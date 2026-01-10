@@ -1,0 +1,21 @@
+Package: ggmlR
+Type: Package
+Title: Machine Learning Tensor Operations via ggml with Vulkan Backend
+Version: 0.1.0
+Date: 2026-01-10
+Authors@R: c(
+    person(
+      "Yuri", "Baramykov",
+      email = "lbsbmsu@mail.ru",
+      role = c("aut", "cre")
+    )
+  )
+Description: R interface to ggml library for GPU-accelerated tensor 
+    operations and machine learning inference. Supports Vulkan compute 
+    for AMD, Intel, and NVIDIA GPUs. Includes quantization (4-bit, 8-bit) 
+    and optimized kernels for LLM inference.
+License: MIT
+Encoding: UTF-8
+LazyData: true
+SystemRequirements: Vulkan headers and loader (libvulkan-dev), Mesa RADV drivers for AMD GPU
+
