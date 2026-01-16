@@ -1,0 +1,118 @@
+* using log directory ‘/mnt/Data2/DS_projects/ggmlR/..Rcheck’
+* using R version 4.3.3 (2024-02-29)
+* using platform: x86_64-pc-linux-gnu (64-bit)
+* R was compiled by
+    gcc (Ubuntu 13.2.0-23ubuntu3) 13.2.0
+    GNU Fortran (Ubuntu 13.2.0-23ubuntu3) 13.2.0
+* running under: Linux Mint 22.3
+* using session charset: UTF-8
+* using options ‘--no-manual --no-vignettes’
+* checking for file ‘./DESCRIPTION’ ... OK
+* checking extension type ... Package
+* this is package ‘ggmlR’ version ‘0.1.0’
+* package encoding: UTF-8
+* checking package namespace information ... OK
+* checking package dependencies ... OK
+* checking if this is a source package ... WARNING
+Subdirectory ‘ggmlR/src’ contains apparent object files/libraries
+  ggml-alloc.o ggml-backend-reg.o ggml-backend.o ggml-quants.o
+  ggml-threading.o ggml.o ggmlR.so r_interface.o r_interface_graph.o
+Object files/libraries should not be included in a source package.
+
+In addition to the above warning(s), found the following notes:
+
+Found the following apparent object files/libraries:
+  src/ggml-cpu/arch/x86/cpu-feats.o src/ggml-cpu/arch/x86/quants.o
+  src/ggml-cpu/arch/x86/repack.o src/ggml-cpu/binary-ops.o
+  src/ggml-cpu/ggml-cpu-backend.o src/ggml-cpu/ggml-cpu.o
+  src/ggml-cpu/hbm.o src/ggml-cpu/ops.o src/ggml-cpu/quants.o
+  src/ggml-cpu/repack.o src/ggml-cpu/traits.o src/ggml-cpu/unary-ops.o
+  src/ggml-cpu/vec.o
+Object files/libraries should not be included in a source package.
+* checking if there is a namespace ... OK
+* checking for executable files ... OK
+* checking for hidden files and directories ... NOTE
+Found the following hidden files and directories:
+  .Rhistory
+  .gitignore
+  R/.Rhistory
+  ..Rcheck
+  .Rproj.user
+  .claude
+  .git
+These were most likely included in error. See section ‘Package
+structure’ in the ‘Writing R Extensions’ manual.
+* checking for portable file names ... OK
+* checking for sufficient/correct file permissions ... OK
+* checking whether package ‘ggmlR’ can be installed ... OK
+* used C compiler: ‘gcc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0’
+* used C++ compiler: ‘g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0’
+* checking C++ specification ... OK
+  Not all R platforms support C++17
+* checking installed package size ... NOTE
+  installed size is  5.6Mb
+  sub-directories of 1Mb or more:
+    libs   5.0Mb
+* checking package directory ... OK
+* checking DESCRIPTION meta-information ... NOTE
+Checking should be performed on sources prepared by ‘R CMD build’.
+* checking top-level files ... OK
+* checking for left-over files ... OK
+* checking index information ... OK
+* checking package subdirectories ... WARNING
+Found the following directory with the name of a check directory:
+  ./..Rcheck
+Most likely, these were included erroneously.
+* checking R files for non-ASCII characters ... OK
+* checking R files for syntax errors ... OK
+* checking whether the package can be loaded ... OK
+* checking whether the package can be loaded with stated dependencies ... OK
+* checking whether the package can be unloaded cleanly ... OK
+* checking whether the namespace can be loaded with stated dependencies ... OK
+* checking whether the namespace can be unloaded cleanly ... OK
+* checking loading without being on the library search path ... OK
+* checking dependencies in R code ... OK
+* checking S3 generic/method consistency ... OK
+* checking replacement functions ... OK
+* checking foreign function calls ... OK
+* checking R code for possible problems ... OK
+* checking Rd files ... OK
+* checking Rd metadata ... OK
+* checking Rd cross-references ... OK
+* checking for missing documentation entries ... OK
+* checking for code/documentation mismatches ... OK
+* checking Rd \usage sections ... OK
+* checking Rd contents ... OK
+* checking for unstated dependencies in examples ... OK
+* checking line endings in C/C++/Fortran sources/headers ... OK
+* checking line endings in Makefiles ... OK
+* checking compilation flags in Makevars ... OK
+* checking for GNU extensions in Makefiles ... OK
+* checking for portable use of $(BLAS_LIBS) and $(LAPACK_LIBS) ... OK
+* checking use of PKG_*FLAGS in Makefiles ... OK
+* checking compiled code ... NOTE
+Файл ‘ggmlR/libs/ggmlR.so’:
+  Нашел ‘_Exit’, возможно, из ‘_Exit’ (C)
+    Object: ‘ggml.o’
+  Нашел ‘__printf_chk’, возможно, из ‘printf’ (C)
+    Object: ‘ggml-quants.o’
+  Нашел ‘abort’, возможно, из ‘abort’ (C)
+    Object: ‘ggml.o’
+  Нашел ‘putchar’, возможно, из ‘putchar’ (C)
+    Object: ‘ggml-quants.o’
+  Нашел ‘puts’, возможно, из ‘printf’ (C), ‘puts’ (C)
+    Object: ‘ggml-quants.o’
+  Нашел ‘stderr’, возможно, из ‘stderr’ (C)
+    Objects: ‘ggml.o’, ‘ggml-quants.o’, ‘ggml-cpu/ggml-cpu-backend.o’,
+      ‘ggml-cpu/unary-ops.o’
+  Нашел ‘stdout’, возможно, из ‘stdout’ (C)
+    Object: ‘ggml.o’
+
+
+See ‘Writing portable packages’ in the ‘Writing R Extensions’ manual.
+* checking examples ... OK
+* checking for unstated dependencies in ‘tests’ ... OK
+* checking tests ... OK
+  Running ‘testthat.R’
+* DONE
+Status: 2 WARNINGs, 4 NOTEs

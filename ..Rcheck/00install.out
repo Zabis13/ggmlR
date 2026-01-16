@@ -1,0 +1,19 @@
+* installing *source* package ‘ggmlR’ ...
+** using staged installation
+** libs
+using C compiler: ‘gcc (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0’
+using C++ compiler: ‘g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0’
+using C++17
+make: Цель «all» не требует выполнения команд.
+installing to /mnt/Data2/DS_projects/ggmlR/..Rcheck/00LOCK-ggmlR/00new/ggmlR/libs
+** R
+** inst
+** byte-compile and prepare package for lazy loading
+** help
+*** installing help indices
+** building package indices
+** testing if installed package can be loaded from temporary location
+** checking absolute paths in shared objects and dynamic libraries
+** testing if installed package can be loaded from final location
+** testing if installed package keeps a record of temporary installation path
+* DONE (ggmlR)

@@ -1,0 +1,109 @@
+GGML_GLU_OP_REGLU       GLU Operation Types
+GGML_TYPE_F32           GGML Data Types
+ggml_abs                Absolute Value (Graph)
+ggml_add                Add tensors
+ggml_argmax             Argmax (Graph)
+ggml_build_forward_expand
+                        Build forward expand
+ggml_ceil               Ceiling (Graph)
+ggml_clamp              Clamp (Graph)
+ggml_cont               Make Contiguous (Graph)
+ggml_cos                Cosine (Graph)
+ggml_cpu_add            Element-wise Addition (CPU Direct)
+ggml_cpu_mul            Element-wise Multiplication (CPU Direct)
+ggml_diag_mask_inf      Diagonal Mask with -Inf (Graph)
+ggml_diag_mask_inf_inplace
+                        Diagonal Mask with -Inf In-place (Graph)
+ggml_diag_mask_zero     Diagonal Mask with Zero (Graph)
+ggml_div                Element-wise Division (Graph)
+ggml_dup_tensor         Duplicate Tensor
+ggml_estimate_memory    Estimate Required Memory
+ggml_exp                Exponential (Graph)
+ggml_flash_attn_ext     Flash Attention (Graph)
+ggml_floor              Floor (Graph)
+ggml_free               Free GGML context
+ggml_geglu              GeGLU (GELU Gated Linear Unit) (Graph)
+ggml_geglu_quick        GeGLU Quick (Fast GeGLU) (Graph)
+ggml_geglu_split        GeGLU Split (Graph)
+ggml_gelu               GELU Activation (Graph)
+ggml_gelu_quick         GELU Quick Activation (Graph)
+ggml_get_f32            Get F32 data
+ggml_get_i32            Get I32 Data
+ggml_get_max_tensor_size
+                        Get Maximum Tensor Size
+ggml_get_mem_size       Get Context Memory Size
+ggml_get_n_threads      Get Number of Threads
+ggml_get_no_alloc       Get No Allocation Mode
+ggml_get_rows           Get Rows by Indices (Graph)
+ggml_glu                Generic GLU (Gated Linear Unit) (Graph)
+ggml_glu_split          Generic GLU Split (Graph)
+ggml_graph_compute      Compute graph
+ggml_graph_get_tensor   Get Tensor from Graph by Name
+ggml_graph_n_nodes      Get Number of Nodes in Graph
+ggml_graph_node         Get Graph Node
+ggml_graph_overhead     Get Graph Overhead
+ggml_graph_print        Print Graph Information
+ggml_graph_reset        Reset Graph (for backpropagation)
+ggml_init               Initialize GGML context
+ggml_init_auto          Create Context with Auto-sizing
+ggml_is_available       Check if GGML is available
+ggml_is_contiguous      Check if Tensor is Contiguous
+ggml_is_permuted        Check if Tensor is Permuted
+ggml_is_transposed      Check if Tensor is Transposed
+ggml_log                Natural Logarithm (Graph)
+ggml_mean               Mean (Graph)
+ggml_mul                Multiply tensors
+ggml_mul_mat            Matrix Multiplication (Graph)
+ggml_n_dims             Get Number of Dimensions
+ggml_nbytes             Get number of bytes
+ggml_neg                Negation (Graph)
+ggml_nelements          Get number of elements
+ggml_new_tensor_1d      Create 1D tensor
+ggml_new_tensor_2d      Create 2D tensor
+ggml_new_tensor_3d      Create 3D Tensor
+ggml_new_tensor_4d      Create 4D Tensor
+ggml_norm               Layer Normalization (Graph)
+ggml_permute            Permute Tensor Dimensions (Graph)
+ggml_print_mem_status   Print Context Memory Status
+ggml_print_objects      Print Objects in Context
+ggml_reglu              ReGLU (ReLU Gated Linear Unit) (Graph)
+ggml_reglu_split        ReGLU Split (Graph)
+ggml_relu               ReLU Activation (Graph)
+ggml_repeat             Repeat (Graph)
+ggml_reset              Reset GGML Context
+ggml_reshape_1d         Reshape to 1D (Graph)
+ggml_reshape_2d         Reshape to 2D (Graph)
+ggml_reshape_3d         Reshape to 3D (Graph)
+ggml_reshape_4d         Reshape to 4D (Graph)
+ggml_rms_norm           RMS Normalization (Graph)
+ggml_rope               Rotary Position Embedding (Graph)
+ggml_rope_ext           Extended RoPE with Frequency Scaling (Graph)
+ggml_rope_inplace       Rotary Position Embedding In-place (Graph)
+ggml_round              Round (Graph)
+ggml_scale              Scale (Graph)
+ggml_set_f32            Set F32 data
+ggml_set_i32            Set I32 Data
+ggml_set_n_threads      Set Number of Threads
+ggml_set_no_alloc       Set No Allocation Mode
+ggml_sigmoid            Sigmoid Activation (Graph)
+ggml_silu               SiLU Activation (Graph)
+ggml_sin                Sine (Graph)
+ggml_soft_max           Softmax (Graph)
+ggml_sqr                Square (Graph)
+ggml_sqrt               Square Root (Graph)
+ggml_sub                Element-wise Subtraction (Graph)
+ggml_sum                Sum (Graph)
+ggml_sum_rows           Sum Rows (Graph)
+ggml_swiglu             SwiGLU (Swish/SiLU Gated Linear Unit) (Graph)
+ggml_swiglu_split       SwiGLU Split (Graph)
+ggml_tanh               Tanh Activation (Graph)
+ggml_tensor_overhead    Get Tensor Overhead
+ggml_tensor_shape       Get Tensor Shape
+ggml_tensor_type        Get Tensor Type
+ggml_test               Test GGML
+ggml_transpose          Transpose (Graph)
+ggml_used_mem           Get Used Memory
+ggml_version            Get GGML version
+ggml_view_tensor        View Tensor
+ggml_with_temp_ctx      Execute with Temporary Context
+rope_types              RoPE Mode Constants

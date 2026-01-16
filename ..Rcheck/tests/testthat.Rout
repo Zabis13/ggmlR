@@ -1,0 +1,49 @@
+
+R version 4.3.3 (2024-02-29) -- "Angel Food Cake"
+Copyright (C) 2024 The R Foundation for Statistical Computing
+Platform: x86_64-pc-linux-gnu (64-bit)
+
+R is free software and comes with ABSOLUTELY NO WARRANTY.
+You are welcome to redistribute it under certain conditions.
+Type 'license()' or 'licence()' for distribution details.
+
+R is a collaborative project with many contributors.
+Type 'contributors()' for more information and
+'citation()' on how to cite R or R packages in publications.
+
+Type 'demo()' for some demos, 'help()' for on-line help, or
+'help.start()' for an HTML browser interface to help.
+Type 'q()' to quit R.
+
+> library(testthat)
+> library(ggmlR)
+> 
+> test_check("ggmlR")
+GGML library loaded successfully!
+GGML version: 0.9.5
+Tensor overhead: 368 bytes
+ggml_print_objects: objects in context 0x59b7b6be9a50:
+ - ggml_object: type = 0, offset = 32, size = 384, next = 0x59b7b9440ae0
+ - ggml_object: type = 0, offset = 448, size = 448, next = (nil)
+ggml_print_objects: --- end ---
+GGML Context Memory Status:
+  Total: 4.00 MB
+  Used:  0.00 MB (0.1%)
+  Free:  4.00 MB (99.9%)
+GGML Context Memory Status:
+  Total: 16.00 MB
+  Used:  0.00 MB (0.0%)
+  Free:  16.00 MB (100.0%)
+GGML library loaded successfully!
+GGML version: 0.9.5
+Tensor overhead: 368 bytes
+[ FAIL 0 | WARN 0 | SKIP 1 | PASS 252 ]
+
+══ Skipped tests (1) ═══════════════════════════════════════════════════════════
+• Platform-dependent behavior (1): 'test-ggml.R:18:3'
+
+[ FAIL 0 | WARN 0 | SKIP 1 | PASS 252 ]
+> 
+> proc.time()
+   user  system elapsed 
+  3.725   0.117   1.284 

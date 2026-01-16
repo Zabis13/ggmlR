@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html>
+<head><title>R: GGML Tensor Operations for Machine Learning</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+<link rel="stylesheet" type="text/css" href="R.css" />
+</head><body><div class="container">
+<h1> GGML Tensor Operations for Machine Learning
+<img class="toplogo" src="../../../doc/html/Rlogo.svg" alt="[R logo]" />
+</h1>
+<hr/>
+<div style="text-align: center;">
+<a href="../../../doc/html/packages.html"><img class="arrow" src="../../../doc/html/left.jpg" alt="[Up]" /></a>
+<a href="../../../doc/html/index.html"><img class="arrow" src="../../../doc/html/up.jpg" alt="[Top]" /></a>
+</div><h2>Documentation for package &lsquo;ggmlR&rsquo; version 0.1.0</h2>
+
+<ul><li><a href="../DESCRIPTION">DESCRIPTION file</a>.</li>
+</ul>
+
+<h2>Help Pages</h2>
+
+
+<p style="text-align: center;">
+<a href="#G">G</a>
+<a href="#R">R</a>
+</p>
+
+
+<h2><a id="G">-- G --</a></h2>
+
+<table style="width: 100%;">
+<tr><td style="width: 25%;"><a href="ggml_abs.html">ggml_abs</a></td>
+<td>Absolute Value (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_add.html">ggml_add</a></td>
+<td>Add tensors</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_argmax.html">ggml_argmax</a></td>
+<td>Argmax (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_build_forward_expand.html">ggml_build_forward_expand</a></td>
+<td>Build forward expand</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_ceil.html">ggml_ceil</a></td>
+<td>Ceiling (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_clamp.html">ggml_clamp</a></td>
+<td>Clamp (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cont.html">ggml_cont</a></td>
+<td>Make Contiguous (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cos.html">ggml_cos</a></td>
+<td>Cosine (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_add.html">ggml_cpu_add</a></td>
+<td>Element-wise Addition (CPU Direct)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_mul.html">ggml_cpu_mul</a></td>
+<td>Element-wise Multiplication (CPU Direct)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_diag_mask_inf.html">ggml_diag_mask_inf</a></td>
+<td>Diagonal Mask with -Inf (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_diag_mask_inf_inplace.html">ggml_diag_mask_inf_inplace</a></td>
+<td>Diagonal Mask with -Inf In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_diag_mask_zero.html">ggml_diag_mask_zero</a></td>
+<td>Diagonal Mask with Zero (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_div.html">ggml_div</a></td>
+<td>Element-wise Division (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_dup_tensor.html">ggml_dup_tensor</a></td>
+<td>Duplicate Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_estimate_memory.html">ggml_estimate_memory</a></td>
+<td>Estimate Required Memory</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_exp.html">ggml_exp</a></td>
+<td>Exponential (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_flash_attn_ext.html">ggml_flash_attn_ext</a></td>
+<td>Flash Attention (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_floor.html">ggml_floor</a></td>
+<td>Floor (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_free.html">ggml_free</a></td>
+<td>Free GGML context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_geglu.html">ggml_geglu</a></td>
+<td>GeGLU (GELU Gated Linear Unit) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_geglu_quick.html">ggml_geglu_quick</a></td>
+<td>GeGLU Quick (Fast GeGLU) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_geglu_split.html">ggml_geglu_split</a></td>
+<td>GeGLU Split (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gelu.html">ggml_gelu</a></td>
+<td>GELU Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gelu_quick.html">ggml_gelu_quick</a></td>
+<td>GELU Quick Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_f32.html">ggml_get_f32</a></td>
+<td>Get F32 data</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_i32.html">ggml_get_i32</a></td>
+<td>Get I32 Data</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_max_tensor_size.html">ggml_get_max_tensor_size</a></td>
+<td>Get Maximum Tensor Size</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_mem_size.html">ggml_get_mem_size</a></td>
+<td>Get Context Memory Size</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_no_alloc.html">ggml_get_no_alloc</a></td>
+<td>Get No Allocation Mode</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_n_threads.html">ggml_get_n_threads</a></td>
+<td>Get Number of Threads</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_rows.html">ggml_get_rows</a></td>
+<td>Get Rows by Indices (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_glu.html">ggml_glu</a></td>
+<td>Generic GLU (Gated Linear Unit) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_GEGLU</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_GEGLU_ERF</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_GEGLU_QUICK</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_REGLU</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_SWIGLU</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_SWIGLU_OAI</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_glu_split.html">ggml_glu_split</a></td>
+<td>Generic GLU Split (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_compute.html">ggml_graph_compute</a></td>
+<td>Compute graph</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_get_tensor.html">ggml_graph_get_tensor</a></td>
+<td>Get Tensor from Graph by Name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_node.html">ggml_graph_node</a></td>
+<td>Get Graph Node</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_n_nodes.html">ggml_graph_n_nodes</a></td>
+<td>Get Number of Nodes in Graph</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_overhead.html">ggml_graph_overhead</a></td>
+<td>Get Graph Overhead</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_print.html">ggml_graph_print</a></td>
+<td>Print Graph Information</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_reset.html">ggml_graph_reset</a></td>
+<td>Reset Graph (for backpropagation)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_init.html">ggml_init</a></td>
+<td>Initialize GGML context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_init_auto.html">ggml_init_auto</a></td>
+<td>Create Context with Auto-sizing</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_available.html">ggml_is_available</a></td>
+<td>Check if GGML is available</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_contiguous.html">ggml_is_contiguous</a></td>
+<td>Check if Tensor is Contiguous</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_permuted.html">ggml_is_permuted</a></td>
+<td>Check if Tensor is Permuted</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_transposed.html">ggml_is_transposed</a></td>
+<td>Check if Tensor is Transposed</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_log.html">ggml_log</a></td>
+<td>Natural Logarithm (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_mean.html">ggml_mean</a></td>
+<td>Mean (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_mul.html">ggml_mul</a></td>
+<td>Multiply tensors</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_mul_mat.html">ggml_mul_mat</a></td>
+<td>Matrix Multiplication (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_nbytes.html">ggml_nbytes</a></td>
+<td>Get number of bytes</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_neg.html">ggml_neg</a></td>
+<td>Negation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_nelements.html">ggml_nelements</a></td>
+<td>Get number of elements</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_tensor_1d.html">ggml_new_tensor_1d</a></td>
+<td>Create 1D tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_tensor_2d.html">ggml_new_tensor_2d</a></td>
+<td>Create 2D tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_tensor_3d.html">ggml_new_tensor_3d</a></td>
+<td>Create 3D Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_tensor_4d.html">ggml_new_tensor_4d</a></td>
+<td>Create 4D Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_norm.html">ggml_norm</a></td>
+<td>Layer Normalization (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_n_dims.html">ggml_n_dims</a></td>
+<td>Get Number of Dimensions</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_permute.html">ggml_permute</a></td>
+<td>Permute Tensor Dimensions (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_print_mem_status.html">ggml_print_mem_status</a></td>
+<td>Print Context Memory Status</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_print_objects.html">ggml_print_objects</a></td>
+<td>Print Objects in Context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reglu.html">ggml_reglu</a></td>
+<td>ReGLU (ReLU Gated Linear Unit) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reglu_split.html">ggml_reglu_split</a></td>
+<td>ReGLU Split (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_relu.html">ggml_relu</a></td>
+<td>ReLU Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_repeat.html">ggml_repeat</a></td>
+<td>Repeat (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reset.html">ggml_reset</a></td>
+<td>Reset GGML Context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reshape_1d.html">ggml_reshape_1d</a></td>
+<td>Reshape to 1D (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reshape_2d.html">ggml_reshape_2d</a></td>
+<td>Reshape to 2D (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reshape_3d.html">ggml_reshape_3d</a></td>
+<td>Reshape to 3D (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reshape_4d.html">ggml_reshape_4d</a></td>
+<td>Reshape to 4D (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rms_norm.html">ggml_rms_norm</a></td>
+<td>RMS Normalization (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope.html">ggml_rope</a></td>
+<td>Rotary Position Embedding (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope_ext.html">ggml_rope_ext</a></td>
+<td>Extended RoPE with Frequency Scaling (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope_inplace.html">ggml_rope_inplace</a></td>
+<td>Rotary Position Embedding In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="rope_types.html">GGML_ROPE_TYPE_MROPE</a></td>
+<td>RoPE Mode Constants</td></tr>
+<tr><td style="width: 25%;"><a href="rope_types.html">GGML_ROPE_TYPE_NEOX</a></td>
+<td>RoPE Mode Constants</td></tr>
+<tr><td style="width: 25%;"><a href="rope_types.html">GGML_ROPE_TYPE_NORM</a></td>
+<td>RoPE Mode Constants</td></tr>
+<tr><td style="width: 25%;"><a href="rope_types.html">GGML_ROPE_TYPE_VISION</a></td>
+<td>RoPE Mode Constants</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_round.html">ggml_round</a></td>
+<td>Round (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_scale.html">ggml_scale</a></td>
+<td>Scale (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_f32.html">ggml_set_f32</a></td>
+<td>Set F32 data</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_i32.html">ggml_set_i32</a></td>
+<td>Set I32 Data</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_no_alloc.html">ggml_set_no_alloc</a></td>
+<td>Set No Allocation Mode</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_n_threads.html">ggml_set_n_threads</a></td>
+<td>Set Number of Threads</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sigmoid.html">ggml_sigmoid</a></td>
+<td>Sigmoid Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_silu.html">ggml_silu</a></td>
+<td>SiLU Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sin.html">ggml_sin</a></td>
+<td>Sine (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_soft_max.html">ggml_soft_max</a></td>
+<td>Softmax (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sqr.html">ggml_sqr</a></td>
+<td>Square (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sqrt.html">ggml_sqrt</a></td>
+<td>Square Root (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sub.html">ggml_sub</a></td>
+<td>Element-wise Subtraction (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sum.html">ggml_sum</a></td>
+<td>Sum (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sum_rows.html">ggml_sum_rows</a></td>
+<td>Sum Rows (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_swiglu.html">ggml_swiglu</a></td>
+<td>SwiGLU (Swish/SiLU Gated Linear Unit) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_swiglu_split.html">ggml_swiglu_split</a></td>
+<td>SwiGLU Split (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tanh.html">ggml_tanh</a></td>
+<td>Tanh Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_overhead.html">ggml_tensor_overhead</a></td>
+<td>Get Tensor Overhead</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_shape.html">ggml_tensor_shape</a></td>
+<td>Get Tensor Shape</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_type.html">ggml_tensor_type</a></td>
+<td>Get Tensor Type</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_test.html">ggml_test</a></td>
+<td>Test GGML</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_transpose.html">ggml_transpose</a></td>
+<td>Transpose (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_F16</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_F32</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_I32</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_Q4_0</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_Q4_1</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_used_mem.html">ggml_used_mem</a></td>
+<td>Get Used Memory</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_version.html">ggml_version</a></td>
+<td>Get GGML version</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_view_tensor.html">ggml_view_tensor</a></td>
+<td>View Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_with_temp_ctx.html">ggml_with_temp_ctx</a></td>
+<td>Execute with Temporary Context</td></tr>
+</table>
+
+<h2><a id="R">-- R --</a></h2>
+
+<table style="width: 100%;">
+<tr><td style="width: 25%;"><a href="rope_types.html">rope_types</a></td>
+<td>RoPE Mode Constants</td></tr>
+</table>
+</div></body></html>

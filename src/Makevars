@@ -1,0 +1,21 @@
+CXX_STD = CXX17
+
+PKG_CPPFLAGS = -I. -Iggml-cpu -Iggml-cpu/arch/x86 \
+  -DGGML_VERSION='"0.9.5"' -DGGML_COMMIT='"ggmlR"' \
+  -DGGML_USE_CPU -D_GNU_SOURCE -DGGML_BACKEND_DL \
+  -DGGML_USE_OPENMP
+
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
+PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)
+PKG_LIBS = -lpthread -lm $(SHLIB_OPENMP_CXXFLAGS)
+
+OBJECTS = \
+  r_interface.o r_interface_graph.o \
+  ggml.o ggml-alloc.o ggml-quants.o \
+  ggml-backend.o ggml-backend-reg.o ggml-threading.o \
+  ggml-cpu/traits.o \
+  ggml-cpu/ggml-cpu-backend.o ggml-cpu/ggml-cpu.o \
+  ggml-cpu/ops.o ggml-cpu/vec.o \
+  ggml-cpu/binary-ops.o ggml-cpu/unary-ops.o ggml-cpu/repack.o \
+  ggml-cpu/quants.o ggml-cpu/hbm.o \
+  ggml-cpu/arch/x86/cpu-feats.o ggml-cpu/arch/x86/quants.o ggml-cpu/arch/x86/repack.o
