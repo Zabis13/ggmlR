@@ -178,7 +178,7 @@ If you use this package in your research, please cite:
   author = {Yuri Baramykov},
   title = {ggmlR: CPU Tensor Operations for R},
   year = {2026},
-  url = {https://github.com/yourusername/ggmlR}
+  url = {https://github.com/Zabis13/ggmlR}
 }
 ```
 
