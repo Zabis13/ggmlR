@@ -1,0 +1,46 @@
+CXX_STD = CXX17
+
+# Base include paths and defines
+GGML_CPPFLAGS = -I. -Iggml-cpu -Iggml-cpu/arch/x86 \
+  -DGGML_VERSION='"0.9.5"' -DGGML_COMMIT='"ggmlR"' \
+  -DGGML_USE_CPU -D_GNU_SOURCE
+
+# Vulkan flags (set by configure --with-vulkan)
+VULKAN_CPPFLAGS = @VULKAN_CPPFLAGS@
+VULKAN_LIBS = @VULKAN_LIBS@
+
+# Enable OpenMP only if compiler supports it
+# SHLIB_OPENMP_CXXFLAGS will be empty if OpenMP is not available
+ifneq ($(SHLIB_OPENMP_CXXFLAGS),)
+  GGML_CPPFLAGS += -DGGML_USE_OPENMP
+endif
+
+# Force include R compatibility header for CRAN compliance
+# This redirects stdout/stderr/abort to R-safe alternatives
+# r_ggml_io.c is compiled separately without this header (see rule below)
+PKG_CPPFLAGS = $(GGML_CPPFLAGS) $(VULKAN_CPPFLAGS) -DGGML_R_PACKAGE -include r_ggml_compat.h
+
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
+PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS) $(VULKAN_LIBS) -lpthread -lm
+
+# Base objects (CPU backend)
+OBJECTS = \
+  r_ggml_io.o \
+  r_interface.o r_interface_graph.o r_interface_vulkan.o \
+  ggml.o ggml-alloc.o ggml-quants.o \
+  ggml-backend.o ggml-backend-reg.o ggml-threading.o \
+  ggml-cpu/traits.o \
+  ggml-cpu/ggml-cpu-backend.o ggml-cpu/ggml-cpu.o \
+  ggml-cpu/ops.o ggml-cpu/vec.o \
+  ggml-cpu/binary-ops.o ggml-cpu/unary-ops.o ggml-cpu/repack.o \
+  ggml-cpu/quants.o ggml-cpu/hbm.o \
+  ggml-cpu/arch/x86/cpu-feats.o ggml-cpu/arch/x86/quants.o ggml-cpu/arch/x86/repack.o
+
+# Vulkan objects (set by configure --with-vulkan)
+VULKAN_OBJECTS = @VULKAN_OBJECTS@
+OBJECTS += $(VULKAN_OBJECTS)
+
+# r_ggml_io.c implements the wrapper functions, so we need to skip the macro
+# redirections when compiling it. R_GGML_IO_IMPL disables the macros in r_ggml_compat.h
+# Note: -D flags are processed before -include, so this works correctly.
+r_ggml_io.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL

@@ -1,0 +1,22 @@
+#!/bin/sh
+
+# Cleanup script for ggmlR package
+# Removes compiled objects, shared libraries, and generated files
+
+# Remove compiled objects and libraries
+rm -f src/*.o src/*.so src/*.dll src/*.dylib
+rm -f src/ggml-cpu/*.o
+rm -f src/ggml-cpu/arch/x86/*.o
+rm -f src/ggml-cpu/llamafile/*.o
+rm -f src/ggml-cpu/amx/*.o
+
+# Remove Vulkan objects
+rm -f src/ggml-vulkan/*.o
+rm -f src/ggml-vulkan/generated/*.o
+
+# Remove generated files created by configure
+rm -f src/Makevars
+
+# Remove Vulkan generated files
+rm -rf src/ggml-vulkan/generated
+rm -f src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen

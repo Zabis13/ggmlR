@@ -1,0 +1,21 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.httr-oauth
+.DS_Store
+.quarto
+
+# Compiled code
+*.o
+*.so
+*.dll
+*.dylib
+src/*.o
+src/*.so
+src/ggml-cpu/*.o
+src/ggml-cpu/arch/**/*.o
+
+# R package build artifacts
+*.tar.gz
+..Rcheck/

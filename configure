@@ -1,0 +1,133 @@
+#!/bin/sh
+
+# Configure script for ggmlR
+# Supports optional Vulkan backend via --with-vulkan flag
+
+# Default values
+USE_VULKAN="no"
+VULKAN_CPPFLAGS=""
+VULKAN_LIBS=""
+VULKAN_OBJECTS=""
+
+# Parse arguments
+for arg in "$@"; do
+  case "$arg" in
+    --with-vulkan)
+      USE_VULKAN="yes"
+      ;;
+  esac
+done
+
+# If Vulkan requested, check dependencies and build shaders
+if [ "$USE_VULKAN" = "yes" ]; then
+  echo "Checking for Vulkan support..."
+
+  # Check for glslc (shader compiler)
+  GLSLC=$(command -v glslc 2>/dev/null)
+  if [ -z "$GLSLC" ]; then
+    echo "ERROR: glslc not found. Please install Vulkan SDK."
+    echo "  Ubuntu/Debian: apt install glslc"
+    echo "  Or download from: https://vulkan.lunarg.com/sdk/home"
+    exit 1
+  fi
+  echo "Found glslc: $GLSLC"
+
+  # Check for Vulkan headers
+  if [ ! -f "/usr/include/vulkan/vulkan.h" ] && [ -z "$VULKAN_SDK" ]; then
+    echo "WARNING: vulkan/vulkan.h not found in standard paths."
+    echo "If build fails, set VULKAN_SDK environment variable."
+  fi
+
+  # Check for pkg-config vulkan
+  if command -v pkg-config >/dev/null 2>&1; then
+    if pkg-config --exists vulkan 2>/dev/null; then
+      VULKAN_CPPFLAGS=$(pkg-config --cflags vulkan)
+      VULKAN_LIBS=$(pkg-config --libs vulkan)
+      echo "Found Vulkan via pkg-config"
+    fi
+  fi
+
+  # Fallback to manual detection
+  if [ -z "$VULKAN_LIBS" ]; then
+    VULKAN_LIBS="-lvulkan"
+    if [ -n "$VULKAN_SDK" ]; then
+      VULKAN_CPPFLAGS="-I${VULKAN_SDK}/include"
+      VULKAN_LIBS="-L${VULKAN_SDK}/lib ${VULKAN_LIBS}"
+    fi
+  fi
+
+  echo "Vulkan CPPFLAGS: $VULKAN_CPPFLAGS"
+  echo "Vulkan LIBS: $VULKAN_LIBS"
+
+  # Build shader generator
+  echo "Building shader generator..."
+  cd src/ggml-vulkan/vulkan-shaders
+
+  CXX="${CXX:-g++}"
+  $CXX -std=c++17 -O2 -o vulkan-shaders-gen vulkan-shaders-gen.cpp -pthread
+  if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to build vulkan-shaders-gen"
+    exit 1
+  fi
+
+  # Create output directories
+  mkdir -p ../generated/spv
+
+  # Generate header file
+  echo "Generating shader header..."
+  ./vulkan-shaders-gen \
+    --output-dir ../generated/spv \
+    --target-hpp ../generated/ggml-vulkan-shaders.hpp
+
+  # Generate shader cpp files
+  echo "Compiling shaders (this may take a while)..."
+  SHADER_COUNT=0
+  SHADER_TOTAL=$(ls -1 *.comp 2>/dev/null | wc -l)
+
+  for shader in *.comp; do
+    SHADER_COUNT=$((SHADER_COUNT + 1))
+    printf "\r  [%d/%d] %s" "$SHADER_COUNT" "$SHADER_TOTAL" "$shader"
+    ./vulkan-shaders-gen \
+      --glslc "$GLSLC" \
+      --source "$(pwd)/$shader" \
+      --output-dir ../generated/spv \
+      --target-hpp ../generated/ggml-vulkan-shaders.hpp \
+      --target-cpp "../generated/${shader}.cpp"
+    if [ $? -ne 0 ]; then
+      echo ""
+      echo "ERROR: Failed to compile shader: $shader"
+      exit 1
+    fi
+  done
+  echo ""
+  echo "Generated $SHADER_COUNT shader files"
+
+  cd ../../..
+
+  # Build list of shader object files
+  VULKAN_OBJECTS="ggml-vulkan/ggml-vulkan.o"
+  for cpp in src/ggml-vulkan/generated/*.cpp; do
+    base=$(basename "$cpp" .cpp)
+    VULKAN_OBJECTS="$VULKAN_OBJECTS ggml-vulkan/generated/${base}.o"
+  done
+
+  VULKAN_CPPFLAGS="$VULKAN_CPPFLAGS -DGGML_USE_VULKAN -Iggml-vulkan -Iggml-vulkan/generated"
+
+  echo "Vulkan backend enabled with $SHADER_COUNT shaders"
+fi
+
+# Generate Makevars from template
+echo "Generating src/Makevars..."
+
+sed \
+  -e "s|@VULKAN_CPPFLAGS@|$VULKAN_CPPFLAGS|g" \
+  -e "s|@VULKAN_LIBS@|$VULKAN_LIBS|g" \
+  -e "s|@VULKAN_OBJECTS@|$VULKAN_OBJECTS|g" \
+  src/Makevars.in > src/Makevars
+
+echo "Configuration complete."
+if [ "$USE_VULKAN" = "yes" ]; then
+  echo "  Vulkan: ENABLED"
+else
+  echo "  Vulkan: disabled (use --with-vulkan to enable)"
+fi
