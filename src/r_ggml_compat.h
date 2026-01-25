@@ -62,8 +62,10 @@ extern "C" {
  */
 #if defined(__GNUC__) || defined(__clang__)
 #  define R_GGML_FORMAT_PRINTF(fmt_idx, first_arg) __attribute__((format(printf, fmt_idx, first_arg)))
+#  define R_GGML_NORETURN __attribute__((noreturn))
 #else
 #  define R_GGML_FORMAT_PRINTF(fmt_idx, first_arg)
+#  define R_GGML_NORETURN
 #endif
 
 /*
@@ -81,7 +83,9 @@ int r_ggml_puts(const char *s);
 int r_ggml_putchar(int c);
 int r_ggml_fflush(FILE *stream);
 int r_ggml_fputs(const char *s, FILE *stream);
+R_GGML_NORETURN
 void r_ggml_abort(const char *file, int line, const char *msg);
+R_GGML_NORETURN
 void r_ggml_exit(int status);
 
 #ifdef __cplusplus
@@ -119,22 +123,17 @@ void r_ggml_exit(int status);
 #define fputs r_ggml_fputs
 
 /*
- * Replace stdout/stderr with NULL
- * Our wrapper functions ignore the stream parameter anyway,
- * so this prevents R CMD check from seeing these symbols
+ * Keep stdout/stderr defined but our wrapper functions ignore them anyway
+ * This prevents nonnull warnings while still redirecting output to R
  */
-#undef stdout
-#define stdout ((FILE*)0)
-
-#undef stderr
-#define stderr ((FILE*)0)
 
 /*
  * Redirect abort() and _Exit() to R error
  * Note: abort() must be noreturn, so we use a wrapper that calls Rf_error
+ * The do-while(0) wrapper + noreturn attribute ensures compiler knows this never returns
  */
 #undef abort
-#define abort() r_ggml_abort(__FILE__, __LINE__, "abort called")
+#define abort() do { r_ggml_abort(__FILE__, __LINE__, "abort called"); __builtin_unreachable(); } while(0)
 
 #undef _Exit
 #define _Exit(status) r_ggml_exit(status)

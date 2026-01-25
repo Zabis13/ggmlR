@@ -1,18 +1,19 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.2.0
+Version: 0.4.0
 Authors@R: person("Yuri", "Baramykov",
     email = "lbsbmsu@mail.ru",
     role = c("aut", "cre"))
 Author: Yuri Baramykov [aut, cre]
 Maintainer: Yuri Baramykov <lbsbmsu@mail.ru>
 Description: An R port of the 'GGML' library providing efficient tensor
-    operations for machine learning on CPU. Implements core functionality
-    of 'GGML', including element-wise arithmetic and basic tensor manipulation.
-    The package brings the lightweight and performance-oriented design of
-    'GGML' to the R environment for fast numerical computation and model
-    prototyping. See <https://github.com/ggml-org/ggml> for more information
+    operations for machine learning on CPU and GPU. Implements core functionality
+    of 'GGML', including element-wise arithmetic, tensor manipulation, and
+    multi-GPU support via Vulkan backend scheduler. The package brings the
+    lightweight and performance-oriented design of 'GGML' to the R environment
+    for fast numerical computation and model prototyping.
+    See <https://github.com/ggml-org/ggml> for more information
     about the underlying library.
 License: MIT + file LICENSE
 URL: https://github.com/Zabis13/ggmlR

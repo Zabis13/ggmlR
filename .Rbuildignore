@@ -28,3 +28,5 @@
 ^src/Makevars$
 ^benchmark_gpu_cpu\.R$
 ^install_vulkan\.sh$
+^docs$
+^examples$

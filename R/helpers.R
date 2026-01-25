@@ -1,10 +1,11 @@
 #' Create Context with Auto-sizing
-#' 
+#'
 #' Creates a context with automatically calculated size based on planned tensors
 #'
 #' @param ... Named arguments with tensor dimensions
 #' @param extra_mb Extra megabytes to add (default: 10)
 #' @param type Tensor type (default: GGML_TYPE_F32)
+#' @param no_alloc If TRUE, don't allocate memory for tensors (default: FALSE)
 #' @return GGML context
 #' @export
 #' @examples
@@ -13,11 +14,11 @@
 #' ctx <- ggml_init_auto(mat1 = c(1000, 1000), mat2 = c(1000, 1000))
 #' ggml_free(ctx)
 #' }
-ggml_init_auto <- function(..., extra_mb = 10, type = GGML_TYPE_F32) {
+ggml_init_auto <- function(..., extra_mb = 10, type = GGML_TYPE_F32, no_alloc = FALSE) {
   tensors <- list(...)
-  
+
   total_bytes <- 0
-  
+
   for (t in tensors) {
     if (length(t) == 1) {
       # 1D tensor
@@ -33,11 +34,11 @@ ggml_init_auto <- function(..., extra_mb = 10, type = GGML_TYPE_F32) {
       total_bytes <- total_bytes + ggml_estimate_memory(type, t[1], t[2], t[3], t[4])
     }
   }
-  
+
   # Add extra space
   total_bytes <- total_bytes + extra_mb * 1024 * 1024
-  
-  ggml_init(as.integer(total_bytes))
+
+  ggml_init(as.integer(total_bytes), no_alloc = no_alloc)
 }
 
 #' Execute with Temporary Context

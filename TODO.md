@@ -138,12 +138,103 @@ R CMD INSTALL . --configure-args="--with-vulkan"
 - [x] Исправление integer overflow для больших тензоров
 - [x] Smoke tests (184 теста)
 - [x] Полный набор testthat тестов (414 тестов)
+- [x] **Multi-GPU Support через Backend Scheduler (v0.4.0)**
+
+## ✅ Multi-GPU Support (v0.4.0) - ГОТОВО К CRAN
+
+**Полная поддержка multi-GPU через Backend Scheduler API**
+
+### Реализованные функции (14 функций):
+
+#### Основные:
+- [x] `ggml_backend_sched_new()` - создание scheduler (автоматически добавляет CPU)
+- [x] `ggml_backend_sched_free()` - освобождение
+- [x] `ggml_backend_sched_reserve()` - резервирование памяти
+- [x] `ggml_backend_sched_alloc_graph()` - аллокация графа
+- [x] `ggml_backend_sched_graph_compute()` - вычисление на нескольких GPU
+- [x] `ggml_backend_sched_reset()` - сброс
+
+#### Асинхронные:
+- [x] `ggml_backend_sched_graph_compute_async()` - асинхронное вычисление
+- [x] `ggml_backend_sched_synchronize()` - синхронизация
+
+#### Информационные:
+- [x] `ggml_backend_sched_get_n_backends()` - количество backends
+- [x] `ggml_backend_sched_get_backend()` - получить backend
+- [x] `ggml_backend_sched_get_n_splits()` - количество разбиений
+- [x] `ggml_backend_sched_get_n_copies()` - количество копий
+
+#### Управление:
+- [x] `ggml_backend_sched_set_tensor_backend()` - назначить тензор
+- [x] `ggml_backend_sched_get_tensor_backend()` - получить backend
+
+### Файлы:
+- [x] `src/r_interface_scheduler.c` - C API (284 строки)
+- [x] `R/scheduler.R` - R функции (258 строки)
+- [x] `tests/testthat/test-scheduler.R` - **7 тестов, 15 PASS, 2 SKIP (multi-GPU)**
+- [x] `man/*.Rd` - **14 файлов документации** (roxygen2)
+- [x] `examples/multi_gpu_example.R` - примеры (230 строк)
+- [x] `docs/MULTI_GPU.md` - документация (320 строк)
+- [x] `benchmark_gpu_cpu.R` - обновлён с multi-GPU тестами
+- [x] **ИСПРАВЛЕНО**: `R/ggml.R`, `R/helpers.R` - добавлен параметр `no_alloc`
+
+### Интеграция:
+- [x] NAMESPACE (14 export функций)
+- [x] src/Makevars.in (r_interface_scheduler.o)
+- [x] src/r_interface.c (регистрация функций)
+- [x] DESCRIPTION (v0.4.0)
+
+### CRAN Готовность:
+- [x] Все функции документированы (14 .Rd файлов)
+- [x] Все функции протестированы (7 тестов, 15 PASS)
+- [x] Нестандартные файлы добавлены в .Rbuildignore
+- [x] Удалены файлы на русском языке
+- [x] **ИСПРАВЛЕНА критическая проблема: `no_alloc` параметр теперь работает**
+- [x] R CMD check: 0 errors, 0 warnings, 6 notes (все допустимые)
+- [x] Все тесты: **429 PASS, 0 FAIL, 0 WARN**
+
+### Использование:
+
+```r
+library(ggmlR)
+
+# Инициализировать все GPU
+gpu1 <- ggml_vulkan_init(0)
+gpu2 <- ggml_vulkan_init(1)
+
+# Создать scheduler (CPU добавится автоматически)
+sched <- ggml_backend_sched_new(list(gpu1, gpu2), parallel = TRUE)
+
+# Теперь scheduler управляет: GPU1, GPU2, CPU
+# Работа автоматически распределится между ними!
+
+# Использовать для вычислений
+ggml_backend_sched_graph_compute(sched, graph)
+
+# Статистика
+cat("Splits:", ggml_backend_sched_get_n_splits(sched), "\n")
+cat("Copies:", ggml_backend_sched_get_n_copies(sched), "\n")
+```
+
+### Benchmark:
+```bash
+Rscript benchmark_gpu_cpu.R
+```
+Автоматически тестирует: CPU, 1 GPU, Multi-GPU (если >= 2 GPU)
 
 ## Следующие возможные улучшения
 
-- [ ] Добавить примеры использования Vulkan backend в виньетках
-- [ ] Автоматический выбор backend на основе размера задачи
-- [ ] Поддержка multi-GPU
-- [ ] Документация по оптимальному использованию Vulkan
+### Документация и примеры:
+- [ ] Виньетки для Vulkan backend
+- [ ] Примеры multi-GPU для разных задач
+- [ ] Best practices для multi-GPU
+
+### Интеграция:
+- [ ] Автоматический выбор backend по размеру задачи
 - [ ] Интеграция с huggingface transformers
-- [ ] Примеры запуска квантизированных моделей (Q4_0, Q8_0)
+- [ ] Примеры квантизированных моделей (Q4_0, Q8_0)
+
+### Оптимизация:
+- [ ] Профилирование overhead scheduler
+- [ ] Оптимизация для малых графов
+- [ ] Минимизация копий между GPU

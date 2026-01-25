@@ -4,6 +4,7 @@
 
 #' Initialize GGML context
 #' @param mem_size Memory size in bytes
+#' @param no_alloc If TRUE, don't allocate memory for tensors (default: FALSE)
 #' @return GGML context pointer
 #' @export
 #' @examples
@@ -11,8 +12,8 @@
 #' ctx <- ggml_init(1024 * 1024)
 #' ggml_free(ctx)
 #' }
-ggml_init <- function(mem_size = 16 * 1024 * 1024) {
-  .Call("R_ggml_init", as.numeric(mem_size), PACKAGE = "ggmlR")
+ggml_init <- function(mem_size = 16 * 1024 * 1024, no_alloc = FALSE) {
+  .Call("R_ggml_init", as.numeric(mem_size), as.logical(no_alloc), PACKAGE = "ggmlR")
 }
 
 #' Free GGML context

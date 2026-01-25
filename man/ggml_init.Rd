@@ -4,10 +4,12 @@
 \alias{ggml_init}
 \title{Initialize GGML context}
 \usage{
-ggml_init(mem_size = 16 * 1024 * 1024)
+ggml_init(mem_size = 16 * 1024 * 1024, no_alloc = FALSE)
 }
 \arguments{
 \item{mem_size}{Memory size in bytes}
+
+\item{no_alloc}{If TRUE, don't allocate memory for tensors (default: FALSE)}
 }
 \value{
 GGML context pointer

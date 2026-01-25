@@ -23,7 +23,12 @@ if [ "$USE_VULKAN" = "yes" ]; then
   echo "Checking for Vulkan support..."
 
   # Check for glslc (shader compiler)
-  GLSLC=$(command -v glslc 2>/dev/null)
+  # On Kaggle, prefer /usr/bin/glslc over /usr/local/bin/glslc (wrapper with bash syntax issues)
+  if [ -x "/usr/bin/glslc" ]; then
+    GLSLC="/usr/bin/glslc"
+  else
+    GLSLC=$(command -v glslc 2>/dev/null)
+  fi
   if [ -z "$GLSLC" ]; then
     echo "ERROR: glslc not found. Please install Vulkan SDK."
     echo "  Ubuntu/Debian: apt install glslc"
