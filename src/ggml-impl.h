@@ -70,7 +70,7 @@ static inline int ggml_up(int n, int m) {
 }
 
 // TODO: move to ggml.h? (won't be able to inline)
-static bool ggml_are_same_layout(const struct ggml_tensor * a, const struct ggml_tensor * b) {
+static inline bool ggml_are_same_layout(const struct ggml_tensor * a, const struct ggml_tensor * b) {
     if (a->type != b->type) {
         return false;
     }

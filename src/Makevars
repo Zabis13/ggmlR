@@ -6,8 +6,8 @@ GGML_CPPFLAGS = -I. -Iggml-cpu -Iggml-cpu/arch/x86 \
   -DGGML_USE_CPU -D_GNU_SOURCE
 
 # Vulkan flags (set by configure --with-vulkan)
-VULKAN_CPPFLAGS = @VULKAN_CPPFLAGS@
-VULKAN_LIBS = @VULKAN_LIBS@
+VULKAN_CPPFLAGS = 
+VULKAN_LIBS = 
 
 # Enable OpenMP only if compiler supports it
 # SHLIB_OPENMP_CXXFLAGS will be empty if OpenMP is not available
@@ -38,7 +38,7 @@ OBJECTS = \
   ggml-cpu/arch/x86/cpu-feats.o ggml-cpu/arch/x86/quants.o ggml-cpu/arch/x86/repack.o
 
 # Vulkan objects (set by configure --with-vulkan)
-VULKAN_OBJECTS = @VULKAN_OBJECTS@
+VULKAN_OBJECTS = 
 OBJECTS += $(VULKAN_OBJECTS)
 
 # r_ggml_io.c implements the wrapper functions, so we need to skip the macro

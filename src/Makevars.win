@@ -20,12 +20,13 @@ endif
 # r_ggml_io.c is compiled separately without this header (see rule below)
 PKG_CPPFLAGS = $(GGML_CPPFLAGS) -DGGML_R_PACKAGE -include r_ggml_compat.h
 
+PKG_CFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
 PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
 PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)
 
 OBJECTS = \
   r_ggml_io.o \
-  r_interface.o r_interface_graph.o \
+  r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o \
   ggml.o ggml-alloc.o ggml-quants.o \
   ggml-backend.o ggml-backend-reg.o ggml-threading.o \
   ggml-cpu/traits.o \

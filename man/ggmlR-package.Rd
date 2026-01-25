@@ -4,9 +4,9 @@
 \name{ggmlR-package}
 \alias{ggmlR}
 \alias{ggmlR-package}
-\title{ggmlR: 'GGML' Tensor Operations for Machine Learning}
+\title{ggmlR: GGML Tensor Operations for Machine Learning}
 \description{
-An R port of the 'GGML' library providing efficient tensor operations for machine learning on CPU and GPU. Implements core functionality of 'GGML', including element-wise arithmetic, tensor manipulation, and multi-GPU support via Vulkan backend scheduler. The package brings the lightweight and performance-oriented design of 'GGML' to the R environment for fast numerical computation and model prototyping. See \url{https://github.com/ggml-org/ggml} for more information about the underlying library.
+An R port of the 'GGML' library providing efficient tensor operations for machine learning. Implements core functionality including element-wise arithmetic, tensor manipulation, and multi-backend support. Brings lightweight, performance-oriented design to 'R' for fast numerical computation and model prototyping. See \url{https://github.com/ggml-org/ggml} for more information about the underlying library.
 }
 \seealso{
 Useful links:
