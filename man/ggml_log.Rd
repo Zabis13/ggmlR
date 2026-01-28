@@ -17,3 +17,15 @@ Tensor representing the log operation
 \description{
 Creates a graph node for element-wise natural logarithm: log(x)
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+ggml_set_f32(a, c(1, exp(1), exp(2)))
+result <- ggml_log(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [0, 1, 2]
+ggml_free(ctx)
+}
+}

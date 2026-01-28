@@ -19,3 +19,14 @@ View of input tensor with L2 norm applied
 \description{
 Creates a graph node for in-place L2 normalization.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(3, 0, 0, 4))
+result <- ggml_l2_norm_inplace(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+}
+}

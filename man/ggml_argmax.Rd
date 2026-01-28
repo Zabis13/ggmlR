@@ -18,3 +18,15 @@ Tensor with argmax indices
 Creates a graph node that finds the index of the maximum value.
 CRITICAL for token generation in LLMs.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 5, 3, 2, 4))
+result <- ggml_argmax(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_i32(result)  # 1 (0-indexed)
+ggml_free(ctx)
+}
+}

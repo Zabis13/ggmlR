@@ -21,3 +21,14 @@ Creates a graph node for in-place RMS normalization.
 Returns a view of the input tensor.
 CRITICAL for LLaMA models when memory efficiency is important.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_rms_norm_inplace(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+}
+}

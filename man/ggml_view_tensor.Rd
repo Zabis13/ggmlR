@@ -17,3 +17,12 @@ View tensor (shares data with src)
 \description{
 Creates a view of the tensor (shares data, no copy)
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+view <- ggml_view_tensor(ctx, a)
+# view shares data with a
+ggml_free(ctx)
+}
+}

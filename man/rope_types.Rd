@@ -9,7 +9,7 @@
 \alias{GGML_ROPE_TYPE_VISION}
 \title{RoPE Mode Constants}
 \format{
-An object of class \code{integer} of length 1.
+Integer constants
 
 An object of class \code{integer} of length 1.
 
@@ -27,12 +27,26 @@ GGML_ROPE_TYPE_MROPE
 GGML_ROPE_TYPE_VISION
 }
 \description{
-Constants for RoPE (Rotary Position Embedding) modes.
+RoPE (Rotary Position Embedding) Type Constants
 }
 \details{
-- GGML_ROPE_TYPE_NORM (0): Standard RoPE as in original paper
-- GGML_ROPE_TYPE_NEOX (2): GPT-NeoX style RoPE (interleaved differently)
-- GGML_ROPE_TYPE_MROPE (8): Multi-RoPE for models like Qwen2-VL
-- GGML_ROPE_TYPE_VISION (24): Vision model RoPE
+Constants for RoPE (Rotary Position Embedding) modes used in transformer models.
+Different models use different RoPE implementations.
+
+
+\itemize{
+  \item \code{GGML_ROPE_TYPE_NORM} (0): Standard RoPE as in original paper (LLaMA, Mistral)
+  \item \code{GGML_ROPE_TYPE_NEOX} (2): GPT-NeoX style RoPE with different interleaving
+  \item \code{GGML_ROPE_TYPE_MROPE} (8): Multi-RoPE for multimodal models (Qwen2-VL)
+  \item \code{GGML_ROPE_TYPE_VISION} (24): Vision model RoPE variant
+}
+}
+\examples{
+\dontrun{
+GGML_ROPE_TYPE_NORM    # 0 - Standard RoPE (LLaMA, Mistral)
+GGML_ROPE_TYPE_NEOX    # 2 - GPT-NeoX style
+GGML_ROPE_TYPE_MROPE   # 8 - Multi-RoPE (Qwen2-VL)
+GGML_ROPE_TYPE_VISION  # 24 - Vision models
+}
 }
 \keyword{datasets}

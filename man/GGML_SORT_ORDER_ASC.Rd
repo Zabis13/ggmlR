@@ -16,12 +16,31 @@ GGML_SORT_ORDER_ASC
 GGML_SORT_ORDER_DESC
 }
 \description{
+Sort Order Constants
+}
+\details{
 Constants for specifying sort order in argsort operations.
+
+
+\itemize{
+  \item \code{GGML_SORT_ORDER_ASC} (0): Ascending order (smallest first)
+  \item \code{GGML_SORT_ORDER_DESC} (1): Descending order (largest first)
+}
 }
 \examples{
 \dontrun{
 GGML_SORT_ORDER_ASC   # 0 - Ascending order
 GGML_SORT_ORDER_DESC  # 1 - Descending order
+
+# Usage with ggml_argsort
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(3, 1, 4, 1, 5))
+# Get ascending sort indices
+idx_asc <- ggml_argsort(ctx, a, GGML_SORT_ORDER_ASC)
+# Get descending sort indices
+idx_desc <- ggml_argsort(ctx, a, GGML_SORT_ORDER_DESC)
+ggml_free(ctx)
 }
 }
 \keyword{datasets}

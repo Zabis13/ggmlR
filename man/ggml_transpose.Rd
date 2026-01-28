@@ -17,3 +17,15 @@ Tensor representing the transposed matrix
 \description{
 Creates a graph node for matrix transpose operation.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2)
+ggml_set_f32(a, 1:6)
+result <- ggml_transpose(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+shape <- ggml_tensor_shape(result)  # [2, 3]
+ggml_free(ctx)
+}
+}

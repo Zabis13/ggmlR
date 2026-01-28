@@ -17,3 +17,15 @@ Tensor representing the exp operation
 \description{
 Creates a graph node for element-wise exponential: exp(x)
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+ggml_set_f32(a, c(0, 1, 2))
+result <- ggml_exp(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [1, e, e^2]
+ggml_free(ctx)
+}
+}

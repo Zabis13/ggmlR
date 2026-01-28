@@ -21,3 +21,15 @@ Creates a graph node for L2 normalization (unit norm).
 Normalizes vectors to unit length: x / ||x||_2.
 Used in RWKV v7 and embedding normalization.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(3, 0, 0, 4))  # Length = 5
+result <- ggml_l2_norm(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [0.6, 0, 0, 0.8] unit vector
+ggml_free(ctx)
+}
+}

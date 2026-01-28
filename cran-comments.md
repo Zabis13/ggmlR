@@ -1,8 +1,6 @@
 ## R CMD check results
 
-0 errors | 0 warnings | 6 notes
-
-Note: Local check shows 6 NOTEs, but NOTE #6 (non-portable compilation flag '-mno-omit-leaf-frame-pointer') is added by the local R configuration and will not appear on CRAN build systems.
+0 errors | 0 warnings | 5 notes
 
 ### NOTEs
 
@@ -32,9 +30,25 @@ Pragmas are required for:
 
 These files are unmodified from the upstream library to ensure stability and easy maintenance.
 
-**5. C++17 specification**
+**5. SHLIB_OPENMP_CFLAGS is included in PKG_CFLAGS but not in PKG_LIBS**
 
-C++17 is required by the upstream GGML library. SystemRequirements correctly lists this dependency.
+This package contains mixed C and C++ code. The upstream GGML CPU backend
+(ggml-cpu-backend.c) uses OpenMP for parallel tensor computation in C code.
+Since the package also contains C++ files, R links via the C++ compiler,
+requiring SHLIB_OPENMP_CXXFLAGS in PKG_LIBS. The configuration is:
+
+- PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS) — enables OpenMP in C compilation
+- PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) — matching macro for C++
+- PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS) — matches the C++ linker
+
+On all CRAN platforms (Linux gcc/g++, Windows Rtools gcc/g++), both macros
+expand to the same value (-fopenmp), so OpenMP is correctly linked.
+On macOS (Apple clang), both macros are empty, and the code compiles
+without OpenMP using built-in pthreads fallback (#ifndef GGML_USE_OPENMP).
+
+As noted in Writing R Extensions sect 1.2.1.1: "It is not portable to use
+OpenMP with more than one of C, C++ and Fortran in a single package."
+This NOTE is expected and unavoidable for our mixed-language codebase.
 
 ## Test environments
 

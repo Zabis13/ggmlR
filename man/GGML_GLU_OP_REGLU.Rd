@@ -41,10 +41,22 @@ Used with ggml_glu() and ggml_glu_split().
 }
 \details{
 \itemize{
-  \item \code{GGML_GLU_OP_REGLU}: ReGLU - ReLU gating
-  \item \code{GGML_GLU_OP_GEGLU}: GeGLU - GELU gating (used in GPT-NeoX, etc.)
-  \item \code{GGML_GLU_OP_SWIGLU}: SwiGLU - SiLU/Swish gating (used in LLaMA)
-  \item \code{GGML_GLU_OP_GEGLU_QUICK}: GeGLU with fast approximation
+  \item \code{GGML_GLU_OP_REGLU} (0): ReGLU - ReLU gating
+  \item \code{GGML_GLU_OP_GEGLU} (1): GeGLU - GELU gating (used in GPT-NeoX, Falcon)
+  \item \code{GGML_GLU_OP_SWIGLU} (2): SwiGLU - SiLU/Swish gating (used in LLaMA, Mistral)
+  \item \code{GGML_GLU_OP_SWIGLU_OAI} (3): SwiGLU OpenAI variant
+  \item \code{GGML_GLU_OP_GEGLU_ERF} (4): GeGLU with exact erf implementation
+  \item \code{GGML_GLU_OP_GEGLU_QUICK} (5): GeGLU with fast approximation
+}
+}
+\examples{
+\dontrun{
+GGML_GLU_OP_REGLU       # 0 - ReLU gating
+GGML_GLU_OP_GEGLU       # 1 - GELU gating
+GGML_GLU_OP_SWIGLU      # 2 - SiLU/Swish gating
+GGML_GLU_OP_SWIGLU_OAI  # 3 - SwiGLU OpenAI
+GGML_GLU_OP_GEGLU_ERF   # 4 - GELU with erf
+GGML_GLU_OP_GEGLU_QUICK # 5 - Fast GELU
 }
 }
 \keyword{datasets}

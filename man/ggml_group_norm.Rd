@@ -23,3 +23,15 @@ Creates a graph node for group normalization.
 Normalizes along ne0*ne1*n_groups dimensions.
 Used in Stable Diffusion and other image generation models.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+# 4 channels, 2 groups (2 channels per group)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 8)
+ggml_set_f32(a, rnorm(32))
+result <- ggml_group_norm(ctx, a, n_groups = 2)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+}
+}

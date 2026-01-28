@@ -21,3 +21,14 @@ View of input tensor with group norm applied
 \description{
 Creates a graph node for in-place group normalization.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 8)
+ggml_set_f32(a, rnorm(32))
+result <- ggml_group_norm_inplace(ctx, a, n_groups = 2)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+}
+}

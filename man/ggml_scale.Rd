@@ -19,3 +19,15 @@ Tensor representing the scaled values
 \description{
 Creates a graph node for scaling tensor by a scalar: x * s
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_scale(ctx, a, 2.0)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [2, 4, 6, 8]
+ggml_free(ctx)
+}
+}

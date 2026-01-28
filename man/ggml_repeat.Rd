@@ -19,3 +19,16 @@ Tensor with repeated values
 \description{
 Creates a graph node that repeats tensor 'a' to match shape of tensor 'b'.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, 2)
+ggml_set_f32(a, c(1, 2))
+b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2)
+result <- ggml_repeat(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [1, 1, 1, 2, 2, 2]
+ggml_free(ctx)
+}
+}

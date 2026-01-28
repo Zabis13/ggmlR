@@ -18,4 +18,17 @@ Tensor representing the layer normalization operation
 }
 \description{
 Creates a graph node for layer normalization.
+Normalizes input to zero mean and unit variance.
+}
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_norm(ctx, a, eps = 1e-5)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)  # Normalized values
+ggml_free(ctx)
+}
 }

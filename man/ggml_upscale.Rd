@@ -26,26 +26,43 @@ GGML_SCALE_MODE_BICUBIC
 \arguments{
 \item{ctx}{GGML context}
 
-\item{a}{Input tensor}
+\item{a}{Input tensor (typically 2D or 4D for images)}
 
 \item{scale_factor}{Integer scale factor (e.g., 2 = double size)}
 
-\item{mode}{Scale mode: 0 = nearest, 1 = bilinear, 2 = bicubic}
+\item{mode}{Scale mode constant (see details)}
 }
 \value{
-Upscaled tensor
+Upscaled tensor with dimensions multiplied by scale_factor
 }
 \description{
 Upscales tensor by multiplying ne0 and ne1 by scale factor.
-Supports different interpolation modes.
+Supports different interpolation modes for image upscaling.
+}
+\details{
+Scale mode constants:
+\itemize{
+  \item \code{GGML_SCALE_MODE_NEAREST} (0): Nearest neighbor interpolation - fastest, pixelated
+  \item \code{GGML_SCALE_MODE_BILINEAR} (1): Bilinear interpolation - smooth, good balance
+  \item \code{GGML_SCALE_MODE_BICUBIC} (2): Bicubic interpolation - smoothest, most compute
+}
 }
 \examples{
 \dontrun{
 ctx <- ggml_init(16 * 1024 * 1024)
 img <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 8)
 ggml_set_f32(img, rnorm(64))
-upscaled <- ggml_upscale(ctx, img, 2, GGML_SCALE_MODE_NEAREST)
-graph <- ggml_build_forward_expand(ctx, upscaled)
+
+# Nearest neighbor (fastest, pixelated)
+up_nearest <- ggml_upscale(ctx, img, 2, GGML_SCALE_MODE_NEAREST)
+
+# Bilinear (smooth)
+up_bilinear <- ggml_upscale(ctx, img, 2, GGML_SCALE_MODE_BILINEAR)
+
+# Bicubic (smoothest)
+up_bicubic <- ggml_upscale(ctx, img, 2, GGML_SCALE_MODE_BICUBIC)
+
+graph <- ggml_build_forward_expand(ctx, up_nearest)
 ggml_graph_compute(ctx, graph)
 # Result is 16x16
 ggml_free(ctx)

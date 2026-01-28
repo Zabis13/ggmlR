@@ -23,18 +23,42 @@ GGML_OP_POOL_AVG
 
 \item{a}{Input tensor}
 
-\item{op}{Pool operation: GGML_OP_POOL_MAX (0) or GGML_OP_POOL_AVG (1)}
+\item{op}{Pool operation constant (see details)}
 
-\item{k0}{Kernel size}
+\item{k0}{Kernel size (window size)}
 
-\item{s0}{Stride (default = k0)}
+\item{s0}{Stride (default = k0 for non-overlapping windows)}
 
 \item{p0}{Padding (default 0)}
 }
 \value{
-Pooled tensor
+Pooled tensor with reduced dimensions
 }
 \description{
-Applies 1D pooling operation.
+Applies 1D pooling operation for downsampling.
+}
+\details{
+Pool operation constants:
+\itemize{
+  \item \code{GGML_OP_POOL_MAX} (0): Max pooling - takes maximum value in each window
+  \item \code{GGML_OP_POOL_AVG} (1): Average pooling - takes mean of values in each window
+}
+}
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8)
+ggml_set_f32(a, c(1, 3, 2, 4, 5, 2, 8, 1))
+
+# Max pooling with kernel 2, stride 2
+max_pool <- ggml_pool_1d(ctx, a, GGML_OP_POOL_MAX, k0 = 2)
+# Result: [3, 4, 5, 8] (max of each pair)
+
+# Average pooling with kernel 2, stride 2
+avg_pool <- ggml_pool_1d(ctx, a, GGML_OP_POOL_AVG, k0 = 2)
+# Result: [2, 3, 3.5, 4.5] (mean of each pair)
+
+ggml_free(ctx)
+}
 }
 \keyword{datasets}

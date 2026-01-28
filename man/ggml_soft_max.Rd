@@ -18,3 +18,16 @@ Tensor representing the softmax operation
 Creates a graph node for softmax operation.
 CRITICAL for attention mechanisms.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_soft_max(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)
+# Output sums to 1.0
+ggml_free(ctx)
+}
+}

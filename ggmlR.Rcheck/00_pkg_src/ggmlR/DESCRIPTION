@@ -1,0 +1,26 @@
+Package: ggmlR
+Type: Package
+Title: GGML Tensor Operations for Machine Learning
+Version: 0.4.1
+Authors@R: person("Yuri", "Baramykov",
+    email = "lbsbmsu@mail.ru",
+    role = c("aut", "cre"))
+Description: An R port of the 'GGML' library providing efficient tensor 
+    operations for machine learning. Implements core functionality 
+    including element-wise arithmetic, tensor manipulation, and 
+    multi-backend support. Brings lightweight, performance-oriented 
+    design to 'R' for fast numerical computation and model prototyping.
+    See <https://github.com/ggml-org/ggml> for more information
+    about the underlying library.
+License: MIT + file LICENSE
+URL: https://github.com/Zabis13/ggmlR
+BugReports: https://github.com/Zabis13/ggmlR/issues
+Encoding: UTF-8
+SystemRequirements: C++17, GNU make
+Suggests: testthat (>= 3.0.0)
+RoxygenNote: 7.3.3
+Config/testthat/edition: 3
+NeedsCompilation: yes
+Packaged: 2026-01-28 10:20:52 UTC; yuri
+Author: Yuri Baramykov [aut, cre]
+Maintainer: Yuri Baramykov <lbsbmsu@mail.ru>

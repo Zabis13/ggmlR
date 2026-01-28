@@ -17,3 +17,15 @@ Tensor with row sums
 \description{
 Creates a graph node that computes the sum along rows.
 }
+\examples{
+\dontrun{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2)
+ggml_set_f32(a, c(1, 2, 3, 4, 5, 6))
+result <- ggml_sum_rows(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [6, 15]
+ggml_free(ctx)
+}
+}
