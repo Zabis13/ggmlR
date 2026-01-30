@@ -7,6 +7,7 @@
 #include "ggml-alloc.h"
 
 #ifdef _OPENMP
+#undef match  // R defines 'match' macro that conflicts with OpenMP pragma
 #include <omp.h>
 #endif
 
@@ -632,6 +633,29 @@ SEXP R_ggml_soft_max_ext(SEXP ctx_ptr, SEXP a_ptr, SEXP mask_ptr,
 
     if (result == NULL) {
         error("Failed to create soft_max_ext operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Extended softmax inplace (returns view of a)
+SEXP R_ggml_soft_max_ext_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP mask_ptr,
+                                  SEXP scale_sexp, SEXP max_bias_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * mask = (mask_ptr == R_NilValue) ? NULL :
+                                (struct ggml_tensor *) R_ExternalPtrAddr(mask_ptr);
+    float scale = (float) asReal(scale_sexp);
+    float max_bias = (float) asReal(max_bias_sexp);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_soft_max_ext_inplace(ctx, a, mask, scale, max_bias);
+
+    if (result == NULL) {
+        error("Failed to create soft_max_ext_inplace operation");
     }
 
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
@@ -1669,6 +1693,134 @@ SEXP R_ggml_rope_ext(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+// Extended RoPE inplace (returns view of a)
+SEXP R_ggml_rope_ext_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
+                              SEXP n_dims_sexp, SEXP mode_sexp, SEXP n_ctx_orig_sexp,
+                              SEXP freq_base_sexp, SEXP freq_scale_sexp,
+                              SEXP ext_factor_sexp, SEXP attn_factor_sexp,
+                              SEXP beta_fast_sexp, SEXP beta_slow_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+    struct ggml_tensor * c = (c_ptr == R_NilValue) ? NULL :
+                             (struct ggml_tensor *) R_ExternalPtrAddr(c_ptr);
+
+    int n_dims = asInteger(n_dims_sexp);
+    int mode = asInteger(mode_sexp);
+    int n_ctx_orig = asInteger(n_ctx_orig_sexp);
+    float freq_base = (float) asReal(freq_base_sexp);
+    float freq_scale = (float) asReal(freq_scale_sexp);
+    float ext_factor = (float) asReal(ext_factor_sexp);
+    float attn_factor = (float) asReal(attn_factor_sexp);
+    float beta_fast = (float) asReal(beta_fast_sexp);
+    float beta_slow = (float) asReal(beta_slow_sexp);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_rope_ext_inplace(ctx, a, b, c, n_dims, mode, n_ctx_orig,
+                                                         freq_base, freq_scale, ext_factor,
+                                                         attn_factor, beta_fast, beta_slow);
+
+    if (result == NULL) {
+        error("Failed to create rope_ext_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Multi-rope (MRoPE) for vision models
+SEXP R_ggml_rope_multi(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
+                        SEXP n_dims_sexp, SEXP sections_sexp, SEXP mode_sexp,
+                        SEXP n_ctx_orig_sexp, SEXP freq_base_sexp, SEXP freq_scale_sexp,
+                        SEXP ext_factor_sexp, SEXP attn_factor_sexp,
+                        SEXP beta_fast_sexp, SEXP beta_slow_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+    struct ggml_tensor * c = (c_ptr == R_NilValue) ? NULL :
+                             (struct ggml_tensor *) R_ExternalPtrAddr(c_ptr);
+
+    int n_dims = asInteger(n_dims_sexp);
+    int mode = asInteger(mode_sexp);
+    int n_ctx_orig = asInteger(n_ctx_orig_sexp);
+    float freq_base = (float) asReal(freq_base_sexp);
+    float freq_scale = (float) asReal(freq_scale_sexp);
+    float ext_factor = (float) asReal(ext_factor_sexp);
+    float attn_factor = (float) asReal(attn_factor_sexp);
+    float beta_fast = (float) asReal(beta_fast_sexp);
+    float beta_slow = (float) asReal(beta_slow_sexp);
+
+    // Parse sections array (must be length 4)
+    int sections[4] = {0, 0, 0, 0};
+    if (sections_sexp != R_NilValue && LENGTH(sections_sexp) >= 4) {
+        int * sec_ptr = INTEGER(sections_sexp);
+        for (int i = 0; i < 4; i++) {
+            sections[i] = sec_ptr[i];
+        }
+    }
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_rope_multi(ctx, a, b, c, n_dims, sections, mode,
+                                                   n_ctx_orig, freq_base, freq_scale,
+                                                   ext_factor, attn_factor, beta_fast, beta_slow);
+
+    if (result == NULL) {
+        error("Failed to create rope_multi operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Multi-rope inplace
+SEXP R_ggml_rope_multi_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
+                                SEXP n_dims_sexp, SEXP sections_sexp, SEXP mode_sexp,
+                                SEXP n_ctx_orig_sexp, SEXP freq_base_sexp, SEXP freq_scale_sexp,
+                                SEXP ext_factor_sexp, SEXP attn_factor_sexp,
+                                SEXP beta_fast_sexp, SEXP beta_slow_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+    struct ggml_tensor * c = (c_ptr == R_NilValue) ? NULL :
+                             (struct ggml_tensor *) R_ExternalPtrAddr(c_ptr);
+
+    int n_dims = asInteger(n_dims_sexp);
+    int mode = asInteger(mode_sexp);
+    int n_ctx_orig = asInteger(n_ctx_orig_sexp);
+    float freq_base = (float) asReal(freq_base_sexp);
+    float freq_scale = (float) asReal(freq_scale_sexp);
+    float ext_factor = (float) asReal(ext_factor_sexp);
+    float attn_factor = (float) asReal(attn_factor_sexp);
+    float beta_fast = (float) asReal(beta_fast_sexp);
+    float beta_slow = (float) asReal(beta_slow_sexp);
+
+    int sections[4] = {0, 0, 0, 0};
+    if (sections_sexp != R_NilValue && LENGTH(sections_sexp) >= 4) {
+        int * sec_ptr = INTEGER(sections_sexp);
+        for (int i = 0; i < 4; i++) {
+            sections[i] = sec_ptr[i];
+        }
+    }
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_rope_multi_inplace(ctx, a, b, c, n_dims, sections, mode,
+                                                           n_ctx_orig, freq_base, freq_scale,
+                                                           ext_factor, attn_factor, beta_fast, beta_slow);
+
+    if (result == NULL) {
+        error("Failed to create rope_multi_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // ============================================================================
 // Graph Compute with Context
 // ============================================================================
@@ -2314,6 +2466,29 @@ SEXP R_ggml_soft_max_ext_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+// Softmax backward inplace (extended version)
+SEXP R_ggml_soft_max_ext_back_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                                       SEXP scale_sexp, SEXP max_bias_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+
+    float scale = (float) asReal(scale_sexp);
+    float max_bias = (float) asReal(max_bias_sexp);
+
+    struct ggml_tensor * result = ggml_soft_max_ext_back_inplace(ctx, a, b, scale, max_bias);
+
+    if (result == NULL) {
+        error("Failed to create soft_max_ext_back_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // RoPE backward (extended version)
 SEXP R_ggml_rope_ext_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
                           SEXP n_dims_sexp, SEXP mode_sexp, SEXP n_ctx_orig_sexp,
@@ -2904,6 +3079,399 @@ SEXP R_ggml_quantize_free(void) {
     return R_NilValue;
 }
 
+// ============================================================================
+// In-place Operations (Memory-efficient, 2-3x memory savings)
+// ============================================================================
+
+// Binary inplace operations (ctx, a, b) -> view(a)
+
+SEXP R_ggml_add_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_add_inplace(ctx, a, b);
+
+    if (result == NULL) {
+        error("Failed to create add_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_sub_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_sub_inplace(ctx, a, b);
+
+    if (result == NULL) {
+        error("Failed to create sub_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_mul_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_mul_inplace(ctx, a, b);
+
+    if (result == NULL) {
+        error("Failed to create mul_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_div_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_div_inplace(ctx, a, b);
+
+    if (result == NULL) {
+        error("Failed to create div_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Unary inplace math operations (ctx, a) -> view(a)
+
+SEXP R_ggml_sqr_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_sqr_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create sqr_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_sqrt_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_sqrt_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create sqrt_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_exp_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_exp_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create exp_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_log_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_log_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create log_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_abs_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_abs_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create abs_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_neg_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_neg_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create neg_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_ceil_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_ceil_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create ceil_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_floor_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_floor_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create floor_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_round_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_round_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create round_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Activation inplace operations (ctx, a) -> view(a)
+
+SEXP R_ggml_relu_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_relu_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create relu_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_gelu_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_gelu_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create gelu_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_silu_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_silu_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create silu_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_sigmoid_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_sigmoid_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create sigmoid_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_tanh_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_tanh_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create tanh_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_softplus_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_softplus_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create softplus_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_elu_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_elu_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create elu_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Scale inplace (ctx, a, s) -> view(a)
+
+SEXP R_ggml_scale_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP s) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    float scale = (float) asReal(s);
+    struct ggml_tensor * result = ggml_scale_inplace(ctx, a, scale);
+
+    if (result == NULL) {
+        error("Failed to create scale_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Dup inplace (ctx, a) -> view(a)
+
+SEXP R_ggml_dup_inplace(SEXP ctx_ptr, SEXP a_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_dup_inplace(ctx, a);
+
+    if (result == NULL) {
+        error("Failed to create dup_inplace operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // Check if quantization type requires importance matrix
 SEXP R_ggml_quantize_requires_imatrix(SEXP type_sexp) {
     enum ggml_type type = (enum ggml_type) asInteger(type_sexp);
@@ -2946,4 +3514,294 @@ SEXP R_ggml_quantize_chunk(SEXP type_sexp, SEXP src_sexp, SEXP nrows_sexp, SEXP 
 
     UNPROTECT(1);
     return out;
+}
+
+// ============================================================================
+// Type System Functions
+// ============================================================================
+
+// Get type name as string
+SEXP R_ggml_type_name(SEXP type_sexp) {
+    enum ggml_type type = (enum ggml_type) asInteger(type_sexp);
+    const char * name = ggml_type_name(type);
+    return mkString(name ? name : "unknown");
+}
+
+// Get type size as float (for quantized types)
+SEXP R_ggml_type_sizef(SEXP type_sexp) {
+    enum ggml_type type = (enum ggml_type) asInteger(type_sexp);
+    double sizef = ggml_type_sizef(type);
+    return ScalarReal(sizef);
+}
+
+// Get block size for type
+SEXP R_ggml_blck_size(SEXP type_sexp) {
+    enum ggml_type type = (enum ggml_type) asInteger(type_sexp);
+    int64_t blck = ggml_blck_size(type);
+    return ScalarReal((double)blck);
+}
+
+// Check if type is quantized
+SEXP R_ggml_is_quantized(SEXP type_sexp) {
+    enum ggml_type type = (enum ggml_type) asInteger(type_sexp);
+    bool quantized = ggml_is_quantized(type);
+    return ScalarLogical(quantized);
+}
+
+// Convert ftype to ggml_type
+SEXP R_ggml_ftype_to_ggml_type(SEXP ftype_sexp) {
+    enum ggml_ftype ftype = (enum ggml_ftype) asInteger(ftype_sexp);
+    enum ggml_type type = ggml_ftype_to_ggml_type(ftype);
+    return ScalarInteger((int)type);
+}
+
+// ============================================================================
+// Operation Info Functions
+// ============================================================================
+
+// Get operation name
+SEXP R_ggml_op_name(SEXP op_sexp) {
+    enum ggml_op op = (enum ggml_op) asInteger(op_sexp);
+    const char * name = ggml_op_name(op);
+    return mkString(name ? name : "unknown");
+}
+
+// Get operation symbol
+SEXP R_ggml_op_symbol(SEXP op_sexp) {
+    enum ggml_op op = (enum ggml_op) asInteger(op_sexp);
+    const char * symbol = ggml_op_symbol(op);
+    return mkString(symbol ? symbol : "?");
+}
+
+// Get unary operation name
+SEXP R_ggml_unary_op_name(SEXP op_sexp) {
+    enum ggml_unary_op op = (enum ggml_unary_op) asInteger(op_sexp);
+    const char * name = ggml_unary_op_name(op);
+    return mkString(name ? name : "unknown");
+}
+
+// Get operation description from tensor
+SEXP R_ggml_op_desc(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    const char * desc = ggml_op_desc(tensor);
+    return mkString(desc ? desc : "");
+}
+
+// Get unary op from tensor
+SEXP R_ggml_get_unary_op(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    enum ggml_unary_op op = ggml_get_unary_op(tensor);
+    return ScalarInteger((int)op);
+}
+
+// ============================================================================
+// CPU Feature Detection Functions
+// ============================================================================
+
+// x86 SIMD features
+SEXP R_ggml_cpu_has_sse3(void) {
+    return ScalarLogical(ggml_cpu_has_sse3());
+}
+
+SEXP R_ggml_cpu_has_ssse3(void) {
+    return ScalarLogical(ggml_cpu_has_ssse3());
+}
+
+SEXP R_ggml_cpu_has_avx(void) {
+    return ScalarLogical(ggml_cpu_has_avx());
+}
+
+SEXP R_ggml_cpu_has_avx_vnni(void) {
+    return ScalarLogical(ggml_cpu_has_avx_vnni());
+}
+
+SEXP R_ggml_cpu_has_avx2(void) {
+    return ScalarLogical(ggml_cpu_has_avx2());
+}
+
+SEXP R_ggml_cpu_has_bmi2(void) {
+    return ScalarLogical(ggml_cpu_has_bmi2());
+}
+
+SEXP R_ggml_cpu_has_f16c(void) {
+    return ScalarLogical(ggml_cpu_has_f16c());
+}
+
+SEXP R_ggml_cpu_has_fma(void) {
+    return ScalarLogical(ggml_cpu_has_fma());
+}
+
+SEXP R_ggml_cpu_has_avx512(void) {
+    return ScalarLogical(ggml_cpu_has_avx512());
+}
+
+SEXP R_ggml_cpu_has_avx512_vbmi(void) {
+    return ScalarLogical(ggml_cpu_has_avx512_vbmi());
+}
+
+SEXP R_ggml_cpu_has_avx512_vnni(void) {
+    return ScalarLogical(ggml_cpu_has_avx512_vnni());
+}
+
+SEXP R_ggml_cpu_has_avx512_bf16(void) {
+    return ScalarLogical(ggml_cpu_has_avx512_bf16());
+}
+
+SEXP R_ggml_cpu_has_amx_int8(void) {
+    return ScalarLogical(ggml_cpu_has_amx_int8());
+}
+
+// ARM SIMD features
+SEXP R_ggml_cpu_has_neon(void) {
+    return ScalarLogical(ggml_cpu_has_neon());
+}
+
+SEXP R_ggml_cpu_has_arm_fma(void) {
+    return ScalarLogical(ggml_cpu_has_arm_fma());
+}
+
+SEXP R_ggml_cpu_has_fp16_va(void) {
+    return ScalarLogical(ggml_cpu_has_fp16_va());
+}
+
+SEXP R_ggml_cpu_has_dotprod(void) {
+    return ScalarLogical(ggml_cpu_has_dotprod());
+}
+
+SEXP R_ggml_cpu_has_matmul_int8(void) {
+    return ScalarLogical(ggml_cpu_has_matmul_int8());
+}
+
+SEXP R_ggml_cpu_has_sve(void) {
+    return ScalarLogical(ggml_cpu_has_sve());
+}
+
+SEXP R_ggml_cpu_get_sve_cnt(void) {
+    return ScalarInteger(ggml_cpu_get_sve_cnt());
+}
+
+SEXP R_ggml_cpu_has_sme(void) {
+    return ScalarLogical(ggml_cpu_has_sme());
+}
+
+// Other architectures
+SEXP R_ggml_cpu_has_riscv_v(void) {
+    return ScalarLogical(ggml_cpu_has_riscv_v());
+}
+
+SEXP R_ggml_cpu_get_rvv_vlen(void) {
+    return ScalarInteger(ggml_cpu_get_rvv_vlen());
+}
+
+SEXP R_ggml_cpu_has_vsx(void) {
+    return ScalarLogical(ggml_cpu_has_vsx());
+}
+
+SEXP R_ggml_cpu_has_vxe(void) {
+    return ScalarLogical(ggml_cpu_has_vxe());
+}
+
+SEXP R_ggml_cpu_has_wasm_simd(void) {
+    return ScalarLogical(ggml_cpu_has_wasm_simd());
+}
+
+SEXP R_ggml_cpu_has_llamafile(void) {
+    return ScalarLogical(ggml_cpu_has_llamafile());
+}
+
+// ============================================================================
+// Tensor Layout/Contiguity Functions
+// ============================================================================
+
+// Check contiguity at different dimensions
+SEXP R_ggml_is_contiguous_0(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    return ScalarLogical(ggml_is_contiguous_0(tensor));
+}
+
+SEXP R_ggml_is_contiguous_1(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    return ScalarLogical(ggml_is_contiguous_1(tensor));
+}
+
+SEXP R_ggml_is_contiguous_2(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    return ScalarLogical(ggml_is_contiguous_2(tensor));
+}
+
+// Check if tensor is contiguously allocated (data pointer is valid)
+SEXP R_ggml_is_contiguously_allocated(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    return ScalarLogical(ggml_is_contiguously_allocated(tensor));
+}
+
+// Check channel-wise contiguity (for CNN operations)
+SEXP R_ggml_is_contiguous_channels(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    return ScalarLogical(ggml_is_contiguous_channels(tensor));
+}
+
+// Check row-wise contiguity (for matrix operations)
+SEXP R_ggml_is_contiguous_rows(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    return ScalarLogical(ggml_is_contiguous_rows(tensor));
+}
+
+// Compare tensor strides
+SEXP R_ggml_are_same_stride(SEXP a_ptr, SEXP b_ptr) {
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+    if (a == NULL || b == NULL) {
+        error("Invalid tensor pointer");
+    }
+    return ScalarLogical(ggml_are_same_stride(a, b));
+}
+
+// Check if tensor a can be repeated to match tensor b
+SEXP R_ggml_can_repeat(SEXP a_ptr, SEXP b_ptr) {
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+    if (a == NULL || b == NULL) {
+        error("Invalid tensor pointer");
+    }
+    return ScalarLogical(ggml_can_repeat(a, b));
+}
+
+// Count equal elements between two tensors
+SEXP R_ggml_count_equal(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+    struct ggml_tensor * result = ggml_count_equal(ctx, a, b);
+    if (result == NULL) {
+        error("Failed to create count_equal operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }

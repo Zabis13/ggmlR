@@ -67,15 +67,22 @@ SEXP R_ggml_backend_sched_new(SEXP backends_list, SEXP parallel, SEXP graph_size
         true            // op_offload
     );
 
+    // Store CPU backend pointer to free it later
+    ggml_backend_t cpu_backend = backends[n_backends - 1];
+
     free(backends);
 
     if (sched == NULL) {
+        // Free CPU backend if scheduler creation failed
+        ggml_backend_free(cpu_backend);
         error("Failed to create backend scheduler");
     }
 
-    // Create external pointer with finalizer
-    SEXP ptr = PROTECT(R_MakeExternalPtr(sched, R_NilValue, R_NilValue));
-    UNPROTECT(1);
+    // Create external pointer with CPU backend stored in tag for cleanup
+    // tag = CPU backend pointer (to free when scheduler is freed)
+    SEXP cpu_ptr = PROTECT(R_MakeExternalPtr(cpu_backend, R_NilValue, R_NilValue));
+    SEXP ptr = PROTECT(R_MakeExternalPtr(sched, R_NilValue, cpu_ptr));
+    UNPROTECT(2);
     return ptr;
 }
 
@@ -86,6 +93,16 @@ SEXP R_ggml_backend_sched_free(SEXP sched_ptr) {
     if (sched != NULL) {
         ggml_backend_sched_free(sched);
         R_ClearExternalPtr(sched_ptr);
+
+        // Free the CPU backend that was created in R_ggml_backend_sched_new
+        SEXP cpu_ptr = R_ExternalPtrProtected(sched_ptr);
+        if (cpu_ptr != R_NilValue) {
+            ggml_backend_t cpu_backend = (ggml_backend_t)R_ExternalPtrAddr(cpu_ptr);
+            if (cpu_backend != NULL) {
+                ggml_backend_free(cpu_backend);
+                R_ClearExternalPtr(cpu_ptr);
+            }
+        }
     }
 
     return R_NilValue;

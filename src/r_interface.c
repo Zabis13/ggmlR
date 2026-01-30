@@ -31,6 +31,152 @@ extern SEXP R_ggml_backend_sched_graph_compute_async(SEXP sched_ptr, SEXP graph_
 extern SEXP R_ggml_backend_sched_synchronize(SEXP sched_ptr);
 extern SEXP R_ggml_backend_sched_reset(SEXP sched_ptr);
 
+// Optimization functions (defined in r_interface_opt.c)
+extern SEXP R_ggml_opt_loss_type_mean(void);
+extern SEXP R_ggml_opt_loss_type_sum(void);
+extern SEXP R_ggml_opt_loss_type_cross_entropy(void);
+extern SEXP R_ggml_opt_loss_type_mse(void);
+extern SEXP R_ggml_opt_optimizer_type_adamw(void);
+extern SEXP R_ggml_opt_optimizer_type_sgd(void);
+extern SEXP R_ggml_opt_dataset_init(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_dataset_free(SEXP);
+extern SEXP R_ggml_opt_dataset_ndata(SEXP);
+extern SEXP R_ggml_opt_dataset_data(SEXP);
+extern SEXP R_ggml_opt_dataset_labels(SEXP);
+extern SEXP R_ggml_opt_dataset_shuffle(SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_dataset_get_batch(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_default_params(SEXP, SEXP);
+extern SEXP R_ggml_opt_init(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_free(SEXP);
+extern SEXP R_ggml_opt_reset(SEXP, SEXP);
+extern SEXP R_ggml_opt_static_graphs(SEXP);
+extern SEXP R_ggml_opt_inputs(SEXP);
+extern SEXP R_ggml_opt_outputs(SEXP);
+extern SEXP R_ggml_opt_labels(SEXP);
+extern SEXP R_ggml_opt_loss(SEXP);
+extern SEXP R_ggml_opt_pred(SEXP);
+extern SEXP R_ggml_opt_ncorrect(SEXP);
+extern SEXP R_ggml_opt_context_optimizer_type(SEXP);
+extern SEXP R_ggml_opt_optimizer_name(SEXP);
+extern SEXP R_ggml_opt_result_init(void);
+extern SEXP R_ggml_opt_result_free(SEXP);
+extern SEXP R_ggml_opt_result_reset(SEXP);
+extern SEXP R_ggml_opt_result_ndata(SEXP);
+extern SEXP R_ggml_opt_result_loss(SEXP);
+extern SEXP R_ggml_opt_result_accuracy(SEXP);
+extern SEXP R_ggml_opt_alloc(SEXP, SEXP);
+extern SEXP R_ggml_opt_eval(SEXP, SEXP);
+extern SEXP R_ggml_opt_fit(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_grad_acc(SEXP, SEXP);
+extern SEXP R_ggml_opt_result_pred(SEXP);
+extern SEXP R_ggml_opt_prepare_alloc(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_epoch(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+
+// Extended backend functions (defined in r_interface_backend.c)
+// Device type constants
+extern SEXP R_ggml_backend_device_type_cpu(void);
+extern SEXP R_ggml_backend_device_type_gpu(void);
+extern SEXP R_ggml_backend_device_type_igpu(void);
+extern SEXP R_ggml_backend_device_type_accel(void);
+// Buffer usage constants
+extern SEXP R_ggml_backend_buffer_usage_any(void);
+extern SEXP R_ggml_backend_buffer_usage_weights(void);
+extern SEXP R_ggml_backend_buffer_usage_compute(void);
+// Device enumeration
+extern SEXP R_ggml_backend_dev_count(void);
+extern SEXP R_ggml_backend_dev_get(SEXP);
+extern SEXP R_ggml_backend_dev_by_name(SEXP);
+extern SEXP R_ggml_backend_dev_by_type(SEXP);
+// Device properties
+extern SEXP R_ggml_backend_dev_name(SEXP);
+extern SEXP R_ggml_backend_dev_description(SEXP);
+extern SEXP R_ggml_backend_dev_memory(SEXP);
+extern SEXP R_ggml_backend_dev_type(SEXP);
+extern SEXP R_ggml_backend_dev_get_props(SEXP);
+extern SEXP R_ggml_backend_dev_supports_op(SEXP, SEXP);
+extern SEXP R_ggml_backend_dev_supports_buft(SEXP, SEXP);
+extern SEXP R_ggml_backend_dev_offload_op(SEXP, SEXP);
+extern SEXP R_ggml_backend_dev_init(SEXP, SEXP);
+// Backend registry
+extern SEXP R_ggml_backend_reg_count(void);
+extern SEXP R_ggml_backend_reg_get(SEXP);
+extern SEXP R_ggml_backend_reg_by_name(SEXP);
+extern SEXP R_ggml_backend_reg_name(SEXP);
+extern SEXP R_ggml_backend_reg_dev_count(SEXP);
+extern SEXP R_ggml_backend_reg_dev_get(SEXP, SEXP);
+extern SEXP R_ggml_backend_load(SEXP);
+extern SEXP R_ggml_backend_unload(SEXP);
+extern SEXP R_ggml_backend_load_all(void);
+// Events
+extern SEXP R_ggml_backend_event_new(SEXP);
+extern SEXP R_ggml_backend_event_free(SEXP);
+extern SEXP R_ggml_backend_event_record(SEXP, SEXP);
+extern SEXP R_ggml_backend_event_synchronize(SEXP);
+extern SEXP R_ggml_backend_event_wait(SEXP, SEXP);
+// Graph planning
+extern SEXP R_ggml_backend_graph_plan_create(SEXP, SEXP);
+extern SEXP R_ggml_backend_graph_plan_free(SEXP, SEXP);
+extern SEXP R_ggml_backend_graph_plan_compute(SEXP, SEXP);
+// Async operations
+extern SEXP R_ggml_backend_tensor_set_async(SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_backend_tensor_get_async(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_backend_tensor_copy_async(SEXP, SEXP, SEXP, SEXP);
+// Buffer management
+extern SEXP R_ggml_backend_buffer_clear(SEXP, SEXP);
+extern SEXP R_ggml_backend_buffer_set_usage(SEXP, SEXP);
+extern SEXP R_ggml_backend_buffer_get_usage(SEXP);
+extern SEXP R_ggml_backend_buffer_reset(SEXP);
+extern SEXP R_ggml_backend_buffer_is_host(SEXP);
+// Direct backend init
+extern SEXP R_ggml_backend_init_by_name(SEXP, SEXP);
+extern SEXP R_ggml_backend_init_by_type(SEXP, SEXP);
+extern SEXP R_ggml_backend_init_best(void);
+extern SEXP R_ggml_backend_synchronize(SEXP);
+extern SEXP R_ggml_backend_get_device(SEXP);
+
+// CPU Feature Detection functions (defined in r_interface_graph.c)
+// x86 SIMD
+extern SEXP R_ggml_cpu_has_sse3(void);
+extern SEXP R_ggml_cpu_has_ssse3(void);
+extern SEXP R_ggml_cpu_has_avx(void);
+extern SEXP R_ggml_cpu_has_avx_vnni(void);
+extern SEXP R_ggml_cpu_has_avx2(void);
+extern SEXP R_ggml_cpu_has_bmi2(void);
+extern SEXP R_ggml_cpu_has_f16c(void);
+extern SEXP R_ggml_cpu_has_fma(void);
+extern SEXP R_ggml_cpu_has_avx512(void);
+extern SEXP R_ggml_cpu_has_avx512_vbmi(void);
+extern SEXP R_ggml_cpu_has_avx512_vnni(void);
+extern SEXP R_ggml_cpu_has_avx512_bf16(void);
+extern SEXP R_ggml_cpu_has_amx_int8(void);
+// ARM SIMD
+extern SEXP R_ggml_cpu_has_neon(void);
+extern SEXP R_ggml_cpu_has_arm_fma(void);
+extern SEXP R_ggml_cpu_has_fp16_va(void);
+extern SEXP R_ggml_cpu_has_dotprod(void);
+extern SEXP R_ggml_cpu_has_matmul_int8(void);
+extern SEXP R_ggml_cpu_has_sve(void);
+extern SEXP R_ggml_cpu_get_sve_cnt(void);
+extern SEXP R_ggml_cpu_has_sme(void);
+// Other architectures
+extern SEXP R_ggml_cpu_has_riscv_v(void);
+extern SEXP R_ggml_cpu_get_rvv_vlen(void);
+extern SEXP R_ggml_cpu_has_vsx(void);
+extern SEXP R_ggml_cpu_has_vxe(void);
+extern SEXP R_ggml_cpu_has_wasm_simd(void);
+extern SEXP R_ggml_cpu_has_llamafile(void);
+
+// Tensor Layout/Contiguity functions (defined in r_interface_graph.c)
+extern SEXP R_ggml_is_contiguous_0(SEXP);
+extern SEXP R_ggml_is_contiguous_1(SEXP);
+extern SEXP R_ggml_is_contiguous_2(SEXP);
+extern SEXP R_ggml_is_contiguously_allocated(SEXP);
+extern SEXP R_ggml_is_contiguous_channels(SEXP);
+extern SEXP R_ggml_is_contiguous_rows(SEXP);
+extern SEXP R_ggml_are_same_stride(SEXP, SEXP);
+extern SEXP R_ggml_can_repeat(SEXP, SEXP);
+extern SEXP R_ggml_count_equal(SEXP, SEXP, SEXP);
+
 // ============================================================================
 // Context Management
 // ============================================================================
@@ -448,6 +594,7 @@ SEXP R_ggml_rms_norm_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP eps);
 SEXP R_ggml_soft_max(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_soft_max_inplace(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_soft_max_ext(SEXP ctx_ptr, SEXP a_ptr, SEXP mask_ptr, SEXP scale, SEXP max_bias);
+SEXP R_ggml_soft_max_ext_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP mask_ptr, SEXP scale, SEXP max_bias);
 SEXP R_ggml_transpose(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_sum(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_sum_rows(SEXP ctx_ptr, SEXP a_ptr);
@@ -491,6 +638,29 @@ SEXP R_ggml_clamp(SEXP ctx_ptr, SEXP a_ptr, SEXP min_val, SEXP max_val);
 SEXP R_ggml_floor(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_ceil(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_round(SEXP ctx_ptr, SEXP a_ptr);
+// In-place operations (memory-efficient)
+SEXP R_ggml_add_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr);
+SEXP R_ggml_sub_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr);
+SEXP R_ggml_mul_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr);
+SEXP R_ggml_div_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr);
+SEXP R_ggml_sqr_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_sqrt_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_exp_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_log_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_abs_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_neg_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_ceil_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_floor_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_round_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_relu_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_gelu_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_silu_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_sigmoid_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_tanh_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_softplus_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_elu_inplace(SEXP ctx_ptr, SEXP a_ptr);
+SEXP R_ggml_scale_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP s);
+SEXP R_ggml_dup_inplace(SEXP ctx_ptr, SEXP a_ptr);
 // GLU (Gated Linear Unit) operations
 SEXP R_ggml_glu(SEXP ctx_ptr, SEXP a_ptr, SEXP op, SEXP swapped);
 SEXP R_ggml_reglu(SEXP ctx_ptr, SEXP a_ptr);
@@ -517,6 +687,20 @@ SEXP R_ggml_rope_ext(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
                      SEXP n_dims, SEXP mode, SEXP n_ctx_orig,
                      SEXP freq_base, SEXP freq_scale, SEXP ext_factor,
                      SEXP attn_factor, SEXP beta_fast, SEXP beta_slow);
+SEXP R_ggml_rope_ext_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
+                              SEXP n_dims, SEXP mode, SEXP n_ctx_orig,
+                              SEXP freq_base, SEXP freq_scale, SEXP ext_factor,
+                              SEXP attn_factor, SEXP beta_fast, SEXP beta_slow);
+SEXP R_ggml_rope_multi(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
+                        SEXP n_dims, SEXP sections, SEXP mode,
+                        SEXP n_ctx_orig, SEXP freq_base, SEXP freq_scale,
+                        SEXP ext_factor, SEXP attn_factor,
+                        SEXP beta_fast, SEXP beta_slow);
+SEXP R_ggml_rope_multi_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
+                                SEXP n_dims, SEXP sections, SEXP mode,
+                                SEXP n_ctx_orig, SEXP freq_base, SEXP freq_scale,
+                                SEXP ext_factor, SEXP attn_factor,
+                                SEXP beta_fast, SEXP beta_slow);
 
 // Flash Attention
 SEXP R_ggml_flash_attn_ext(SEXP ctx_ptr, SEXP q_ptr, SEXP k_ptr, SEXP v_ptr,
@@ -554,6 +738,8 @@ SEXP R_ggml_silu_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr);
 SEXP R_ggml_get_rows_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr);
 SEXP R_ggml_soft_max_ext_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                                SEXP scale, SEXP max_bias);
+SEXP R_ggml_soft_max_ext_back_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                                       SEXP scale, SEXP max_bias);
 SEXP R_ggml_rope_ext_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
                           SEXP n_dims, SEXP mode, SEXP n_ctx_orig,
                           SEXP freq_base, SEXP freq_scale, SEXP ext_factor,
@@ -600,6 +786,20 @@ SEXP R_ggml_nrows(SEXP tensor_ptr);
 SEXP R_ggml_are_same_shape(SEXP a_ptr, SEXP b_ptr);
 SEXP R_ggml_set_name(SEXP tensor_ptr, SEXP name);
 SEXP R_ggml_get_name(SEXP tensor_ptr);
+
+// Type system functions
+SEXP R_ggml_type_name(SEXP type);
+SEXP R_ggml_type_sizef(SEXP type);
+SEXP R_ggml_blck_size(SEXP type);
+SEXP R_ggml_is_quantized(SEXP type);
+SEXP R_ggml_ftype_to_ggml_type(SEXP ftype);
+
+// Operation info functions
+SEXP R_ggml_op_name(SEXP op);
+SEXP R_ggml_op_symbol(SEXP op);
+SEXP R_ggml_unary_op_name(SEXP op);
+SEXP R_ggml_op_desc(SEXP tensor_ptr);
+SEXP R_ggml_get_unary_op(SEXP tensor_ptr);
 
 // Backend functions - direct access
 SEXP R_ggml_backend_cpu_init(void);
@@ -782,6 +982,7 @@ SEXP R_ggml_set_zero(SEXP tensor_ptr) {
 // ============================================================================
 
 #ifdef _OPENMP
+#undef match  // R defines 'match' macro that conflicts with OpenMP pragma
 #include <omp.h>
 #endif
 
@@ -897,9 +1098,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_rms_norm_back",  (DL_FUNC) &R_ggml_rms_norm_back,  4},
 
     // Softmax
-    {"R_ggml_soft_max",         (DL_FUNC) &R_ggml_soft_max,         2},
-    {"R_ggml_soft_max_inplace", (DL_FUNC) &R_ggml_soft_max_inplace, 2},
-    {"R_ggml_soft_max_ext",     (DL_FUNC) &R_ggml_soft_max_ext,     5},
+    {"R_ggml_soft_max",             (DL_FUNC) &R_ggml_soft_max,             2},
+    {"R_ggml_soft_max_inplace",     (DL_FUNC) &R_ggml_soft_max_inplace,     2},
+    {"R_ggml_soft_max_ext",         (DL_FUNC) &R_ggml_soft_max_ext,         5},
+    {"R_ggml_soft_max_ext_inplace", (DL_FUNC) &R_ggml_soft_max_ext_inplace, 5},
 
     // Basic operations - extended
     {"R_ggml_transpose",  (DL_FUNC) &R_ggml_transpose,  2},
@@ -961,6 +1163,30 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_ceil",  (DL_FUNC) &R_ggml_ceil,  2},
     {"R_ggml_round", (DL_FUNC) &R_ggml_round, 2},
 
+    // In-place operations (memory-efficient, 2-3x savings)
+    {"R_ggml_add_inplace",      (DL_FUNC) &R_ggml_add_inplace,      3},
+    {"R_ggml_sub_inplace",      (DL_FUNC) &R_ggml_sub_inplace,      3},
+    {"R_ggml_mul_inplace",      (DL_FUNC) &R_ggml_mul_inplace,      3},
+    {"R_ggml_div_inplace",      (DL_FUNC) &R_ggml_div_inplace,      3},
+    {"R_ggml_sqr_inplace",      (DL_FUNC) &R_ggml_sqr_inplace,      2},
+    {"R_ggml_sqrt_inplace",     (DL_FUNC) &R_ggml_sqrt_inplace,     2},
+    {"R_ggml_exp_inplace",      (DL_FUNC) &R_ggml_exp_inplace,      2},
+    {"R_ggml_log_inplace",      (DL_FUNC) &R_ggml_log_inplace,      2},
+    {"R_ggml_abs_inplace",      (DL_FUNC) &R_ggml_abs_inplace,      2},
+    {"R_ggml_neg_inplace",      (DL_FUNC) &R_ggml_neg_inplace,      2},
+    {"R_ggml_ceil_inplace",     (DL_FUNC) &R_ggml_ceil_inplace,     2},
+    {"R_ggml_floor_inplace",    (DL_FUNC) &R_ggml_floor_inplace,    2},
+    {"R_ggml_round_inplace",    (DL_FUNC) &R_ggml_round_inplace,    2},
+    {"R_ggml_relu_inplace",     (DL_FUNC) &R_ggml_relu_inplace,     2},
+    {"R_ggml_gelu_inplace",     (DL_FUNC) &R_ggml_gelu_inplace,     2},
+    {"R_ggml_silu_inplace",     (DL_FUNC) &R_ggml_silu_inplace,     2},
+    {"R_ggml_sigmoid_inplace",  (DL_FUNC) &R_ggml_sigmoid_inplace,  2},
+    {"R_ggml_tanh_inplace",     (DL_FUNC) &R_ggml_tanh_inplace,     2},
+    {"R_ggml_softplus_inplace", (DL_FUNC) &R_ggml_softplus_inplace, 2},
+    {"R_ggml_elu_inplace",      (DL_FUNC) &R_ggml_elu_inplace,      2},
+    {"R_ggml_scale_inplace",    (DL_FUNC) &R_ggml_scale_inplace,    3},
+    {"R_ggml_dup_inplace",      (DL_FUNC) &R_ggml_dup_inplace,      2},
+
     // GLU (Gated Linear Unit) operations
     {"R_ggml_glu",          (DL_FUNC) &R_ggml_glu,          4},
     {"R_ggml_reglu",        (DL_FUNC) &R_ggml_reglu,        2},
@@ -981,9 +1207,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_diag_mask_zero",        (DL_FUNC) &R_ggml_diag_mask_zero,        3},
 
     // RoPE (Rotary Position Embedding)
-    {"R_ggml_rope",         (DL_FUNC) &R_ggml_rope,         5},
-    {"R_ggml_rope_inplace", (DL_FUNC) &R_ggml_rope_inplace, 5},
-    {"R_ggml_rope_ext",     (DL_FUNC) &R_ggml_rope_ext,     13},
+    {"R_ggml_rope",               (DL_FUNC) &R_ggml_rope,               5},
+    {"R_ggml_rope_inplace",       (DL_FUNC) &R_ggml_rope_inplace,       5},
+    {"R_ggml_rope_ext",           (DL_FUNC) &R_ggml_rope_ext,           13},
+    {"R_ggml_rope_ext_inplace",   (DL_FUNC) &R_ggml_rope_ext_inplace,   13},
+    {"R_ggml_rope_multi",         (DL_FUNC) &R_ggml_rope_multi,         14},
+    {"R_ggml_rope_multi_inplace", (DL_FUNC) &R_ggml_rope_multi_inplace, 14},
 
     // Flash Attention
     {"R_ggml_flash_attn_ext",  (DL_FUNC) &R_ggml_flash_attn_ext,  8},
@@ -1013,10 +1242,11 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_diag",           (DL_FUNC) &R_ggml_diag,           2},
 
     // Backward pass operations
-    {"R_ggml_silu_back",         (DL_FUNC) &R_ggml_silu_back,         3},
-    {"R_ggml_get_rows_back",     (DL_FUNC) &R_ggml_get_rows_back,     4},
-    {"R_ggml_soft_max_ext_back", (DL_FUNC) &R_ggml_soft_max_ext_back, 5},
-    {"R_ggml_rope_ext_back",     (DL_FUNC) &R_ggml_rope_ext_back,     13},
+    {"R_ggml_silu_back",                (DL_FUNC) &R_ggml_silu_back,                3},
+    {"R_ggml_get_rows_back",            (DL_FUNC) &R_ggml_get_rows_back,            4},
+    {"R_ggml_soft_max_ext_back",        (DL_FUNC) &R_ggml_soft_max_ext_back,        5},
+    {"R_ggml_soft_max_ext_back_inplace",(DL_FUNC) &R_ggml_soft_max_ext_back_inplace,5},
+    {"R_ggml_rope_ext_back",            (DL_FUNC) &R_ggml_rope_ext_back,            13},
 
     // Concatenation
     {"R_ggml_concat",         (DL_FUNC) &R_ggml_concat,         4},
@@ -1059,6 +1289,20 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_are_same_shape",     (DL_FUNC) &R_ggml_are_same_shape,     2},
     {"R_ggml_set_name",           (DL_FUNC) &R_ggml_set_name,           2},
     {"R_ggml_get_name",           (DL_FUNC) &R_ggml_get_name,           1},
+
+    // Type system functions
+    {"R_ggml_type_name",          (DL_FUNC) &R_ggml_type_name,          1},
+    {"R_ggml_type_sizef",         (DL_FUNC) &R_ggml_type_sizef,         1},
+    {"R_ggml_blck_size",          (DL_FUNC) &R_ggml_blck_size,          1},
+    {"R_ggml_is_quantized",       (DL_FUNC) &R_ggml_is_quantized,       1},
+    {"R_ggml_ftype_to_ggml_type", (DL_FUNC) &R_ggml_ftype_to_ggml_type, 1},
+
+    // Operation info functions
+    {"R_ggml_op_name",            (DL_FUNC) &R_ggml_op_name,            1},
+    {"R_ggml_op_symbol",          (DL_FUNC) &R_ggml_op_symbol,          1},
+    {"R_ggml_unary_op_name",      (DL_FUNC) &R_ggml_unary_op_name,      1},
+    {"R_ggml_op_desc",            (DL_FUNC) &R_ggml_op_desc,            1},
+    {"R_ggml_get_unary_op",       (DL_FUNC) &R_ggml_get_unary_op,       1},
 
     // Backend functions - direct access
     {"R_ggml_backend_cpu_init",          (DL_FUNC) &R_ggml_backend_cpu_init,          0},
@@ -1107,6 +1351,140 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_backend_sched_graph_compute_async",(DL_FUNC) &R_ggml_backend_sched_graph_compute_async,2},
     {"R_ggml_backend_sched_synchronize",        (DL_FUNC) &R_ggml_backend_sched_synchronize,        1},
     {"R_ggml_backend_sched_reset",              (DL_FUNC) &R_ggml_backend_sched_reset,              1},
+
+    // Optimization functions (r_interface_opt.c)
+    {"R_ggml_opt_loss_type_mean",               (DL_FUNC) &R_ggml_opt_loss_type_mean,               0},
+    {"R_ggml_opt_loss_type_sum",                (DL_FUNC) &R_ggml_opt_loss_type_sum,                0},
+    {"R_ggml_opt_loss_type_cross_entropy",      (DL_FUNC) &R_ggml_opt_loss_type_cross_entropy,      0},
+    {"R_ggml_opt_loss_type_mse",                (DL_FUNC) &R_ggml_opt_loss_type_mse,                0},
+    {"R_ggml_opt_optimizer_type_adamw",         (DL_FUNC) &R_ggml_opt_optimizer_type_adamw,         0},
+    {"R_ggml_opt_optimizer_type_sgd",           (DL_FUNC) &R_ggml_opt_optimizer_type_sgd,           0},
+    {"R_ggml_opt_dataset_init",                 (DL_FUNC) &R_ggml_opt_dataset_init,                 6},
+    {"R_ggml_opt_dataset_free",                 (DL_FUNC) &R_ggml_opt_dataset_free,                 1},
+    {"R_ggml_opt_dataset_ndata",                (DL_FUNC) &R_ggml_opt_dataset_ndata,                1},
+    {"R_ggml_opt_dataset_data",                 (DL_FUNC) &R_ggml_opt_dataset_data,                 1},
+    {"R_ggml_opt_dataset_labels",               (DL_FUNC) &R_ggml_opt_dataset_labels,               1},
+    {"R_ggml_opt_dataset_shuffle",              (DL_FUNC) &R_ggml_opt_dataset_shuffle,              3},
+    {"R_ggml_opt_dataset_get_batch",            (DL_FUNC) &R_ggml_opt_dataset_get_batch,            4},
+    {"R_ggml_opt_default_params",               (DL_FUNC) &R_ggml_opt_default_params,               2},
+    {"R_ggml_opt_init",                         (DL_FUNC) &R_ggml_opt_init,                         4},
+    {"R_ggml_opt_free",                         (DL_FUNC) &R_ggml_opt_free,                         1},
+    {"R_ggml_opt_reset",                        (DL_FUNC) &R_ggml_opt_reset,                        2},
+    {"R_ggml_opt_static_graphs",                (DL_FUNC) &R_ggml_opt_static_graphs,                1},
+    {"R_ggml_opt_inputs",                       (DL_FUNC) &R_ggml_opt_inputs,                       1},
+    {"R_ggml_opt_outputs",                      (DL_FUNC) &R_ggml_opt_outputs,                      1},
+    {"R_ggml_opt_labels",                       (DL_FUNC) &R_ggml_opt_labels,                       1},
+    {"R_ggml_opt_loss",                         (DL_FUNC) &R_ggml_opt_loss,                         1},
+    {"R_ggml_opt_pred",                         (DL_FUNC) &R_ggml_opt_pred,                         1},
+    {"R_ggml_opt_ncorrect",                     (DL_FUNC) &R_ggml_opt_ncorrect,                     1},
+    {"R_ggml_opt_context_optimizer_type",       (DL_FUNC) &R_ggml_opt_context_optimizer_type,       1},
+    {"R_ggml_opt_optimizer_name",               (DL_FUNC) &R_ggml_opt_optimizer_name,               1},
+    {"R_ggml_opt_result_init",                  (DL_FUNC) &R_ggml_opt_result_init,                  0},
+    {"R_ggml_opt_result_free",                  (DL_FUNC) &R_ggml_opt_result_free,                  1},
+    {"R_ggml_opt_result_reset",                 (DL_FUNC) &R_ggml_opt_result_reset,                 1},
+    {"R_ggml_opt_result_ndata",                 (DL_FUNC) &R_ggml_opt_result_ndata,                 1},
+    {"R_ggml_opt_result_loss",                  (DL_FUNC) &R_ggml_opt_result_loss,                  1},
+    {"R_ggml_opt_result_accuracy",              (DL_FUNC) &R_ggml_opt_result_accuracy,              1},
+    {"R_ggml_opt_alloc",                        (DL_FUNC) &R_ggml_opt_alloc,                        2},
+    {"R_ggml_opt_eval",                         (DL_FUNC) &R_ggml_opt_eval,                         2},
+    {"R_ggml_opt_fit",                          (DL_FUNC) &R_ggml_opt_fit,                          11},
+    {"R_ggml_opt_grad_acc",                      (DL_FUNC) &R_ggml_opt_grad_acc,                      2},
+    {"R_ggml_opt_result_pred",                   (DL_FUNC) &R_ggml_opt_result_pred,                   1},
+    {"R_ggml_opt_prepare_alloc",                 (DL_FUNC) &R_ggml_opt_prepare_alloc,                 5},
+    {"R_ggml_opt_epoch",                         (DL_FUNC) &R_ggml_opt_epoch,                         7},
+
+    // Extended backend functions
+    {"R_ggml_backend_device_type_cpu",          (DL_FUNC) &R_ggml_backend_device_type_cpu,           0},
+    {"R_ggml_backend_device_type_gpu",          (DL_FUNC) &R_ggml_backend_device_type_gpu,           0},
+    {"R_ggml_backend_device_type_igpu",         (DL_FUNC) &R_ggml_backend_device_type_igpu,          0},
+    {"R_ggml_backend_device_type_accel",        (DL_FUNC) &R_ggml_backend_device_type_accel,         0},
+    {"R_ggml_backend_buffer_usage_any",         (DL_FUNC) &R_ggml_backend_buffer_usage_any,          0},
+    {"R_ggml_backend_buffer_usage_weights",     (DL_FUNC) &R_ggml_backend_buffer_usage_weights,      0},
+    {"R_ggml_backend_buffer_usage_compute",     (DL_FUNC) &R_ggml_backend_buffer_usage_compute,      0},
+    {"R_ggml_backend_dev_count",                (DL_FUNC) &R_ggml_backend_dev_count,                 0},
+    {"R_ggml_backend_dev_get",                  (DL_FUNC) &R_ggml_backend_dev_get,                   1},
+    {"R_ggml_backend_dev_by_name",              (DL_FUNC) &R_ggml_backend_dev_by_name,               1},
+    {"R_ggml_backend_dev_by_type",              (DL_FUNC) &R_ggml_backend_dev_by_type,               1},
+    {"R_ggml_backend_dev_name",                 (DL_FUNC) &R_ggml_backend_dev_name,                  1},
+    {"R_ggml_backend_dev_description",          (DL_FUNC) &R_ggml_backend_dev_description,           1},
+    {"R_ggml_backend_dev_memory",               (DL_FUNC) &R_ggml_backend_dev_memory,                1},
+    {"R_ggml_backend_dev_type",                 (DL_FUNC) &R_ggml_backend_dev_type,                  1},
+    {"R_ggml_backend_dev_get_props",            (DL_FUNC) &R_ggml_backend_dev_get_props,             1},
+    {"R_ggml_backend_dev_supports_op",          (DL_FUNC) &R_ggml_backend_dev_supports_op,           2},
+    {"R_ggml_backend_dev_supports_buft",        (DL_FUNC) &R_ggml_backend_dev_supports_buft,         2},
+    {"R_ggml_backend_dev_offload_op",           (DL_FUNC) &R_ggml_backend_dev_offload_op,            2},
+    {"R_ggml_backend_dev_init",                 (DL_FUNC) &R_ggml_backend_dev_init,                  2},
+    {"R_ggml_backend_reg_count",                (DL_FUNC) &R_ggml_backend_reg_count,                 0},
+    {"R_ggml_backend_reg_get",                  (DL_FUNC) &R_ggml_backend_reg_get,                   1},
+    {"R_ggml_backend_reg_by_name",              (DL_FUNC) &R_ggml_backend_reg_by_name,               1},
+    {"R_ggml_backend_reg_name",                 (DL_FUNC) &R_ggml_backend_reg_name,                  1},
+    {"R_ggml_backend_reg_dev_count",            (DL_FUNC) &R_ggml_backend_reg_dev_count,             1},
+    {"R_ggml_backend_reg_dev_get",              (DL_FUNC) &R_ggml_backend_reg_dev_get,               2},
+    {"R_ggml_backend_load",                     (DL_FUNC) &R_ggml_backend_load,                      1},
+    {"R_ggml_backend_unload",                   (DL_FUNC) &R_ggml_backend_unload,                    1},
+    {"R_ggml_backend_load_all",                 (DL_FUNC) &R_ggml_backend_load_all,                  0},
+    {"R_ggml_backend_event_new",                (DL_FUNC) &R_ggml_backend_event_new,                 1},
+    {"R_ggml_backend_event_free",               (DL_FUNC) &R_ggml_backend_event_free,                1},
+    {"R_ggml_backend_event_record",             (DL_FUNC) &R_ggml_backend_event_record,              2},
+    {"R_ggml_backend_event_synchronize",        (DL_FUNC) &R_ggml_backend_event_synchronize,         1},
+    {"R_ggml_backend_event_wait",               (DL_FUNC) &R_ggml_backend_event_wait,                2},
+    {"R_ggml_backend_graph_plan_create",        (DL_FUNC) &R_ggml_backend_graph_plan_create,         2},
+    {"R_ggml_backend_graph_plan_free",          (DL_FUNC) &R_ggml_backend_graph_plan_free,           2},
+    {"R_ggml_backend_graph_plan_compute",       (DL_FUNC) &R_ggml_backend_graph_plan_compute,        2},
+    {"R_ggml_backend_tensor_set_async",         (DL_FUNC) &R_ggml_backend_tensor_set_async,          5},
+    {"R_ggml_backend_tensor_get_async",         (DL_FUNC) &R_ggml_backend_tensor_get_async,          4},
+    {"R_ggml_backend_tensor_copy_async",        (DL_FUNC) &R_ggml_backend_tensor_copy_async,         4},
+    {"R_ggml_backend_buffer_clear",             (DL_FUNC) &R_ggml_backend_buffer_clear,              2},
+    {"R_ggml_backend_buffer_set_usage",         (DL_FUNC) &R_ggml_backend_buffer_set_usage,          2},
+    {"R_ggml_backend_buffer_get_usage",         (DL_FUNC) &R_ggml_backend_buffer_get_usage,          1},
+    {"R_ggml_backend_buffer_reset",             (DL_FUNC) &R_ggml_backend_buffer_reset,              1},
+    {"R_ggml_backend_buffer_is_host",           (DL_FUNC) &R_ggml_backend_buffer_is_host,            1},
+    {"R_ggml_backend_init_by_name",             (DL_FUNC) &R_ggml_backend_init_by_name,              2},
+    {"R_ggml_backend_init_by_type",             (DL_FUNC) &R_ggml_backend_init_by_type,              2},
+    {"R_ggml_backend_init_best",                (DL_FUNC) &R_ggml_backend_init_best,                 0},
+    {"R_ggml_backend_synchronize",              (DL_FUNC) &R_ggml_backend_synchronize,               1},
+    {"R_ggml_backend_get_device",               (DL_FUNC) &R_ggml_backend_get_device,                1},
+
+    // CPU Feature Detection (x86)
+    {"R_ggml_cpu_has_sse3",                     (DL_FUNC) &R_ggml_cpu_has_sse3,                      0},
+    {"R_ggml_cpu_has_ssse3",                    (DL_FUNC) &R_ggml_cpu_has_ssse3,                     0},
+    {"R_ggml_cpu_has_avx",                      (DL_FUNC) &R_ggml_cpu_has_avx,                       0},
+    {"R_ggml_cpu_has_avx_vnni",                 (DL_FUNC) &R_ggml_cpu_has_avx_vnni,                  0},
+    {"R_ggml_cpu_has_avx2",                     (DL_FUNC) &R_ggml_cpu_has_avx2,                      0},
+    {"R_ggml_cpu_has_bmi2",                     (DL_FUNC) &R_ggml_cpu_has_bmi2,                      0},
+    {"R_ggml_cpu_has_f16c",                     (DL_FUNC) &R_ggml_cpu_has_f16c,                      0},
+    {"R_ggml_cpu_has_fma",                      (DL_FUNC) &R_ggml_cpu_has_fma,                       0},
+    {"R_ggml_cpu_has_avx512",                   (DL_FUNC) &R_ggml_cpu_has_avx512,                    0},
+    {"R_ggml_cpu_has_avx512_vbmi",              (DL_FUNC) &R_ggml_cpu_has_avx512_vbmi,               0},
+    {"R_ggml_cpu_has_avx512_vnni",              (DL_FUNC) &R_ggml_cpu_has_avx512_vnni,               0},
+    {"R_ggml_cpu_has_avx512_bf16",              (DL_FUNC) &R_ggml_cpu_has_avx512_bf16,               0},
+    {"R_ggml_cpu_has_amx_int8",                 (DL_FUNC) &R_ggml_cpu_has_amx_int8,                  0},
+    // CPU Feature Detection (ARM)
+    {"R_ggml_cpu_has_neon",                     (DL_FUNC) &R_ggml_cpu_has_neon,                      0},
+    {"R_ggml_cpu_has_arm_fma",                  (DL_FUNC) &R_ggml_cpu_has_arm_fma,                   0},
+    {"R_ggml_cpu_has_fp16_va",                  (DL_FUNC) &R_ggml_cpu_has_fp16_va,                   0},
+    {"R_ggml_cpu_has_dotprod",                  (DL_FUNC) &R_ggml_cpu_has_dotprod,                   0},
+    {"R_ggml_cpu_has_matmul_int8",              (DL_FUNC) &R_ggml_cpu_has_matmul_int8,               0},
+    {"R_ggml_cpu_has_sve",                      (DL_FUNC) &R_ggml_cpu_has_sve,                       0},
+    {"R_ggml_cpu_get_sve_cnt",                  (DL_FUNC) &R_ggml_cpu_get_sve_cnt,                   0},
+    {"R_ggml_cpu_has_sme",                      (DL_FUNC) &R_ggml_cpu_has_sme,                       0},
+    // CPU Feature Detection (Other)
+    {"R_ggml_cpu_has_riscv_v",                  (DL_FUNC) &R_ggml_cpu_has_riscv_v,                   0},
+    {"R_ggml_cpu_get_rvv_vlen",                 (DL_FUNC) &R_ggml_cpu_get_rvv_vlen,                  0},
+    {"R_ggml_cpu_has_vsx",                      (DL_FUNC) &R_ggml_cpu_has_vsx,                       0},
+    {"R_ggml_cpu_has_vxe",                      (DL_FUNC) &R_ggml_cpu_has_vxe,                       0},
+    {"R_ggml_cpu_has_wasm_simd",                (DL_FUNC) &R_ggml_cpu_has_wasm_simd,                 0},
+    {"R_ggml_cpu_has_llamafile",                (DL_FUNC) &R_ggml_cpu_has_llamafile,                 0},
+    // Tensor Layout/Contiguity
+    {"R_ggml_is_contiguous_0",                  (DL_FUNC) &R_ggml_is_contiguous_0,                   1},
+    {"R_ggml_is_contiguous_1",                  (DL_FUNC) &R_ggml_is_contiguous_1,                   1},
+    {"R_ggml_is_contiguous_2",                  (DL_FUNC) &R_ggml_is_contiguous_2,                   1},
+    {"R_ggml_is_contiguously_allocated",        (DL_FUNC) &R_ggml_is_contiguously_allocated,         1},
+    {"R_ggml_is_contiguous_channels",           (DL_FUNC) &R_ggml_is_contiguous_channels,            1},
+    {"R_ggml_is_contiguous_rows",               (DL_FUNC) &R_ggml_is_contiguous_rows,                1},
+    {"R_ggml_are_same_stride",                  (DL_FUNC) &R_ggml_are_same_stride,                   2},
+    {"R_ggml_can_repeat",                       (DL_FUNC) &R_ggml_can_repeat,                        2},
+    {"R_ggml_count_equal",                      (DL_FUNC) &R_ggml_count_equal,                       3},
 
     {NULL, NULL, 0}
 };

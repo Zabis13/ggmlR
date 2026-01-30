@@ -30,3 +30,8 @@
 ^install_vulkan\.sh$
 ^docs$
 ^examples$
+^src/ggml-cpu/amx/mmq\.cpp$
+^src/ggml-cpu/amx/amx\.cpp$
+^src/ggml-cpu/llamafile/sgemm\.cpp$
+^src/r_interface_memory\.c$
+^src/r_interface_threading\.c$

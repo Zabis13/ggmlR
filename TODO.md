@@ -1,240 +1,165 @@
-# Vulkan GPU Backend - План реализации
 
-убрал большую папку
+## Статус реализации GGML API (v0.5.1+)
 
-### Использование
+**Экспортировано функций: 397**
 
-```bash
-# Установка без Vulkan (по умолчанию, для CRAN)
-R CMD INSTALL ggmlR
+---
 
-# Установка с Vulkan (требует Vulkan SDK + glslc)
-R CMD INSTALL --configure-args="--with-vulkan" ggmlR
-```
+## ✅ РЕАЛИЗОВАНО
 
-Требования для Vulkan:
-- Vulkan SDK (libvulkan-dev)
-- glslc компилятор шейдеров
-- GPU с поддержкой Vulkan (AMD, NVIDIA, Intel)
+### Ядро GGML
+- Управление контекстом: `ggml_init`, `ggml_free`, `ggml_reset`
+- Создание тензоров: `ggml_new_tensor_1d/2d/3d/4d`, `ggml_dup_tensor`
+- Доступ к данным: `ggml_set_f32`, `ggml_get_f32`, `ggml_set_i32`, `ggml_get_i32`
+- Информация о тензорах: `ggml_nelements`, `ggml_nbytes`, `ggml_tensor_shape`, `ggml_tensor_type`
 
+### Операции (150+ функций)
+- **Арифметика**: add, sub, mul, div, scale, clamp (+ inplace варианты)
+- **Математика**: sqr, sqrt, exp, log, abs, neg, sin, cos, ceil, floor, round
+- **Активации**: relu, gelu, silu, sigmoid, tanh, elu, softplus, hardsigmoid, hardswish, leaky_relu
+- **GLU**: glu, reglu, geglu, swiglu (+ split варианты)
+- **Нормализация**: norm, rms_norm, l2_norm, group_norm (+ inplace варианты)
+- **Softmax**: soft_max, soft_max_ext (+ inplace и back варианты)
+- **Редукция**: sum, sum_rows, mean, argmax
+- **Матричные**: mul_mat, mul_mat_id, out_prod, transpose
+- **Reshape/View**: reshape_1d/2d/3d/4d, view_1d/2d/3d/4d, permute, cont
+- **CNN**: conv_1d, conv_2d, conv_transpose_1d, pool_1d, pool_2d, im2col
+- **Attention**: flash_attn_ext, flash_attn_back, diag_mask_inf/zero
+- **RoPE**: rope, rope_ext, rope_multi (+ inplace и back варианты)
 
-## ✅ РЕАЛИЗОВАНО - Функции ggml Vulkan Backend
+### Backend System (60+ функций)
+- **CPU Backend**: `ggml_backend_cpu_init`, `ggml_backend_cpu_set_n_threads`
+- **Device Management**: `ggml_backend_dev_count/get/by_name/by_type`
+- **Device Properties**: `ggml_backend_dev_name/description/memory/type/get_props`
+- **Registry**: `ggml_backend_reg_count/get/by_name/dev_count/dev_get`
+- **Buffer Management**: `ggml_backend_buffer_*` (free, get_size, name, clear, usage, is_host)
+- **Events**: `ggml_backend_event_new/free/record/synchronize/wait`
+- **Graph Plans**: `ggml_backend_graph_plan_create/free/compute`
+- **Async Operations**: `ggml_backend_tensor_set/get/copy_async`
+- **Scheduler**: `ggml_backend_sched_*` (new, free, reserve, alloc_graph, graph_compute, synchronize)
+- **Init Helpers**: `ggml_backend_init_by_name/by_type/init_best`, `ggml_backend_load/load_all`
 
-### 1. Инициализация и управление backend
+### Vulkan Backend (10 функций)
+- `ggml_vulkan_available`, `ggml_vulkan_device_count/description/memory`
+- `ggml_vulkan_init`, `ggml_vulkan_free`, `ggml_vulkan_list_devices`
 
-- [x] `ggml_vulkan_available()` - проверка доступности Vulkan
-- [x] `ggml_vulkan_init()` - инициализация Vulkan backend
-- [x] `ggml_vulkan_is_backend()` - проверка является ли backend Vulkan
-- [x] `ggml_vulkan_device_count()` - получение количества устройств
-- [x] `ggml_vulkan_device_description()` - описание устройства
-- [x] `ggml_vulkan_device_memory()` - получение информации о памяти
-- [x] `ggml_vulkan_list_devices()` - список всех устройств
-- [x] `ggml_vulkan_backend_name()` - имя backend
-- [x] `ggml_vulkan_free()` - освобождение backend
-- [x] `ggml_vulkan_status()` - статус Vulkan (с выводом в консоль)
+### Optimizer System (39 функций)
+- **Dataset**: `ggml_opt_dataset_init/free/ndata/data/labels/shuffle/get_batch`
+- **Context**: `ggml_opt_init/free/reset/alloc/static_graphs`
+- **Training**: `ggml_opt_fit`, `ggml_opt_epoch`, `ggml_opt_eval`, `ggml_opt_grad_acc`
+- **Tensors**: `ggml_opt_inputs/outputs/labels/loss/pred/ncorrect`
+- **Results**: `ggml_opt_result_init/free/reset/ndata/loss/accuracy/pred`
+- **Constants**: loss types (mean, sum, cross_entropy, mse), optimizer types (adamw, sgd)
 
-### 2. Управление буферами и памятью
+### CPU Feature Detection (28 функций)
+- **x86**: sse3, ssse3, avx, avx2, avx_vnni, bmi2, f16c, fma, avx512, avx512_vbmi/vnni/bf16, amx_int8
+- **ARM**: neon, arm_fma, fp16_va, dotprod, matmul_int8, sve, sme + sve_cnt
+- **Other**: riscv_v + rvv_vlen, vsx, vxe, wasm_simd, llamafile
+- **Helper**: `ggml_cpu_features()` — все фичи как named list
 
-- [x] Автоматическое управление буферами через ggml backend API
-- [x] Поддержка device и host памяти
+### Tensor Layout/Contiguity (9 функций)
+- `ggml_is_contiguous_0/1/2`, `ggml_is_contiguous_channels/rows`
+- `ggml_is_contiguously_allocated`, `ggml_are_same_stride`
+- `ggml_can_repeat`, `ggml_count_equal`
 
-### 3. Тестирование
+### Type System (10 функций)
+- `ggml_type_name`, `ggml_type_size`, `ggml_type_sizef`, `ggml_blck_size`
+- `ggml_is_quantized`, `ggml_ftype_to_ggml_type`
+- `ggml_op_name`, `ggml_op_symbol`, `ggml_op_desc`, `ggml_get_unary_op`
 
-**Полный набор тестов: 414 PASS, 0 FAIL, 4 SKIP**
+### Quantization (4 функции)
+- `ggml_quantize_init`, `ggml_quantize_free`, `ggml_quantize_requires_imatrix`
+- `ggml_quantize_chunk`
 
-**Vulkan-специфичные тесты (47 tests):**
-- ✅ Инфраструктура: инициализация, устройства, память (10 тестов)
-- ✅ LLM активации: swiglu, geglu (LLaMA/Mistral)
-- ✅ Flash Attention для эффективного внимания (multi-head, 4 головы)
-- ✅ Базовые операции: add, mul_mat
-- ✅ Smoke tests: 10 Vulkan тестов в tests.R
+### Graph Operations
+- `ggml_build_forward_expand`, `ggml_graph_compute`, `ggml_graph_compute_with_ctx`
+- `ggml_graph_n_nodes`, `ggml_graph_node`, `ggml_graph_get_tensor`
+- `ggml_graph_print`, `ggml_graph_reset`, `ggml_graph_dump_dot`, `ggml_graph_overhead`
 
-**CPU тесты (367 tests):**
-- ✅ Базовые операции: add, sub, mul, div, sqrt, abs, exp, log (32 теста)
-- ✅ Активации: relu, gelu, silu, sigmoid, tanh, GLU варианты (24 теста)
-- ✅ Трансформеры: rope, flash_attn, diag_mask, argsort (45 тестов)
-- ✅ Нормализация: norm, rms_norm, group_norm, l2_norm
-- ✅ Матричные операции: mul_mat, out_prod
-- ✅ Память и контексты: allocate, free, reset (48 тестов)
-- ✅ Тензоры: создание, копирование, reshape (72 теста)
-- ✅ Графы вычислений: build, compute, optimize (14 тестов)
-- ✅ Утилиты: helpers, types, version (22 теста)
+### Memory Allocators
+- `ggml_gallocr_new`, `ggml_gallocr_free`, `ggml_gallocr_reserve`
+- `ggml_gallocr_alloc_graph`, `ggml_gallocr_get_buffer_size`
+- `ggml_backend_alloc_ctx_tensors`
 
-**Benchmark GPU vs CPU:**
-- ✅ Векторные операции: 30-50x ускорение (до 43.5 GFLOPS на GPU)
-- ✅ Матричные операции: до 433x ускорение (10.9 TFLOPS на 8192x8192)
-- ✅ Тест на больших данных: до 2e8 элементов (763 MB), 5e8 элементов (1.9 GB)
+---
 
-**Результаты:**
-- AMD Radeon Graphics (RADV GFX1201) - 17.18 GB памяти
-- 145 Vulkan шейдеров успешно скомпилированы
-- Все тесты проходят без ошибок
-- Время выполнения тестов: 1.3 секунды
+## 🔴 НЕ РЕАЛИЗОВАНО (Критичные)
 
-### 4. Доступные шейдеры (145 операций)
+- [ ] `ggml_backend_graph_compute_async()` — async graph compute
+- [ ] `ggml_backend_multi_buffer_*()` — multi-buffer операции
+- [ ] `ggml_backend_register()` — dynamic backend registration
 
-Все шейдеры из ggml-vulkan уже включены:
+---
 
-**Матричные операции:**
-- mul_mat_vec, mul_mm, mul_mmq (с вариантами для разных типов данных)
-- flash_attn, flash_attn_cm1, flash_attn_cm2
+## 🟡 НЕ РЕАЛИЗОВАНО (Средний приоритет)
 
-**Базовые операции:**
-- add, sub, mul, div, neg, abs, exp, log, sqrt, square
-- relu, gelu, silu, sigmoid, tanh, softplus
-- soft_max, norm, rms_norm, group_norm, l2_norm
+### Advanced RoPE (1 функция)
+- [ ] `ggml_rope_multi_back()` — backward для multi-head RoPE
+- ⚠️ `ggml_rope_custom*()` — deprecated, использовать rope_ext
 
-**Квантизация:**
-- dequant_q4_0/1, dequant_q5_0/1, dequant_q8_0
-- dequant_q2_k - q6_k
-- dequant_iq1_s/m, dequant_iq2_xxs/xs/s, dequant_iq3_xxs/s, dequant_iq4_nl/xs
+### Graph Introspection (8 функций)
+- [ ] `ggml_build_backward_expand()` — для обучения
+- [ ] `ggml_graph_add_node()` / `ggml_graph_clear()` / `ggml_graph_cpy()` / `ggml_graph_dup()`
+- [ ] `ggml_graph_get_grad()` / `ggml_graph_get_grad_acc()`
+- [ ] `ggml_graph_view()`, `ggml_cgraph_eval_order()`
+- [ ] `ggml_op_can_inplace()`, `ggml_cplan()`
 
-**Трансформеры:**
-- rope_norm, rope_neox, rope_multi, rope_vision
-- diag_mask_inf, argsort, get_rows
+### Advanced Attention/Loss (6 функций)
+- [ ] `ggml_cross_entropy_loss()` / `ggml_cross_entropy_loss_back()`
+- [ ] `ggml_cumsum()`
+- [ ] `ggml_flash_attn_ext_add_sinks()`
+- [ ] `ggml_flash_attn_ext_get_prec()` / `ggml_flash_attn_ext_set_prec()`
 
-**Прочее:**
-- copy, concat, pad, repeat, upscale, pool2d, im2col
-- conv2d_mm, conv2d_dw, conv_transpose_1d
+---
 
-## Технические заметки
+## 🟢 НЕ РЕАЛИЗОВАНО (Низкий приоритет)
 
-- Исходники шейдеров: `src/ggml-vulkan/vulkan-shaders/*.comp` (1.5 MB)
-- Сгенерированные шейдеры: ~150 MB (не включены в пакет)
-- Шейдеры компилируются при `configure --with-vulkan`
-- Время компиляции шейдеров: ~1-2 минуты
-- Поддерживаемые GPU: AMD (RADV), NVIDIA, Intel
+### Низкоуровневая квантизация (100+ функций)
+Row-level операции для типов: q4_0, q5_0, q8_0, q2_K-q8_K, iq2_xxs/xs/s, iq3_xxs/s, iq4_nl/xs, tq1_0, tq2_0, mxfp4.
 
-## Известные проблемы и решения
+⚠️ Высокоуровневый `ggml_quantize_chunk()` уже реализован.
 
-### 1. ⚠️ Важно при установке
-При переустановке пакета нужно удалять старые объектные файлы:
-```bash
-rm -f src/*.o src/ggml-cpu/*.o src/ggml-cpu/arch/x86/*.o
-R CMD INSTALL . --configure-args="--with-vulkan"
-```
+### Custom Operations (5 функций)
+⚠️ Требуют C callback (сложно в R)
+- [ ] `ggml_custom()` / `ggml_custom_inplace()`
+- [ ] `ggml_set_op_params*()`
 
-Иначе `r_interface_vulkan.c` будет использовать старый .o без флага `-DGGML_USE_VULKAN`.
+### Logging & Debugging (2 функции)
+⚠️ Требуют C callback
+- [ ] `ggml_log_set()`, `ggml_set_abort_callback()`
 
-### 2. ✅ Исправленные баги
-- **configure скрипт**: Удалён дублирующийся `cd ../../..` который ломал генерацию src/Makevars
-- **Парсинг аргументов**: Упрощён до одного флага `--with-vulkan` (вместо `--with-vulkan=full`)
-- **Integer overflow**: Исправлен переполнение integer при больших размерах тензоров (>2GB)
-  - `R/ggml.R`: заменён `as.integer(mem_size)` на `as.numeric(mem_size)`
-  - `src/r_interface.c`: заменён `int size = asInteger()` на `size_t size = (size_t)asReal()`
-  - Теперь поддерживаются тензоры размером >2GB (протестировано до 1.9GB)
+### Internal Functions (не экспортируются)
+- `ggml_are_same_layout()` — inline в ggml-impl.h
+- `ggml_can_fuse*()`, `ggml_check_edges()` — требуют cgraph internals
 
-### 3. Warnings при компиляции
-- `RADV is not a conformant Vulkan implementation` - это нормально для AMD RADV драйвера
-- Warnings о `fprintf(stderr)` в ggml-vulkan.cpp - связаны с r_ggml_compat.h, не критично
+---
 
-## ✅ Завершённые задачи
+## Use Cases Status
 
-- [x] Интеграция Vulkan backend (145 шейдеров)
-- [x] R-обёртки для всех Vulkan функций
-- [x] Тесты для Vulkan backend (47 тестов)
-- [x] Тесты для LLM операций (swiglu, geglu, flash_attn)
-- [x] Бенчмарки CPU vs Vulkan (векторы + матрицы)
-- [x] Исправление integer overflow для больших тензоров
-- [x] Smoke tests (184 теста)
-- [x] Полный набор testthat тестов (414 тестов)
-- [x] **Multi-GPU Support через Backend Scheduler (v0.4.0)**
+| Use Case | Статус | Комментарий |
+|----------|--------|-------------|
+| Inference на CPU | ✅ Полная | Backend, scheduler, все операции |
+| Inference на GPU (Vulkan) | ✅ Базовая | Device discovery, compute |
+| Multi-GPU | ✅ Базовая | Scheduler, device management |
+| Обучение/Fine-tuning | ✅ Полная | ggml_opt_* (39 функций) |
+| Экономия памяти | ✅ Полная | 28+ inplace операций |
+| Квантизация | ✅ Базовая | quantize_chunk, type system |
+| Диагностика | ✅ Полная | CPU features, tensor layout, type info |
+| Custom операции | ❌ | Требуют C callbacks |
 
-## ✅ Multi-GPU Support (v0.4.0) - ГОТОВО К CRAN
+---
 
-**Полная поддержка multi-GPU через Backend Scheduler API**
+## Следующие шаги
 
-### Реализованные функции (14 функций):
+### Документация
+- [ ] Виньетка: Vulkan backend tutorial
+- [ ] Виньетка: Multi-GPU inference
+- [ ] Примеры квантизированных моделей
 
-#### Основные:
-- [x] `ggml_backend_sched_new()` - создание scheduler (автоматически добавляет CPU)
-- [x] `ggml_backend_sched_free()` - освобождение
-- [x] `ggml_backend_sched_reserve()` - резервирование памяти
-- [x] `ggml_backend_sched_alloc_graph()` - аллокация графа
-- [x] `ggml_backend_sched_graph_compute()` - вычисление на нескольких GPU
-- [x] `ggml_backend_sched_reset()` - сброс
+### Функциональность
+- [ ] `ggml_cross_entropy_loss()` — для обучения классификаторов
+- [ ] `ggml_build_backward_expand()` — автоматическое построение backward graph
 
-#### Асинхронные:
-- [x] `ggml_backend_sched_graph_compute_async()` - асинхронное вычисление
-- [x] `ggml_backend_sched_synchronize()` - синхронизация
-
-#### Информационные:
-- [x] `ggml_backend_sched_get_n_backends()` - количество backends
-- [x] `ggml_backend_sched_get_backend()` - получить backend
-- [x] `ggml_backend_sched_get_n_splits()` - количество разбиений
-- [x] `ggml_backend_sched_get_n_copies()` - количество копий
-
-#### Управление:
-- [x] `ggml_backend_sched_set_tensor_backend()` - назначить тензор
-- [x] `ggml_backend_sched_get_tensor_backend()` - получить backend
-
-### Файлы:
-- [x] `src/r_interface_scheduler.c` - C API (284 строки)
-- [x] `R/scheduler.R` - R функции (258 строки)
-- [x] `tests/testthat/test-scheduler.R` - **7 тестов, 15 PASS, 2 SKIP (multi-GPU)**
-- [x] `man/*.Rd` - **14 файлов документации** (roxygen2)
-- [x] `examples/multi_gpu_example.R` - примеры (230 строк)
-- [x] `docs/MULTI_GPU.md` - документация (320 строк)
-- [x] `benchmark_gpu_cpu.R` - обновлён с multi-GPU тестами
-- [x] **ИСПРАВЛЕНО**: `R/ggml.R`, `R/helpers.R` - добавлен параметр `no_alloc`
-
-### Интеграция:
-- [x] NAMESPACE (14 export функций)
-- [x] src/Makevars.in (r_interface_scheduler.o)
-- [x] src/r_interface.c (регистрация функций)
-- [x] DESCRIPTION (v0.4.0)
-
-### CRAN Готовность:
-- [x] Все функции документированы (14 .Rd файлов)
-- [x] Все функции протестированы (7 тестов, 15 PASS)
-- [x] Нестандартные файлы добавлены в .Rbuildignore
-- [x] Удалены файлы на русском языке
-- [x] **ИСПРАВЛЕНА критическая проблема: `no_alloc` параметр теперь работает**
-- [x] R CMD check: 0 errors, 0 warnings, 6 notes (все допустимые)
-- [x] Все тесты: **429 PASS, 0 FAIL, 0 WARN**
-
-### Использование:
-
-```r
-library(ggmlR)
-
-# Инициализировать все GPU
-gpu1 <- ggml_vulkan_init(0)
-gpu2 <- ggml_vulkan_init(1)
-
-# Создать scheduler (CPU добавится автоматически)
-sched <- ggml_backend_sched_new(list(gpu1, gpu2), parallel = TRUE)
-
-# Теперь scheduler управляет: GPU1, GPU2, CPU
-# Работа автоматически распределится между ними!
-
-# Использовать для вычислений
-ggml_backend_sched_graph_compute(sched, graph)
-
-# Статистика
-cat("Splits:", ggml_backend_sched_get_n_splits(sched), "\n")
-cat("Copies:", ggml_backend_sched_get_n_copies(sched), "\n")
-```
-
-### Benchmark:
-```bash
-Rscript benchmark_gpu_cpu.R
-```
-Автоматически тестирует: CPU, 1 GPU, Multi-GPU (если >= 2 GPU)
-
-## Следующие возможные улучшения
-
-### Документация и примеры:
-- [ ] Виньетки для Vulkan backend
-- [ ] Примеры multi-GPU для разных задач
-- [ ] Best practices для multi-GPU
-
-### Интеграция:
-- [ ] Автоматический выбор backend по размеру задачи
-- [ ] Интеграция с huggingface transformers
-- [ ] Примеры квантизированных моделей (Q4_0, Q8_0)
-
-### Оптимизация:
-- [ ] Профилирование overhead scheduler
-- [ ] Оптимизация для малых графов
+### Оптимизация
+- [ ] Профилирование scheduler overhead
 - [ ] Минимизация копий между GPU

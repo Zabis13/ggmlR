@@ -237,6 +237,300 @@ ggml_mul_mat <- function(ctx, a, b) {
 }
 
 # ============================================================================
+# In-place Operations (Memory-efficient, 2-3x savings for inference)
+# ============================================================================
+
+#' Element-wise Addition In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise addition.
+#' Result is stored in tensor a, saving memory allocation.
+#' Returns a view of the modified tensor.
+#'
+#' @param ctx GGML context
+#' @param a First tensor (will be modified in-place)
+#' @param b Second tensor (same shape as a)
+#' @return View of tensor a with the addition result
+#' @export
+#' @examples
+#' \dontrun{
+#' ctx <- ggml_init(1024 * 1024)
+#' a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+#' b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+#' ggml_set_f32(a, c(1, 2, 3, 4, 5))
+#' ggml_set_f32(b, c(5, 4, 3, 2, 1))
+#' result <- ggml_add_inplace(ctx, a, b)
+#' graph <- ggml_build_forward_expand(ctx, result)
+#' ggml_graph_compute(ctx, graph)
+#' ggml_get_f32(result)
+#' ggml_free(ctx)
+#' }
+ggml_add_inplace <- function(ctx, a, b) {
+  .Call("R_ggml_add_inplace", ctx, a, b, PACKAGE = "ggmlR")
+}
+
+#' Element-wise Subtraction In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise subtraction.
+#' Result is stored in tensor a, saving memory allocation.
+#'
+#' @param ctx GGML context
+#' @param a First tensor (will be modified in-place)
+#' @param b Second tensor (same shape as a)
+#' @return View of tensor a with the subtraction result
+#' @export
+ggml_sub_inplace <- function(ctx, a, b) {
+  .Call("R_ggml_sub_inplace", ctx, a, b, PACKAGE = "ggmlR")
+}
+
+#' Element-wise Multiplication In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise multiplication.
+#' Result is stored in tensor a, saving memory allocation.
+#'
+#' @param ctx GGML context
+#' @param a First tensor (will be modified in-place)
+#' @param b Second tensor (same shape as a)
+#' @return View of tensor a with the multiplication result
+#' @export
+ggml_mul_inplace <- function(ctx, a, b) {
+  .Call("R_ggml_mul_inplace", ctx, a, b, PACKAGE = "ggmlR")
+}
+
+#' Element-wise Division In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise division.
+#' Result is stored in tensor a, saving memory allocation.
+#'
+#' @param ctx GGML context
+#' @param a First tensor (will be modified in-place)
+#' @param b Second tensor (same shape as a)
+#' @return View of tensor a with the division result
+#' @export
+ggml_div_inplace <- function(ctx, a, b) {
+  .Call("R_ggml_div_inplace", ctx, a, b, PACKAGE = "ggmlR")
+}
+
+#' Square In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise square: x^2
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with squared values
+#' @export
+ggml_sqr_inplace <- function(ctx, a) {
+  .Call("R_ggml_sqr_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Square Root In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise square root.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with square root values
+#' @export
+ggml_sqrt_inplace <- function(ctx, a) {
+  .Call("R_ggml_sqrt_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Exponential In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise exponential: e^x
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with exponential values
+#' @export
+ggml_exp_inplace <- function(ctx, a) {
+  .Call("R_ggml_exp_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Natural Logarithm In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise natural logarithm.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with log values
+#' @export
+ggml_log_inplace <- function(ctx, a) {
+  .Call("R_ggml_log_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Absolute Value In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise absolute value.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with absolute values
+#' @export
+ggml_abs_inplace <- function(ctx, a) {
+  .Call("R_ggml_abs_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Negation In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise negation: -x
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with negated values
+#' @export
+ggml_neg_inplace <- function(ctx, a) {
+  .Call("R_ggml_neg_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Ceiling In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise ceiling.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with ceiling values
+#' @export
+ggml_ceil_inplace <- function(ctx, a) {
+  .Call("R_ggml_ceil_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Floor In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise floor.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with floor values
+#' @export
+ggml_floor_inplace <- function(ctx, a) {
+  .Call("R_ggml_floor_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Round In-place (Graph)
+#'
+#' Creates a graph node for in-place element-wise rounding.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with rounded values
+#' @export
+ggml_round_inplace <- function(ctx, a) {
+  .Call("R_ggml_round_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' ReLU Activation In-place (Graph)
+#'
+#' Creates a graph node for in-place ReLU activation: max(0, x)
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with ReLU applied
+#' @export
+ggml_relu_inplace <- function(ctx, a) {
+  .Call("R_ggml_relu_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' GELU Activation In-place (Graph)
+#'
+#' Creates a graph node for in-place GELU (Gaussian Error Linear Unit) activation.
+#' CRITICAL for GPT models with memory efficiency.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with GELU applied
+#' @export
+ggml_gelu_inplace <- function(ctx, a) {
+  .Call("R_ggml_gelu_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' SiLU Activation In-place (Graph)
+#'
+#' Creates a graph node for in-place SiLU (Sigmoid Linear Unit) activation.
+#' CRITICAL for LLaMA models with memory efficiency.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with SiLU applied
+#' @export
+ggml_silu_inplace <- function(ctx, a) {
+  .Call("R_ggml_silu_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Sigmoid Activation In-place (Graph)
+#'
+#' Creates a graph node for in-place sigmoid activation: 1 / (1 + e^(-x))
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with sigmoid applied
+#' @export
+ggml_sigmoid_inplace <- function(ctx, a) {
+  .Call("R_ggml_sigmoid_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Tanh Activation In-place (Graph)
+#'
+#' Creates a graph node for in-place hyperbolic tangent activation.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with tanh applied
+#' @export
+ggml_tanh_inplace <- function(ctx, a) {
+  .Call("R_ggml_tanh_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Softplus Activation In-place (Graph)
+#'
+#' Creates a graph node for in-place softplus activation: log(1 + e^x)
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with softplus applied
+#' @export
+ggml_softplus_inplace <- function(ctx, a) {
+  .Call("R_ggml_softplus_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' ELU Activation In-place (Graph)
+#'
+#' Creates a graph node for in-place ELU (Exponential Linear Unit) activation.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @return View of tensor a with ELU applied
+#' @export
+ggml_elu_inplace <- function(ctx, a) {
+  .Call("R_ggml_elu_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Scale Tensor In-place (Graph)
+#'
+#' Creates a graph node for in-place scaling: a * s
+#'
+#' @param ctx GGML context
+#' @param a Input tensor (will be modified in-place)
+#' @param s Scalar value to multiply by
+#' @return View of tensor a with scaled values
+#' @export
+ggml_scale_inplace <- function(ctx, a, s) {
+  .Call("R_ggml_scale_inplace", ctx, a, as.numeric(s), PACKAGE = "ggmlR")
+}
+
+#' Duplicate Tensor In-place (Graph)
+#'
+#' Creates a graph node for in-place tensor duplication.
+#' Returns a view of the input tensor.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @return View of tensor a
+#' @export
+ggml_dup_inplace <- function(ctx, a) {
+  .Call("R_ggml_dup_inplace", ctx, a, PACKAGE = "ggmlR")
+}
+
+# ============================================================================
 # Activation Functions
 # ============================================================================
 
@@ -642,6 +936,37 @@ ggml_soft_max_inplace <- function(ctx, a) {
 #' @export
 ggml_soft_max_ext <- function(ctx, a, mask = NULL, scale = 1.0, max_bias = 0.0) {
   .Call("R_ggml_soft_max_ext", ctx, a, mask,
+        as.numeric(scale), as.numeric(max_bias), PACKAGE = "ggmlR")
+}
+
+#' Extended Softmax Inplace (Graph)
+#'
+#' Creates a graph node for extended softmax, modifying input tensor in place.
+#' Returns a view of the input tensor.
+#'
+#' @inheritParams ggml_soft_max_ext
+#' @return View of input tensor with softmax applied in place
+#' @export
+#' @family softmax
+ggml_soft_max_ext_inplace <- function(ctx, a, mask = NULL, scale = 1.0, max_bias = 0.0) {
+  .Call("R_ggml_soft_max_ext_inplace", ctx, a, mask,
+        as.numeric(scale), as.numeric(max_bias), PACKAGE = "ggmlR")
+}
+
+#' Extended Softmax Backward Inplace (Graph)
+#'
+#' Creates a graph node for the backward pass of extended softmax, modifying in place.
+#'
+#' @param ctx GGML context
+#' @param a Gradient tensor from upstream
+#' @param b Softmax output from forward pass
+#' @param scale Scaling factor used in forward pass
+#' @param max_bias Maximum ALiBi bias used in forward pass
+#' @return View of input tensor with gradient computed in place
+#' @export
+#' @family softmax
+ggml_soft_max_ext_back_inplace <- function(ctx, a, b, scale = 1.0, max_bias = 0.0) {
+  .Call("R_ggml_soft_max_ext_back_inplace", ctx, a, b,
         as.numeric(scale), as.numeric(max_bias), PACKAGE = "ggmlR")
 }
 
@@ -1976,6 +2301,74 @@ ggml_rope_ext <- function(ctx, a, b, c = NULL,
         PACKAGE = "ggmlR")
 }
 
+#' Extended RoPE Inplace (Graph)
+#'
+#' Creates a graph node for extended RoPE, modifying input tensor in place.
+#' Returns a view of the input tensor.
+#'
+#' @inheritParams ggml_rope_ext
+#' @return View of input tensor with RoPE applied in place
+#' @export
+#' @family rope
+ggml_rope_ext_inplace <- function(ctx, a, b, c = NULL,
+                                   n_dims, mode = 0L, n_ctx_orig = 0L,
+                                   freq_base = 10000.0, freq_scale = 1.0,
+                                   ext_factor = 0.0, attn_factor = 1.0,
+                                   beta_fast = 32.0, beta_slow = 1.0) {
+  .Call("R_ggml_rope_ext_inplace", ctx, a, b, c,
+        as.integer(n_dims), as.integer(mode), as.integer(n_ctx_orig),
+        as.numeric(freq_base), as.numeric(freq_scale),
+        as.numeric(ext_factor), as.numeric(attn_factor),
+        as.numeric(beta_fast), as.numeric(beta_slow),
+        PACKAGE = "ggmlR")
+}
+
+#' Multi-RoPE for Vision Models (Graph)
+#'
+#' Creates a graph node for multi-dimensional RoPE (MRoPE) used in vision transformers.
+#' Supports separate rotation for different positional dimensions (e.g., height, width, time).
+#'
+#' @inheritParams ggml_rope_ext
+#' @param sections Integer vector of length 4 specifying dimension sections for MRoPE
+#' @return Tensor with multi-dimensional RoPE applied
+#' @export
+#' @family rope
+ggml_rope_multi <- function(ctx, a, b, c = NULL,
+                             n_dims, sections = c(0L, 0L, 0L, 0L),
+                             mode = 0L, n_ctx_orig = 0L,
+                             freq_base = 10000.0, freq_scale = 1.0,
+                             ext_factor = 0.0, attn_factor = 1.0,
+                             beta_fast = 32.0, beta_slow = 1.0) {
+  .Call("R_ggml_rope_multi", ctx, a, b, c,
+        as.integer(n_dims), as.integer(sections), as.integer(mode),
+        as.integer(n_ctx_orig), as.numeric(freq_base), as.numeric(freq_scale),
+        as.numeric(ext_factor), as.numeric(attn_factor),
+        as.numeric(beta_fast), as.numeric(beta_slow),
+        PACKAGE = "ggmlR")
+}
+
+#' Multi-RoPE Inplace (Graph)
+#'
+#' Creates a graph node for multi-dimensional RoPE, modifying input in place.
+#'
+#' @inheritParams ggml_rope_multi
+#' @return View of input tensor with MRoPE applied in place
+#' @export
+#' @family rope
+ggml_rope_multi_inplace <- function(ctx, a, b, c = NULL,
+                                     n_dims, sections = c(0L, 0L, 0L, 0L),
+                                     mode = 0L, n_ctx_orig = 0L,
+                                     freq_base = 10000.0, freq_scale = 1.0,
+                                     ext_factor = 0.0, attn_factor = 1.0,
+                                     beta_fast = 32.0, beta_slow = 1.0) {
+  .Call("R_ggml_rope_multi_inplace", ctx, a, b, c,
+        as.integer(n_dims), as.integer(sections), as.integer(mode),
+        as.integer(n_ctx_orig), as.numeric(freq_base), as.numeric(freq_scale),
+        as.numeric(ext_factor), as.numeric(attn_factor),
+        as.numeric(beta_fast), as.numeric(beta_slow),
+        PACKAGE = "ggmlR")
+}
+
 # ============================================================================
 # Flash Attention
 # ============================================================================
@@ -2985,4 +3378,648 @@ ggml_quantize_requires_imatrix <- function(type) {
 ggml_quantize_chunk <- function(type, src, nrows, n_per_row) {
   .Call("R_ggml_quantize_chunk", as.integer(type), as.numeric(src),
         as.numeric(nrows), as.numeric(n_per_row), PACKAGE = "ggmlR")
+}
+
+# ============================================================================
+# Type System Functions
+# ============================================================================
+
+#' Get Type Name
+#'
+#' Returns the string name of a GGML type.
+#'
+#' @param type GGML type constant (e.g., GGML_TYPE_F32)
+#' @return Character string with type name
+#' @export
+#' @family type_system
+#' @examples
+#' ggml_type_name(GGML_TYPE_F32)  # "f32"
+#' ggml_type_name(GGML_TYPE_Q4_0) # "q4_0"
+ggml_type_name <- function(type) {
+  .Call("R_ggml_type_name", as.integer(type), PACKAGE = "ggmlR")
+}
+
+#' Get Type Size as Float
+#'
+#' Returns the size in bytes of a GGML type as a floating-point number.
+#' For quantized types, this is the average bytes per element.
+#'
+#' @param type GGML type constant
+#' @return Numeric size in bytes (can be fractional for quantized types)
+#' @export
+#' @family type_system
+#' @examples
+#' ggml_type_sizef(GGML_TYPE_F32)  # 4.0
+#' ggml_type_sizef(GGML_TYPE_Q4_0) # 0.5 (4 bits per element)
+ggml_type_sizef <- function(type) {
+  .Call("R_ggml_type_sizef", as.integer(type), PACKAGE = "ggmlR")
+}
+
+#' Get Block Size
+#'
+#' Returns the block size for a GGML type. Quantized types process
+#' data in blocks (e.g., 32 elements for Q4_0).
+#'
+#' @param type GGML type constant
+#' @return Integer block size
+#' @export
+#' @family type_system
+#' @examples
+#' ggml_blck_size(GGML_TYPE_F32)  # 1
+#' ggml_blck_size(GGML_TYPE_Q4_0) # 32
+ggml_blck_size <- function(type) {
+  .Call("R_ggml_blck_size", as.integer(type), PACKAGE = "ggmlR")
+}
+
+#' Check If Type is Quantized
+#'
+#' Returns TRUE if the GGML type is a quantized format.
+#'
+#' @param type GGML type constant
+#' @return Logical indicating if type is quantized
+#' @export
+#' @family type_system
+#' @examples
+#' ggml_is_quantized(GGML_TYPE_F32)  # FALSE
+#' ggml_is_quantized(GGML_TYPE_Q4_0) # TRUE
+ggml_is_quantized <- function(type) {
+  .Call("R_ggml_is_quantized", as.integer(type), PACKAGE = "ggmlR")
+}
+
+#' Convert ftype to ggml_type
+#'
+#' Converts a file type (ftype) to the corresponding GGML type.
+#' Used when loading quantized models.
+#'
+#' @param ftype File type constant
+#' @return Integer GGML type
+#' @export
+#' @family type_system
+ggml_ftype_to_ggml_type <- function(ftype) {
+  .Call("R_ggml_ftype_to_ggml_type", as.integer(ftype), PACKAGE = "ggmlR")
+}
+
+# ============================================================================
+# Operation Info Functions
+# ============================================================================
+
+#' Get Operation Name
+#'
+#' Returns the string name of a GGML operation.
+#'
+#' @param op GGML operation constant
+#' @return Character string with operation name
+#' @export
+#' @family op_info
+ggml_op_name <- function(op) {
+  .Call("R_ggml_op_name", as.integer(op), PACKAGE = "ggmlR")
+}
+
+#' Get Operation Symbol
+#'
+#' Returns the mathematical symbol for a GGML operation.
+#'
+#' @param op GGML operation constant
+#' @return Character string with operation symbol
+#' @export
+#' @family op_info
+ggml_op_symbol <- function(op) {
+  .Call("R_ggml_op_symbol", as.integer(op), PACKAGE = "ggmlR")
+}
+
+#' Get Unary Operation Name
+#'
+#' Returns the string name of a GGML unary operation.
+#'
+#' @param op GGML unary operation constant
+#' @return Character string with operation name
+#' @export
+#' @family op_info
+ggml_unary_op_name <- function(op) {
+  .Call("R_ggml_unary_op_name", as.integer(op), PACKAGE = "ggmlR")
+}
+
+#' Get Operation Description from Tensor
+#'
+#' Returns a description of the operation that produces a tensor.
+#'
+#' @param tensor Tensor pointer
+#' @return Character string describing the operation
+#' @export
+#' @family op_info
+ggml_op_desc <- function(tensor) {
+  .Call("R_ggml_op_desc", tensor, PACKAGE = "ggmlR")
+}
+
+#' Get Unary Operation from Tensor
+#'
+#' Returns the unary operation type for a unary operation tensor.
+#'
+#' @param tensor Tensor pointer (must be a unary operation result)
+#' @return Integer unary operation type
+#' @export
+#' @family op_info
+ggml_get_unary_op <- function(tensor) {
+  .Call("R_ggml_get_unary_op", tensor, PACKAGE = "ggmlR")
+}
+
+# ============================================================================
+# CPU Feature Detection Functions
+# ============================================================================
+
+#' CPU Feature Detection - SSE3
+#'
+#' Check if the CPU supports SSE3 instructions.
+#'
+#' @return Logical indicating SSE3 support
+#' @export
+#' @family cpu_features
+#' @examples
+#' ggml_cpu_has_sse3()
+ggml_cpu_has_sse3 <- function() {
+  .Call("R_ggml_cpu_has_sse3", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - SSSE3
+#'
+#' Check if the CPU supports SSSE3 instructions.
+#'
+#' @return Logical indicating SSSE3 support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_ssse3 <- function() {
+  .Call("R_ggml_cpu_has_ssse3", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - AVX
+#'
+#' Check if the CPU supports AVX instructions.
+#'
+#' @return Logical indicating AVX support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_avx <- function() {
+  .Call("R_ggml_cpu_has_avx", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - AVX-VNNI
+#'
+#' Check if the CPU supports AVX-VNNI instructions.
+#'
+#' @return Logical indicating AVX-VNNI support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_avx_vnni <- function() {
+  .Call("R_ggml_cpu_has_avx_vnni", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - AVX2
+#'
+#' Check if the CPU supports AVX2 instructions.
+#' AVX2 provides 256-bit SIMD operations for faster matrix math.
+#'
+#' @return Logical indicating AVX2 support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_avx2 <- function() {
+  .Call("R_ggml_cpu_has_avx2", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - BMI2
+#'
+#' Check if the CPU supports BMI2 (Bit Manipulation Instructions 2).
+#'
+#' @return Logical indicating BMI2 support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_bmi2 <- function() {
+  .Call("R_ggml_cpu_has_bmi2", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - F16C
+#'
+#' Check if the CPU supports F16C instructions for float16 conversion.
+#'
+#' @return Logical indicating F16C support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_f16c <- function() {
+  .Call("R_ggml_cpu_has_f16c", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - FMA
+#'
+#' Check if the CPU supports FMA (Fused Multiply-Add) instructions.
+#' FMA allows matrix operations to run faster by combining operations.
+#'
+#' @return Logical indicating FMA support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_fma <- function() {
+  .Call("R_ggml_cpu_has_fma", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - AVX-512
+#'
+#' Check if the CPU supports AVX-512 instructions.
+#' AVX-512 provides 512-bit SIMD for maximum throughput.
+#'
+#' @return Logical indicating AVX-512 support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_avx512 <- function() {
+  .Call("R_ggml_cpu_has_avx512", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - AVX-512 VBMI
+#'
+#' Check if the CPU supports AVX-512 VBMI instructions.
+#'
+#' @return Logical indicating AVX-512 VBMI support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_avx512_vbmi <- function() {
+  .Call("R_ggml_cpu_has_avx512_vbmi", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - AVX-512 VNNI
+#'
+#' Check if the CPU supports AVX-512 VNNI instructions.
+#' VNNI accelerates neural network inference with int8/int16 dot products.
+#'
+#' @return Logical indicating AVX-512 VNNI support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_avx512_vnni <- function() {
+  .Call("R_ggml_cpu_has_avx512_vnni", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - AVX-512 BF16
+#'
+#' Check if the CPU supports AVX-512 BF16 (bfloat16) instructions.
+#'
+#' @return Logical indicating AVX-512 BF16 support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_avx512_bf16 <- function() {
+  .Call("R_ggml_cpu_has_avx512_bf16", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - AMX INT8
+#'
+#' Check if the CPU supports AMX INT8 (Advanced Matrix Extensions).
+#' AMX provides hardware acceleration for matrix operations on Intel CPUs.
+#'
+#' @return Logical indicating AMX INT8 support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_amx_int8 <- function() {
+  .Call("R_ggml_cpu_has_amx_int8", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - NEON (ARM)
+#'
+#' Check if the CPU supports ARM NEON instructions.
+#' NEON is ARM's SIMD extension for vectorized operations.
+#'
+#' @return Logical indicating NEON support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_neon <- function() {
+  .Call("R_ggml_cpu_has_neon", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - ARM FMA
+#'
+#' Check if the CPU supports ARM FMA (Fused Multiply-Add).
+#'
+#' @return Logical indicating ARM FMA support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_arm_fma <- function() {
+  .Call("R_ggml_cpu_has_arm_fma", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - FP16 Vector Arithmetic (ARM)
+#'
+#' Check if the CPU supports ARM half-precision FP16 vector arithmetic.
+#'
+#' @return Logical indicating FP16 VA support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_fp16_va <- function() {
+  .Call("R_ggml_cpu_has_fp16_va", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - Dot Product (ARM)
+#'
+#' Check if the CPU supports ARM dot product instructions.
+#' Accelerates int8 matrix multiplication common in quantized models.
+#'
+#' @return Logical indicating dot product support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_dotprod <- function() {
+  .Call("R_ggml_cpu_has_dotprod", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - INT8 Matrix Multiply (ARM)
+#'
+#' Check if the CPU supports ARM INT8 matrix multiplication.
+#'
+#' @return Logical indicating INT8 MATMUL support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_matmul_int8 <- function() {
+  .Call("R_ggml_cpu_has_matmul_int8", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - SVE (ARM)
+#'
+#' Check if the CPU supports ARM SVE (Scalable Vector Extension).
+#'
+#' @return Logical indicating SVE support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_sve <- function() {
+  .Call("R_ggml_cpu_has_sve", PACKAGE = "ggmlR")
+}
+
+#' Get SVE Vector Length (ARM)
+#'
+#' Returns the SVE vector length in bytes (0 if not supported).
+#'
+#' @return Integer vector length in bytes
+#' @export
+#' @family cpu_features
+ggml_cpu_get_sve_cnt <- function() {
+  .Call("R_ggml_cpu_get_sve_cnt", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - SME (ARM)
+#'
+#' Check if the CPU supports ARM SME (Scalable Matrix Extension).
+#'
+#' @return Logical indicating SME support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_sme <- function() {
+  .Call("R_ggml_cpu_has_sme", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - RISC-V Vector
+#'
+#' Check if the CPU supports RISC-V Vector extension.
+#'
+#' @return Logical indicating RISC-V V support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_riscv_v <- function() {
+  .Call("R_ggml_cpu_has_riscv_v", PACKAGE = "ggmlR")
+}
+
+#' Get RISC-V Vector Length
+#'
+#' Returns the RISC-V RVV vector length in bytes (0 if not supported).
+#'
+#' @return Integer vector length in bytes
+#' @export
+#' @family cpu_features
+ggml_cpu_get_rvv_vlen <- function() {
+  .Call("R_ggml_cpu_get_rvv_vlen", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - VSX (PowerPC)
+#'
+#' Check if the CPU supports PowerPC VSX instructions.
+#'
+#' @return Logical indicating VSX support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_vsx <- function() {
+  .Call("R_ggml_cpu_has_vsx", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - VXE (IBM z/Architecture)
+#'
+#' Check if the CPU supports IBM z/Architecture VXE instructions.
+#'
+#' @return Logical indicating VXE support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_vxe <- function() {
+  .Call("R_ggml_cpu_has_vxe", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - WebAssembly SIMD
+#'
+#' Check if the CPU/environment supports WebAssembly SIMD.
+#'
+#' @return Logical indicating WASM SIMD support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_wasm_simd <- function() {
+  .Call("R_ggml_cpu_has_wasm_simd", PACKAGE = "ggmlR")
+}
+
+#' CPU Feature Detection - Llamafile
+#'
+#' Check if llamafile optimizations are available.
+#'
+#' @return Logical indicating llamafile support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_llamafile <- function() {
+  .Call("R_ggml_cpu_has_llamafile", PACKAGE = "ggmlR")
+}
+
+#' Get All CPU Features
+#'
+#' Returns a named list of all CPU feature detection results.
+#' Useful for diagnostics and optimizing computation.
+#'
+#' @return Named list with feature names and logical values
+#' @export
+#' @family cpu_features
+#' @examples
+#' features <- ggml_cpu_features()
+#' print(features)
+#' # On typical x86-64: sse3=TRUE, avx=TRUE, avx2=TRUE, ...
+ggml_cpu_features <- function() {
+  list(
+    # x86 features
+    sse3 = ggml_cpu_has_sse3(),
+    ssse3 = ggml_cpu_has_ssse3(),
+    avx = ggml_cpu_has_avx(),
+    avx_vnni = ggml_cpu_has_avx_vnni(),
+    avx2 = ggml_cpu_has_avx2(),
+    bmi2 = ggml_cpu_has_bmi2(),
+    f16c = ggml_cpu_has_f16c(),
+    fma = ggml_cpu_has_fma(),
+    avx512 = ggml_cpu_has_avx512(),
+    avx512_vbmi = ggml_cpu_has_avx512_vbmi(),
+    avx512_vnni = ggml_cpu_has_avx512_vnni(),
+    avx512_bf16 = ggml_cpu_has_avx512_bf16(),
+    amx_int8 = ggml_cpu_has_amx_int8(),
+    # ARM features
+    neon = ggml_cpu_has_neon(),
+    arm_fma = ggml_cpu_has_arm_fma(),
+    fp16_va = ggml_cpu_has_fp16_va(),
+    dotprod = ggml_cpu_has_dotprod(),
+    matmul_int8 = ggml_cpu_has_matmul_int8(),
+    sve = ggml_cpu_has_sve(),
+    sve_cnt = ggml_cpu_get_sve_cnt(),
+    sme = ggml_cpu_has_sme(),
+    # Other
+    riscv_v = ggml_cpu_has_riscv_v(),
+    rvv_vlen = ggml_cpu_get_rvv_vlen(),
+    vsx = ggml_cpu_has_vsx(),
+    vxe = ggml_cpu_has_vxe(),
+    wasm_simd = ggml_cpu_has_wasm_simd(),
+    llamafile = ggml_cpu_has_llamafile()
+  )
+}
+
+# ============================================================================
+# Tensor Layout/Contiguity Functions
+# ============================================================================
+
+#' Check Tensor Contiguity (Dimension 0)
+#'
+#' Check if tensor is contiguous. Same as \code{ggml_is_contiguous}.
+#'
+#' @param tensor Tensor pointer
+#' @return Logical indicating contiguity
+#' @export
+#' @family tensor_layout
+ggml_is_contiguous_0 <- function(tensor) {
+  .Call("R_ggml_is_contiguous_0", tensor, PACKAGE = "ggmlR")
+}
+
+#' Check Tensor Contiguity (Dimensions >= 1)
+#'
+#' Check if tensor is contiguous for dimensions >= 1.
+#' Allows non-contiguous first dimension.
+#'
+#' @param tensor Tensor pointer
+#' @return Logical indicating contiguity for dims >= 1
+#' @export
+#' @family tensor_layout
+ggml_is_contiguous_1 <- function(tensor) {
+  .Call("R_ggml_is_contiguous_1", tensor, PACKAGE = "ggmlR")
+}
+
+#' Check Tensor Contiguity (Dimensions >= 2)
+#'
+#' Check if tensor is contiguous for dimensions >= 2.
+#' Allows non-contiguous first two dimensions.
+#'
+#' @param tensor Tensor pointer
+#' @return Logical indicating contiguity for dims >= 2
+#' @export
+#' @family tensor_layout
+ggml_is_contiguous_2 <- function(tensor) {
+  .Call("R_ggml_is_contiguous_2", tensor, PACKAGE = "ggmlR")
+}
+
+#' Check If Tensor is Contiguously Allocated
+#'
+#' Check if tensor data is contiguously allocated in memory.
+#' Different from contiguous layout - this checks the actual allocation.
+#'
+#' @param tensor Tensor pointer
+#' @return Logical indicating if data is contiguously allocated
+#' @export
+#' @family tensor_layout
+ggml_is_contiguously_allocated <- function(tensor) {
+  .Call("R_ggml_is_contiguously_allocated", tensor, PACKAGE = "ggmlR")
+}
+
+#' Check Channel-wise Contiguity
+#'
+#' Check if tensor has contiguous channels (important for CNN operations).
+#' Data for each channel should be stored contiguously.
+#'
+#' @param tensor Tensor pointer
+#' @return Logical indicating channel-wise contiguity
+#' @export
+#' @family tensor_layout
+ggml_is_contiguous_channels <- function(tensor) {
+  .Call("R_ggml_is_contiguous_channels", tensor, PACKAGE = "ggmlR")
+}
+
+#' Check Row-wise Contiguity
+#'
+#' Check if tensor has contiguous rows (important for matrix operations).
+#' Each row should be stored contiguously in memory.
+#'
+#' @param tensor Tensor pointer
+#' @return Logical indicating row-wise contiguity
+#' @export
+#' @family tensor_layout
+ggml_is_contiguous_rows <- function(tensor) {
+  .Call("R_ggml_is_contiguous_rows", tensor, PACKAGE = "ggmlR")
+}
+
+#' Compare Tensor Strides
+#'
+#' Check if two tensors have the same stride pattern.
+#' Useful for determining if tensors can share operations.
+#'
+#' @param a First tensor
+#' @param b Second tensor
+#' @return Logical indicating if strides are identical
+#' @export
+#' @family tensor_layout
+ggml_are_same_stride <- function(a, b) {
+  .Call("R_ggml_are_same_stride", a, b, PACKAGE = "ggmlR")
+}
+
+#' Check If Tensor Can Be Repeated
+#'
+#' Check if tensor \code{a} can be repeated (broadcast) to match tensor \code{b}.
+#' Used for broadcasting operations.
+#'
+#' @param a Source tensor (smaller)
+#' @param b Target tensor (larger or same size)
+#' @return Logical indicating if a can be repeated to match b
+#' @export
+#' @family tensor_layout
+#' @examples
+#' \dontrun{
+#' ctx <- ggml_init(1024 * 1024)
+#' a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+#' b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 8)
+#' ggml_can_repeat(a, b)  # TRUE - a can broadcast along dim 1
+#' ggml_free(ctx)
+#' }
+ggml_can_repeat <- function(a, b) {
+  .Call("R_ggml_can_repeat", a, b, PACKAGE = "ggmlR")
+}
+
+#' Count Equal Elements (Graph)
+#'
+#' Creates a graph node that counts equal elements between two tensors.
+#' Useful for accuracy computation.
+#'
+#' @param ctx GGML context
+#' @param a First tensor
+#' @param b Second tensor (same shape as a)
+#' @return Tensor containing the count of equal elements
+#' @export
+#' @family tensor_layout
+#' @examples
+#' \dontrun{
+#' ctx <- ggml_init(16 * 1024 * 1024)
+#' pred <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 100)
+#' labels <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 100)
+#' # ... set values ...
+#' correct <- ggml_count_equal(ctx, pred, labels)
+#' graph <- ggml_build_forward_expand(ctx, correct)
+#' ggml_graph_compute(ctx, graph)
+#' # correct now contains count of matching elements
+#' ggml_free(ctx)
+#' }
+ggml_count_equal <- function(ctx, a, b) {
+  .Call("R_ggml_count_equal", ctx, a, b, PACKAGE = "ggmlR")
 }
