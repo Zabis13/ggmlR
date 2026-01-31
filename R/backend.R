@@ -507,3 +507,105 @@ ggml_backend_synchronize <- function(backend) {
 ggml_backend_get_device <- function(backend) {
  .Call("R_ggml_backend_get_device", backend)
 }
+
+# ============================================================================
+# Async Graph Compute
+# ============================================================================
+
+#' Compute graph asynchronously
+#'
+#' Starts graph computation without blocking. Use ggml_backend_synchronize()
+#' to wait for completion.
+#'
+#' @param backend External pointer to backend
+#' @param graph External pointer to computation graph
+#' @return Integer status code (0 = success)
+#' @export
+#' @family backend
+#' @examples
+#' \dontrun{
+#' status <- ggml_backend_graph_compute_async(backend, graph)
+#' # Do other work while computation runs...
+#' ggml_backend_synchronize(backend)  # Wait for completion
+#' }
+ggml_backend_graph_compute_async <- function(backend, graph) {
+  .Call("R_ggml_backend_graph_compute_async", backend, graph)
+}
+
+# ============================================================================
+# Multi-buffer Operations
+# ============================================================================
+
+#' Allocate multi-buffer
+#'
+#' Creates a buffer that combines multiple backend buffers into one.
+#' Useful for managing memory across different backends.
+#'
+#' @param buffers List of backend buffer external pointers
+#' @return External pointer to multi-buffer
+#' @export
+#' @family backend
+#' @examples
+#' \dontrun{
+#' buf1 <- ggml_backend_alloc_buffer(backend, 1024)
+#' buf2 <- ggml_backend_alloc_buffer(backend, 2048)
+#' multi <- ggml_backend_multi_buffer_alloc_buffer(list(buf1, buf2))
+#' }
+ggml_backend_multi_buffer_alloc_buffer <- function(buffers) {
+  if (!is.list(buffers)) {
+    buffers <- list(buffers)
+  }
+  .Call("R_ggml_backend_multi_buffer_alloc_buffer", buffers)
+}
+
+#' Check if buffer is a multi-buffer
+#'
+#' @param buffer External pointer to buffer
+#' @return Logical indicating if buffer is a multi-buffer
+#' @export
+#' @family backend
+ggml_backend_buffer_is_multi_buffer <- function(buffer) {
+  .Call("R_ggml_backend_buffer_is_multi_buffer", buffer)
+}
+
+#' Set usage for all buffers in a multi-buffer
+#'
+#' @param buffer External pointer to multi-buffer
+#' @param usage Usage constant (from ggml_backend_buffer_usage_*)
+#' @return NULL invisibly
+#' @export
+#' @family backend
+ggml_backend_multi_buffer_set_usage <- function(buffer, usage) {
+  invisible(.Call("R_ggml_backend_multi_buffer_set_usage", buffer,
+                  as.integer(usage)))
+}
+
+# ============================================================================
+# Backend Registration
+# ============================================================================
+
+#' Register a backend
+#'
+#' Dynamically registers a new backend in the global registry.
+#' This is an advanced function for custom backend development.
+#'
+#' @param reg External pointer to backend registry
+#' @return NULL invisibly
+#' @export
+#' @family backend
+ggml_backend_register <- function(reg) {
+  invisible(.Call("R_ggml_backend_register", reg))
+}
+
+#' Register a device
+#'
+#' Dynamically registers a new device in the global registry.
+#' This is an advanced function for custom backend development.
+#'
+#' @param device External pointer to device
+#' @return NULL invisibly
+#' @export
+#' @family backend
+ggml_backend_device_register <- function(device) {
+  invisible(.Call("R_ggml_backend_device_register", device))
+}

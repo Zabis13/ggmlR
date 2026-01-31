@@ -177,6 +177,131 @@ extern SEXP R_ggml_are_same_stride(SEXP, SEXP);
 extern SEXP R_ggml_can_repeat(SEXP, SEXP);
 extern SEXP R_ggml_count_equal(SEXP, SEXP, SEXP);
 
+// Advanced RoPE functions (defined in r_interface_graph.c)
+extern SEXP R_ggml_rope_multi_back(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+
+// Graph Construction & Introspection functions (defined in r_interface_graph.c)
+extern SEXP R_ggml_build_backward_expand(SEXP, SEXP);
+extern SEXP R_ggml_graph_add_node(SEXP, SEXP);
+extern SEXP R_ggml_graph_clear(SEXP);
+extern SEXP R_ggml_graph_cpy(SEXP, SEXP);
+extern SEXP R_ggml_graph_dup(SEXP, SEXP, SEXP);
+extern SEXP R_ggml_graph_get_grad(SEXP, SEXP);
+extern SEXP R_ggml_graph_get_grad_acc(SEXP, SEXP);
+extern SEXP R_ggml_graph_view(SEXP, SEXP, SEXP);
+extern SEXP R_ggml_op_can_inplace(SEXP);
+extern SEXP R_ggml_are_same_layout(SEXP, SEXP);
+
+// Backend async/multi-buffer functions (defined in r_interface_backend.c)
+extern SEXP R_ggml_backend_graph_compute_async(SEXP, SEXP);
+extern SEXP R_ggml_backend_multi_buffer_alloc_buffer(SEXP);
+extern SEXP R_ggml_backend_buffer_is_multi_buffer(SEXP);
+extern SEXP R_ggml_backend_multi_buffer_set_usage(SEXP, SEXP);
+extern SEXP R_ggml_backend_register(SEXP);
+extern SEXP R_ggml_backend_device_register(SEXP);
+
+// Advanced Attention/Loss functions (defined in r_interface_graph.c)
+extern SEXP R_ggml_cross_entropy_loss(SEXP, SEXP, SEXP);
+extern SEXP R_ggml_cross_entropy_loss_back(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_cumsum(SEXP, SEXP);
+extern SEXP R_ggml_flash_attn_ext_set_prec(SEXP, SEXP);
+extern SEXP R_ggml_flash_attn_ext_get_prec(SEXP);
+extern SEXP R_ggml_flash_attn_ext_add_sinks(SEXP, SEXP);
+extern SEXP R_ggml_soft_max_add_sinks(SEXP, SEXP);
+
+// Logging & debugging functions (defined in r_interface_graph.c)
+extern SEXP R_ggml_log_set_r(void);
+extern SEXP R_ggml_log_set_default(void);
+extern SEXP R_ggml_log_is_r_enabled(void);
+extern SEXP R_ggml_set_abort_callback_r(void);
+extern SEXP R_ggml_set_abort_callback_default(void);
+extern SEXP R_ggml_abort_is_r_enabled(void);
+
+// Op params functions (defined in r_interface_graph.c)
+extern SEXP R_ggml_get_op_params(SEXP);
+extern SEXP R_ggml_set_op_params(SEXP, SEXP);
+extern SEXP R_ggml_get_op_params_i32(SEXP, SEXP);
+extern SEXP R_ggml_set_op_params_i32(SEXP, SEXP, SEXP);
+extern SEXP R_ggml_get_op_params_f32(SEXP, SEXP);
+extern SEXP R_ggml_set_op_params_f32(SEXP, SEXP, SEXP);
+
+// Low-level quantization functions (defined in r_interface_quants.c)
+// Dequantize row functions
+extern SEXP R_dequantize_row_q4_0(SEXP, SEXP);
+extern SEXP R_dequantize_row_q4_1(SEXP, SEXP);
+extern SEXP R_dequantize_row_q5_0(SEXP, SEXP);
+extern SEXP R_dequantize_row_q5_1(SEXP, SEXP);
+extern SEXP R_dequantize_row_q8_0(SEXP, SEXP);
+extern SEXP R_dequantize_row_q2_K(SEXP, SEXP);
+extern SEXP R_dequantize_row_q3_K(SEXP, SEXP);
+extern SEXP R_dequantize_row_q4_K(SEXP, SEXP);
+extern SEXP R_dequantize_row_q5_K(SEXP, SEXP);
+extern SEXP R_dequantize_row_q6_K(SEXP, SEXP);
+extern SEXP R_dequantize_row_q8_K(SEXP, SEXP);
+extern SEXP R_dequantize_row_tq1_0(SEXP, SEXP);
+extern SEXP R_dequantize_row_tq2_0(SEXP, SEXP);
+extern SEXP R_dequantize_row_iq2_xxs(SEXP, SEXP);
+extern SEXP R_dequantize_row_iq2_xs(SEXP, SEXP);
+extern SEXP R_dequantize_row_iq2_s(SEXP, SEXP);
+extern SEXP R_dequantize_row_iq3_xxs(SEXP, SEXP);
+extern SEXP R_dequantize_row_iq3_s(SEXP, SEXP);
+extern SEXP R_dequantize_row_iq4_nl(SEXP, SEXP);
+extern SEXP R_dequantize_row_iq4_xs(SEXP, SEXP);
+extern SEXP R_dequantize_row_iq1_s(SEXP, SEXP);
+extern SEXP R_dequantize_row_iq1_m(SEXP, SEXP);
+extern SEXP R_dequantize_row_mxfp4(SEXP, SEXP);
+// Quantize functions (with imatrix)
+extern SEXP R_quantize_q4_0(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q4_1(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q5_0(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q5_1(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q8_0(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q2_K(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q3_K(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q4_K(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q5_K(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q6_K(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_tq1_0(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_tq2_0(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_iq2_xxs(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_iq2_xs(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_iq2_s(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_iq3_xxs(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_iq3_s(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_iq1_s(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_iq1_m(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_iq4_nl(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_iq4_xs(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_mxfp4(SEXP, SEXP, SEXP, SEXP);
+// Quantize row ref functions
+extern SEXP R_quantize_row_q4_0_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q4_1_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q5_0_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q5_1_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q8_0_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q8_1_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q2_K_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q3_K_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q4_K_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q5_K_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q6_K_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q8_K_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_tq1_0_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_tq2_0_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_iq3_xxs_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_iq4_nl_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_iq4_xs_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_iq3_s_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_iq2_s_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_mxfp4_ref(SEXP, SEXP);
+// IQ init/free
+extern SEXP R_iq2xs_init_impl(SEXP);
+extern SEXP R_iq2xs_free_impl(SEXP);
+extern SEXP R_iq3xs_init_impl(SEXP);
+extern SEXP R_iq3xs_free_impl(SEXP);
+// Quantization block info
+extern SEXP R_ggml_quant_block_info(SEXP);
+
 // ============================================================================
 // Context Management
 // ============================================================================
@@ -1485,6 +1610,134 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_are_same_stride",                  (DL_FUNC) &R_ggml_are_same_stride,                   2},
     {"R_ggml_can_repeat",                       (DL_FUNC) &R_ggml_can_repeat,                        2},
     {"R_ggml_count_equal",                      (DL_FUNC) &R_ggml_count_equal,                       3},
+
+    // Advanced RoPE
+    {"R_ggml_rope_multi_back",                  (DL_FUNC) &R_ggml_rope_multi_back,                  14},
+
+    // Graph Construction & Introspection
+    {"R_ggml_build_backward_expand",            (DL_FUNC) &R_ggml_build_backward_expand,             2},
+    {"R_ggml_graph_add_node",                   (DL_FUNC) &R_ggml_graph_add_node,                    2},
+    {"R_ggml_graph_clear",                      (DL_FUNC) &R_ggml_graph_clear,                       1},
+    {"R_ggml_graph_cpy",                        (DL_FUNC) &R_ggml_graph_cpy,                         2},
+    {"R_ggml_graph_dup",                        (DL_FUNC) &R_ggml_graph_dup,                         3},
+    {"R_ggml_graph_get_grad",                   (DL_FUNC) &R_ggml_graph_get_grad,                    2},
+    {"R_ggml_graph_get_grad_acc",               (DL_FUNC) &R_ggml_graph_get_grad_acc,                2},
+    {"R_ggml_graph_view",                       (DL_FUNC) &R_ggml_graph_view,                        3},
+    {"R_ggml_op_can_inplace",                   (DL_FUNC) &R_ggml_op_can_inplace,                    1},
+    {"R_ggml_are_same_layout",                  (DL_FUNC) &R_ggml_are_same_layout,                   2},
+
+    // Backend async/multi-buffer
+    {"R_ggml_backend_graph_compute_async",      (DL_FUNC) &R_ggml_backend_graph_compute_async,       2},
+    {"R_ggml_backend_multi_buffer_alloc_buffer",(DL_FUNC) &R_ggml_backend_multi_buffer_alloc_buffer, 1},
+    {"R_ggml_backend_buffer_is_multi_buffer",   (DL_FUNC) &R_ggml_backend_buffer_is_multi_buffer,    1},
+    {"R_ggml_backend_multi_buffer_set_usage",   (DL_FUNC) &R_ggml_backend_multi_buffer_set_usage,    2},
+    {"R_ggml_backend_register",                 (DL_FUNC) &R_ggml_backend_register,                  1},
+    {"R_ggml_backend_device_register",          (DL_FUNC) &R_ggml_backend_device_register,           1},
+
+    // Advanced Attention/Loss
+    {"R_ggml_cross_entropy_loss",               (DL_FUNC) &R_ggml_cross_entropy_loss,                3},
+    {"R_ggml_cross_entropy_loss_back",          (DL_FUNC) &R_ggml_cross_entropy_loss_back,           4},
+    {"R_ggml_cumsum",                           (DL_FUNC) &R_ggml_cumsum,                            2},
+    {"R_ggml_flash_attn_ext_set_prec",          (DL_FUNC) &R_ggml_flash_attn_ext_set_prec,           2},
+    {"R_ggml_flash_attn_ext_get_prec",          (DL_FUNC) &R_ggml_flash_attn_ext_get_prec,           1},
+    {"R_ggml_flash_attn_ext_add_sinks",         (DL_FUNC) &R_ggml_flash_attn_ext_add_sinks,          2},
+    {"R_ggml_soft_max_add_sinks",               (DL_FUNC) &R_ggml_soft_max_add_sinks,                2},
+
+    // Logging & debugging
+    {"R_ggml_log_set_r",                        (DL_FUNC) &R_ggml_log_set_r,                         0},
+    {"R_ggml_log_set_default",                  (DL_FUNC) &R_ggml_log_set_default,                   0},
+    {"R_ggml_log_is_r_enabled",                 (DL_FUNC) &R_ggml_log_is_r_enabled,                  0},
+    {"R_ggml_set_abort_callback_r",             (DL_FUNC) &R_ggml_set_abort_callback_r,              0},
+    {"R_ggml_set_abort_callback_default",       (DL_FUNC) &R_ggml_set_abort_callback_default,        0},
+    {"R_ggml_abort_is_r_enabled",               (DL_FUNC) &R_ggml_abort_is_r_enabled,                0},
+
+    // Op params
+    {"R_ggml_get_op_params",                    (DL_FUNC) &R_ggml_get_op_params,                     1},
+    {"R_ggml_set_op_params",                    (DL_FUNC) &R_ggml_set_op_params,                     2},
+    {"R_ggml_get_op_params_i32",                (DL_FUNC) &R_ggml_get_op_params_i32,                 2},
+    {"R_ggml_set_op_params_i32",                (DL_FUNC) &R_ggml_set_op_params_i32,                 3},
+    {"R_ggml_get_op_params_f32",                (DL_FUNC) &R_ggml_get_op_params_f32,                 2},
+    {"R_ggml_set_op_params_f32",                (DL_FUNC) &R_ggml_set_op_params_f32,                 3},
+
+    // Low-level quantization - dequantize row
+    {"R_dequantize_row_q4_0",                   (DL_FUNC) &R_dequantize_row_q4_0,                    2},
+    {"R_dequantize_row_q4_1",                   (DL_FUNC) &R_dequantize_row_q4_1,                    2},
+    {"R_dequantize_row_q5_0",                   (DL_FUNC) &R_dequantize_row_q5_0,                    2},
+    {"R_dequantize_row_q5_1",                   (DL_FUNC) &R_dequantize_row_q5_1,                    2},
+    {"R_dequantize_row_q8_0",                   (DL_FUNC) &R_dequantize_row_q8_0,                    2},
+    {"R_dequantize_row_q2_K",                   (DL_FUNC) &R_dequantize_row_q2_K,                    2},
+    {"R_dequantize_row_q3_K",                   (DL_FUNC) &R_dequantize_row_q3_K,                    2},
+    {"R_dequantize_row_q4_K",                   (DL_FUNC) &R_dequantize_row_q4_K,                    2},
+    {"R_dequantize_row_q5_K",                   (DL_FUNC) &R_dequantize_row_q5_K,                    2},
+    {"R_dequantize_row_q6_K",                   (DL_FUNC) &R_dequantize_row_q6_K,                    2},
+    {"R_dequantize_row_q8_K",                   (DL_FUNC) &R_dequantize_row_q8_K,                    2},
+    {"R_dequantize_row_tq1_0",                  (DL_FUNC) &R_dequantize_row_tq1_0,                   2},
+    {"R_dequantize_row_tq2_0",                  (DL_FUNC) &R_dequantize_row_tq2_0,                   2},
+    {"R_dequantize_row_iq2_xxs",                (DL_FUNC) &R_dequantize_row_iq2_xxs,                 2},
+    {"R_dequantize_row_iq2_xs",                 (DL_FUNC) &R_dequantize_row_iq2_xs,                  2},
+    {"R_dequantize_row_iq2_s",                  (DL_FUNC) &R_dequantize_row_iq2_s,                   2},
+    {"R_dequantize_row_iq3_xxs",                (DL_FUNC) &R_dequantize_row_iq3_xxs,                 2},
+    {"R_dequantize_row_iq3_s",                  (DL_FUNC) &R_dequantize_row_iq3_s,                   2},
+    {"R_dequantize_row_iq4_nl",                 (DL_FUNC) &R_dequantize_row_iq4_nl,                  2},
+    {"R_dequantize_row_iq4_xs",                 (DL_FUNC) &R_dequantize_row_iq4_xs,                  2},
+    {"R_dequantize_row_iq1_s",                  (DL_FUNC) &R_dequantize_row_iq1_s,                   2},
+    {"R_dequantize_row_iq1_m",                  (DL_FUNC) &R_dequantize_row_iq1_m,                   2},
+    {"R_dequantize_row_mxfp4",                  (DL_FUNC) &R_dequantize_row_mxfp4,                   2},
+
+    // Low-level quantization - quantize (with imatrix)
+    {"R_quantize_q4_0",                         (DL_FUNC) &R_quantize_q4_0,                          4},
+    {"R_quantize_q4_1",                         (DL_FUNC) &R_quantize_q4_1,                          4},
+    {"R_quantize_q5_0",                         (DL_FUNC) &R_quantize_q5_0,                          4},
+    {"R_quantize_q5_1",                         (DL_FUNC) &R_quantize_q5_1,                          4},
+    {"R_quantize_q8_0",                         (DL_FUNC) &R_quantize_q8_0,                          4},
+    {"R_quantize_q2_K",                         (DL_FUNC) &R_quantize_q2_K,                          4},
+    {"R_quantize_q3_K",                         (DL_FUNC) &R_quantize_q3_K,                          4},
+    {"R_quantize_q4_K",                         (DL_FUNC) &R_quantize_q4_K,                          4},
+    {"R_quantize_q5_K",                         (DL_FUNC) &R_quantize_q5_K,                          4},
+    {"R_quantize_q6_K",                         (DL_FUNC) &R_quantize_q6_K,                          4},
+    {"R_quantize_tq1_0",                        (DL_FUNC) &R_quantize_tq1_0,                         4},
+    {"R_quantize_tq2_0",                        (DL_FUNC) &R_quantize_tq2_0,                         4},
+    {"R_quantize_iq2_xxs",                      (DL_FUNC) &R_quantize_iq2_xxs,                       4},
+    {"R_quantize_iq2_xs",                       (DL_FUNC) &R_quantize_iq2_xs,                        4},
+    {"R_quantize_iq2_s",                        (DL_FUNC) &R_quantize_iq2_s,                         4},
+    {"R_quantize_iq3_xxs",                      (DL_FUNC) &R_quantize_iq3_xxs,                       4},
+    {"R_quantize_iq3_s",                        (DL_FUNC) &R_quantize_iq3_s,                         4},
+    {"R_quantize_iq1_s",                        (DL_FUNC) &R_quantize_iq1_s,                         4},
+    {"R_quantize_iq1_m",                        (DL_FUNC) &R_quantize_iq1_m,                         4},
+    {"R_quantize_iq4_nl",                       (DL_FUNC) &R_quantize_iq4_nl,                        4},
+    {"R_quantize_iq4_xs",                       (DL_FUNC) &R_quantize_iq4_xs,                        4},
+    {"R_quantize_mxfp4",                        (DL_FUNC) &R_quantize_mxfp4,                         4},
+
+    // Low-level quantization - quantize row ref
+    {"R_quantize_row_q4_0_ref",                 (DL_FUNC) &R_quantize_row_q4_0_ref,                  2},
+    {"R_quantize_row_q4_1_ref",                 (DL_FUNC) &R_quantize_row_q4_1_ref,                  2},
+    {"R_quantize_row_q5_0_ref",                 (DL_FUNC) &R_quantize_row_q5_0_ref,                  2},
+    {"R_quantize_row_q5_1_ref",                 (DL_FUNC) &R_quantize_row_q5_1_ref,                  2},
+    {"R_quantize_row_q8_0_ref",                 (DL_FUNC) &R_quantize_row_q8_0_ref,                  2},
+    {"R_quantize_row_q8_1_ref",                 (DL_FUNC) &R_quantize_row_q8_1_ref,                  2},
+    {"R_quantize_row_q2_K_ref",                 (DL_FUNC) &R_quantize_row_q2_K_ref,                  2},
+    {"R_quantize_row_q3_K_ref",                 (DL_FUNC) &R_quantize_row_q3_K_ref,                  2},
+    {"R_quantize_row_q4_K_ref",                 (DL_FUNC) &R_quantize_row_q4_K_ref,                  2},
+    {"R_quantize_row_q5_K_ref",                 (DL_FUNC) &R_quantize_row_q5_K_ref,                  2},
+    {"R_quantize_row_q6_K_ref",                 (DL_FUNC) &R_quantize_row_q6_K_ref,                  2},
+    {"R_quantize_row_q8_K_ref",                 (DL_FUNC) &R_quantize_row_q8_K_ref,                  2},
+    {"R_quantize_row_tq1_0_ref",                (DL_FUNC) &R_quantize_row_tq1_0_ref,                 2},
+    {"R_quantize_row_tq2_0_ref",                (DL_FUNC) &R_quantize_row_tq2_0_ref,                 2},
+    {"R_quantize_row_iq3_xxs_ref",              (DL_FUNC) &R_quantize_row_iq3_xxs_ref,               2},
+    {"R_quantize_row_iq4_nl_ref",               (DL_FUNC) &R_quantize_row_iq4_nl_ref,                2},
+    {"R_quantize_row_iq4_xs_ref",               (DL_FUNC) &R_quantize_row_iq4_xs_ref,                2},
+    {"R_quantize_row_iq3_s_ref",                (DL_FUNC) &R_quantize_row_iq3_s_ref,                 2},
+    {"R_quantize_row_iq2_s_ref",                (DL_FUNC) &R_quantize_row_iq2_s_ref,                 2},
+    {"R_quantize_row_mxfp4_ref",                (DL_FUNC) &R_quantize_row_mxfp4_ref,                 2},
+
+    // IQ init/free
+    {"R_iq2xs_init_impl",                       (DL_FUNC) &R_iq2xs_init_impl,                        1},
+    {"R_iq2xs_free_impl",                       (DL_FUNC) &R_iq2xs_free_impl,                        1},
+    {"R_iq3xs_init_impl",                       (DL_FUNC) &R_iq3xs_init_impl,                        1},
+    {"R_iq3xs_free_impl",                       (DL_FUNC) &R_iq3xs_free_impl,                        1},
+
+    // Quantization info
+    {"R_ggml_quant_block_info",                 (DL_FUNC) &R_ggml_quant_block_info,                  1},
 
     {NULL, NULL, 0}
 };

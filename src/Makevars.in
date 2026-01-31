@@ -47,7 +47,7 @@ PKG_LIBS = $(OPENMP_CXXFLAGS) $(VULKAN_LIBS) -lpthread -lm
 # Base objects (CPU backend)
 OBJECTS = \
   r_ggml_io.o \
-  r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o r_interface_opt.o r_interface_backend.o \
+  r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o r_interface_opt.o r_interface_backend.o r_interface_quants.o \
   ggml.o ggml-alloc.o ggml-quants.o ggml-opt.o \
   ggml-backend.o ggml-backend-reg.o ggml-threading.o \
   ggml-cpu/traits.o \
@@ -75,3 +75,4 @@ r_interface_vulkan.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_scheduler.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_opt.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_backend.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+r_interface_quants.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL

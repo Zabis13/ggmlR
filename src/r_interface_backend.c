@@ -5,6 +5,7 @@
 #include <Rinternals.h>
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-backend-impl.h"
 
 // ============================================================================
 // Device Type Constants
@@ -715,4 +716,106 @@ SEXP R_ggml_backend_get_device(SEXP backend_ptr) {
     SEXP ptr = PROTECT(R_MakeExternalPtr(device, R_NilValue, R_NilValue));
     UNPROTECT(1);
     return ptr;
+}
+
+// ============================================================================
+// Async Graph Compute
+// ============================================================================
+
+SEXP R_ggml_backend_graph_compute_async(SEXP backend_ptr, SEXP graph_ptr) {
+    ggml_backend_t backend = (ggml_backend_t)R_ExternalPtrAddr(backend_ptr);
+    struct ggml_cgraph * graph = (struct ggml_cgraph *)R_ExternalPtrAddr(graph_ptr);
+
+    if (backend == NULL) {
+        error("Invalid backend pointer");
+    }
+    if (graph == NULL) {
+        error("Invalid graph pointer");
+    }
+
+    enum ggml_status status = ggml_backend_graph_compute_async(backend, graph);
+    return ScalarInteger((int)status);
+}
+
+// ============================================================================
+// Multi-buffer Operations
+// ============================================================================
+
+SEXP R_ggml_backend_multi_buffer_alloc_buffer(SEXP buffers_list) {
+    if (TYPEOF(buffers_list) != VECSXP) {
+        error("buffers must be a list of buffer pointers");
+    }
+
+    size_t n_buffers = (size_t)LENGTH(buffers_list);
+    if (n_buffers == 0) {
+        error("buffers list cannot be empty");
+    }
+
+    ggml_backend_buffer_t * buffers = (ggml_backend_buffer_t *)R_alloc(n_buffers, sizeof(ggml_backend_buffer_t));
+
+    for (size_t i = 0; i < n_buffers; i++) {
+        SEXP buf_ptr = VECTOR_ELT(buffers_list, i);
+        buffers[i] = (ggml_backend_buffer_t)R_ExternalPtrAddr(buf_ptr);
+        if (buffers[i] == NULL) {
+            error("Invalid buffer pointer at index %zu", i);
+        }
+    }
+
+    ggml_backend_buffer_t multi_buffer = ggml_backend_multi_buffer_alloc_buffer(buffers, n_buffers);
+
+    if (multi_buffer == NULL) {
+        error("Failed to allocate multi-buffer");
+    }
+
+    SEXP ptr = PROTECT(R_MakeExternalPtr(multi_buffer, R_NilValue, R_NilValue));
+    UNPROTECT(1);
+    return ptr;
+}
+
+SEXP R_ggml_backend_buffer_is_multi_buffer(SEXP buffer_ptr) {
+    ggml_backend_buffer_t buffer = (ggml_backend_buffer_t)R_ExternalPtrAddr(buffer_ptr);
+
+    if (buffer == NULL) {
+        error("Invalid buffer pointer");
+    }
+
+    return ScalarLogical(ggml_backend_buffer_is_multi_buffer(buffer));
+}
+
+SEXP R_ggml_backend_multi_buffer_set_usage(SEXP buffer_ptr, SEXP usage) {
+    ggml_backend_buffer_t buffer = (ggml_backend_buffer_t)R_ExternalPtrAddr(buffer_ptr);
+
+    if (buffer == NULL) {
+        error("Invalid buffer pointer");
+    }
+
+    enum ggml_backend_buffer_usage buf_usage = (enum ggml_backend_buffer_usage)asInteger(usage);
+    ggml_backend_multi_buffer_set_usage(buffer, buf_usage);
+    return R_NilValue;
+}
+
+// ============================================================================
+// Backend Registration
+// ============================================================================
+
+SEXP R_ggml_backend_register(SEXP reg_ptr) {
+    ggml_backend_reg_t reg = (ggml_backend_reg_t)R_ExternalPtrAddr(reg_ptr);
+
+    if (reg == NULL) {
+        error("Invalid registry pointer");
+    }
+
+    ggml_backend_register(reg);
+    return R_NilValue;
+}
+
+SEXP R_ggml_backend_device_register(SEXP device_ptr) {
+    ggml_backend_dev_t device = (ggml_backend_dev_t)R_ExternalPtrAddr(device_ptr);
+
+    if (device == NULL) {
+        error("Invalid device pointer");
+    }
+
+    ggml_backend_device_register(device);
+    return R_NilValue;
 }

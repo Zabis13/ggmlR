@@ -351,3 +351,70 @@ ggml_backend_buffer_get_size <- function(buffer) {
 ggml_backend_buffer_name <- function(buffer) {
   .Call("R_ggml_backend_buffer_name", buffer, PACKAGE = "ggmlR")
 }
+
+# ============================================================================
+# Graph Introspection
+# ============================================================================
+
+#' Create a View of a Subgraph
+#'
+#' Creates a view of a portion of a computation graph, containing nodes
+#' from index i0 to i1 (exclusive). The view shares the underlying nodes
+#' but does not include leaf tensors or gradients.
+#'
+#' @param graph External pointer to computation graph
+#' @param i0 Start index (0-based, inclusive)
+#' @param i1 End index (exclusive)
+#' @return External pointer to graph view
+#' @export
+#' @family graph
+#' @examples
+#' \dontrun{
+#' # Get first 10 nodes of a graph
+#' view <- ggml_graph_view(graph, 0, 10)
+#' }
+ggml_graph_view <- function(graph, i0, i1) {
+  .Call("R_ggml_graph_view", graph, as.integer(i0), as.integer(i1),
+        PACKAGE = "ggmlR")
+}
+
+#' Check if Operation Can Be Done In-place
+#'
+#' Returns whether a GGML operation can reuse memory from its source tensors.
+#' This is useful for memory optimization.
+#'
+#' @param op Operation code (integer)
+#' @return Logical indicating if operation supports in-place execution
+#' @export
+#' @family graph
+#' @examples
+#' \dontrun{
+#' # Check if add operation can be in-place
+#' can_inplace <- ggml_op_can_inplace(ggml_op_add())
+#' }
+ggml_op_can_inplace <- function(op) {
+  .Call("R_ggml_op_can_inplace", as.integer(op), PACKAGE = "ggmlR")
+}
+
+#' Check if Two Tensors Have the Same Layout
+#'
+#' Compares two tensors to check if they have identical type, shape,
+#' and strides. Tensors with the same layout can be used interchangeably
+#' for memory operations.
+#'
+#' @param a External pointer to first tensor
+#' @param b External pointer to second tensor
+#' @return Logical indicating if tensors have identical layout
+#' @export
+#' @family tensor
+#' @examples
+#' \dontrun{
+#' ctx <- ggml_init(1024 * 1024)
+#' a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 4)
+#' b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 4)
+#' same <- ggml_are_same_layout(a, b)  # TRUE
+#' ggml_free(ctx)
+#' }
+ggml_are_same_layout <- function(a, b) {
+  .Call("R_ggml_are_same_layout", a, b, PACKAGE = "ggmlR")
+}
