@@ -1,5 +1,11 @@
 ## TODO
 
+### llamaR Integration
+- [x] Export static library `libggml.a`
+- [x] Export headers via `inst/include/`
+- [x] Add `gguf.cpp` for GGUF support
+- [ ] Sync ggml version with llama.cpp (add `ggml_build_forward_select`)
+
 ### Custom Operations
 - [ ] `ggml_custom()` / `ggml_custom_inplace()` — требуют C расширение
 

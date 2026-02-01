@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.5.0
+Version: 0.5.1
 Authors@R: person("Yuri", "Baramykov",
     email = "lbsbmsu@mail.ru",
     role = c("aut", "cre"))

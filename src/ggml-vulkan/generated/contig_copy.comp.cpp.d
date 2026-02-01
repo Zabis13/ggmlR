@@ -1,0 +1,1 @@
+../generated/contig_copy.comp.cpp: /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/contig_copy.comp /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/generic_unary_head.glsl /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/types.glsl

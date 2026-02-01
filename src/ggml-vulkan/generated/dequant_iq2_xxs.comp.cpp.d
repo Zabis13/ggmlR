@@ -1,0 +1,1 @@
+../generated/dequant_iq2_xxs.comp.cpp: /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/dequant_iq2_xxs.comp /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/types.glsl /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/dequant_head.glsl

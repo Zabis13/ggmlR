@@ -1,0 +1,1 @@
+../generated/group_norm.comp.cpp: /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/group_norm.comp /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/types.glsl /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/generic_head.glsl

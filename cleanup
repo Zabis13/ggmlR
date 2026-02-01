@@ -4,7 +4,8 @@
 # Removes compiled objects, shared libraries, and generated files
 
 # Remove compiled objects and libraries
-rm -f src/*.o src/*.so src/*.dll src/*.dylib
+rm -f src/*.o src/*.so src/*.dll src/*.dylib src/*.a
+rm -f inst/lib/*.a
 rm -f src/ggml-cpu/*.o
 rm -f src/ggml-cpu/arch/x86/*.o
 rm -f src/ggml-cpu/llamafile/*.o

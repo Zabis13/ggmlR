@@ -1,3 +1,16 @@
+# ggmlR 0.5.1
+
+## New Features
+
+* Export static library `libggml.a` for linking by dependent packages (llamaR)
+* Added `gguf.cpp` for GGUF file format support
+* Headers exported via `inst/include/` for `LinkingTo`
+
+## Internal
+
+* `r_ggml_io.o` moved to GGML_OBJECTS for proper symbol export
+* Static library excluded from source tarball via `.Rbuildignore`
+
 # ggmlR 0.5.0
 
 ## Major Features

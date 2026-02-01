@@ -1,0 +1,1 @@
+../generated/cumsum.comp.cpp: /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/cumsum.comp /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/sum_rows.glsl /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/types.glsl

@@ -1,0 +1,1 @@
+../generated/leaky_relu.comp.cpp: /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/leaky_relu.comp /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/types.glsl /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/generic_head.glsl

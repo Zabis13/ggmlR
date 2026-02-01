@@ -35,3 +35,5 @@
 ^src/ggml-cpu/llamafile/sgemm\.cpp$
 ^src/r_interface_memory\.c$
 ^src/r_interface_threading\.c$
+^src/.*\.a$
+^inst/lib/.*\.a$
