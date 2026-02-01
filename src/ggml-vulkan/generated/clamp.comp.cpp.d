@@ -1,1 +1,0 @@
-../generated/clamp.comp.cpp: /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/clamp.comp /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/generic_unary_head.glsl /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/types.glsl

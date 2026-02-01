@@ -1,1 +1,0 @@
-../generated/mul_mat_vec_iq3_xxs.comp.cpp: /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iq3_xxs.comp /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/types.glsl /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_iface.glsl /mnt/Data2/DS_projects/ggmlR/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_base.glsl
