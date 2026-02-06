@@ -1,0 +1,96 @@
+CXX_STD = CXX17
+
+# Base include paths and defines
+GGML_CPPFLAGS = -I. -Iggml-cpu -Iggml-cpu/arch/x86 \
+  -DGGML_VERSION='"0.9.5"' -DGGML_COMMIT='"ggmlR"' \
+  -DGGML_USE_CPU -D_GNU_SOURCE
+
+# Vulkan flags (set by configure --with-vulkan)
+VULKAN_CPPFLAGS = @VULKAN_CPPFLAGS@
+VULKAN_LIBS = @VULKAN_LIBS@
+
+# --- OpenMP configuration ---
+#
+# CRAN R CMD check enforces strict pairing of SHLIB_OPENMP_*FLAGS macros:
+#   - PKG_CFLAGS must use SHLIB_OPENMP_CFLAGS
+#   - PKG_CXXFLAGS must use SHLIB_OPENMP_CXXFLAGS
+#   - PKG_LIBS must use the macro matching the linker language
+#   - Multiple SHLIB_OPENMP_* macros in PKG_LIBS are not allowed
+#   - Mismatched macros (e.g. CXXFLAGS in CFLAGS) trigger NOTE
+#
+# For mixed C/C++ packages this creates an unsolvable conflict:
+# linking is by C++, so PKG_LIBS needs CXXFLAGS, but C code also needs
+# CFLAGS for compilation, which then has no matching pair in PKG_LIBS.
+#
+# Solution: resolve OpenMP flags at configure time from R's Makeconf
+# (see RcppArmadillo for the same approach). The configure script reads
+# SHLIB_OPENMP_CFLAGS and SHLIB_OPENMP_CXXFLAGS and substitutes them
+# here as literal values. R CMD check does not see the SHLIB_OPENMP_*
+# macro names, so the NOTE disappears.
+#
+# On macOS (Apple clang) both values are empty -> OpenMP disabled,
+# code falls back to pthreads (#ifndef GGML_USE_OPENMP in ggml-cpu-backend.c).
+#
+OPENMP_CPPFLAGS = @OPENMP_CPPFLAGS@
+OPENMP_CFLAGS = @OPENMP_CFLAGS@
+OPENMP_CXXFLAGS = @OPENMP_CXXFLAGS@
+
+# Force include R compatibility header for CRAN compliance
+# This redirects stdout/stderr/abort to R-safe alternatives
+# r_ggml_io.c is compiled separately without this header (see rule below)
+PKG_CPPFLAGS = $(GGML_CPPFLAGS) $(OPENMP_CPPFLAGS) $(VULKAN_CPPFLAGS) -DGGML_R_PACKAGE -include r_ggml_compat.h
+
+PKG_CFLAGS = $(OPENMP_CFLAGS)
+PKG_CXXFLAGS = $(OPENMP_CXXFLAGS)
+PKG_LIBS = $(OPENMP_CXXFLAGS) $(VULKAN_LIBS) -lpthread -lm
+
+# GGML library objects (for static library export)
+GGML_OBJECTS = \
+  r_ggml_io.o \
+  ggml.o ggml-alloc.o ggml-quants.o ggml-opt.o gguf.o \
+  ggml-backend.o ggml-backend-reg.o ggml-threading.o \
+  ggml-cpu/traits.o \
+  ggml-cpu/ggml-cpu-backend.o ggml-cpu/ggml-cpu.o \
+  ggml-cpu/ops.o ggml-cpu/vec.o \
+  ggml-cpu/binary-ops.o ggml-cpu/unary-ops.o ggml-cpu/repack.o \
+  ggml-cpu/quants.o ggml-cpu/hbm.o \
+  ggml-cpu/arch/x86/cpu-feats.o ggml-cpu/arch/x86/quants.o ggml-cpu/arch/x86/repack.o
+
+# R interface objects
+R_INTERFACE_OBJECTS = \
+  r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o r_interface_opt.o r_interface_backend.o r_interface_quants.o
+
+# Vulkan objects (set by configure --with-vulkan)
+VULKAN_OBJECTS = @VULKAN_OBJECTS@
+GGML_OBJECTS += $(VULKAN_OBJECTS)
+
+# All objects for shared library
+OBJECTS = $(R_INTERFACE_OBJECTS) $(GGML_OBJECTS)
+
+# Static library for linking by other packages
+STATICLIB = libggml.a
+
+$(SHLIB): $(OBJECTS) staticlib
+
+.PHONY: staticlib
+
+staticlib: $(GGML_OBJECTS)
+	$(AR) rcs $(STATICLIB) $(GGML_OBJECTS)
+	mkdir -p ../inst/lib
+	cp $(STATICLIB) ../inst/lib/
+
+# R interface files and r_ggml_io.c include R headers (R.h, Rinternals.h)
+# which contain __attribute__((format(printf, ...))). Our macro
+# '#define printf r_ggml_printf' would turn this into format(r_ggml_printf, ...)
+# which GCC rejects as an unrecognized format type.
+# R_GGML_IO_IMPL disables all macro redirections in r_ggml_compat.h.
+# These files use only R API (Rprintf, Rf_error), not stdio printf/fprintf,
+# so they don't need the redirections.
+r_ggml_io.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+r_interface.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+r_interface_graph.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+r_interface_vulkan.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+r_interface_scheduler.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+r_interface_opt.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+r_interface_backend.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+r_interface_quants.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL

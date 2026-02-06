@@ -1,0 +1,31 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.httr-oauth
+.DS_Store
+.quarto
+
+# Compiled code
+*.o
+*.so
+*.dll
+*.dylib
+src/*.o
+src/*.so
+src/ggml-cpu/*.o
+src/ggml-cpu/arch/**/*.o
+
+# R package build artifacts
+*.tar.gz
+..Rcheck/
+src/Makevars
+
+# Static libraries
+*.a
+src/*.a
+inst/lib/*.a
+
+# Vulkan generated files
+src/ggml-vulkan/generated/
+src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen

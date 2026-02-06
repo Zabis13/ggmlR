@@ -1,0 +1,245 @@
+---
+title: "Working with Quantized Models"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Working with Quantized Models}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+## Introduction
+
+Quantization reduces model size and memory usage by representing weights with
+fewer bits. GGML supports various quantization formats that can significantly
+reduce memory requirements while maintaining acceptable accuracy.
+
+## Supported Data Types
+
+ggmlR supports the following data types:
+```{r data-types}
+library(ggmlR)
+
+# Standard floating point
+GGML_TYPE_F32   # 32-bit float (4 bytes per element)
+GGML_TYPE_F16   # 16-bit float (2 bytes per element)
+
+# Integer
+GGML_TYPE_I32   # 32-bit integer
+
+# Quantized types
+GGML_TYPE_Q4_0  # 4-bit quantization, type 0
+GGML_TYPE_Q4_1  # 4-bit quantization, type 1
+GGML_TYPE_Q8_0  # 8-bit quantization
+```
+
+## Memory Savings
+
+Quantization provides significant memory savings:
+```{r memory-comparison}
+ctx <- ggml_init(64 * 1024 * 1024)
+
+# Create tensors of same logical size with different types
+n <- 1000000  # 1M elements
+
+f32_tensor <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n)
+f16_tensor <- ggml_new_tensor_1d(ctx, GGML_TYPE_F16, n)
+q8_tensor  <- ggml_new_tensor_1d(ctx, GGML_TYPE_Q8_0, n)
+q4_tensor  <- ggml_new_tensor_1d(ctx, GGML_TYPE_Q4_0, n)
+
+cat("Memory usage for", n, "elements:\n")
+cat("  F32:", ggml_nbytes(f32_tensor) / 1024^2, "MB\n")
+cat("  F16:", ggml_nbytes(f16_tensor) / 1024^2, "MB\n")
+cat("  Q8_0:", ggml_nbytes(q8_tensor) / 1024^2, "MB\n")
+cat("  Q4_0:", ggml_nbytes(q4_tensor) / 1024^2, "MB\n")
+
+ggml_free(ctx)
+```
+
+## Quantization Functions
+
+### Initialize Quantization Tables
+
+Before quantizing, initialize the quantization tables:
+```{r init-quant}
+# Initialize quantization (required before first use)
+ggml_quantize_init(GGML_TYPE_Q4_0)
+ggml_quantize_init(GGML_TYPE_Q8_0)
+```
+
+### Quantize Data
+
+Use `ggml_quantize_chunk()` to quantize floating-point data:
+```{r quantize-data}
+ctx <- ggml_init(16 * 1024 * 1024)
+
+# Create source data (F32)
+n <- 256  # Must be multiple of block size (32 for Q4_0)
+src <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n)
+ggml_set_f32(src, rnorm(n))
+
+# Extract numeric data from tensor
+src_data <- ggml_get_f32(src)
+
+# Quantize to Q4_0
+quantized <- ggml_quantize_chunk(
+  type = GGML_TYPE_Q4_0,
+  src = src_data,
+  nrows = 1,
+  n_per_row = n
+)
+
+cat("Original size:", length(src_data) * 4, "bytes\n")  # F32 = 4 bytes
+cat("Quantized size:", length(quantized), "bytes\n")
+cat("Compression ratio:", round(ggml_nbytes(src) / length(quantized), 1), "x\n")
+
+ggml_free(ctx)
+```
+
+### Dequantize Data
+
+To convert quantized data back to float:
+```{r dequantize}
+# Q4_0 dequantization
+q4_data <- quantized  # From previous example
+dequantized <- dequantize_row_q4_0(q4_data, n)
+
+# Compare with original
+error <- mean(abs(src_data - dequantized))
+cat("Mean absolute error:", error, "\n")
+```
+
+## Block Sizes and Alignment
+
+Quantized types have specific block sizes:
+```{r block-info}
+# Get block information for quantized types
+q4_info <- ggml_quant_block_info(GGML_TYPE_Q4_0)
+cat("Q4_0 block size:", q4_info$blck_size, "elements\n")
+cat("Q4_0 type size:", q4_info$type_size, "bytes per block\n")
+
+q8_info <- ggml_quant_block_info(GGML_TYPE_Q8_0)
+cat("Q8_0 block size:", q8_info$blck_size, "elements\n")
+cat("Q8_0 type size:", q8_info$type_size, "bytes per block\n")
+
+# Check if type is quantized
+cat("\nIs Q4_0 quantized?", ggml_is_quantized(GGML_TYPE_Q4_0), "\n")
+cat("Is F32 quantized?", ggml_is_quantized(GGML_TYPE_F32), "\n")
+```
+
+## Using Quantized Tensors in Computations
+
+GGML automatically handles dequantization during computation:
+```{r compute-quantized}
+ctx <- ggml_init(32 * 1024 * 1024)
+
+# Create quantized weight matrix (e.g., for neural network)
+weight_rows <- 256
+weight_cols <- 128
+
+# In practice, you would load pre-quantized weights
+# Here we create F32 weights and the computation handles mixed types
+weights <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, weight_cols, weight_rows)
+input <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, weight_cols)
+
+# Matrix-vector multiplication works with mixed types
+output <- ggml_mul_mat(ctx, weights, input)
+
+graph <- ggml_build_forward_expand(ctx, output)
+
+# Initialize data
+ggml_set_f32(weights, rnorm(weight_rows * weight_cols, sd = 0.1))
+ggml_set_f32(input, rnorm(weight_cols))
+
+ggml_graph_compute(ctx, graph)
+
+cat("Output shape:", ggml_tensor_shape(output), "\n")
+cat("Output sample:", head(ggml_get_f32(output), 5), "\n")
+
+ggml_free(ctx)
+```
+
+## Available Dequantization Functions
+
+ggmlR provides dequantization for all GGML quantized types:
+```{r dequant-functions}
+# Standard quantization
+# dequantize_row_q4_0()  - 4-bit, type 0
+# dequantize_row_q4_1()  - 4-bit, type 1
+# dequantize_row_q5_0()  - 5-bit, type 0
+# dequantize_row_q5_1()  - 5-bit, type 1
+# dequantize_row_q8_0()  - 8-bit, type 0
+
+# K-quants (better quality)
+# dequantize_row_q2_K()  - 2-bit K-quant
+# dequantize_row_q3_K()  - 3-bit K-quant
+# dequantize_row_q4_K()  - 4-bit K-quant
+# dequantize_row_q5_K()  - 5-bit K-quant
+# dequantize_row_q6_K()  - 6-bit K-quant
+# dequantize_row_q8_K()  - 8-bit K-quant
+
+# I-quants (importance matrix)
+# dequantize_row_iq2_xxs(), dequantize_row_iq2_xs(), dequantize_row_iq2_s()
+# dequantize_row_iq3_xxs(), dequantize_row_iq3_s()
+# dequantize_row_iq4_nl(), dequantize_row_iq4_xs()
+
+# Special types
+# dequantize_row_tq1_0()  - Ternary quantization
+# dequantize_row_tq2_0()
+```
+
+## Importance Matrix Quantization
+
+Some quantization types require an importance matrix for better quality:
+```{r imatrix}
+# Check if type requires importance matrix
+cat("Q4_0 requires imatrix:", ggml_quantize_requires_imatrix(GGML_TYPE_Q4_0),
+    "\n")
+
+# I-quants typically require importance matrix for best results
+# The imatrix captures which weights are most important for model quality
+```
+
+## Cleanup
+
+Always free quantization resources when done:
+```{r cleanup}
+# Free quantization tables
+ggml_quantize_free()
+```
+
+## Performance Considerations
+
+### When to Use Quantization
+
+- **Large models**: Quantization is essential for running large language models
+- **Memory-constrained environments**: Reduce memory footprint by 2-8x
+- **Inference**: Quantization is primarily used for inference, not training
+
+### Choosing Quantization Type
+
+| Type | Bits | Quality | Speed | Use Case |
+|------|------|---------|-------|----------|
+| Q8_0 | 8 | High | Fast | When quality matters |
+| Q4_K | 4 | Good | Fast | Balanced choice |
+| Q4_0 | 4 | Medium | Fastest | Maximum compression |
+| Q2_K | 2 | Lower | Fast | Extreme compression |
+
+### Tips
+
+1. **Start with Q4_K or Q5_K** for a good balance of quality and size
+2. **Use Q8_0** when quality is critical
+3. **Test accuracy** after quantization on your specific use case
+4. **Align tensor sizes** to block sizes for optimal performance
+
+## See Also
+
+- `vignette("vulkan-backend")` for GPU acceleration
+- `vignette("multi-gpu")` for distributed inference
