@@ -38,10 +38,9 @@ PKG_CPPFLAGS = $(GGML_CPPFLAGS) -DGGML_R_PACKAGE -include r_ggml_compat.h
 PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
 PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)
 
-OBJECTS = \
+# GGML library objects (for static library export)
+GGML_OBJECTS = \
   r_ggml_io.o \
-  r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o \
-  r_interface_opt.o r_interface_backend.o r_interface_quants.o \
   ggml.o ggml-alloc.o ggml-quants.o ggml-opt.o gguf.o \
   ggml-backend.o ggml-backend-reg.o ggml-threading.o \
   ggml-cpu/traits.o \
@@ -50,6 +49,26 @@ OBJECTS = \
   ggml-cpu/binary-ops.o ggml-cpu/unary-ops.o ggml-cpu/repack.o \
   ggml-cpu/quants.o ggml-cpu/hbm.o \
   ggml-cpu/arch/x86/cpu-feats.o ggml-cpu/arch/x86/quants.o ggml-cpu/arch/x86/repack.o
+
+# R interface objects
+R_INTERFACE_OBJECTS = \
+  r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o \
+  r_interface_opt.o r_interface_backend.o r_interface_quants.o
+
+# All objects for shared library
+OBJECTS = $(R_INTERFACE_OBJECTS) $(GGML_OBJECTS)
+
+# Static library for linking by other packages
+STATICLIB = libggml.a
+
+$(SHLIB): $(OBJECTS) staticlib
+
+.PHONY: staticlib
+
+staticlib: $(GGML_OBJECTS)
+	$(AR) rcs $(STATICLIB) $(GGML_OBJECTS)
+	mkdir -p ../inst/lib
+	cp $(STATICLIB) ../inst/lib/
 
 # R interface files and r_ggml_io.c include R headers (R.h, Rinternals.h)
 # which contain __attribute__((format(printf, ...))). Our macro
