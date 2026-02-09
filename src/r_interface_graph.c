@@ -1,6 +1,7 @@
 #include <R.h>
 #include <Rinternals.h>
 #include <stdlib.h>
+#include <string.h>
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
@@ -4264,4 +4265,247 @@ SEXP R_ggml_set_op_params_f32(SEXP tensor_ptr, SEXP index, SEXP value) {
     float * params = (float *)tensor->op_params;
     params[idx] = (float)asReal(value);
     return R_NilValue;
+}
+
+// ============================================================================
+// Timestep Embedding (for Stable Diffusion)
+// ============================================================================
+
+SEXP R_ggml_timestep_embedding(SEXP ctx_ptr, SEXP a_ptr, SEXP dim_sexp, SEXP max_period_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+
+    int dim = asInteger(dim_sexp);
+    int max_period = asInteger(max_period_sexp);
+
+    struct ggml_tensor * result = ggml_timestep_embedding(ctx, a, dim, max_period);
+
+    if (result == NULL) {
+        error("Failed to create timestep_embedding operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// ============================================================================
+// CPU-side tensor data access (for sdR / stable-diffusion port)
+// ============================================================================
+
+// Set single f32 value at [i0, i1, i2, i3] via direct memory access
+SEXP R_ggml_set_f32_nd(SEXP tensor_ptr, SEXP i0_sexp, SEXP i1_sexp, SEXP i2_sexp, SEXP i3_sexp, SEXP value_sexp) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    if (tensor->data == NULL) {
+        error("Tensor data is NULL");
+    }
+    int64_t i0 = (int64_t) asReal(i0_sexp);
+    int64_t i1 = (int64_t) asReal(i1_sexp);
+    int64_t i2 = (int64_t) asReal(i2_sexp);
+    int64_t i3 = (int64_t) asReal(i3_sexp);
+    float val = (float) asReal(value_sexp);
+    *(float*)((char*)(tensor->data) + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0]) = val;
+    return R_NilValue;
+}
+
+// Get single f32 value at [i0, i1, i2, i3] via direct memory access or backend
+SEXP R_ggml_get_f32_nd(SEXP tensor_ptr, SEXP i0_sexp, SEXP i1_sexp, SEXP i2_sexp, SEXP i3_sexp) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    int64_t i0 = (int64_t) asReal(i0_sexp);
+    int64_t i1 = (int64_t) asReal(i1_sexp);
+    int64_t i2 = (int64_t) asReal(i2_sexp);
+    int64_t i3 = (int64_t) asReal(i3_sexp);
+    size_t offset = i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0];
+    float val;
+    if (tensor->buffer != NULL) {
+        ggml_backend_tensor_get(tensor, &val, offset, sizeof(float));
+    } else {
+        val = *(float*)((char*)(tensor->data) + offset);
+    }
+    return ScalarReal((double) val);
+}
+
+// Get single i32 value at [i0, i1, i2, i3] via direct memory access or backend
+SEXP R_ggml_get_i32_nd(SEXP tensor_ptr, SEXP i0_sexp, SEXP i1_sexp, SEXP i2_sexp, SEXP i3_sexp) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    int64_t i0 = (int64_t) asReal(i0_sexp);
+    int64_t i1 = (int64_t) asReal(i1_sexp);
+    int64_t i2 = (int64_t) asReal(i2_sexp);
+    int64_t i3 = (int64_t) asReal(i3_sexp);
+    size_t offset = i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0];
+    int32_t val;
+    if (tensor->buffer != NULL) {
+        ggml_backend_tensor_get(tensor, &val, offset, sizeof(int32_t));
+    } else {
+        val = *(int32_t*)((char*)(tensor->data) + offset);
+    }
+    return ScalarInteger(val);
+}
+
+// Set single i32 value at [i0, i1, i2, i3] via direct memory access
+SEXP R_ggml_set_i32_nd(SEXP tensor_ptr, SEXP i0_sexp, SEXP i1_sexp, SEXP i2_sexp, SEXP i3_sexp, SEXP value_sexp) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    if (tensor->data == NULL) {
+        error("Tensor data is NULL");
+    }
+    int64_t i0 = (int64_t) asReal(i0_sexp);
+    int64_t i1 = (int64_t) asReal(i1_sexp);
+    int64_t i2 = (int64_t) asReal(i2_sexp);
+    int64_t i3 = (int64_t) asReal(i3_sexp);
+    int32_t val = asInteger(value_sexp);
+    *(int32_t*)((char*)(tensor->data) + i3 * tensor->nb[3] + i2 * tensor->nb[2] + i1 * tensor->nb[1] + i0 * tensor->nb[0]) = val;
+    return R_NilValue;
+}
+
+// Get tensor strides (nb) - needed for view operations
+SEXP R_ggml_tensor_nb(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    SEXP result = PROTECT(allocVector(REALSXP, GGML_MAX_DIMS));
+    double * r_data = REAL(result);
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        r_data[i] = (double) tensor->nb[i];
+    }
+    UNPROTECT(1);
+    return result;
+}
+
+// Backend tensor get and sync
+SEXP R_ggml_backend_tensor_get_and_sync(SEXP backend_ptr, SEXP tensor_ptr, SEXP offset_sexp, SEXP size_sexp) {
+    ggml_backend_t backend = (ggml_backend_t) R_ExternalPtrAddr(backend_ptr);
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+
+    size_t offset = (size_t) asReal(offset_sexp);
+    size_t size = (size_t) asReal(size_sexp);
+
+    SEXP result = PROTECT(allocVector(RAWSXP, size));
+    void * data = RAW(result);
+
+    if (backend != NULL) {
+        ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
+        ggml_backend_synchronize(backend);
+    } else {
+        ggml_backend_tensor_get(tensor, data, offset, size);
+    }
+
+    UNPROTECT(1);
+    return result;
+}
+
+// Get single f32 from backend tensor (first element)
+SEXP R_ggml_backend_tensor_get_f32(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+
+    float val;
+    if (tensor->buffer != NULL) {
+        ggml_backend_tensor_get(tensor, &val, 0, sizeof(float));
+    } else if (tensor->data != NULL) {
+        val = *(float *)(tensor->data);
+    } else {
+        error("Tensor has no data or buffer");
+    }
+    return ScalarReal((double) val);
+}
+
+// Count tensors in context
+SEXP R_ggml_tensor_num(SEXP ctx_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    if (ctx == NULL) {
+        error("Invalid context pointer");
+    }
+    size_t count = 0;
+    struct ggml_tensor * t = ggml_get_first_tensor(ctx);
+    while (t != NULL) {
+        count++;
+        t = ggml_get_next_tensor(ctx, t);
+    }
+    return ScalarReal((double) count);
+}
+
+// Get tensor data pointer offset (for raw data access)
+SEXP R_ggml_tensor_data_ptr(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    return R_MakeExternalPtr(tensor->data, R_NilValue, R_NilValue);
+}
+
+// Copy tensor data from src to dst (direct memcpy for same-shape tensors)
+SEXP R_ggml_tensor_copy(SEXP dst_ptr, SEXP src_ptr) {
+    struct ggml_tensor * dst = (struct ggml_tensor *) R_ExternalPtrAddr(dst_ptr);
+    struct ggml_tensor * src = (struct ggml_tensor *) R_ExternalPtrAddr(src_ptr);
+    if (dst == NULL || src == NULL) {
+        error("Invalid tensor pointer");
+    }
+    size_t nbytes = ggml_nbytes(src);
+    if (ggml_nbytes(dst) != nbytes) {
+        error("Tensor sizes don't match: dst=%zu, src=%zu", ggml_nbytes(dst), nbytes);
+    }
+    memcpy(dst->data, src->data, nbytes);
+    return R_NilValue;
+}
+
+// Set all elements of f32 tensor to a single value
+SEXP R_ggml_tensor_set_f32_scalar(SEXP tensor_ptr, SEXP value_sexp) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    float val = (float) asReal(value_sexp);
+    int64_t n = ggml_nelements(tensor);
+    float * data = (float *) tensor->data;
+    for (int64_t i = 0; i < n; i++) {
+        data[i] = val;
+    }
+    return R_NilValue;
+}
+
+// Get first tensor from context
+SEXP R_ggml_get_first_tensor(SEXP ctx_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    if (ctx == NULL) {
+        error("Invalid context pointer");
+    }
+    struct ggml_tensor * t = ggml_get_first_tensor(ctx);
+    if (t == NULL) {
+        return R_NilValue;
+    }
+    return R_MakeExternalPtr(t, R_NilValue, R_NilValue);
+}
+
+// Get next tensor from context
+SEXP R_ggml_get_next_tensor(SEXP ctx_ptr, SEXP tensor_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (ctx == NULL || tensor == NULL) {
+        error("Invalid pointer");
+    }
+    struct ggml_tensor * t = ggml_get_next_tensor(ctx, tensor);
+    if (t == NULL) {
+        return R_NilValue;
+    }
+    return R_MakeExternalPtr(t, R_NilValue, R_NilValue);
 }

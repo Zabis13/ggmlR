@@ -14,6 +14,13 @@
 - [x] Add `gguf.cpp` for GGUF support
 - [ ] Sync ggml version with llama.cpp (add `ggml_build_forward_select`)
 
+### sdR (Stable Diffusion port)
+- [x] `ggml_timestep_embedding()` — базовая ggml операция для SD
+- [x] N-D indexed tensor access (`ggml_set_f32_nd`, `ggml_get_f32_nd`, etc.)
+- [x] Tensor utilities (`ggml_tensor_nb`, `ggml_tensor_copy`, `ggml_tensor_num`, etc.)
+- [x] Backend sync utilities (`ggml_backend_tensor_get_and_sync`, `ggml_backend_tensor_get_f32_first`)
+- [x] Context tensor iteration (`ggml_get_first_tensor`, `ggml_get_next_tensor`)
+
 ### Custom Operations
 - [ ] `ggml_custom()` / `ggml_custom_inplace()` — требуют C расширение
 

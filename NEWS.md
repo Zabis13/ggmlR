@@ -1,3 +1,21 @@
+# ggmlR 0.5.2
+
+## New Features (sdR support)
+
+* Added `ggml_timestep_embedding()` — sinusoidal timestep embeddings for diffusion models
+* Added N-D indexed tensor access:
+  - `ggml_set_f32_nd()` / `ggml_get_f32_nd()` — set/get float by [i0,i1,i2,i3] index
+  - `ggml_set_i32_nd()` / `ggml_get_i32_nd()` — set/get int32 by index
+  - Backend-aware: auto-detects CPU data vs backend buffer
+* Added tensor utilities:
+  - `ggml_tensor_nb()` — get tensor byte strides (nb0..nb3)
+  - `ggml_tensor_num()` — count tensors in context
+  - `ggml_tensor_copy()` — direct memcpy between same-size tensors
+  - `ggml_tensor_set_f32_scalar()` — fill all elements with a single value
+  - `ggml_get_first_tensor()` / `ggml_get_next_tensor()` — iterate tensors in context
+  - `ggml_backend_tensor_get_f32_first()` — read first f32 from backend/CPU tensor
+  - `ggml_backend_tensor_get_and_sync()` — read raw bytes with backend synchronization
+
 # ggmlR 0.5.1
 
 ## New Features

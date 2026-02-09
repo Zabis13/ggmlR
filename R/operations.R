@@ -4026,3 +4026,174 @@ ggml_can_repeat <- function(a, b) {
 ggml_count_equal <- function(ctx, a, b) {
   .Call("R_ggml_count_equal", ctx, a, b, PACKAGE = "ggmlR")
 }
+
+# ============================================================================
+# Timestep Embedding
+# ============================================================================
+
+#' Timestep Embedding (Graph Operation)
+#'
+#' Creates sinusoidal timestep embeddings as used in diffusion models.
+#' Reference: CompVis/stable-diffusion util.py timestep_embedding
+#'
+#' @param ctx GGML context
+#' @param timesteps Input tensor of timestep values [N]
+#' @param dim Embedding dimension
+#' @param max_period Maximum period for sinusoidal embedding (default 10000)
+#' @return Tensor of shape [N, dim] with timestep embeddings
+#' @export
+ggml_timestep_embedding <- function(ctx, timesteps, dim, max_period = 10000L) {
+  .Call("R_ggml_timestep_embedding", ctx, timesteps,
+        as.integer(dim), as.integer(max_period), PACKAGE = "ggmlR")
+}
+
+# ============================================================================
+# CPU-side Tensor Data Access (indexed)
+# ============================================================================
+
+#' Set Single Float Value by N-D Index
+#'
+#' Sets a single f32 value in the tensor at position [i0, i1, i2, i3].
+#' This is a direct data write, not a graph operation.
+#'
+#' @param tensor Tensor pointer
+#' @param i0,i1,i2,i3 Indices (0-based)
+#' @param value Float value to set
+#' @return NULL (invisible)
+#' @export
+ggml_set_f32_nd <- function(tensor, i0, i1 = 0, i2 = 0, i3 = 0, value) {
+  invisible(.Call("R_ggml_set_f32_nd", tensor, as.numeric(i0), as.numeric(i1),
+                  as.numeric(i2), as.numeric(i3), as.numeric(value), PACKAGE = "ggmlR"))
+}
+
+#' Get Single Float Value by N-D Index
+#'
+#' Gets a single f32 value from the tensor at position [i0, i1, i2, i3].
+#' Works with any tensor type (auto-converts to float).
+#'
+#' @param tensor Tensor pointer
+#' @param i0,i1,i2,i3 Indices (0-based)
+#' @return Float value
+#' @export
+ggml_get_f32_nd <- function(tensor, i0, i1 = 0, i2 = 0, i3 = 0) {
+  .Call("R_ggml_get_f32_nd", tensor, as.numeric(i0), as.numeric(i1),
+        as.numeric(i2), as.numeric(i3), PACKAGE = "ggmlR")
+}
+
+#' Get Single Int32 Value by N-D Index
+#'
+#' Gets a single i32 value from the tensor at position [i0, i1, i2, i3].
+#'
+#' @param tensor Tensor pointer
+#' @param i0,i1,i2,i3 Indices (0-based)
+#' @return Integer value
+#' @export
+ggml_get_i32_nd <- function(tensor, i0, i1 = 0, i2 = 0, i3 = 0) {
+  .Call("R_ggml_get_i32_nd", tensor, as.numeric(i0), as.numeric(i1),
+        as.numeric(i2), as.numeric(i3), PACKAGE = "ggmlR")
+}
+
+#' Set Single Int32 Value by N-D Index
+#'
+#' Sets a single i32 value in the tensor at position [i0, i1, i2, i3].
+#'
+#' @param tensor Tensor pointer
+#' @param i0,i1,i2,i3 Indices (0-based)
+#' @param value Integer value to set
+#' @return NULL (invisible)
+#' @export
+ggml_set_i32_nd <- function(tensor, i0, i1 = 0, i2 = 0, i3 = 0, value) {
+  invisible(.Call("R_ggml_set_i32_nd", tensor, as.numeric(i0), as.numeric(i1),
+                  as.numeric(i2), as.numeric(i3), as.integer(value), PACKAGE = "ggmlR"))
+}
+
+#' Get Tensor Strides (nb)
+#'
+#' Returns the byte strides for each dimension of the tensor.
+#'
+#' @param tensor Tensor pointer
+#' @return Numeric vector of 4 stride values (nb0, nb1, nb2, nb3)
+#' @export
+ggml_tensor_nb <- function(tensor) {
+  .Call("R_ggml_tensor_nb", tensor, PACKAGE = "ggmlR")
+}
+
+#' Backend Tensor Get and Sync
+#'
+#' Gets tensor data from a backend with synchronization.
+#'
+#' @param backend Backend pointer (or NULL for CPU)
+#' @param tensor Tensor pointer
+#' @param offset Byte offset (default 0)
+#' @param size Number of bytes to read
+#' @return Raw vector with tensor data
+#' @export
+ggml_backend_tensor_get_and_sync <- function(backend, tensor, offset = 0, size) {
+  .Call("R_ggml_backend_tensor_get_and_sync", backend, tensor,
+        as.numeric(offset), as.numeric(size), PACKAGE = "ggmlR")
+}
+
+#' Get First Float from Backend Tensor
+#'
+#' Reads the first f32 element from a backend tensor.
+#'
+#' @param tensor Tensor pointer
+#' @return Float value
+#' @export
+ggml_backend_tensor_get_f32_first <- function(tensor) {
+  .Call("R_ggml_backend_tensor_get_f32", tensor, PACKAGE = "ggmlR")
+}
+
+#' Count Tensors in Context
+#'
+#' Counts the number of tensors allocated in a context.
+#'
+#' @param ctx GGML context
+#' @return Number of tensors
+#' @export
+ggml_tensor_num <- function(ctx) {
+  .Call("R_ggml_tensor_num", ctx, PACKAGE = "ggmlR")
+}
+
+#' Copy Tensor Data
+#'
+#' Copies raw data from src tensor to dst tensor (must be same size).
+#'
+#' @param dst Destination tensor
+#' @param src Source tensor
+#' @return NULL (invisible)
+#' @export
+ggml_tensor_copy <- function(dst, src) {
+  invisible(.Call("R_ggml_tensor_copy", dst, src, PACKAGE = "ggmlR"))
+}
+
+#' Fill Tensor with Scalar
+#'
+#' Sets all elements of a f32 tensor to a single value.
+#'
+#' @param tensor Tensor pointer
+#' @param value Float value to fill with
+#' @return NULL (invisible)
+#' @export
+ggml_tensor_set_f32_scalar <- function(tensor, value) {
+  invisible(.Call("R_ggml_tensor_set_f32_scalar", tensor, as.numeric(value), PACKAGE = "ggmlR"))
+}
+
+#' Get First Tensor from Context
+#'
+#' @param ctx GGML context
+#' @return Tensor pointer or NULL
+#' @export
+ggml_get_first_tensor <- function(ctx) {
+  .Call("R_ggml_get_first_tensor", ctx, PACKAGE = "ggmlR")
+}
+
+#' Get Next Tensor from Context
+#'
+#' @param ctx GGML context
+#' @param tensor Current tensor
+#' @return Next tensor pointer or NULL
+#' @export
+ggml_get_next_tensor <- function(ctx, tensor) {
+  .Call("R_ggml_get_next_tensor", ctx, tensor, PACKAGE = "ggmlR")
+}
