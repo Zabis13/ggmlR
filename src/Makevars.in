@@ -40,8 +40,11 @@ OPENMP_CXXFLAGS = @OPENMP_CXXFLAGS@
 # r_ggml_io.c is compiled separately without this header (see rule below)
 PKG_CPPFLAGS = $(GGML_CPPFLAGS) $(OPENMP_CPPFLAGS) $(VULKAN_CPPFLAGS) -DGGML_R_PACKAGE -include r_ggml_compat.h
 
-PKG_CFLAGS = $(OPENMP_CFLAGS)
-PKG_CXXFLAGS = $(OPENMP_CXXFLAGS)
+# CPU SIMD flags (set by configure: -march=native or empty)
+SIMD_CFLAGS = @SIMD_CFLAGS@
+
+PKG_CFLAGS = $(OPENMP_CFLAGS) $(SIMD_CFLAGS)
+PKG_CXXFLAGS = $(OPENMP_CXXFLAGS) $(SIMD_CFLAGS)
 PKG_LIBS = $(OPENMP_CXXFLAGS) $(VULKAN_LIBS) -lpthread -lm
 
 # GGML library objects (for static library export)
