@@ -1,17 +1,13 @@
-# R-hub's generic GitHub Actions workflow file. It's canonical location is at
-# https://github.com/r-hub/actions/blob/v1/workflows/rhub.yaml
-# You can update this file to a newer version using the rhub2 package:
-#
-# rhub::rhub_setup()
-#
-# It is unlikely that you need to modify this file manually.
-
-name: R-hub
+name: R-hub check on the R Consortium cluster
 run-name: "${{ github.event.inputs.id }}: ${{ github.event.inputs.name || format('Manually run by {0}', github.triggering_actor) }}"
 
 on:
   workflow_dispatch:
     inputs:
+      url:
+        descirption: Tarball URL
+        type: string
+        required: true
       config:
         description: 'A comma separated list of R-hub platforms to use.'
         type: string
@@ -24,8 +20,22 @@ on:
         type: string
 
 jobs:
+  update-repo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      ref: ${{ steps.update-step.outputs.ref }}
+    steps:
+      - uses: r-hub/update-repo-from-url@v1
+        id: update-step
+        with:
+          url: ${{ github.event.inputs.url }}
+          ignore-top-directory: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   setup:
+    needs: update-repo
     runs-on: ubuntu-latest
     outputs:
       containers: ${{ steps.rhub-setup.outputs.containers }}
@@ -39,7 +49,7 @@ jobs:
       id: rhub-setup
 
   linux-containers:
-    needs: setup
+    needs: [ setup, update-repo ]
     if: ${{ needs.setup.outputs.containers != '[]' }}
     runs-on: ubuntu-latest
     name: ${{ matrix.config.label }}
@@ -52,6 +62,8 @@ jobs:
 
     steps:
       - uses: r-hub/actions/checkout@v1
+        with:
+          ref: ${{ needs.update-repo.outputs.ref }}
       - uses: r-hub/actions/platform-info@v1
         with:
           token: ${{ secrets.RHUB_TOKEN }}
@@ -64,9 +76,10 @@ jobs:
         with:
           token: ${{ secrets.RHUB_TOKEN }}
           job-config: ${{ matrix.config.job-config }}
+          remove-dot-github: true
 
   other-platforms:
-    needs: setup
+    needs: [ setup, update-repo ]
     if: ${{ needs.setup.outputs.platforms != '[]' }}
     runs-on: ${{ matrix.config.os }}
     name: ${{ matrix.config.label }}
@@ -77,6 +90,8 @@ jobs:
 
     steps:
       - uses: r-hub/actions/checkout@v1
+        with:
+          ref: ${{ needs.update-repo.outputs.ref }}
       - uses: r-hub/actions/setup-r@v1
         with:
           job-config: ${{ matrix.config.job-config }}
@@ -93,3 +108,4 @@ jobs:
         with:
           job-config: ${{ matrix.config.job-config }}
           token: ${{ secrets.RHUB_TOKEN }}
+          remove-dot-github: true
