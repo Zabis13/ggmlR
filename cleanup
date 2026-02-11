@@ -17,6 +17,7 @@ rm -f src/ggml-vulkan/generated/*.o
 
 # Remove generated files created by configure
 rm -f src/Makevars
+rm -f src/Makevars.win
 
 # Remove Vulkan generated files
 rm -rf src/ggml-vulkan/generated

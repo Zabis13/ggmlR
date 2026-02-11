@@ -35,5 +35,7 @@
 ^src/r_interface_memory\.c$
 ^src/r_interface_threading\.c$
 ^src/.*\.a$
+^src/.*\.o$
 ^inst/lib/.*\.a$
+^inst/lib$
 ^inst/lib/\.gitkeep$

@@ -121,6 +121,7 @@ if [ "$USE_VULKAN" = "yes" ]; then
   echo "Vulkan backend enabled with $SHADER_COUNT shaders"
 fi
 
+
 # --- Detect CPU SIMD features ---
 #
 # ggml uses compile-time #if defined(__AVX2__) guards to enable SIMD code paths.
@@ -181,6 +182,28 @@ else
   echo "  OpenMP not available, using pthreads fallback"
 fi
 
+# --- Detect CPU architecture for arch-fallback ---
+#
+# We only ship arch/x86/ native implementations. On non-x86 platforms
+# (ARM64 macOS, etc.) we need -DGGML_CPU_GENERIC so that arch-fallback.h
+# maps all _generic functions to their canonical names, providing the
+# symbols that would otherwise come from arch/aarch64/ or other arch dirs.
+#
+echo "Detecting CPU architecture..."
+GENERIC_CPPFLAGS=""
+X86_OBJECTS="ggml-cpu/arch/x86/cpu-feats.o ggml-cpu/arch/x86/quants.o ggml-cpu/arch/x86/repack.o"
+ARCH=$(uname -m 2>/dev/null || echo "unknown")
+case "$ARCH" in
+  x86_64|i386|i686|amd64)
+    echo "  x86 architecture detected, using native arch/x86/ implementations"
+    ;;
+  *)
+    GENERIC_CPPFLAGS="-DGGML_CPU_GENERIC"
+    X86_OBJECTS=""
+    echo "  Non-x86 architecture ($ARCH), using generic CPU fallbacks"
+    ;;
+esac
+
 # Generate Makevars from template
 echo "Generating src/Makevars..."
 
@@ -192,6 +215,8 @@ sed \
   -e "s|@OPENMP_CFLAGS@|$OPENMP_CFLAGS|g" \
   -e "s|@OPENMP_CXXFLAGS@|$OPENMP_CXXFLAGS|g" \
   -e "s|@SIMD_CFLAGS@|$SIMD_CFLAGS|g" \
+  -e "s|@GENERIC_CPPFLAGS@|$GENERIC_CPPFLAGS|g" \
+  -e "s|@X86_OBJECTS@|$X86_OBJECTS|g" \
   src/Makevars.in > src/Makevars
 
 echo "Configuration complete."

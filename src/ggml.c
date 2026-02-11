@@ -6900,22 +6900,33 @@ static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
     return ptr;
 }
 
+// [ggmlR patch] UBSAN-safe version of incr_ptr_aligned for size calculation.
+// Upstream ggml uses NULL pointer arithmetic in ggml_graph_nbytes() to compute
+// layout sizes without allocating memory. This is functionally harmless but
+// triggers "applying non-zero offset to null pointer" under UBSan (CRAN m1-san).
+// This version uses uintptr_t arithmetic instead.
+// TODO: remove if fixed upstream (https://github.com/ggml-org/ggml)
+static uintptr_t incr_uintptr_aligned(uintptr_t * p, size_t size, size_t align) {
+    uintptr_t ptr = GGML_PAD(*p, align);
+    *p = ptr + size;
+    return ptr;
+}
+
 static size_t ggml_graph_nbytes(size_t size, bool grads) {
     size_t hash_size = ggml_hash_size(size * 2);
-    void * p = 0;
-    incr_ptr_aligned(&p, sizeof(struct ggml_cgraph), 1);
-    incr_ptr_aligned(&p, size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // nodes
-    incr_ptr_aligned(&p, size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // leafs
-    incr_ptr_aligned(&p, hash_size * sizeof(int32_t), sizeof(int32_t)); // use_counts
-    incr_ptr_aligned(&p, hash_size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // hash keys
+    uintptr_t p = 0;
+    incr_uintptr_aligned(&p, sizeof(struct ggml_cgraph), 1);
+    incr_uintptr_aligned(&p, size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // nodes
+    incr_uintptr_aligned(&p, size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // leafs
+    incr_uintptr_aligned(&p, hash_size * sizeof(int32_t), sizeof(int32_t)); // use_counts
+    incr_uintptr_aligned(&p, hash_size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // hash keys
     if (grads) {
-        incr_ptr_aligned(&p, hash_size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // grads
-        incr_ptr_aligned(&p, hash_size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // grad_accs
+        incr_uintptr_aligned(&p, hash_size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // grads
+        incr_uintptr_aligned(&p, hash_size * sizeof(struct ggml_tensor *), sizeof(struct ggml_tensor *)); // grad_accs
     }
-    incr_ptr_aligned(&p, ggml_bitset_size(hash_size) * sizeof(ggml_bitset_t), sizeof(ggml_bitset_t));
+    incr_uintptr_aligned(&p, ggml_bitset_size(hash_size) * sizeof(ggml_bitset_t), sizeof(ggml_bitset_t));
 
-    size_t nbytes = (size_t) p;
-    return nbytes;
+    return (size_t) p;
 }
 
 size_t ggml_graph_overhead_custom(size_t size, bool grads) {

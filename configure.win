@@ -1,0 +1,34 @@
+#!/bin/sh
+
+# Configure script for ggmlR (Windows/Rtools)
+# Detects CPU SIMD support and generates Makevars.win
+
+# --- Detect CPU SIMD features ---
+#
+# ggml uses compile-time #if defined(__AVX2__) guards to enable SIMD code paths.
+# Without appropriate -m flags, all ggml_cpu_has_*() return 0 and inference
+# falls back to slow scalar code.
+#
+# We try -march=native first (auto-detects everything). If that fails
+# (e.g. cross-compilation or old compiler), we fall back to no SIMD flags.
+#
+echo "Detecting CPU SIMD features..."
+
+CC_CMD="${CC:-gcc}"
+
+SIMD_CFLAGS=""
+if echo "int main(){return 0;}" | $CC_CMD -march=native -x c -o /dev/null - 2>/dev/null; then
+  SIMD_CFLAGS="-march=native"
+  echo "  Using -march=native"
+else
+  echo "  -march=native not supported, SIMD disabled"
+fi
+
+# Generate Makevars.win from template
+echo "Generating src/Makevars.win..."
+
+sed \
+  -e "s|@SIMD_CFLAGS@|$SIMD_CFLAGS|g" \
+  src/Makevars.win.in > src/Makevars.win
+
+echo "Configuration complete."

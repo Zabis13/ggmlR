@@ -6,7 +6,7 @@
 \alias{ggmlR-package}
 \title{ggmlR: 'GGML' Tensor Operations for Machine Learning}
 \description{
-Provides 'R' bindings to the 'GGML' tensor library for efficient machine learning computation. Implements core tensor operations including element-wise arithmetic, reshaping, and matrix multiplication. Supports neural network layers (attention, convolutions, normalization), activation functions, and quantization. Features optimization/training API with 'AdamW' (Adam with Weight decay) and 'SGD' (Stochastic Gradient Descent) optimizers, 'MSE' (Mean Squared Error) and cross-entropy losses. Multi-backend support with CPU and optional 'Vulkan' GPU (Graphics Processing Unit) acceleration. See \url{https://github.com/ggml-org/ggml} for more information about the underlying library.
+Provides 'R' bindings to the 'GGML' tensor library for efficient machine learning computation. Serves as a backend engine for LLM (Large Language Model) inference via 'llamaR' and Stable Diffusion image generation via 'sdR', both with optional 'Vulkan' GPU (Graphics Processing Unit) acceleration. Implements core tensor operations including element-wise arithmetic, reshaping, and matrix multiplication. Supports neural network layers (attention, convolutions, normalization), activation functions, and quantization. Features optimization/training API with 'AdamW' (Adam with Weight decay) and 'SGD' (Stochastic Gradient Descent) optimizers, 'MSE' (Mean Squared Error) and cross-entropy losses. Multi-backend support with CPU and 'Vulkan' GPU. See \url{https://github.com/ggml-org/ggml} for more information about the underlying library.
 }
 \seealso{
 Useful links:

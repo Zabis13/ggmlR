@@ -11,7 +11,6 @@ GGML_CPPFLAGS = -I. -Iggml-cpu -Iggml-cpu/arch/x86 \
 
 # --- OpenMP configuration (Windows) ---
 #
-# Windows has no configure script, so we use SHLIB_OPENMP_* macros directly.
 # On Rtools, gcc and g++ are from the same MinGW toolchain, so
 # SHLIB_OPENMP_CFLAGS == SHLIB_OPENMP_CXXFLAGS (both are -fopenmp).
 #
@@ -35,9 +34,11 @@ endif
 # r_ggml_io.c is compiled separately without this header (see rule below)
 PKG_CPPFLAGS = $(GGML_CPPFLAGS) -DGGML_R_PACKAGE -include r_ggml_compat.h
 
-# -march=native for SIMD support (AVX2/FMA/SSE on x86_64)
-PKG_CFLAGS = -march=native
-PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -march=native
+# CPU SIMD flags (set by configure.win: -march=native or empty)
+SIMD_CFLAGS = @SIMD_CFLAGS@
+
+PKG_CFLAGS = $(SIMD_CFLAGS)
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) $(SIMD_CFLAGS)
 PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)
 
 # GGML library objects (for static library export)
@@ -68,9 +69,8 @@ $(SHLIB): $(OBJECTS) staticlib
 .PHONY: staticlib
 
 staticlib: $(GGML_OBJECTS)
-	$(AR) rcs $(STATICLIB) $(GGML_OBJECTS)
 	mkdir -p ../inst/lib
-	cp $(STATICLIB) ../inst/lib/
+	$(AR) rcs ../inst/lib/$(STATICLIB) $(GGML_OBJECTS)
 
 # R interface files and r_ggml_io.c include R headers (R.h, Rinternals.h)
 # which contain __attribute__((format(printf, ...))). Our macro

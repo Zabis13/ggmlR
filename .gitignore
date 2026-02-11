@@ -20,6 +20,7 @@ src/ggml-cpu/arch/**/*.o
 *.tar.gz
 ..Rcheck/
 src/Makevars
+src/Makevars.win
 
 # Static libraries
 *.a
