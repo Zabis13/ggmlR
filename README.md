@@ -176,7 +176,7 @@ If you use this package in your research, please cite:
 ```
 @software{ggmlR,
   author = {Yuri Baramykov},
-  title = {ggmlR: CPU Tensor Operations for R},
+  title = {ggmlR: CPU/GPU Tensor Operations for R},
   year = {2026},
   url = {https://github.com/Zabis13/ggmlR}
 }
