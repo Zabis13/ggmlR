@@ -1,111 +1,41 @@
-name: R-hub check on the R Consortium cluster
-run-name: "${{ github.event.inputs.id }}: ${{ github.event.inputs.name || format('Manually run by {0}', github.triggering_actor) }}"
+name: R-CMD-check
 
 on:
-  workflow_dispatch:
-    inputs:
-      url:
-        descirption: Tarball URL
-        type: string
-        required: true
-      config:
-        description: 'A comma separated list of R-hub platforms to use.'
-        type: string
-        default: 'linux,windows,macos'
-      name:
-        description: 'Run name. You can leave this empty now.'
-        type: string
-      id:
-        description: 'Unique ID. You can leave this empty now.'
-        type: string
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
 
 jobs:
-  update-repo:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      ref: ${{ steps.update-step.outputs.ref }}
-    steps:
-      - uses: r-hub/update-repo-from-url@v1
-        id: update-step
-        with:
-          url: ${{ github.event.inputs.url }}
-          ignore-top-directory: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  setup:
-    needs: update-repo
-    runs-on: ubuntu-latest
-    outputs:
-      containers: ${{ steps.rhub-setup.outputs.containers }}
-      platforms: ${{ steps.rhub-setup.outputs.platforms }}
-
-    steps:
-    # NO NEED TO CHECKOUT HERE
-    - uses: r-hub/actions/setup@v1
-      with:
-        config: ${{ github.event.inputs.config }}
-      id: rhub-setup
-
-  linux-containers:
-    needs: [ setup, update-repo ]
-    if: ${{ needs.setup.outputs.containers != '[]' }}
-    runs-on: ubuntu-latest
-    name: ${{ matrix.config.label }}
-    strategy:
-      fail-fast: false
-      matrix:
-        config: ${{ fromJson(needs.setup.outputs.containers) }}
-    container:
-      image: ${{ matrix.config.container }}
-
-    steps:
-      - uses: r-hub/actions/checkout@v1
-        with:
-          ref: ${{ needs.update-repo.outputs.ref }}
-      - uses: r-hub/actions/platform-info@v1
-        with:
-          token: ${{ secrets.RHUB_TOKEN }}
-          job-config: ${{ matrix.config.job-config }}
-      - uses: r-hub/actions/setup-deps@v1
-        with:
-          token: ${{ secrets.RHUB_TOKEN }}
-          job-config: ${{ matrix.config.job-config }}
-      - uses: r-hub/actions/run-check@v1
-        with:
-          token: ${{ secrets.RHUB_TOKEN }}
-          job-config: ${{ matrix.config.job-config }}
-          remove-dot-github: true
-
-  other-platforms:
-    needs: [ setup, update-repo ]
-    if: ${{ needs.setup.outputs.platforms != '[]' }}
+  R-CMD-check:
     runs-on: ${{ matrix.config.os }}
-    name: ${{ matrix.config.label }}
+    
+    name: ${{ matrix.config.os }} (${{ matrix.config.r }})
+    
     strategy:
       fail-fast: false
       matrix:
-        config: ${{ fromJson(needs.setup.outputs.platforms) }}
-
+        config:
+          - {os: macos-latest,   r: 'release'}
+          - {os: macos-14,       r: 'release'}  # ARM64
+          - {os: windows-latest, r: 'release'}
+          - {os: ubuntu-latest,  r: 'devel'}
+          - {os: ubuntu-latest,  r: 'release'}
+          - {os: ubuntu-latest,  r: 'oldrel-1'}
+    
     steps:
-      - uses: r-hub/actions/checkout@v1
+      - uses: actions/checkout@v4
+      
+      - uses: r-lib/actions/setup-r@v2
         with:
-          ref: ${{ needs.update-repo.outputs.ref }}
-      - uses: r-hub/actions/setup-r@v1
+          r-version: ${{ matrix.config.r }}
+          use-public-rspm: true
+      
+      - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          job-config: ${{ matrix.config.job-config }}
-          token: ${{ secrets.RHUB_TOKEN }}
-      - uses: r-hub/actions/platform-info@v1
+          extra-packages: any::rcmdcheck
+          needs: check
+      
+      - uses: r-lib/actions/check-r-package@v2
         with:
-          token: ${{ secrets.RHUB_TOKEN }}
-          job-config: ${{ matrix.config.job-config }}
-      - uses: r-hub/actions/setup-deps@v1
-        with:
-          job-config: ${{ matrix.config.job-config }}
-          token: ${{ secrets.RHUB_TOKEN }}
-      - uses: r-hub/actions/run-check@v1
-        with:
-          job-config: ${{ matrix.config.job-config }}
-          token: ${{ secrets.RHUB_TOKEN }}
-          remove-dot-github: true
+          upload-snapshots: true
