@@ -4,10 +4,11 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:  # Добавьте эту строку для ручного запуска
 
 jobs:
   ubuntu-arm64:
-    runs-on: ubuntu-24.04-arm64  # ARM64 runner
+    runs-on: ubuntu-24.04-arm64
     
     steps:
       - uses: actions/checkout@v4
