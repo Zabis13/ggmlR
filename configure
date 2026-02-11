@@ -128,18 +128,44 @@ fi
 # Without appropriate -m flags, all ggml_cpu_has_*() return 0 and inference
 # falls back to slow scalar code.
 #
-# We try -march=native first (auto-detects everything). If that fails
-# (e.g. cross-compilation or old compiler), we fall back to no SIMD flags.
+# We probe individual SIMD flags for portability (CRAN policy forbids
+# -march=native because binaries are built on one machine and distributed
+# to users with different CPUs).
 #
 echo "Detecting CPU SIMD features..."
 CC_CMD="${CC:-cc}"
 
 SIMD_CFLAGS=""
-if echo "int main(){return 0;}" | $CC_CMD -march=native -x c -o /dev/null - 2>/dev/null; then
-  SIMD_CFLAGS="-march=native"
-  echo "  Using -march=native"
-else
-  echo "  -march=native not supported, SIMD disabled"
+check_cflag() {
+  if echo "int main(){return 0;}" | $CC_CMD $1 -x c -o /dev/null - 2>/dev/null; then
+    SIMD_CFLAGS="$SIMD_CFLAGS $1"
+    echo "  Found: $1"
+    return 0
+  fi
+  return 1
+}
+
+# Only probe x86 SIMD flags on x86 platforms to avoid
+# non-portable compilation flags NOTE on ARM/other architectures
+SIMD_ARCH=$(uname -m 2>/dev/null || echo "unknown")
+case "$SIMD_ARCH" in
+  x86_64|i386|i686|amd64)
+    check_cflag -msse3
+    check_cflag -mssse3
+    check_cflag -msse4.1
+    check_cflag -msse4.2
+    check_cflag -mavx
+    check_cflag -mavx2
+    check_cflag -mfma
+    check_cflag -mf16c
+    ;;
+  *)
+    echo "  Non-x86 architecture ($SIMD_ARCH), skipping x86 SIMD flags"
+    ;;
+esac
+
+if [ -z "$SIMD_CFLAGS" ]; then
+  echo "  No SIMD flags detected, using scalar fallback"
 fi
 
 # --- Detect OpenMP support ---

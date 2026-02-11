@@ -34,7 +34,7 @@ endif
 # r_ggml_io.c is compiled separately without this header (see rule below)
 PKG_CPPFLAGS = $(GGML_CPPFLAGS) -DGGML_R_PACKAGE -include r_ggml_compat.h
 
-# CPU SIMD flags (set by configure.win: -march=native or empty)
+# CPU SIMD flags (set by configure.win: individual -msse4.2 -mavx2 etc. or empty)
 SIMD_CFLAGS = @SIMD_CFLAGS@
 
 PKG_CFLAGS = $(SIMD_CFLAGS)

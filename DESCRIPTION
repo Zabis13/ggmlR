@@ -20,7 +20,7 @@ Authors@R: c(
         comment = "Author of llamafile/sgemm.cpp")
     )
 Description: Provides 'R' bindings to the 'GGML' tensor library for efficient
-    machine learning computation. Serves as a backend engine for LLM (Large
+    machine learning computation. Serves as a backend engine for 'LLM' (Large
     Language Model) inference via 'llamaR' and Stable Diffusion image generation
     via 'sdR', both with optional 'Vulkan' GPU (Graphics Processing Unit)
     acceleration. Implements core tensor operations including element-wise
