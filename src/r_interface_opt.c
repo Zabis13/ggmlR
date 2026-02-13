@@ -200,7 +200,8 @@ SEXP R_ggml_opt_default_params(SEXP sched_ptr, SEXP loss_type) {
 }
 
 // Initialize optimizer context
-SEXP R_ggml_opt_init(SEXP sched_ptr, SEXP loss_type, SEXP optimizer_type, SEXP opt_period) {
+SEXP R_ggml_opt_init(SEXP sched_ptr, SEXP loss_type, SEXP optimizer_type, SEXP opt_period,
+                     SEXP ctx_compute_ptr, SEXP inputs_ptr, SEXP outputs_ptr) {
     ggml_backend_sched_t sched = (ggml_backend_sched_t)R_ExternalPtrAddr(sched_ptr);
 
     if (sched == NULL) {
@@ -212,6 +213,17 @@ SEXP R_ggml_opt_init(SEXP sched_ptr, SEXP loss_type, SEXP optimizer_type, SEXP o
 
     params.optimizer = (enum ggml_opt_optimizer_type)asInteger(optimizer_type);
     params.opt_period = asInteger(opt_period);
+
+    // Optional: set ctx_compute, inputs, outputs for static graph mode
+    if (ctx_compute_ptr != R_NilValue) {
+        params.ctx_compute = (struct ggml_context *)R_ExternalPtrAddr(ctx_compute_ptr);
+    }
+    if (inputs_ptr != R_NilValue) {
+        params.inputs = (struct ggml_tensor *)R_ExternalPtrAddr(inputs_ptr);
+    }
+    if (outputs_ptr != R_NilValue) {
+        params.outputs = (struct ggml_tensor *)R_ExternalPtrAddr(outputs_ptr);
+    }
 
     ggml_opt_context_t opt_ctx = ggml_opt_init(params);
 
@@ -537,7 +549,12 @@ SEXP R_ggml_opt_eval(SEXP opt_ctx_ptr, SEXP result_ptr) {
 // High-Level Training Function
 // ============================================================================
 
-// Fit model to dataset
+// Helper: get batch size from last dimension of tensor
+static int64_t r_ggml_opt_batch_size(const struct ggml_tensor * t) {
+    return t->ne[ggml_n_dims(t) - 1];
+}
+
+// Fit model to dataset, returning history (loss/accuracy per epoch)
 SEXP R_ggml_opt_fit(SEXP sched_ptr, SEXP ctx_compute_ptr,
                     SEXP inputs_ptr, SEXP outputs_ptr,
                     SEXP dataset_ptr, SEXP loss_type, SEXP optimizer_type,
@@ -572,10 +589,106 @@ SEXP R_ggml_opt_fit(SEXP sched_ptr, SEXP ctx_compute_ptr,
     float v_split = (float)asReal(val_split);
     bool is_silent = asLogical(silent);
 
-    ggml_opt_fit(sched, ctx_compute, inputs, outputs, dataset, lt, ot,
-                 ggml_opt_get_default_optimizer_params, n_epoch, n_batch, v_split, is_silent);
+    // Compute parameters (mirroring ggml_opt_fit logic from ggml-opt.cpp)
+    const int64_t ndata = ggml_opt_dataset_data(dataset)->ne[1];
+    const int64_t nbatch_physical = r_ggml_opt_batch_size(inputs);
+    const int64_t opt_period = n_batch / nbatch_physical;
+    const int64_t nbatches_logical = ndata / n_batch;
+    const int64_t ibatch_split = (int64_t)(((1.0f - v_split) * nbatches_logical)) * opt_period;
+    const int64_t idata_split = ibatch_split * nbatch_physical;
 
-    return R_NilValue;
+    int64_t epoch = 1;
+
+    struct ggml_opt_params params = ggml_opt_default_params(sched, lt);
+    params.ctx_compute     = ctx_compute;
+    params.inputs          = inputs;
+    params.outputs         = outputs;
+    params.opt_period      = opt_period;
+    params.get_opt_pars    = ggml_opt_get_default_optimizer_params;
+    params.get_opt_pars_ud = &epoch;
+    params.optimizer       = ot;
+    ggml_opt_context_t opt_ctx = ggml_opt_init(params);
+
+    if (n_batch < ndata) {
+        ggml_opt_dataset_shuffle(opt_ctx, dataset, -1);
+    }
+
+    ggml_opt_result_t result_train = ggml_opt_result_init();
+    ggml_opt_result_t result_val   = ggml_opt_result_init();
+
+    ggml_opt_epoch_callback epoch_callback = is_silent ? NULL : ggml_opt_epoch_callback_progress_bar;
+
+    // Allocate history arrays
+    double * hist_train_loss = (double *)R_alloc(n_epoch, sizeof(double));
+    double * hist_train_acc  = (double *)R_alloc(n_epoch, sizeof(double));
+    double * hist_val_loss   = (double *)R_alloc(n_epoch, sizeof(double));
+    double * hist_val_acc    = (double *)R_alloc(n_epoch, sizeof(double));
+
+    for (; epoch <= n_epoch; ++epoch) {
+        if (n_batch < idata_split) {
+            ggml_opt_dataset_shuffle(opt_ctx, dataset, idata_split);
+        }
+
+        ggml_opt_result_reset(result_train);
+        ggml_opt_result_reset(result_val);
+
+        if (!is_silent) {
+            Rprintf("Epoch %d/%d:\n", (int)epoch, (int)n_epoch);
+        }
+
+        ggml_opt_epoch(opt_ctx, dataset, result_train, result_val,
+                       idata_split, epoch_callback, epoch_callback);
+
+        if (!is_silent) {
+            Rprintf("\n");
+        }
+
+        // Collect metrics
+        int idx = (int)(epoch - 1);
+
+        ggml_opt_result_loss(result_train, &hist_train_loss[idx], NULL);
+        ggml_opt_result_accuracy(result_train, &hist_train_acc[idx], NULL);
+
+        if (v_split > 0.0f) {
+            ggml_opt_result_loss(result_val, &hist_val_loss[idx], NULL);
+            ggml_opt_result_accuracy(result_val, &hist_val_acc[idx], NULL);
+        } else {
+            hist_val_loss[idx] = NA_REAL;
+            hist_val_acc[idx]  = NA_REAL;
+        }
+    }
+
+    ggml_opt_free(opt_ctx);
+    ggml_opt_result_free(result_train);
+    ggml_opt_result_free(result_val);
+
+    // Build R list with history
+    SEXP r_train_loss = PROTECT(allocVector(REALSXP, n_epoch));
+    SEXP r_train_acc  = PROTECT(allocVector(REALSXP, n_epoch));
+    SEXP r_val_loss   = PROTECT(allocVector(REALSXP, n_epoch));
+    SEXP r_val_acc    = PROTECT(allocVector(REALSXP, n_epoch));
+
+    memcpy(REAL(r_train_loss), hist_train_loss, n_epoch * sizeof(double));
+    memcpy(REAL(r_train_acc),  hist_train_acc,  n_epoch * sizeof(double));
+    memcpy(REAL(r_val_loss),   hist_val_loss,   n_epoch * sizeof(double));
+    memcpy(REAL(r_val_acc),    hist_val_acc,    n_epoch * sizeof(double));
+
+    SEXP result = PROTECT(allocVector(VECSXP, 4));
+    SEXP names = PROTECT(allocVector(STRSXP, 4));
+
+    SET_VECTOR_ELT(result, 0, r_train_loss);
+    SET_VECTOR_ELT(result, 1, r_train_acc);
+    SET_VECTOR_ELT(result, 2, r_val_loss);
+    SET_VECTOR_ELT(result, 3, r_val_acc);
+
+    SET_STRING_ELT(names, 0, mkChar("train_loss"));
+    SET_STRING_ELT(names, 1, mkChar("train_accuracy"));
+    SET_STRING_ELT(names, 2, mkChar("val_loss"));
+    SET_STRING_ELT(names, 3, mkChar("val_accuracy"));
+
+    setAttrib(result, R_NamesSymbol, names);
+    UNPROTECT(6);
+    return result;
 }
 
 // ============================================================================

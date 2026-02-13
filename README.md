@@ -186,3 +186,9 @@ If you use this package in your research, please cite:
 
 - GGML library: https://github.com/ggerganov/ggml
 - llama.cpp: https://github.com/ggerganov/llama.cpp
+
+
+## Acknowledgements
+
+- Thanks to the R community for the inspiration.
+- Code structure and documentation were partially refined with the assistance of generative AI tools.

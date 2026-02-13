@@ -28,7 +28,6 @@
 ^benchmark_gpu_cpu\.R$
 ^install_vulkan\.sh$
 ^docs$
-^examples$
 ^src/ggml-cpu/amx/mmq\.cpp$
 ^src/ggml-cpu/amx/amx\.cpp$
 ^src/ggml-cpu/llamafile/sgemm\.cpp$

@@ -8,7 +8,10 @@ ggml_opt_init(
   sched,
   loss_type,
   optimizer = ggml_opt_optimizer_type_adamw(),
-  opt_period = 1L
+  opt_period = 1L,
+  ctx_compute = NULL,
+  inputs = NULL,
+  outputs = NULL
 )
 }
 \arguments{
@@ -19,6 +22,12 @@ ggml_opt_init(
 \item{optimizer}{Optimizer type (use ggml_opt_optimizer_type_* functions)}
 
 \item{opt_period}{Gradient accumulation steps before optimizer step}
+
+\item{ctx_compute}{Compute context for static graph mode (or NULL)}
+
+\item{inputs}{Input tensor for static graph mode (or NULL)}
+
+\item{outputs}{Output tensor for static graph mode (or NULL)}
 }
 \value{
 External pointer to optimizer context

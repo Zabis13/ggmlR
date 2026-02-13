@@ -3087,6 +3087,36 @@ ggml_set_name <- function(tensor, name) {
   .Call("R_ggml_set_name", tensor, as.character(name), PACKAGE = "ggmlR")
 }
 
+#' Set Tensor as Trainable Parameter
+#'
+#' Marks a tensor as a trainable parameter for backpropagation.
+#' The optimizer will compute gradients for this tensor during training.
+#'
+#' @param tensor Tensor pointer
+#' @return The tensor (for chaining)
+#' @export
+ggml_set_param <- function(tensor) {
+  .Call("R_ggml_set_param", tensor, PACKAGE = "ggmlR")
+}
+
+#' Mark Tensor as Input
+#'
+#' @param tensor Tensor pointer
+#' @return The tensor (for chaining)
+#' @export
+ggml_set_input <- function(tensor) {
+  .Call("R_ggml_set_input", tensor, PACKAGE = "ggmlR")
+}
+
+#' Mark Tensor as Output
+#'
+#' @param tensor Tensor pointer
+#' @return The tensor (for chaining)
+#' @export
+ggml_set_output <- function(tensor) {
+  .Call("R_ggml_set_output", tensor, PACKAGE = "ggmlR")
+}
+
 #' Get Tensor Name
 #'
 #' Retrieves the name of a tensor.

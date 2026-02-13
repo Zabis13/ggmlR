@@ -1,3 +1,44 @@
+# ggmlR 0.5.3
+
+## New Layers
+
+* `ggml_layer_conv_1d()` — 1D convolution layer with stride, padding ("valid"/"same"), and activation support. Uses `ggml_conv_1d` backend. Kernel shape: [K, IC, OC].
+* `ggml_layer_batch_norm()` — batch normalization via `ggml_norm()` with learnable gamma (scale) and beta (shift). Supports 1D, 2D, and 3D inputs.
+
+## New Features
+
+* `ggml_predict_classes()` — convenience wrapper returning 1-based integer class indices (argmax of `ggml_predict()` output)
+* `summary.ggml_sequential_model()` — detailed model summary: layer-by-layer parameter counts (trainable/non-trainable), input shape, estimated weight memory
+* Training history from `ggml_fit()`:
+  - `ggml_fit()` now returns model with `model$history` (class `ggml_history`)
+  - `print(history)` — final epoch metrics
+  - `plot(history)` — loss and accuracy curves over epochs (train + validation)
+  - C-level epoch loop collects loss/accuracy per epoch via `ggml_opt_epoch()`
+
+## Keras-like Sequential API
+
+* Added Keras-like Sequential model API for building and training neural networks:
+  - `ggml_model_sequential()` — create sequential model
+  - `ggml_layer_dense()` — fully connected layer
+  - `ggml_layer_conv_2d()` — 2D convolution layer
+  - `ggml_layer_max_pooling_2d()` — 2D max pooling layer
+  - `ggml_layer_flatten()` — flatten layer
+  - `ggml_compile()` — compile model with optimizer and loss
+  - `ggml_fit()` — train model on data
+  - `ggml_evaluate()` — evaluate model on test data
+  - `ggml_predict()` — get prediction probabilities without labels
+  - `ggml_save_weights()` / `ggml_load_weights()` — save/load trained weights (RDS format)
+  - `print.ggml_sequential_model()` — model summary with parameter counts
+* Added `ggml_set_input()` / `ggml_set_output()` — mark tensors as graph inputs/outputs
+* Automatic shape inference for all layer types
+* Weight initialization: He uniform (conv), Glorot uniform (dense)
+
+## Bug Fixes
+
+* Fixed `ggml_evaluate()` returning random accuracy (~11% on MNIST) — trained weights were not carried over to the evaluation graph; `nn_build_graph()` now reuses weights from the trained model instead of re-initializing randomly
+* Fixed segfault in `ggml_opt_fit()` — `fprintf(stderr, ...)` crashes when R sets `stderr` to NULL; replaced with safe wrapper macro
+* Fixed missing input/output tensor flags causing segfault in optimizer
+
 # ggmlR 0.5.2
 
 ## New Features (LLM and Stable Diffusion support)

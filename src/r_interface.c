@@ -46,7 +46,7 @@ extern SEXP R_ggml_opt_dataset_labels(SEXP);
 extern SEXP R_ggml_opt_dataset_shuffle(SEXP, SEXP, SEXP);
 extern SEXP R_ggml_opt_dataset_get_batch(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_opt_default_params(SEXP, SEXP);
-extern SEXP R_ggml_opt_init(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_init(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_opt_free(SEXP);
 extern SEXP R_ggml_opt_reset(SEXP, SEXP);
 extern SEXP R_ggml_opt_static_graphs(SEXP);
@@ -928,6 +928,9 @@ SEXP R_ggml_element_size(SEXP tensor_ptr);
 SEXP R_ggml_nrows(SEXP tensor_ptr);
 SEXP R_ggml_are_same_shape(SEXP a_ptr, SEXP b_ptr);
 SEXP R_ggml_set_name(SEXP tensor_ptr, SEXP name);
+SEXP R_ggml_set_param(SEXP tensor_ptr);
+SEXP R_ggml_set_input(SEXP tensor_ptr);
+SEXP R_ggml_set_output(SEXP tensor_ptr);
 SEXP R_ggml_get_name(SEXP tensor_ptr);
 
 // Type system functions
@@ -1431,6 +1434,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_nrows",              (DL_FUNC) &R_ggml_nrows,              1},
     {"R_ggml_are_same_shape",     (DL_FUNC) &R_ggml_are_same_shape,     2},
     {"R_ggml_set_name",           (DL_FUNC) &R_ggml_set_name,           2},
+    {"R_ggml_set_param",          (DL_FUNC) &R_ggml_set_param,          1},
+    {"R_ggml_set_input",          (DL_FUNC) &R_ggml_set_input,          1},
+    {"R_ggml_set_output",         (DL_FUNC) &R_ggml_set_output,         1},
     {"R_ggml_get_name",           (DL_FUNC) &R_ggml_get_name,           1},
 
     // Type system functions
@@ -1510,7 +1516,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_opt_dataset_shuffle",              (DL_FUNC) &R_ggml_opt_dataset_shuffle,              3},
     {"R_ggml_opt_dataset_get_batch",            (DL_FUNC) &R_ggml_opt_dataset_get_batch,            4},
     {"R_ggml_opt_default_params",               (DL_FUNC) &R_ggml_opt_default_params,               2},
-    {"R_ggml_opt_init",                         (DL_FUNC) &R_ggml_opt_init,                         4},
+    {"R_ggml_opt_init",                         (DL_FUNC) &R_ggml_opt_init,                         7},
     {"R_ggml_opt_free",                         (DL_FUNC) &R_ggml_opt_free,                         1},
     {"R_ggml_opt_reset",                        (DL_FUNC) &R_ggml_opt_reset,                        2},
     {"R_ggml_opt_static_graphs",                (DL_FUNC) &R_ggml_opt_static_graphs,                1},

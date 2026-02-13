@@ -2819,6 +2819,38 @@ SEXP R_ggml_set_name(SEXP tensor_ptr, SEXP name_sexp) {
     return tensor_ptr;  // Return the tensor for chaining
 }
 
+// Set tensor as trainable parameter (for backpropagation)
+SEXP R_ggml_set_param(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+
+    ggml_set_param(tensor);
+
+    return tensor_ptr;
+}
+
+// Set tensor as input
+SEXP R_ggml_set_input(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    ggml_set_input(tensor);
+    return tensor_ptr;
+}
+
+// Set tensor as output
+SEXP R_ggml_set_output(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    ggml_set_output(tensor);
+    return tensor_ptr;
+}
+
 // Get tensor name
 SEXP R_ggml_get_name(SEXP tensor_ptr) {
     struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);

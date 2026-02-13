@@ -13,6 +13,28 @@
 #include <random>
 #include <vector>
 
+// Use R's REprintf for stderr output — fprintf(stderr,...) crashes in C++ within R packages
+// because R may redirect stderr and the C++ runtime sees a different (invalid) symbol.
+#include <R_ext/Print.h>
+#define GGML_OPT_LOG(...) REprintf(__VA_ARGS__)
+#define GGML_OPT_FFLUSH() do { } while(0)
+
+// Get batch size from the last dimension of an N-D tensor.
+// For 2D [features, batch] returns ne[1], for 4D [W, H, C, batch] returns ne[3].
+static int64_t ggml_opt_batch_size(const struct ggml_tensor * t) {
+    return t->ne[ggml_n_dims(t) - 1];
+}
+
+// Get the number of elements per sample (all dims except the batch dim).
+static int64_t ggml_opt_ne_per_sample(const struct ggml_tensor * t) {
+    int64_t n = 1;
+    const int ndims = ggml_n_dims(t);
+    for (int i = 0; i < ndims - 1; ++i) {
+        n *= t->ne[i];
+    }
+    return n;
+}
+
 struct ggml_opt_dataset {
     struct ggml_context   * ctx    = nullptr;
     ggml_backend_buffer_t   buf    = nullptr;
@@ -450,8 +472,11 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             return;
         }
     } else if (opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_FORWARD) {
+        // Allocate ctx_static on CPU (last backend) — contains loss/labels/results
+        // which may use ops not supported on GPU backends (e.g. CROSS_ENTROPY_LOSS on Vulkan)
+        const int n_backends = ggml_backend_sched_get_n_backends(opt_ctx->backend_sched);
         opt_ctx->buf_static = ggml_backend_alloc_ctx_tensors(
-            opt_ctx->ctx_static, ggml_backend_sched_get_backend(opt_ctx->backend_sched, 0));
+            opt_ctx->ctx_static, ggml_backend_sched_get_backend(opt_ctx->backend_sched, n_backends - 1));
         return;
     }
 
@@ -494,7 +519,9 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             return;
         }
     } else if (opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_GRAD) {
-        opt_ctx->buf_static = ggml_backend_alloc_ctx_tensors(opt_ctx->ctx_static, ggml_backend_sched_get_backend(opt_ctx->backend_sched, 0));
+        // Allocate ctx_static on CPU (last backend) — contains grad accumulators + loss tensors
+        const int n_backends = ggml_backend_sched_get_n_backends(opt_ctx->backend_sched);
+        opt_ctx->buf_static = ggml_backend_alloc_ctx_tensors(opt_ctx->ctx_static, ggml_backend_sched_get_backend(opt_ctx->backend_sched, n_backends - 1));
         ggml_graph_reset(opt_ctx->gb_grad);
     }
 
@@ -538,8 +565,10 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     }
 
     if (!opt_ctx->buf_static) {
+        // Allocate ctx_static on CPU (last backend) — contains grad accumulators, momenta, loss tensors
+        const int n_backends = ggml_backend_sched_get_n_backends(opt_ctx->backend_sched);
         opt_ctx->buf_static = ggml_backend_alloc_ctx_tensors(
-            opt_ctx->ctx_static, ggml_backend_sched_get_backend(opt_ctx->backend_sched, 0));
+            opt_ctx->ctx_static, ggml_backend_sched_get_backend(opt_ctx->backend_sched, n_backends - 1));
         ggml_graph_reset(opt_ctx->gb_opt);
     }
 
@@ -846,7 +875,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
         GGML_ASSERT(result->opt_period         == opt_ctx->opt_period);
     }
 
-    const int64_t ndata = opt_ctx->outputs->ne[1];
+    const int64_t ndata = ggml_opt_batch_size(opt_ctx->outputs);
     GGML_ASSERT(result->ndata == ndata*int64_t(result->loss.size()) && "varying batch size not supported");
     result->ndata += ndata;
 
@@ -889,12 +918,14 @@ void ggml_opt_epoch(
     struct ggml_tensor * inputs = ggml_opt_inputs(opt_ctx);
     struct ggml_tensor * labels = ggml_opt_labels(opt_ctx);
     struct ggml_tensor * data   = ggml_opt_dataset_data(dataset);
-    GGML_ASSERT(data->ne[0] == inputs->ne[0]);
+    // Dataset is always 2D [ne_datapoint, ndata], inputs may be N-D with batch in last dim.
+    // Verify that per-sample element counts match.
+    GGML_ASSERT(data->ne[0] == ggml_opt_ne_per_sample(inputs));
 
-    const int64_t ndata       =   data->ne[1];
-    const int64_t ndata_batch = inputs->ne[1];
+    const int64_t ndata       = data->ne[1];
+    const int64_t ndata_batch = ggml_opt_batch_size(inputs);
 
-    GGML_ASSERT(data->ne[1] % inputs->ne[1] == 0);
+    GGML_ASSERT(ndata % ndata_batch == 0);
     const int64_t nbatches = ndata/ndata_batch;
 
     idata_split = idata_split < 0 ? ndata : idata_split;
@@ -930,34 +961,34 @@ void ggml_opt_epoch_callback_progress_bar(
         int64_t            ibatch,
         int64_t            ibatch_max,
         int64_t            t_start_us) {
-    fprintf(stderr, "%s[", train ? "train: " : "val:   ");
+    GGML_OPT_LOG("%s[", train ? "train: " : "val:   ");
 
     // The progress bar consists of partially filled blocks, unicode has 8 separate fill levels.
     constexpr int64_t bar_length = 8;
     const int64_t ibatch8 = 8 * ibatch;
     for (int64_t j = 0; j < bar_length; ++j) {
         if        (ibatch_max * (8*j + 8) / bar_length < ibatch8) {
-            fprintf(stderr, "\u2588"); // full block
+            GGML_OPT_LOG("\u2588"); // full block
         } else if (ibatch_max * (8*j + 7) / bar_length < ibatch8) {
-            fprintf(stderr, "\u2589"); // 7/8 filled
+            GGML_OPT_LOG("\u2589"); // 7/8 filled
         } else if (ibatch_max * (8*j + 6) / bar_length < ibatch8) {
-            fprintf(stderr, "\u258A"); // 6/8 filled
+            GGML_OPT_LOG("\u258A"); // 6/8 filled
         } else if (ibatch_max * (8*j + 5) / bar_length < ibatch8) {
-            fprintf(stderr, "\u258B"); // 5/8 filled
+            GGML_OPT_LOG("\u258B"); // 5/8 filled
         } else if (ibatch_max * (8*j + 4) / bar_length < ibatch8) {
-            fprintf(stderr, "\u258C"); // 4/8 filled
+            GGML_OPT_LOG("\u258C"); // 4/8 filled
         } else if (ibatch_max * (8*j + 3) / bar_length < ibatch8) {
-            fprintf(stderr, "\u258D"); // 3/8 filled
+            GGML_OPT_LOG("\u258D"); // 3/8 filled
         } else if (ibatch_max * (8*j + 2) / bar_length < ibatch8) {
-            fprintf(stderr, "\u258E"); // 2/8 filled
+            GGML_OPT_LOG("\u258E"); // 2/8 filled
         } else if (ibatch_max * (8*j + 1) / bar_length < ibatch8) {
-            fprintf(stderr, "\u258F"); // 1/8 filled
+            GGML_OPT_LOG("\u258F"); // 1/8 filled
         } else {
-            fprintf(stderr, " ");
+            GGML_OPT_LOG(" ");
         }
     }
 
-    const int64_t batch_size = ggml_opt_inputs(opt_ctx)->ne[1];
+    const int64_t batch_size = ggml_opt_batch_size(ggml_opt_inputs(opt_ctx));
     const int64_t idata      = ibatch*batch_size;
     const int64_t idata_max  = ibatch_max*batch_size;
 
@@ -983,14 +1014,14 @@ void ggml_opt_epoch_callback_progress_bar(
     const int64_t t_eta_m = t_eta_s / 60;
     t_eta_s -= t_eta_m * 60;
 
-    fprintf(stderr, "] data=%07" PRId64 "/%07" PRId64 " loss=%.5lf±%.5lf acc=%.2lf±%.2lf%% "
+    GGML_OPT_LOG("] data=%07" PRId64 "/%07" PRId64 " loss=%.5lf±%.5lf acc=%.2lf±%.2lf%% "
             "t=%02" PRId64 ":%02" PRId64 ":%02" PRId64 " ETA=%02" PRId64 ":%02" PRId64 ":%02" PRId64 " \r",
             idata, idata_max, loss, loss_unc, 100.0*accuracy, 100.0*accuracy_unc,
             t_ibatch_h, t_ibatch_m, t_ibatch_s, t_eta_h, t_eta_m, t_eta_s);
     if (ibatch == ibatch_max) {
-        fprintf(stderr, "\n");
+        GGML_OPT_LOG("\n");
     }
-    fflush(stderr);
+    GGML_OPT_FFLUSH();
 
     GGML_UNUSED(dataset);
 }
@@ -1012,7 +1043,7 @@ void ggml_opt_fit(
     const int64_t t_start_us = ggml_time_us();
 
     const int64_t ndata           = ggml_opt_dataset_data(dataset)->ne[1];
-    const int64_t nbatch_physical = inputs->ne[1];
+    const int64_t nbatch_physical = ggml_opt_batch_size(inputs);
     GGML_ASSERT(ndata          % nbatch_logical  == 0);
     GGML_ASSERT(nbatch_logical % nbatch_physical == 0);
 
@@ -1055,11 +1086,11 @@ void ggml_opt_fit(
         ggml_opt_result_reset(result_val);
 
         if (!silent) {
-            fprintf(stderr, "%s: epoch %04" PRId64 "/%04" PRId64 ":\n", __func__, epoch, nepoch);
+            GGML_OPT_LOG("%s: epoch %04" PRId64 "/%04" PRId64 ":\n", __func__, epoch, nepoch);
         }
         ggml_opt_epoch(opt_ctx, dataset, result_train, result_val, idata_split, epoch_callback, epoch_callback);
         if (!silent) {
-            fprintf(stderr, "\n");
+            GGML_OPT_LOG("\n");
         }
     }
 
@@ -1069,7 +1100,7 @@ void ggml_opt_fit(
         t_total_s -= t_total_h * 3600;
         const int64_t t_total_m = t_total_s / 60;
         t_total_s -= t_total_m * 60;
-        fprintf(stderr, "%s: training took %02" PRId64 ":%02" PRId64 ":%02" PRId64 "\n", __func__, t_total_h, t_total_m, t_total_s);
+        GGML_OPT_LOG("%s: training took %02" PRId64 ":%02" PRId64 ":%02" PRId64 "\n", __func__, t_total_h, t_total_m, t_total_s);
     }
 
     ggml_opt_free(opt_ctx);

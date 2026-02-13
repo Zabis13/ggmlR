@@ -208,11 +208,16 @@ ggml_opt_default_params <- function(sched, loss_type) {
 #' @param loss_type Loss type (use ggml_opt_loss_type_* functions)
 #' @param optimizer Optimizer type (use ggml_opt_optimizer_type_* functions)
 #' @param opt_period Gradient accumulation steps before optimizer step
+#' @param ctx_compute Compute context for static graph mode (or NULL)
+#' @param inputs Input tensor for static graph mode (or NULL)
+#' @param outputs Output tensor for static graph mode (or NULL)
 #' @return External pointer to optimizer context
 #' @export
 #' @family optimization
-ggml_opt_init <- function(sched, loss_type, optimizer = ggml_opt_optimizer_type_adamw(), opt_period = 1L) {
-  .Call("R_ggml_opt_init", sched, as.integer(loss_type), as.integer(optimizer), as.integer(opt_period))
+ggml_opt_init <- function(sched, loss_type, optimizer = ggml_opt_optimizer_type_adamw(), opt_period = 1L,
+                          ctx_compute = NULL, inputs = NULL, outputs = NULL) {
+  .Call("R_ggml_opt_init", sched, as.integer(loss_type), as.integer(optimizer), as.integer(opt_period),
+        ctx_compute, inputs, outputs)
 }
 
 #' Free optimizer context

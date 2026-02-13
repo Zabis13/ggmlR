@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.5.2
+Version: 0.5.3
 Authors@R: c(
     person("Yuri", "Baramykov",
         email = "lbsbmsu@mail.ru",
@@ -28,10 +28,13 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for efficient
     layers (attention, convolutions, normalization), activation functions, and
     quantization. Features optimization/training API with 'AdamW' (Adam with
     Weight decay) and 'SGD' (Stochastic Gradient Descent) optimizers, 'MSE'
-    (Mean Squared Error) and cross-entropy losses. Multi-backend support with
+    (Mean Squared Error) and cross-entropy losses. Includes high-level
+    sequential model API with dense, convolution, pooling and flatten layers
+    for building and training neural networks. Multi-backend support with
     CPU and 'Vulkan' GPU.
     See <https://github.com/ggml-org/ggml> for more information about the
     underlying library.
+Depends: R (>= 4.1.0)
 License: MIT + file LICENSE
 URL: https://github.com/Zabis13/ggmlR
 BugReports: https://github.com/Zabis13/ggmlR/issues
