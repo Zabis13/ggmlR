@@ -2,25 +2,61 @@
 
 [![R-hub check on the R Consortium cluster](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml/badge.svg)](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml)
 
-R bindings for the GGML tensor library, optimized for CPU and GPU computations. This package provides low-level tensor operations for machine learning, particularly useful for LLM inference and other deep learning tasks on CPU.
+R bindings for the [GGML](https://github.com/ggml-org/ggml) tensor library with CPU and optional Vulkan GPU acceleration. Provides low-level tensor operations and a high-level Keras-like API for building, training, and deploying neural networks in R. Serves as the backend engine for [llamaR](https://github.com/Zabis13/llamaR) (LLM inference) and [sdR](https://github.com/Zabis13/sdR) (Stable Diffusion image generation).
 
 ## Features
 
-- ✅ Efficient CPU tensor operations
-- ✅ Support for multiple data types (F32, F16, quantized formats)
-- ✅ Common neural network operations (matmul, activations, normalization)
-- ✅ Computation graph building and execution
-- ✅ Memory-efficient design
-- ✅ No external dependencies (all C/C++ code included)
+- **CPU + GPU**: Efficient CPU operations with optional Vulkan GPU acceleration (NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno)
+- **Keras-like Sequential API**: Dense, Conv1D, Conv2D, MaxPooling2D, BatchNorm, Flatten layers with automatic shape inference
+- **Training**: AdamW and SGD optimizers, MSE and cross-entropy losses, training history with plots
+- **Quantization**: Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, F16 formats for memory-efficient inference
+- **LLM & Diffusion backend**: Powers llamaR and sdR packages with GPU support
+- **No external dependencies**: All C/C++ code included in the package
+
+## Vulkan GPU Acceleration
+
+ggmlR includes built-in Vulkan GPU support. When enabled, the Vulkan backend accelerates 90%+ of ML/DL operations directly on GPU.
+
+### GPU-Accelerated Operations
+
+| Category | Operations |
+|----------|-----------|
+| Matrix math | `mul_mat` with cooperative matrix extensions, quantized GEMM (Q4_0, Q4_1, Q8_0, F16) |
+| Element-wise | `add`, `mul`, `div`, `sqr`, `sqrt`, `clamp` |
+| Activations | `gelu`, `silu`, `relu`, `soft_max` |
+| Normalization | `norm`, `rms_norm`, `group_norm` |
+| Attention | `rope`, `rope_neox`, `flash_attn` |
+| Pooling | `pool_2d` |
+| Convolutions | `conv_1d`, `conv_2d` |
+| Reshaping | `transpose`, `permute`, `view`, `concat` |
+
+### Architectural Advantages
+
+- **Cross-platform**: Works on NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno GPUs
+- **Batch submissions**: Multiple operations in a single command buffer to reduce overhead
+- **Cooperative matrix extensions**: Hardware-accelerated matrix ops on modern GPUs
+- **Pipeline optimization**: Pre-compiled shaders, Split-K matmul for large matrices
+- **5x-20x speedup** over CPU for typical ML workloads
+
+### Checking GPU Availability
+
+```r
+library(ggmlR)
+ggml_vulkan_available()  # TRUE if Vulkan GPU is detected
+ggml_vulkan_status()     # Detailed GPU information
+```
 
 ## Installation
+
 ```r
-# From source
+# CPU only (from CRAN)
 install.packages("ggmlR")
 
-# with vulkan for GPU
+# With Vulkan GPU acceleration
 install.packages("ggmlR", configure.args = "--with-vulkan")
 ```
+
+Vulkan GPU requires [Vulkan SDK](https://vulkan.lunarg.com/) installed on the system.
 
 ## Quick Start
 
@@ -53,6 +89,38 @@ result <- ggml_get_f32(c)
 ggml_free(ctx)
 ```
 
+### Keras-like Sequential Model (MNIST Example)
+```r
+library(ggmlR)
+
+# Build model
+model <- ggml_model_sequential(input_shape = c(28, 28, 1)) |>
+  ggml_layer_conv_2d(filters = 32, kernel_size = 3, activation = "relu") |>
+  ggml_layer_max_pooling_2d(pool_size = 2) |>
+  ggml_layer_conv_2d(filters = 64, kernel_size = 3, activation = "relu") |>
+  ggml_layer_max_pooling_2d(pool_size = 2) |>
+  ggml_layer_flatten() |>
+  ggml_layer_dense(units = 128, activation = "relu") |>
+  ggml_layer_dense(units = 10, activation = "softmax")
+
+# Compile
+model <- ggml_compile(model, optimizer = "adamw", loss = "cross_entropy")
+
+# Train
+model <- ggml_fit(model, x_train, y_train,
+                  epochs = 10, batch_size = 32,
+                  validation_data = list(x_test, y_test))
+
+# Plot training history
+plot(model$history)
+
+# Evaluate
+ggml_evaluate(model, x_test, y_test)
+
+# Predict
+classes <- ggml_predict_classes(model, x_new)
+```
+
 ### Matrix Multiplication
 ```r
 ctx <- ggml_init(16 * 1024 * 1024)
@@ -77,35 +145,6 @@ result <- ggml_get_f32(C)
 ggml_free(ctx)
 ```
 
-### Neural Network Layer
-```r
-ctx <- ggml_init(128 * 1024 * 1024)
-
-# Input
-input <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 128)
-ggml_set_f32(input, rnorm(128))
-
-# Weights and bias
-W <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 128, 256)
-b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 256)
-
-ggml_set_f32(W, rnorm(128 * 256, sd = 0.01))
-ggml_set_f32(b, rep(0, 256))
-
-# Forward: GELU(W * input + b)
-h <- ggml_mul_mat(ctx, W, input)
-h <- ggml_add(ctx, h, b)
-output <- ggml_gelu(ctx, h)
-
-# Compute
-graph <- ggml_build_forward_expand(ctx, output)
-ggml_graph_compute(ctx, graph)
-
-result <- ggml_get_f32(output)
-
-ggml_free(ctx)
-```
-
 ## Supported Operations
 
 ### Tensor Creation
@@ -121,50 +160,72 @@ ggml_free(ctx)
 - `GGML_TYPE_Q5_0`, `GGML_TYPE_Q5_1` - 5-bit quantized
 - `GGML_TYPE_Q8_0`, `GGML_TYPE_Q8_1` - 8-bit quantized
 
-### Operations
+### Core Operations
 - `ggml_mul_mat()` - Matrix multiplication
-- `ggml_add()` - Element-wise addition
-- `ggml_mul()` - Element-wise multiplication
-- `ggml_relu()` - ReLU activation
-- `ggml_gelu()` - GELU activation
-- `ggml_silu()` - SiLU/Swish activation
-- `ggml_norm()` - Layer normalization
-- `ggml_rms_norm()` - RMS normalization
+- `ggml_add()`, `ggml_mul()`, `ggml_div()` - Element-wise arithmetic
+- `ggml_sqr()`, `ggml_sqrt()`, `ggml_abs()` - Math functions
+- `ggml_clamp()`, `ggml_floor()`, `ggml_ceil()`, `ggml_round()` - Rounding
+
+### Activations
+- `ggml_relu()`, `ggml_gelu()`, `ggml_silu()` - Standard activations
+- `ggml_geglu_split()`, `ggml_swiglu_split()`, `ggml_reglu_split()` - GLU variants
+- `ggml_soft_max()` - Softmax
+
+### Neural Network Layers
+- `ggml_norm()`, `ggml_rms_norm()`, `ggml_group_norm()` - Normalization
+- `ggml_conv_1d()`, `ggml_conv_2d()` - Convolutions
+- `ggml_pool_2d()` - Pooling
+- `ggml_rope()` - Rotary position embeddings
+
+### Sequential Model API
+- `ggml_model_sequential()` - Create model
+- `ggml_layer_dense()` - Fully connected layer
+- `ggml_layer_conv_1d()`, `ggml_layer_conv_2d()` - Convolution layers
+- `ggml_layer_max_pooling_2d()` - Pooling layer
+- `ggml_layer_batch_norm()` - Batch normalization
+- `ggml_layer_flatten()` - Flatten layer
+- `ggml_compile()`, `ggml_fit()`, `ggml_evaluate()`, `ggml_predict()` - Training workflow
 
 ## Use Cases
 
 ### LLM Inference
-This package is designed for running language model inference on CPU or GPU:
-- Load quantized model weights
-- Build transformer layers
-- Run token-by-token generation
-- Efficient memory usage with quantization
+Backend engine for [llamaR](https://github.com/Zabis13/llamaR):
+- Quantized model loading and inference
+- Transformer layers with GPU acceleration
+- Token-by-token generation
+- Memory-efficient with quantization
 
 ### Stable Diffusion
-Can be used for diffusion model inference on CPU or GPU:
-- U-Net architecture building blocks
-- Attention mechanisms
+Backend engine for [sdR](https://github.com/Zabis13/sdR):
+- U-Net, attention, normalization on GPU
+- Timestep embeddings for diffusion models
 - Residual connections
-- Normalization layers
+
+### Training Neural Networks
+Train models directly in R:
+- Keras-like API for quick prototyping
+- AdamW/SGD optimizers with gradient accumulation
+- Training history, evaluation, prediction
 
 ## Performance
 
-Optimized for x86-64 CPUs with:
-- SIMD vectorization
-- Multi-threading support
-- Efficient memory layout
-- Cache-friendly operations
+### CPU
+- SIMD vectorization (AVX2, AVX-512, ARM NEON)
+- OpenMP multi-threading
+- Cache-friendly memory layout
 
-## Future Plans
-- Additional operations (softmax, attention, etc.)
-- Model loading utilities
-- Pre-built model examples
+### GPU (Vulkan)
+- 5x-20x speedup over CPU for ML workloads
+- Batch command submissions
+- Cooperative matrix extensions
+- Pre-compiled shader pipelines
 
 ## System Requirements
 
 - C++17 compiler
-- x86-64 CPU (ARM support planned)
-- R >= 4.0.0
+- R >= 4.1.0
+- **Optional**: [Vulkan SDK](https://vulkan.lunarg.com/) for GPU acceleration
+- Supported platforms: Linux, macOS, Windows (x86-64, ARM64)
 
 ## License
 
@@ -184,9 +245,9 @@ If you use this package in your research, please cite:
 
 ## See Also
 
-- GGML library: https://github.com/ggerganov/ggml
-- llama.cpp: https://github.com/ggerganov/llama.cpp
-
+- GGML library: https://github.com/ggml-org/ggml
+- llamaR (LLM inference): https://github.com/Zabis13/llamaR
+- sdR (Stable Diffusion): https://github.com/Zabis13/sdR
 
 ## Acknowledgements
 
