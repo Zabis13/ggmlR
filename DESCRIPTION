@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.5.3
+Version: 0.5.4
 Authors@R: c(
     person("Yuri", "Baramykov",
         email = "lbsbmsu@mail.ru",
@@ -20,24 +20,25 @@ Authors@R: c(
         comment = "Author of llamafile/sgemm.cpp")
     )
 Description: Provides 'R' bindings to the 'GGML' tensor library for machine
-    learning with CPU/GPU 'Vulkan' acceleration. Implements tensor operations,
-    neural network layers, quantization, and a 'Keras'-like sequential model
-    API for building and training networks. Includes 'AdamW' (Adam with Weight
-    decay) and 'SGD' (Stochastic Gradient Descent) optimizers with 'MSE'
-    (Mean Squared Error) and cross-entropy losses. Serves as backend for 'LLM'
-    (Large Language Model) inference via 'llamaR' and Stable Diffusion image
-    generation via 'sdR'. See <https://github.com/ggml-org/ggml> for more
-    information about the underlying library.
+    learning with CPU/GPU 'Vulkan' acceleration. 'Vulkan' GPU support is
+    auto-detected at build time on Linux (when 'libvulkan-dev' and 'glslc' are
+    installed) and on Windows (when 'Vulkan SDK' is installed and 'VULKAN_SDK'
+    environment variable is set). Implements tensor operations, neural network
+    layers, quantization, and a 'Keras'-like sequential model API for building
+    and training networks. Includes 'AdamW' (Adam with Weight decay) and 'SGD'
+    (Stochastic Gradient Descent) optimizers with 'MSE' (Mean Squared Error)
+    and cross-entropy losses. Serves as backend for 'LLM' (Large Language
+    Model) inference via 'llamaR' and Stable Diffusion image generation via
+    'sdR'. See <https://github.com/ggml-org/ggml> for more information about
+    the underlying library.
 Depends: R (>= 4.1.0)
 License: MIT + file LICENSE
 URL: https://github.com/Zabis13/ggmlR
 BugReports: https://github.com/Zabis13/ggmlR/issues
 Encoding: UTF-8
-SystemRequirements: C++17, GNU make
+SystemRequirements: C++17, GNU make, libvulkan-dev and glslc (optional, for
+    GPU on Linux), Vulkan SDK (optional, for GPU on Windows)
 Suggests:
-    testthat (>= 3.0.0),
-    knitr,
-    rmarkdown
-VignetteBuilder: knitr
+    testthat (>= 3.0.0)
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3

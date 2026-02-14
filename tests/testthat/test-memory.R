@@ -53,7 +53,7 @@ test_that("ggml_print_mem_status works", {
   ctx <- ggml_init(16 * 1024 * 1024)
   
   # Должна вернуть список с информацией
-  info <- ggml_print_mem_status(ctx)
+  invisible(capture.output(info <- ggml_print_mem_status(ctx)))
   expect_type(info, "list")
   expect_named(info, c("total", "used", "free"))
   

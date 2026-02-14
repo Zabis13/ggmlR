@@ -4124,6 +4124,8 @@ static void r_ggml_log_callback(enum ggml_log_level level, const char * text, vo
 
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG:
+            // Suppress debug messages (scheduler realloc, graph alloc, etc.)
+            break;
         case GGML_LOG_LEVEL_INFO:
         case GGML_LOG_LEVEL_CONT:
             Rprintf("%s", text);

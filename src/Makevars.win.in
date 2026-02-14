@@ -4,6 +4,10 @@ CXX_STD = CXX17
 # Without this, gcc on Windows warns about unknown format character 'z'
 PKG_CPPFLAGS_WIN = -D__USE_MINGW_ANSI_STDIO=1
 
+# Vulkan flags (set by configure.win --with-vulkan)
+VULKAN_CPPFLAGS = @VULKAN_CPPFLAGS@
+VULKAN_LIBS = @VULKAN_LIBS@
+
 # Base include paths and defines
 GGML_CPPFLAGS = -I. -Iggml-cpu -Iggml-cpu/arch/x86 \
   -DGGML_VERSION='"0.9.5"' -DGGML_COMMIT='"ggmlR"' \
@@ -32,14 +36,14 @@ endif
 # Force include R compatibility header for CRAN compliance
 # This redirects stdout/stderr/abort to R-safe alternatives
 # r_ggml_io.c is compiled separately without this header (see rule below)
-PKG_CPPFLAGS = $(GGML_CPPFLAGS) -DGGML_R_PACKAGE -include r_ggml_compat.h
+PKG_CPPFLAGS = $(GGML_CPPFLAGS) $(VULKAN_CPPFLAGS) -DGGML_R_PACKAGE -include r_ggml_compat.h
 
 # CPU SIMD flags (set by configure.win: individual -msse4.2 -mavx2 etc. or empty)
 SIMD_CFLAGS = @SIMD_CFLAGS@
 
 PKG_CFLAGS = $(SIMD_CFLAGS)
 PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) $(SIMD_CFLAGS)
-PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS)
+PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS) $(VULKAN_LIBS)
 
 # GGML library objects (for static library export)
 GGML_OBJECTS = \
@@ -58,6 +62,10 @@ R_INTERFACE_OBJECTS = \
   r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o \
   r_interface_opt.o r_interface_backend.o r_interface_quants.o
 
+# Vulkan objects (set by configure.win --with-vulkan)
+VULKAN_OBJECTS = @VULKAN_OBJECTS@
+GGML_OBJECTS += $(VULKAN_OBJECTS)
+
 # All objects for shared library
 OBJECTS = $(R_INTERFACE_OBJECTS) $(GGML_OBJECTS)
 
@@ -71,6 +79,7 @@ $(SHLIB): $(OBJECTS) staticlib
 staticlib: $(GGML_OBJECTS)
 	mkdir -p ../inst/lib
 	$(AR) rcs ../inst/lib/$(STATICLIB) $(GGML_OBJECTS)
+	strip --strip-debug ../inst/lib/$(STATICLIB) 2>/dev/null || true
 
 # R interface files and r_ggml_io.c include R headers (R.h, Rinternals.h)
 # which contain __attribute__((format(printf, ...))). Our macro

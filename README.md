@@ -49,14 +49,44 @@ ggml_vulkan_status()     # Detailed GPU information
 ## Installation
 
 ```r
-# CPU only (from CRAN)
 install.packages("ggmlR")
-
-# With Vulkan GPU acceleration
-install.packages("ggmlR", configure.args = "--with-vulkan")
 ```
 
-Vulkan GPU requires [Vulkan SDK](https://vulkan.lunarg.com/) installed on the system.
+Vulkan GPU support is auto-detected at build time. If `libvulkan-dev` and `glslc` are installed, Vulkan is enabled automatically. Otherwise, the package builds with CPU only.
+
+To force Vulkan on (error if deps missing) or off:
+```r
+install.packages("ggmlR", configure.args = "--with-vulkan")    # require Vulkan
+install.packages("ggmlR", configure.args = "--without-vulkan")  # force CPU only
+```
+
+### Ubuntu / Debian
+
+```bash
+# Install Vulkan build dependencies (optional, for GPU support)
+sudo apt install libvulkan-dev glslc
+
+# Install from R — Vulkan will be detected automatically
+install.packages("ggmlR")
+```
+
+For CPU-only builds, no additional system packages are required.
+
+### Windows
+
+```bash
+# 1. Install Rtools (provides C++17 compiler)
+#    Download from: https://cran.r-project.org/bin/windows/Rtools/
+
+# 2. (Optional) Install Vulkan SDK for GPU support
+#    Download from: https://vulkan.lunarg.com/sdk/home
+#    The installer sets the VULKAN_SDK environment variable automatically.
+
+# 3. Install from R
+install.packages("ggmlR")
+```
+
+If the `VULKAN_SDK` environment variable is set and `glslc.exe` is found, Vulkan GPU support is enabled automatically. Otherwise, the package builds with CPU only.
 
 ## Quick Start
 
@@ -224,7 +254,7 @@ Train models directly in R:
 
 - C++17 compiler
 - R >= 4.1.0
-- **Optional**: [Vulkan SDK](https://vulkan.lunarg.com/) for GPU acceleration
+- **Optional**: `libvulkan-dev` and `glslc` for GPU acceleration (auto-detected at build time)
 - Supported platforms: Linux, macOS, Windows (x86-64, ARM64)
 
 ## License

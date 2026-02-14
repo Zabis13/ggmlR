@@ -202,7 +202,7 @@ SEXP R_ggml_vulkan_list_devices(void) {
         SET_VECTOR_ELT(result, i, device_info);
 
         // Name for outer list
-        char idx_str[16];
+        char idx_str[32];
         snprintf(idx_str, sizeof(idx_str), "device_%d", i);
         SET_STRING_ELT(names, i, mkChar(idx_str));
 

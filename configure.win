@@ -1,7 +1,146 @@
 #!/bin/sh
 
 # Configure script for ggmlR (Windows/Rtools)
-# Detects CPU SIMD support and generates Makevars.win
+# Detects CPU SIMD support and optional Vulkan GPU backend,
+# then generates Makevars.win from Makevars.win.in
+
+# Default values
+USE_VULKAN="auto"
+VULKAN_CPPFLAGS=""
+VULKAN_LIBS=""
+VULKAN_OBJECTS=""
+
+# Parse arguments
+for arg in "$@"; do
+  case "$arg" in
+    --with-vulkan)
+      USE_VULKAN="yes"
+      ;;
+    --without-vulkan)
+      USE_VULKAN="no"
+      ;;
+  esac
+done
+
+# --- Vulkan detection ---
+#
+# Three modes:
+#   --with-vulkan    : require Vulkan, error if deps missing
+#   --without-vulkan : disable Vulkan unconditionally
+#   (default) auto   : enable if Vulkan SDK and glslc are found
+#
+
+if [ "$USE_VULKAN" = "no" ]; then
+  echo "Vulkan: disabled by --without-vulkan"
+fi
+
+if [ "$USE_VULKAN" = "auto" ] || [ "$USE_VULKAN" = "yes" ]; then
+  echo "Checking for Vulkan support..."
+
+  # Check for glslc (shader compiler)
+  GLSLC=""
+  if [ -n "$VULKAN_SDK" ] && [ -x "$VULKAN_SDK/Bin/glslc.exe" ]; then
+    GLSLC="$VULKAN_SDK/Bin/glslc.exe"
+  else
+    GLSLC=$(command -v glslc 2>/dev/null || command -v glslc.exe 2>/dev/null)
+  fi
+
+  # Check for Vulkan headers via VULKAN_SDK
+  HAVE_VULKAN_H="no"
+  if [ -n "$VULKAN_SDK" ] && [ -d "$VULKAN_SDK/Include" ]; then
+    HAVE_VULKAN_H="yes"
+  fi
+
+  if [ -z "$GLSLC" ] || [ "$HAVE_VULKAN_H" = "no" ]; then
+    if [ "$USE_VULKAN" = "yes" ]; then
+      echo "ERROR: Vulkan dependencies not found."
+      echo "  Install Vulkan SDK from: https://vulkan.lunarg.com/sdk/home"
+      echo "  Ensure VULKAN_SDK environment variable is set."
+      [ -z "$GLSLC" ] && echo "  Missing: glslc.exe (shader compiler)"
+      [ "$HAVE_VULKAN_H" = "no" ] && echo "  Missing: Vulkan headers (VULKAN_SDK/Include)"
+      exit 1
+    else
+      echo ""
+      echo "Note: Vulkan GPU support not enabled (Vulkan SDK not found)."
+      echo "  To enable Vulkan acceleration, install:"
+      echo "    Vulkan SDK: https://vulkan.lunarg.com/sdk/home"
+      echo "  Ensure VULKAN_SDK environment variable is set."
+      echo "  Building CPU-only version."
+      echo ""
+      USE_VULKAN="no"
+    fi
+  else
+    USE_VULKAN="yes"
+    echo "Vulkan SDK detected: $VULKAN_SDK"
+    echo "Found glslc: $GLSLC"
+  fi
+fi
+
+if [ "$USE_VULKAN" = "yes" ]; then
+
+  # Set Vulkan include and lib paths from SDK
+  VULKAN_CPPFLAGS="-I\"${VULKAN_SDK}/Include\""
+  VULKAN_LIBS="-L\"${VULKAN_SDK}/Lib\" -lvulkan-1"
+
+  echo "Vulkan CPPFLAGS: $VULKAN_CPPFLAGS"
+  echo "Vulkan LIBS: $VULKAN_LIBS"
+
+  # Build shader generator
+  echo "Building shader generator..."
+  cd src/ggml-vulkan/vulkan-shaders
+
+  CXX="${CXX:-g++}"
+  $CXX -std=c++17 -O2 -o vulkan-shaders-gen.exe vulkan-shaders-gen.cpp
+  if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to build vulkan-shaders-gen"
+    exit 1
+  fi
+
+  # Create output directories
+  mkdir -p ../generated/spv
+
+  # Generate header file
+  echo "Generating shader header..."
+  ./vulkan-shaders-gen.exe \
+    --output-dir ../generated/spv \
+    --target-hpp ../generated/ggml-vulkan-shaders.hpp
+
+  # Generate shader cpp files
+  echo "Compiling shaders (this may take a while)..."
+  SHADER_COUNT=0
+  SHADER_TOTAL=$(ls -1 *.comp 2>/dev/null | wc -l)
+
+  for shader in *.comp; do
+    SHADER_COUNT=$((SHADER_COUNT + 1))
+    printf "\r  [%d/%d] %s" "$SHADER_COUNT" "$SHADER_TOTAL" "$shader"
+    ./vulkan-shaders-gen.exe \
+      --glslc "$GLSLC" \
+      --source "$(pwd)/$shader" \
+      --output-dir ../generated/spv \
+      --target-hpp ../generated/ggml-vulkan-shaders.hpp \
+      --target-cpp "../generated/${shader}.cpp"
+    if [ $? -ne 0 ]; then
+      echo ""
+      echo "ERROR: Failed to compile shader: $shader"
+      exit 1
+    fi
+  done
+  echo ""
+  echo "Generated $SHADER_COUNT shader files"
+
+  cd ../../..
+
+  # Build list of shader object files
+  VULKAN_OBJECTS="ggml-vulkan/ggml-vulkan.o"
+  for cpp in src/ggml-vulkan/generated/*.cpp; do
+    base=$(basename "$cpp" .cpp)
+    VULKAN_OBJECTS="$VULKAN_OBJECTS ggml-vulkan/generated/${base}.o"
+  done
+
+  VULKAN_CPPFLAGS="$VULKAN_CPPFLAGS -DGGML_USE_VULKAN -Iggml-vulkan -Iggml-vulkan/generated"
+
+  echo "Vulkan backend enabled with $SHADER_COUNT shaders"
+fi
 
 # --- Detect CPU SIMD features ---
 #
@@ -53,7 +192,15 @@ fi
 echo "Generating src/Makevars.win..."
 
 sed \
+  -e "s|@VULKAN_CPPFLAGS@|$VULKAN_CPPFLAGS|g" \
+  -e "s|@VULKAN_LIBS@|$VULKAN_LIBS|g" \
+  -e "s|@VULKAN_OBJECTS@|$VULKAN_OBJECTS|g" \
   -e "s|@SIMD_CFLAGS@|$SIMD_CFLAGS|g" \
   src/Makevars.win.in > src/Makevars.win
 
 echo "Configuration complete."
+if [ "$USE_VULKAN" = "yes" ]; then
+  echo "  Vulkan: ENABLED"
+else
+  echo "  Vulkan: disabled"
+fi

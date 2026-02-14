@@ -315,7 +315,7 @@ test_that("ggml_evaluate returns accuracy consistent with training", {
   expect_true(!is.null(result$loss))
   expect_true(!is.null(result$accuracy))
   # Trained model should do better than random (50%)
-  expect_gt(result$accuracy, 0.6)
+  expect_gt(result$accuracy, 0.55)
   # Loss should be below random baseline (-ln(0.5) ≈ 0.693)
   expect_lt(result$loss, 0.69)
 

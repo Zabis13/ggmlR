@@ -25,6 +25,25 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <cmath>
 #include <iomanip>
 #include <iostream>
+
+// R package: redirect std::cerr to a no-op stream to avoid CRAN NOTE
+// about '_ZSt4cerr' symbol in compiled code.
+// std::cerr -> std::r_vk_null_ostream() via macro on 'cerr' token.
+#if defined(GGML_R_PACKAGE)
+#include <streambuf>
+namespace std {
+    inline std::ostream & r_vk_null_ostream() {
+        struct null_buf : std::streambuf {
+            int overflow(int c) override { return c; }
+        };
+        static null_buf buf;
+        static std::ostream stream(&buf);
+        return stream;
+    }
+}
+#define cerr r_vk_null_ostream()
+#endif
+
 #include <tuple>
 #include <vector>
 #include <sstream>
@@ -65,6 +84,12 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include "ggml-backend-impl.h"
 
 #include "ggml-vulkan-shaders.hpp"
+
+// R package: re-redirect exit() after <cstdlib> undoes the r_ggml_compat.h macro
+#if defined(GGML_R_PACKAGE) && !defined(R_GGML_IO_IMPL)
+#undef exit
+#define exit(status) r_ggml_exit(status)
+#endif
 
 // remove this once it's more widely available in the SDK
 #if !defined(VK_KHR_shader_bfloat16)

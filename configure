@@ -1,10 +1,10 @@
 #!/bin/sh
 
 # Configure script for ggmlR
-# Supports optional Vulkan backend via --with-vulkan flag
+# Vulkan backend: auto-detected, or forced via --with-vulkan / --without-vulkan
 
 # Default values
-USE_VULKAN="no"
+USE_VULKAN="auto"
 VULKAN_CPPFLAGS=""
 VULKAN_LIBS=""
 VULKAN_OBJECTS=""
@@ -15,11 +15,25 @@ for arg in "$@"; do
     --with-vulkan)
       USE_VULKAN="yes"
       ;;
+    --without-vulkan)
+      USE_VULKAN="no"
+      ;;
   esac
 done
 
-# If Vulkan requested, check dependencies and build shaders
-if [ "$USE_VULKAN" = "yes" ]; then
+# --- Vulkan detection ---
+#
+# Three modes:
+#   --with-vulkan    : require Vulkan, error if deps missing
+#   --without-vulkan : disable Vulkan unconditionally
+#   (default) auto   : enable if libvulkan-dev and glslc are found
+#
+
+if [ "$USE_VULKAN" = "no" ]; then
+  echo "Vulkan: disabled by --without-vulkan"
+fi
+
+if [ "$USE_VULKAN" = "auto" ] || [ "$USE_VULKAN" = "yes" ]; then
   echo "Checking for Vulkan support..."
 
   # Check for glslc (shader compiler)
@@ -29,15 +43,47 @@ if [ "$USE_VULKAN" = "yes" ]; then
   else
     GLSLC=$(command -v glslc 2>/dev/null)
   fi
-  if [ -z "$GLSLC" ]; then
-    echo "ERROR: glslc not found. Please install Vulkan SDK."
-    echo "  Ubuntu/Debian: apt install glslc"
-    echo "  Or download from: https://vulkan.lunarg.com/sdk/home"
-    exit 1
-  fi
-  echo "Found glslc: $GLSLC"
 
   # Check for Vulkan headers
+  HAVE_VULKAN_H="no"
+  if [ -f "/usr/include/vulkan/vulkan.h" ] || [ -n "$VULKAN_SDK" ]; then
+    HAVE_VULKAN_H="yes"
+  elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists vulkan 2>/dev/null; then
+    HAVE_VULKAN_H="yes"
+  fi
+
+  if [ -z "$GLSLC" ] || [ "$HAVE_VULKAN_H" = "no" ]; then
+    if [ "$USE_VULKAN" = "yes" ]; then
+      # Explicit --with-vulkan: error out
+      echo "ERROR: Vulkan dependencies not found."
+      echo "  Required packages (Ubuntu/Debian): sudo apt install libvulkan-dev glslc"
+      echo "  Or download Vulkan SDK from: https://vulkan.lunarg.com/sdk/home"
+      [ -z "$GLSLC" ] && echo "  Missing: glslc (shader compiler)"
+      [ "$HAVE_VULKAN_H" = "no" ] && echo "  Missing: vulkan/vulkan.h (Vulkan headers)"
+      exit 1
+    else
+      # Auto mode: skip Vulkan with helpful message
+      echo ""
+      echo "Note: Vulkan GPU support not enabled (optional dependencies not found)."
+      echo "  To enable Vulkan acceleration, install:"
+      echo "    Ubuntu/Debian: sudo apt install libvulkan-dev glslc"
+      echo "    Other systems: https://vulkan.lunarg.com/sdk/home"
+      echo "  Building CPU-only version."
+      echo ""
+      USE_VULKAN="no"
+    fi
+  else
+    USE_VULKAN="yes"
+    if [ "$1" != "--with-vulkan" ]; then
+      echo "Vulkan dev packages detected, enabling Vulkan automatically"
+    fi
+    echo "Found glslc: $GLSLC"
+  fi
+fi
+
+if [ "$USE_VULKAN" = "yes" ]; then
+
+  # Check for Vulkan headers in standard paths
   if [ ! -f "/usr/include/vulkan/vulkan.h" ] && [ -z "$VULKAN_SDK" ]; then
     echo "WARNING: vulkan/vulkan.h not found in standard paths."
     echo "If build fails, set VULKAN_SDK environment variable."
@@ -249,5 +295,5 @@ echo "Configuration complete."
 if [ "$USE_VULKAN" = "yes" ]; then
   echo "  Vulkan: ENABLED"
 else
-  echo "  Vulkan: disabled (use --with-vulkan to enable)"
+  echo "  Vulkan: disabled"
 fi

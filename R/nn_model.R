@@ -88,7 +88,7 @@ ggml_compile <- function(model, optimizer = "adam",
   } else if (backend == "vulkan") {
     if (!ggml_vulkan_available() || ggml_vulkan_device_count() == 0) {
       stop("Vulkan backend requested but not available. ",
-           "Reinstall with configure.args = \"--with-vulkan\"")
+           "Install libvulkan-dev and glslc, then reinstall ggmlR")
     }
     use_vulkan <- TRUE
   } else if (backend != "cpu") {
@@ -101,11 +101,17 @@ ggml_compile <- function(model, optimizer = "adam",
     sched <- ggml_backend_sched_new(list(gpu_backend), parallel = FALSE)
     # Use separate CPU backend for weight allocation
     cpu_backend <- ggml_backend_cpu_init()
-    message("Using Vulkan GPU backend: ", ggml_vulkan_device_description(0L))
+    if (!isTRUE(.ggmlr_state$backend_msg_shown)) {
+      message("Using Vulkan GPU backend: ", ggml_vulkan_device_description(0L))
+      .ggmlr_state$backend_msg_shown <- TRUE
+    }
   } else {
     cpu_backend <- ggml_backend_cpu_init()
     sched <- ggml_backend_sched_new(list(cpu_backend), parallel = FALSE)
-    message("Using CPU backend")
+    if (!isTRUE(.ggmlr_state$backend_msg_shown)) {
+      message("Using CPU backend")
+      .ggmlr_state$backend_msg_shown <- TRUE
+    }
   }
 
   # 3. Store compilation config (weights created later in fit/evaluate)

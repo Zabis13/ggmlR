@@ -11,7 +11,7 @@ Logical indicating if Vulkan is available
 }
 \description{
 Returns TRUE if the package was compiled with Vulkan support.
-To enable Vulkan, reinstall with: install.packages(..., configure.args = "--with-vulkan")
+To enable Vulkan, install libvulkan-dev and glslc, then reinstall ggmlR.
 }
 \examples{
 ggml_vulkan_available()

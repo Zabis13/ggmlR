@@ -3,7 +3,7 @@
 #' Check if Vulkan support is available
 #'
 #' Returns TRUE if the package was compiled with Vulkan support.
-#' To enable Vulkan, reinstall with: install.packages(..., configure.args = "--with-vulkan")
+#' To enable Vulkan, install libvulkan-dev and glslc, then reinstall ggmlR.
 #'
 #' @return Logical indicating if Vulkan is available
 #' @export
@@ -176,8 +176,8 @@ ggml_vulkan_status <- function() {
 
   if (!available) {
     cat("Vulkan: NOT AVAILABLE\n")
-    cat("  To enable: reinstall with configure.args = \"--with-vulkan\"\n")
-    cat("  Requirements: Vulkan SDK, glslc compiler\n")
+    cat("  To enable: install libvulkan-dev and glslc, then reinstall ggmlR\n")
+    cat("  Ubuntu/Debian: sudo apt install libvulkan-dev glslc\n")
     return(invisible(NULL))
   }
 

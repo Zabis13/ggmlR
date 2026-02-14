@@ -147,6 +147,9 @@ void r_ggml_exit(int status);
 #undef abort
 #define abort() do { r_ggml_abort(__FILE__, __LINE__, "abort called"); __builtin_unreachable(); } while(0)
 
+#undef exit
+#define exit(status) r_ggml_exit(status)
+
 #undef _Exit
 #define _Exit(status) r_ggml_exit(status)
 

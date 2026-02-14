@@ -37,8 +37,8 @@ test_that("print_objects runs without error", {
   a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
   b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 5, 5)
 
-  # Should not throw error
-  expect_silent(ggml_print_objects(ctx))
+  # Should not throw error (output goes to Rprintf, suppress it)
+  expect_no_error(invisible(capture.output(ggml_print_objects(ctx))))
 
   ggml_free(ctx)
 })
@@ -49,8 +49,8 @@ test_that("print_mem_status shows correct info", {
   # Create a tensor to use some memory
   a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1000)
 
-  # Capture output
-  result <- ggml_print_mem_status(ctx)
+  # Suppress console output, capture return value
+  invisible(capture.output(result <- ggml_print_mem_status(ctx)))
 
   expect_type(result, "list")
   expect_true("total" %in% names(result))

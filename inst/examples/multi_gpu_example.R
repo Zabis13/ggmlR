@@ -5,7 +5,7 @@ library(ggmlR)
 
 # Check if Vulkan is available
 if (!ggml_vulkan_available()) {
-  stop("Vulkan is not available. Install with: R CMD INSTALL --configure-args='--with-vulkan' .")
+  stop("Vulkan is not available. Install libvulkan-dev and glslc, then reinstall ggmlR.")
 }
 
 # Check available devices

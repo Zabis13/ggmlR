@@ -7,6 +7,9 @@ test_that("logging functions exist and work", {
 
   expect_silent(ggml_log_set_default())
   expect_false(ggml_log_is_r_enabled())
+
+  # Restore R logging (suppresses debug messages in subsequent tests)
+  ggml_log_set_r()
 })
 
 test_that("abort callback functions exist and work", {
@@ -16,6 +19,9 @@ test_that("abort callback functions exist and work", {
 
   expect_silent(ggml_set_abort_callback_default())
   expect_false(ggml_abort_is_r_enabled())
+
+  # Restore R abort handler for subsequent tests
+  ggml_set_abort_callback_r()
 })
 
 test_that("op_params functions work", {

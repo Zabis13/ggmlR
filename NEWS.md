@@ -1,3 +1,33 @@
+# ggmlR 0.5.4
+
+## Vulkan on Windows
+
+* Added Vulkan GPU support on Windows via `configure.win`
+* Auto-detects Vulkan SDK through `VULKAN_SDK` environment variable
+* Detects `glslc.exe` for shader compilation (from SDK or PATH)
+* Compiles SPIR-V shaders at build time using Rtools g++
+* Links against `vulkan-1.lib` (Windows) vs `libvulkan` (Linux)
+* Supports `--with-vulkan` / `--without-vulkan` flags (same as Linux)
+* CPU-only build works without Vulkan SDK installed
+
+## Vulkan Auto-Detection
+
+* Vulkan GPU support is now auto-detected at build time on both Linux and Windows
+* Linux: enabled when `libvulkan-dev` and `glslc` are installed
+* Windows: enabled when `VULKAN_SDK` environment variable is set
+* `--with-vulkan` forces Vulkan (errors if deps missing), `--without-vulkan` disables it
+
+## Logging
+
+* GGML debug messages (scheduler realloc, graph allocation) are now suppressed at runtime
+* R log callback is automatically activated on package load via `.onLoad`
+* Backend selection message ("Using Vulkan GPU backend" / "Using CPU backend") now prints only once per session
+
+## Other
+
+* Removed vignettes to speed up package build (installation instructions in README)
+* Fixed `snprintf` buffer truncation warning in `r_interface_vulkan.c`
+
 # ggmlR 0.5.3
 
 ## Vulkan GPU Backend
@@ -104,12 +134,6 @@
   - Mozilla Foundation (llamafile/sgemm.cpp)
 * Replaced `\dontrun{}` with `\donttest{}` in all examples
 * Added `\value` documentation to all exported functions and constants
-
-## Documentation
-
-* Added vignette: Vulkan GPU Backend (`vignette("vulkan-backend")`)
-* Added vignette: Multi-GPU Inference (`vignette("multi-gpu")`)
-* Added vignette: Working with Quantized Models (`vignette("quantization")`)
 
 ## Internal
 

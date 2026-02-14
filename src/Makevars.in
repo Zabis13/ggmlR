@@ -83,6 +83,7 @@ $(SHLIB): $(OBJECTS) staticlib
 staticlib: $(GGML_OBJECTS)
 	mkdir -p ../inst/lib
 	$(AR) rcs ../inst/lib/$(STATICLIB) $(GGML_OBJECTS)
+	strip --strip-debug ../inst/lib/$(STATICLIB) 2>/dev/null || true
 
 # R interface files and r_ggml_io.c include R headers (R.h, Rinternals.h)
 # which contain __attribute__((format(printf, ...))). Our macro

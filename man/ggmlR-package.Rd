@@ -6,7 +6,7 @@
 \alias{ggmlR-package}
 \title{ggmlR: 'GGML' Tensor Operations for Machine Learning}
 \description{
-Provides 'R' bindings to the 'GGML' tensor library for machine learning with CPU/GPU 'Vulkan' acceleration. Implements tensor operations, neural network layers, quantization, and a 'Keras'-like sequential model API for building and training networks. Includes 'AdamW' (Adam with Weight decay) and 'SGD' (Stochastic Gradient Descent) optimizers with 'MSE' (Mean Squared Error) and cross-entropy losses. Serves as backend for 'LLM' (Large Language Model) inference via 'llamaR' and Stable Diffusion image generation via 'sdR'. See \url{https://github.com/ggml-org/ggml} for more information about the underlying library.
+Provides 'R' bindings to the 'GGML' tensor library for machine learning with CPU/GPU 'Vulkan' acceleration. 'Vulkan' GPU support is auto-detected at build time on Linux (when 'libvulkan-dev' and 'glslc' are installed) and on Windows (when 'Vulkan SDK' is installed and 'VULKAN_SDK' environment variable is set). Implements tensor operations, neural network layers, quantization, and a 'Keras'-like sequential model API for building and training networks. Includes 'AdamW' (Adam with Weight decay) and 'SGD' (Stochastic Gradient Descent) optimizers with 'MSE' (Mean Squared Error) and cross-entropy losses. Serves as backend for 'LLM' (Large Language Model) inference via 'llamaR' and Stable Diffusion image generation via 'sdR'. See \url{https://github.com/ggml-org/ggml} for more information about the underlying library.
 }
 \seealso{
 Useful links:
