@@ -32,4 +32,4 @@ jobs:
           file: Dockerfile.amd-gpu-vulkan
           push: true
           tags: |
-            ghcr.io/Zabis13/ggmlr-vulkan-amd:latest
+            ghcr.io/zabis13/ggmlr-vulkan-amd:latest
