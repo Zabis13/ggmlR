@@ -1,0 +1,27 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Чтобы nvidia-container-toolkit знал, какие возможности нужны
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility
+ENV NVIDIA_VISIBLE_DEVICES=all
+
+# Базовые пакеты + R + Vulkan runtime (без AMD/Mesa-специфики)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    r-base r-base-dev \
+    git build-essential cmake pkg-config \
+    wget curl ca-certificates \
+    libvulkan1 libvulkan-dev vulkan-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+# НЕ задаём VK_ICD_FILENAMES:
+# nvidia-container-toolkit сам подмонтирует NVIDIA ICD и библиотеки в /usr/share/vulkan/icd.d [web:375][web:371]
+
+# Установка ggmlR из GitHub
+RUN R -e "install.packages('remotes', repos = 'https://cloud.r-project.org')" && \
+    R -e "remotes::install_github('Zabis13/ggmlR')"
+
+WORKDIR /work
+COPY inst/examples/benchmark_gpu_cpu.R /work/benchmark_gpu_cpu.R
+
+CMD ["Rscript", "benchmark_gpu_cpu.R"]
+
