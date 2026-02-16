@@ -36,7 +36,7 @@ License: MIT + file LICENSE
 URL: https://github.com/Zabis13/ggmlR
 BugReports: https://github.com/Zabis13/ggmlR/issues
 Encoding: UTF-8
-SystemRequirements: C++17, GNU make, libvulkan-dev and glslc (optional, for
+SystemRequirements: C++17, GNU make, vulkan-sdk (optional, for
     GPU on Linux), Vulkan SDK (optional, for GPU on Windows)
 Suggests:
     testthat (>= 3.0.0)
