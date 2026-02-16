@@ -27,7 +27,7 @@ WORKDIR /work
 
 # Копируем пример из inst/examples в образ
 # Важно: путь относительно корня репо, куда ты положишь Dockerfile
-COPY inst/examples/mnist_cnn.R /work/mnist_cnn.R
+COPY inst/examples/benchmark_gpu_cpu.R /work/benchmark_gpu_cpu.R
 
-CMD ["Rscript", "mnist_cnn.R"]
+CMD ["Rscript", "benchmark_gpu_cpu.R"]
 
