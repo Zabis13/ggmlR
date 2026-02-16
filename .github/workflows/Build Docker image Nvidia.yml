@@ -18,7 +18,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile.ggmlr-vulkan-nvidia
+          file: ./Dockerfile.nvidia-gpu-vulkan
           tags: ggmlr-vulkan-nvidia:latest
           outputs: type=docker,dest=/tmp/image.tar
           push: false
