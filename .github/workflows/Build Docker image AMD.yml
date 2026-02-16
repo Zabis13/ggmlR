@@ -1,4 +1,4 @@
-name: Build Docker image
+name: Build Docker image AMD
 
 on:
   workflow_dispatch:
@@ -18,7 +18,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
+          file: ./Dockerfile.amd-gpu-vulkan
           tags: ggmlr-vulkan:latest
           outputs: type=docker,dest=/tmp/image.tar
           push: false
