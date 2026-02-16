@@ -1,0 +1,7 @@
+- name: Build Docker image (no push)
+  uses: docker/build-push-action@v6
+  with:
+    context: .
+    file: ./Dockerfile
+    tags: ggmlr-vulkan:latest
+    push: false
