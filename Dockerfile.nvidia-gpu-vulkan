@@ -4,17 +4,32 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,graphics,utility
 ENV NVIDIA_VISIBLE_DEVICES=all
 
-# Базовые пакеты + R + Vulkan runtime + Mesa drivers (для ICD)
+# Базовые пакеты + R
 RUN apt-get update && apt-get install -y --no-install-recommends \
     r-base r-base-dev \
     git build-essential cmake pkg-config \
     wget curl ca-certificates \
-    libvulkan1 libvulkan-dev vulkan-tools \
-    mesa-vulkan-drivers \
-    spirv-tools glslang-tools \
     && rm -rf /var/lib/apt/lists/*
 
-# Установка ggmlR из GitHub
+# Vulkan runtime (Mesa, чтобы был /usr/share/vulkan/icd.d)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libvulkan1 vulkan-tools mesa-vulkan-drivers \
+    && rm -rf /var/lib/apt/lists/*
+
+# LunarG Vulkan SDK (Ubuntu 24.04 noble) [web:349][web:363]
+RUN wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc \
+      | tee /etc/apt/trusted.gpg.d/lunarg.asc && \
+    wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list \
+      http://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      vulkan-sdk \
+      && rm -rf /var/lib/apt/lists/*
+
+# Быстрая проверка, что есть и Vulkan dev, и glslc
+RUN dpkg -l libvulkan* | grep vulkan && which glslc
+
+# Установка ggmlR
 RUN R -e "install.packages('remotes', repos = 'https://cloud.r-project.org')" && \
     R -e "remotes::install_github('Zabis13/ggmlR')"
 
