@@ -63,10 +63,7 @@ install.packages("ggmlR", configure.args = "--without-vulkan")  # force CPU only
 ### Ubuntu / Debian
 
 ```bash
-# Option 1 (recommended): Vulkan SDK (headers + glslc)
-sudo apt install vulkan-sdk
-
-# Option 2: minimal build dependencies (headers + glslc)
+# Build-time dependencies: Vulkan headers + glslc
 sudo apt install libvulkan-dev glslc
 
 # For Vulkan runtime on Linux you also need the Vulkan loader and drivers, e.g.:

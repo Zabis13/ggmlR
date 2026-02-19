@@ -903,3 +903,109 @@ SEXP R_ggml_opt_epoch(SEXP opt_ctx_ptr, SEXP dataset_ptr,
 
     return R_NilValue;
 }
+
+// ============================================================================
+// LR-controllable optimizer context for R-side epoch loop
+// ============================================================================
+
+// Userdata for R-controlled LR: holds current optimizer params
+// (updated by R between epochs via R_ggml_opt_set_lr)
+typedef struct {
+    struct ggml_opt_optimizer_params params;
+} r_opt_lr_userdata;
+
+// C callback: simply returns the stored params (R updates them between epochs)
+static struct ggml_opt_optimizer_params r_opt_get_constant_lr(void * userdata) {
+    r_opt_lr_userdata * ud = (r_opt_lr_userdata *)userdata;
+    return ud->params;
+}
+
+// Finalizer: free userdata when external pointer is GC'd
+static void r_opt_lr_userdata_finalizer(SEXP ptr) {
+    void * ud = R_ExternalPtrAddr(ptr);
+    if (ud != NULL) {
+        free(ud);
+        R_ClearExternalPtr(ptr);
+    }
+}
+
+// Initialize optimizer context for R-side epoch loop.
+// Returns a list: list(opt_ctx=<ptr>, lr_ud=<ptr>) so R can call R_ggml_opt_set_lr.
+// Default LR is taken from ggml_opt_get_default_optimizer_params.
+SEXP R_ggml_opt_init_for_fit(SEXP sched_ptr, SEXP loss_type, SEXP optimizer_type,
+                              SEXP opt_period, SEXP ctx_compute_ptr,
+                              SEXP inputs_ptr, SEXP outputs_ptr) {
+    ggml_backend_sched_t sched = (ggml_backend_sched_t)R_ExternalPtrAddr(sched_ptr);
+    if (sched == NULL) error("Invalid scheduler pointer");
+
+    enum ggml_opt_loss_type lt = (enum ggml_opt_loss_type)asInteger(loss_type);
+    struct ggml_opt_params params = ggml_opt_default_params(sched, lt);
+    params.optimizer = (enum ggml_opt_optimizer_type)asInteger(optimizer_type);
+    params.opt_period = asInteger(opt_period);
+
+    if (ctx_compute_ptr != R_NilValue)
+        params.ctx_compute = (struct ggml_context *)R_ExternalPtrAddr(ctx_compute_ptr);
+    if (inputs_ptr != R_NilValue)
+        params.inputs = (struct ggml_tensor *)R_ExternalPtrAddr(inputs_ptr);
+    if (outputs_ptr != R_NilValue)
+        params.outputs = (struct ggml_tensor *)R_ExternalPtrAddr(outputs_ptr);
+
+    // Allocate userdata with default LR from ggml defaults
+    r_opt_lr_userdata * ud = (r_opt_lr_userdata *)malloc(sizeof(r_opt_lr_userdata));
+    if (ud == NULL) error("Failed to allocate LR userdata");
+    // Get default params (epoch=1 just to get defaults)
+    int64_t dummy_epoch = 1;
+    ud->params = ggml_opt_get_default_optimizer_params(&dummy_epoch);
+
+    params.get_opt_pars    = r_opt_get_constant_lr;
+    params.get_opt_pars_ud = ud;
+
+    ggml_opt_context_t opt_ctx = ggml_opt_init(params);
+    if (opt_ctx == NULL) { free(ud); error("Failed to initialize optimizer context"); }
+
+    SEXP opt_ptr = PROTECT(R_MakeExternalPtr(opt_ctx, R_NilValue, R_NilValue));
+    SEXP ud_ptr  = PROTECT(R_MakeExternalPtr(ud, R_NilValue, R_NilValue));
+    R_RegisterCFinalizerEx(ud_ptr, r_opt_lr_userdata_finalizer, TRUE);
+
+    SEXP result = PROTECT(allocVector(VECSXP, 2));
+    SEXP names  = PROTECT(allocVector(STRSXP, 2));
+    SET_VECTOR_ELT(result, 0, opt_ptr);
+    SET_VECTOR_ELT(result, 1, ud_ptr);
+    SET_STRING_ELT(names, 0, mkChar("opt_ctx"));
+    SET_STRING_ELT(names, 1, mkChar("lr_ud"));
+    setAttrib(result, R_NamesSymbol, names);
+
+    UNPROTECT(4);
+    return result;
+}
+
+// Update learning rate in the userdata (called between epochs from R).
+// adamw_lr: new AdamW LR (NA to keep current)
+// sgd_lr:   new SGD LR (NA to keep current)
+SEXP R_ggml_opt_set_lr(SEXP ud_ptr, SEXP adamw_lr, SEXP sgd_lr) {
+    r_opt_lr_userdata * ud = (r_opt_lr_userdata *)R_ExternalPtrAddr(ud_ptr);
+    if (ud == NULL) error("Invalid LR userdata pointer");
+
+    if (!ISNA(asReal(adamw_lr)))
+        ud->params.adamw.alpha = (float)asReal(adamw_lr);
+    if (!ISNA(asReal(sgd_lr)))
+        ud->params.sgd.alpha = (float)asReal(sgd_lr);
+
+    return R_NilValue;
+}
+
+// Get current LR from userdata
+SEXP R_ggml_opt_get_lr(SEXP ud_ptr) {
+    r_opt_lr_userdata * ud = (r_opt_lr_userdata *)R_ExternalPtrAddr(ud_ptr);
+    if (ud == NULL) error("Invalid LR userdata pointer");
+
+    SEXP result = PROTECT(allocVector(REALSXP, 2));
+    SEXP names  = PROTECT(allocVector(STRSXP, 2));
+    REAL(result)[0] = (double)ud->params.adamw.alpha;
+    REAL(result)[1] = (double)ud->params.sgd.alpha;
+    SET_STRING_ELT(names, 0, mkChar("adamw"));
+    SET_STRING_ELT(names, 1, mkChar("sgd"));
+    setAttrib(result, R_NamesSymbol, names);
+    UNPROTECT(2);
+    return result;
+}

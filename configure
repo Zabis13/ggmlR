@@ -10,6 +10,7 @@ VULKAN_LIBS=""
 VULKAN_OBJECTS=""
 
 # Parse arguments
+HOST=""
 for arg in "$@"; do
   case "$arg" in
     --with-vulkan)
@@ -17,6 +18,9 @@ for arg in "$@"; do
       ;;
     --without-vulkan)
       USE_VULKAN="no"
+      ;;
+    --host=*)
+      HOST="${arg#--host=}"
       ;;
   esac
 done
@@ -154,7 +158,10 @@ OPENMP_CFLAGS=""
 OPENMP_CXXFLAGS=""
 OPENMP_CPPFLAGS=""
 
-if [ -f "$MAKECONF" ]; then
+# Emscripten (WASM) does not provide omp.h - disable OpenMP
+if echo "$HOST" | grep -q "emscripten"; then
+  echo "  Emscripten target detected, disabling OpenMP"
+elif [ -f "$MAKECONF" ]; then
   OPENMP_CFLAGS=$(grep '^SHLIB_OPENMP_CFLAGS' "$MAKECONF" | sed 's/[^=]*= *//')
   OPENMP_CXXFLAGS=$(grep '^SHLIB_OPENMP_CXXFLAGS' "$MAKECONF" | sed 's/[^=]*= *//')
 fi

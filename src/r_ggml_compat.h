@@ -103,6 +103,14 @@ void r_ggml_exit(int status);
  * Note: These redefine standard library functions to use our R-safe wrappers
  */
 
+/* Redirect stderr/stdout to NULL so their symbols don't appear in the .so.
+ * Our wrapper functions (r_ggml_fprintf, r_ggml_fputs, r_ggml_fflush) all
+ * ignore the stream argument and route to REprintf/Rprintf instead. */
+#undef stderr
+#define stderr NULL
+#undef stdout
+#define stdout NULL
+
 /* I/O redirections */
 #undef fprintf
 #define fprintf r_ggml_fprintf
@@ -127,17 +135,6 @@ void r_ggml_exit(int status);
 
 #undef fputs
 #define fputs r_ggml_fputs
-
-/*
- * Redirect stdout/stderr to NULL
- * Our wrapper functions (r_ggml_fprintf, etc.) ignore the stream parameter,
- * so replacing these with NULL is safe and removes the global symbols
- * that trigger CRAN NOTE about stdout/stderr usage in compiled code.
- */
-#undef stdout
-#define stdout ((FILE *) 0)
-#undef stderr
-#define stderr ((FILE *) 0)
 
 /*
  * Redirect abort() and _Exit() to R error

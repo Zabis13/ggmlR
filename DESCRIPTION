@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.5.4
+Version: 0.5.5
 Authors@R: c(
     person("Yuri", "Baramykov",
         email = "lbsbmsu@mail.ru",
@@ -36,7 +36,7 @@ License: MIT + file LICENSE
 URL: https://github.com/Zabis13/ggmlR
 BugReports: https://github.com/Zabis13/ggmlR/issues
 Encoding: UTF-8
-SystemRequirements: C++17, GNU make, vulkan-sdk (optional, for
+SystemRequirements: C++17, GNU make, libvulkan-dev, glslc (optional, for
     GPU on Linux), Vulkan SDK (optional, for GPU on Windows)
 Suggests:
     testthat (>= 3.0.0)

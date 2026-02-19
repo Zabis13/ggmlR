@@ -2,36 +2,52 @@
 % Please edit documentation in R/nn_model.R
 \name{ggml_fit}
 \alias{ggml_fit}
-\title{Train a Sequential Model}
+\title{Train a Model (dispatcher)}
 \usage{
-ggml_fit(
-  model,
-  x,
-  y,
-  epochs = 1,
-  batch_size = 32,
-  validation_split = 0,
-  verbose = 1
-)
+ggml_fit(...)
 }
 \arguments{
-\item{model}{A compiled ggml_sequential_model}
-
-\item{x}{Training data (array or matrix)}
-
-\item{y}{Training labels (matrix, one-hot encoded for classification)}
-
-\item{epochs}{Number of training epochs}
-
-\item{batch_size}{Batch size}
-
-\item{validation_split}{Fraction of data for validation (0 to 1)}
-
-\item{verbose}{0 = silent, 1 = progress}
+\item{...}{Arguments passed to the appropriate implementation.}
 }
 \value{
-The trained model (invisibly).
+For Sequential models: the trained model (invisibly).
+  For the low-level API: a data frame with columns
+  \code{epoch}, \code{train_loss}, \code{train_accuracy},
+  \code{val_loss}, \code{val_accuracy}.
 }
 \description{
-Train a Sequential Model
+Dispatcher: if the first argument is a \code{ggml_sequential_model}, delegates
+to the Keras-style high-level API (\code{ggml_fit_sequential}); otherwise
+delegates to the low-level optimizer loop (\code{ggml_fit_opt}).
+}
+\details{
+\strong{Keras-style (Sequential model):}
+\describe{
+  \item{model}{A compiled \code{ggml_sequential_model}}
+  \item{x}{Training data (matrix or array)}
+  \item{y}{Training labels (matrix, one-hot encoded for classification)}
+  \item{epochs}{Number of training epochs (default: 1)}
+  \item{batch_size}{Batch size (default: 32)}
+  \item{validation_split}{Fraction of data for validation (default: 0)}
+  \item{verbose}{0 = silent, 1 = progress (default: 1)}
+}
+
+\strong{Low-level (optimizer loop):}
+\describe{
+  \item{sched}{Backend scheduler}
+  \item{ctx_compute}{Compute context}
+  \item{inputs}{Input tensor}
+  \item{outputs}{Output tensor}
+  \item{dataset}{Dataset from \code{ggml_opt_dataset_init()}}
+  \item{loss_type}{Loss type (default: MSE)}
+  \item{optimizer}{Optimizer type (default: AdamW)}
+  \item{nepoch}{Number of epochs (default: 10)}
+  \item{nbatch_logical}{Logical batch size (default: 32)}
+  \item{val_split}{Validation fraction (default: 0)}
+  \item{callbacks}{List of callback objects}
+  \item{silent}{Suppress output (default: FALSE)}
+}
+}
+\seealso{
+\code{\link{ggml_fit_opt}}, \code{\link{ggml_compile}}
 }

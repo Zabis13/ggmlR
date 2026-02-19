@@ -1,3 +1,46 @@
+# ggmlR 0.5.5
+
+## API Refactoring
+
+* `ggml_fit()` is now a dispatcher:
+  - If the first argument is a `ggml_sequential_model`, delegates to the
+    Keras-style high-level API (same signature as before: `model, x, y,
+    epochs, batch_size, validation_split, verbose`).
+  - Otherwise, delegates to `ggml_fit_opt()` — the low-level R-side epoch
+    loop with callbacks (`sched, ctx_compute, inputs, outputs, dataset, ...`).
+* `ggml_fit_opt()` — new exported function (previously named `ggml_fit` in
+  `optimizer.R`). Accepts the full low-level optimizer API with callbacks,
+  learning-rate control, and validation split.
+
+## Training Callbacks (Keras-style API)
+
+* `ggml_fit()` now accepts `callbacks = list(...)` — a list of callback objects
+  with hooks `on_epoch_begin(epoch, logs, state)` and `on_epoch_end(epoch, logs, state)`.
+  `state` is a mutable environment; set `state$stop <- TRUE` to stop training early.
+* `ggml_fit()` now runs the epoch loop in R (instead of C), returning a `data.frame`
+  with columns `epoch`, `train_loss`, `train_accuracy`, `val_loss`, `val_accuracy`.
+* New built-in callback factories (`R/callbacks.R`):
+  - `ggml_callback_early_stopping(monitor, patience, min_delta, mode)` — stops training
+    when the monitored metric stagnates; supports "min"/"max"/"auto" mode.
+  - `ggml_schedule_step_decay(step_size, gamma)` — multiplies LR by `gamma` every
+    `step_size` epochs.
+  - `ggml_schedule_cosine_decay(eta_min, T_max)` — anneals LR along a cosine curve
+    from the initial value down to `eta_min`.
+  - `ggml_schedule_reduce_on_plateau(monitor, factor, patience, min_lr, min_delta, mode)` —
+    reduces LR by `factor` when the monitored metric stops improving.
+
+## Learning Rate Control
+
+* New C functions `R_ggml_opt_init_for_fit()`, `R_ggml_opt_set_lr()`, `R_ggml_opt_get_lr()`
+  allow updating the optimizer learning rate between epochs without recreating the
+  optimizer context — AdamW momentum state is fully preserved.
+* New R wrappers: `ggml_opt_init_for_fit()`, `ggml_opt_set_lr()`, `ggml_opt_get_lr()`.
+
+## Testing
+
+* Added `tests/testthat/test-callbacks.R` — 67 tests covering callbacks, LR control,
+  and `ggml_fit()` integration.
+
 # ggmlR 0.5.4
 
 ## Vulkan on Windows

@@ -17,6 +17,7 @@ Get number of datapoints from result
 }
 \seealso{
 Other optimization: 
+\code{\link{ggml_fit_opt}()},
 \code{\link{ggml_opt_alloc}()},
 \code{\link{ggml_opt_context_optimizer_type}()},
 \code{\link{ggml_opt_dataset_data}()},
@@ -31,8 +32,10 @@ Other optimization:
 \code{\link{ggml_opt_eval}()},
 \code{\link{ggml_opt_fit}()},
 \code{\link{ggml_opt_free}()},
+\code{\link{ggml_opt_get_lr}()},
 \code{\link{ggml_opt_grad_acc}()},
 \code{\link{ggml_opt_init}()},
+\code{\link{ggml_opt_init_for_fit}()},
 \code{\link{ggml_opt_inputs}()},
 \code{\link{ggml_opt_labels}()},
 \code{\link{ggml_opt_loss}()},
@@ -54,6 +57,7 @@ Other optimization:
 \code{\link{ggml_opt_result_loss}()},
 \code{\link{ggml_opt_result_pred}()},
 \code{\link{ggml_opt_result_reset}()},
+\code{\link{ggml_opt_set_lr}()},
 \code{\link{ggml_opt_static_graphs}()}
 }
 \concept{optimization}

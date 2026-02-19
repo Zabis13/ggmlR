@@ -558,3 +558,225 @@ ggml_opt_epoch <- function(opt_ctx, dataset, result_train = NULL, result_eval = 
   invisible(.Call("R_ggml_opt_epoch", opt_ctx, dataset, result_train, result_eval,
                   as.numeric(idata_split), callback_train, callback_eval))
 }
+
+# ============================================================================
+# Low-level: init optimizer context for R-side epoch loop
+# ============================================================================
+
+#' Initialize optimizer context for R-side epoch loop
+#'
+#' Returns a list with `opt_ctx` and `lr_ud` (learning rate userdata pointer).
+#' Use `ggml_opt_set_lr()` to update LR between epochs.
+#' The optimizer state (momentum) is preserved across epochs.
+#'
+#' @param sched Backend scheduler
+#' @param loss_type Loss type constant
+#' @param optimizer Optimizer type constant
+#' @param opt_period Gradient accumulation period
+#' @param ctx_compute Compute context (for static graphs)
+#' @param inputs Input tensor (for static graphs)
+#' @param outputs Output tensor (for static graphs)
+#' @return List with elements `opt_ctx` and `lr_ud`
+#' @export
+#' @family optimization
+ggml_opt_init_for_fit <- function(sched, loss_type, optimizer = ggml_opt_optimizer_type_adamw(),
+                                   opt_period = 1L, ctx_compute = NULL,
+                                   inputs = NULL, outputs = NULL) {
+  .Call("R_ggml_opt_init_for_fit",
+        sched, as.integer(loss_type), as.integer(optimizer), as.integer(opt_period),
+        ctx_compute, inputs, outputs)
+}
+
+#' Set learning rate in optimizer context
+#'
+#' Updates the LR used for subsequent backward passes.
+#' Can be called between epochs to implement LR scheduling.
+#'
+#' @param lr_ud LR userdata pointer (from `ggml_opt_init_for_fit()$lr_ud`)
+#' @param adamw_lr New AdamW learning rate (NA to keep current)
+#' @param sgd_lr New SGD learning rate (NA to keep current)
+#' @return NULL invisibly
+#' @export
+#' @family optimization
+ggml_opt_set_lr <- function(lr_ud, adamw_lr = NA, sgd_lr = NA) {
+  invisible(.Call("R_ggml_opt_set_lr", lr_ud, as.numeric(adamw_lr), as.numeric(sgd_lr)))
+}
+
+#' Get current learning rate from optimizer context
+#'
+#' @param lr_ud LR userdata pointer (from `ggml_opt_init_for_fit()$lr_ud`)
+#' @return Named numeric vector with 'adamw' and 'sgd' LR values
+#' @export
+#' @family optimization
+ggml_opt_get_lr <- function(lr_ud) {
+  .Call("R_ggml_opt_get_lr", lr_ud)
+}
+
+# ============================================================================
+# High-level: ggml_fit_opt() with R epoch loop and callbacks
+# ============================================================================
+
+#' Fit model with R-side epoch loop and callbacks
+#'
+#' Trains a model epoch by epoch in R, allowing callbacks for early stopping
+#' and learning rate scheduling. Optimizer state (momentum) is preserved
+#' across all epochs.
+#'
+#' @param sched Backend scheduler
+#' @param ctx_compute Compute context (for temporary tensors)
+#' @param inputs Input tensor with shape [ne_datapoint, batch_size]
+#' @param outputs Output tensor with shape [ne_label, batch_size]
+#' @param dataset Dataset created with `ggml_opt_dataset_init()`
+#' @param loss_type Loss type (default: MSE)
+#' @param optimizer Optimizer type (default: AdamW)
+#' @param nepoch Number of epochs
+#' @param nbatch_logical Logical batch size (for gradient accumulation)
+#' @param val_split Fraction of data for validation (0.0 to 1.0)
+#' @param callbacks List of callback lists. Each element may have
+#'   `on_epoch_begin(epoch, logs, state)` and/or `on_epoch_end(epoch, logs, state)`.
+#'   Built-in factories: `ggml_callback_early_stopping()`,
+#'   `ggml_schedule_step_decay()`, `ggml_schedule_cosine_decay()`,
+#'   `ggml_schedule_reduce_on_plateau()`.
+#'   `state` is a mutable environment with fields:
+#'   `stop` (set TRUE to stop training), `lr_ud`, `nepoch`.
+#' @param silent Whether to suppress per-epoch progress output
+#' @return Data frame with columns epoch, train_loss, train_accuracy, val_loss, val_accuracy
+#' @export
+#' @family optimization
+#' @examples
+#' if (FALSE) {
+#' history <- ggml_fit_opt(sched, ctx_compute, inputs, outputs, dataset,
+#'   nepoch = 50, val_split = 0.2,
+#'   callbacks = list(
+#'     ggml_callback_early_stopping(monitor = "val_loss", patience = 5),
+#'     ggml_schedule_cosine_decay()
+#'   ))
+#' }
+ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
+                     loss_type   = ggml_opt_loss_type_mse(),
+                     optimizer   = ggml_opt_optimizer_type_adamw(),
+                     nepoch      = 10L,
+                     nbatch_logical = 32L,
+                     val_split   = 0.0,
+                     callbacks   = list(),
+                     silent      = FALSE) {
+
+  # --- compute parameters (same as R_ggml_opt_fit) ---
+  ndata <- as.integer(ggml_opt_dataset_ndata(dataset))
+  nbatch_physical <- .ggml_tensor_last_dim(inputs)
+  opt_period      <- as.integer(max(1L, nbatch_logical %/% nbatch_physical))
+  nbatches_logical  <- ndata %/% nbatch_logical
+  ibatch_split    <- as.integer(floor((1.0 - val_split) * nbatches_logical) * opt_period)
+  idata_split     <- ibatch_split * nbatch_physical
+
+  # --- init optimizer context (preserves momentum across epochs) ---
+  ctx_list <- ggml_opt_init_for_fit(
+    sched, loss_type, optimizer, opt_period,
+    ctx_compute, inputs, outputs
+  )
+  opt_ctx <- ctx_list$opt_ctx
+  lr_ud   <- ctx_list$lr_ud
+  on.exit({
+    ggml_opt_free(opt_ctx)
+  }, add = TRUE)
+
+  # --- shuffle all data once at start ---
+  if (nbatch_logical < ndata) {
+    ggml_opt_dataset_shuffle(opt_ctx, dataset, -1)
+  }
+
+  result_train <- ggml_opt_result_init()
+  result_eval  <- ggml_opt_result_init()
+  on.exit({
+    ggml_opt_result_free(result_train)
+    ggml_opt_result_free(result_eval)
+  }, add = TRUE)
+
+  # --- mutable state shared with callbacks ---
+  state <- new.env(parent = emptyenv())
+  state$stop   <- FALSE
+  state$lr_ud  <- lr_ud
+  state$nepoch <- as.integer(nepoch)
+
+  # --- history ---
+  hist <- vector("list", nepoch)
+
+  for (epoch in seq_len(nepoch)) {
+    # shuffle training portion
+    if (nbatch_logical < idata_split) {
+      ggml_opt_dataset_shuffle(opt_ctx, dataset, idata_split)
+    }
+
+    ggml_opt_result_reset(result_train)
+    ggml_opt_result_reset(result_eval)
+
+    logs <- list()
+
+    # on_epoch_begin callbacks
+    for (cb in callbacks) {
+      if (is.function(cb$on_epoch_begin))
+        cb$on_epoch_begin(epoch, logs, state)
+      if (isTRUE(state$stop)) break
+    }
+    if (isTRUE(state$stop)) break
+
+    if (!silent) message(sprintf("Epoch %d/%d", epoch, nepoch))
+
+    cb_progress <- if (silent) FALSE else TRUE
+    ggml_opt_epoch(opt_ctx, dataset, result_train, result_eval,
+                   idata_split,
+                   callback_train = cb_progress,
+                   callback_eval  = cb_progress)
+
+    # collect metrics
+    train_loss_res <- ggml_opt_result_loss(result_train)
+    train_acc_res  <- ggml_opt_result_accuracy(result_train)
+
+    logs$train_loss     <- train_loss_res[["loss"]]
+    logs$train_accuracy <- train_acc_res[["accuracy"]]
+
+    if (val_split > 0) {
+      val_loss_res  <- ggml_opt_result_loss(result_eval)
+      val_acc_res   <- ggml_opt_result_accuracy(result_eval)
+      logs$val_loss     <- val_loss_res[["loss"]]
+      logs$val_accuracy <- val_acc_res[["accuracy"]]
+    } else {
+      logs$val_loss     <- NA_real_
+      logs$val_accuracy <- NA_real_
+    }
+
+    hist[[epoch]] <- c(epoch = epoch, logs)
+
+    if (!silent) {
+      message(sprintf("  train_loss=%.4f  train_acc=%.4f  val_loss=%s  val_acc=%s",
+                      logs$train_loss, logs$train_accuracy,
+                      if (is.na(logs$val_loss)) "NA" else sprintf("%.4f", logs$val_loss),
+                      if (is.na(logs$val_accuracy)) "NA" else sprintf("%.4f", logs$val_accuracy)))
+    }
+
+    # on_epoch_end callbacks
+    for (cb in callbacks) {
+      if (is.function(cb$on_epoch_end))
+        cb$on_epoch_end(epoch, logs, state)
+      if (isTRUE(state$stop)) break
+    }
+    if (isTRUE(state$stop)) break
+  }
+
+  # --- build history data frame ---
+  filled <- Filter(Negate(is.null), hist)
+  if (length(filled) == 0) {
+    return(data.frame(epoch = integer(0), train_loss = numeric(0),
+                      train_accuracy = numeric(0), val_loss = numeric(0),
+                      val_accuracy = numeric(0)))
+  }
+  do.call(rbind.data.frame, lapply(filled, function(x) as.data.frame(as.list(x))))
+}
+
+# Internal helper: get last dimension of tensor (batch size)
+.ggml_tensor_last_dim <- function(tensor_ptr) {
+  # ggml_tensor has ne[0..3]; last dim = ne[ndims-1]
+  # We use the existing ggml_tensor_shape() helper if available, else call C
+  shape <- ggml_tensor_shape(tensor_ptr)
+  shape[length(shape)]
+}

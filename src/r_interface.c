@@ -71,6 +71,9 @@ extern SEXP R_ggml_opt_grad_acc(SEXP, SEXP);
 extern SEXP R_ggml_opt_result_pred(SEXP);
 extern SEXP R_ggml_opt_prepare_alloc(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_opt_epoch(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_init_for_fit(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_set_lr(SEXP, SEXP, SEXP);
+extern SEXP R_ggml_opt_get_lr(SEXP);
 
 // Extended backend functions (defined in r_interface_backend.c)
 // Device type constants
@@ -1541,6 +1544,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_opt_result_pred",                   (DL_FUNC) &R_ggml_opt_result_pred,                   1},
     {"R_ggml_opt_prepare_alloc",                 (DL_FUNC) &R_ggml_opt_prepare_alloc,                 5},
     {"R_ggml_opt_epoch",                         (DL_FUNC) &R_ggml_opt_epoch,                         7},
+    {"R_ggml_opt_init_for_fit",                  (DL_FUNC) &R_ggml_opt_init_for_fit,                  7},
+    {"R_ggml_opt_set_lr",                        (DL_FUNC) &R_ggml_opt_set_lr,                        3},
+    {"R_ggml_opt_get_lr",                        (DL_FUNC) &R_ggml_opt_get_lr,                        1},
 
     // Extended backend functions
     {"R_ggml_backend_device_type_cpu",          (DL_FUNC) &R_ggml_backend_device_type_cpu,           0},

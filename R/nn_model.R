@@ -350,19 +350,58 @@ nn_build_graph <- function(model, batch_size) {
 # Fit (Training)
 # ============================================================================
 
-#' Train a Sequential Model
+#' Train a Model (dispatcher)
 #'
-#' @param model A compiled ggml_sequential_model
-#' @param x Training data (array or matrix)
-#' @param y Training labels (matrix, one-hot encoded for classification)
-#' @param epochs Number of training epochs
-#' @param batch_size Batch size
-#' @param validation_split Fraction of data for validation (0 to 1)
-#' @param verbose 0 = silent, 1 = progress
-#' @return The trained model (invisibly).
+#' Dispatcher: if the first argument is a \code{ggml_sequential_model}, delegates
+#' to the Keras-style high-level API (\code{ggml_fit_sequential}); otherwise
+#' delegates to the low-level optimizer loop (\code{ggml_fit_opt}).
+#'
+#' \strong{Keras-style (Sequential model):}
+#' \describe{
+#'   \item{model}{A compiled \code{ggml_sequential_model}}
+#'   \item{x}{Training data (matrix or array)}
+#'   \item{y}{Training labels (matrix, one-hot encoded for classification)}
+#'   \item{epochs}{Number of training epochs (default: 1)}
+#'   \item{batch_size}{Batch size (default: 32)}
+#'   \item{validation_split}{Fraction of data for validation (default: 0)}
+#'   \item{verbose}{0 = silent, 1 = progress (default: 1)}
+#' }
+#'
+#' \strong{Low-level (optimizer loop):}
+#' \describe{
+#'   \item{sched}{Backend scheduler}
+#'   \item{ctx_compute}{Compute context}
+#'   \item{inputs}{Input tensor}
+#'   \item{outputs}{Output tensor}
+#'   \item{dataset}{Dataset from \code{ggml_opt_dataset_init()}}
+#'   \item{loss_type}{Loss type (default: MSE)}
+#'   \item{optimizer}{Optimizer type (default: AdamW)}
+#'   \item{nepoch}{Number of epochs (default: 10)}
+#'   \item{nbatch_logical}{Logical batch size (default: 32)}
+#'   \item{val_split}{Validation fraction (default: 0)}
+#'   \item{callbacks}{List of callback objects}
+#'   \item{silent}{Suppress output (default: FALSE)}
+#' }
+#'
+#' @param ... Arguments passed to the appropriate implementation.
+#' @return For Sequential models: the trained model (invisibly).
+#'   For the low-level API: a data frame with columns
+#'   \code{epoch}, \code{train_loss}, \code{train_accuracy},
+#'   \code{val_loss}, \code{val_accuracy}.
+#' @seealso \code{\link{ggml_fit_opt}}, \code{\link{ggml_compile}}
 #' @export
-ggml_fit <- function(model, x, y, epochs = 1, batch_size = 32,
-                      validation_split = 0.0, verbose = 1) {
+ggml_fit <- function(...) {
+  args <- list(...)
+  first <- if (!is.null(args[[1]])) args[[1]] else args[["model"]]
+  if (inherits(first, "ggml_sequential_model")) {
+    do.call(ggml_fit_sequential, args)
+  } else {
+    do.call(ggml_fit_opt, args)
+  }
+}
+
+ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
+                                validation_split = 0.0, verbose = 1) {
   if (!model$compiled) {
     stop("Model must be compiled before training. Call ggml_compile() first.")
   }
