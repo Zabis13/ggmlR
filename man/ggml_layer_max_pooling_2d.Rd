@@ -4,7 +4,13 @@
 \alias{ggml_layer_max_pooling_2d}
 \title{Add 2D Max Pooling Layer}
 \usage{
-ggml_layer_max_pooling_2d(model, pool_size = c(2L, 2L), strides = NULL)
+ggml_layer_max_pooling_2d(
+  model,
+  pool_size = c(2L, 2L),
+  strides = NULL,
+  name = NULL,
+  trainable = TRUE
+)
 }
 \arguments{
 \item{model}{A ggml_sequential_model object}
@@ -12,6 +18,10 @@ ggml_layer_max_pooling_2d(model, pool_size = c(2L, 2L), strides = NULL)
 \item{pool_size}{Integer or vector of 2 integers for pool height and width}
 
 \item{strides}{Integer or vector of 2 integers (defaults to pool_size)}
+
+\item{name}{Optional character name for the layer.}
+
+\item{trainable}{Logical; reserved for API consistency (no weights).}
 }
 \value{
 The model object with the max pooling layer appended (invisibly).

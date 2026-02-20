@@ -1,280 +1,112 @@
+# ggmlR 0.6.0
+
+## Dynamic autograd engine (PyTorch-style training)
+
+* `ag_tensor()` / `ag_param()` — environment-backed tensors with reference semantics; in-place optimizer updates visible to all references.
+* `with_grad_tape({ ... })` — enables the global gradient tape for the enclosed forward pass.
+* `backward(loss)` — reverse-mode automatic differentiation; returns a gradient environment keyed by tensor id.
+* Differentiable ops: `ag_matmul`, `ag_add` (with bias broadcast), `ag_sub`, `ag_mul`, `ag_scale`.
+* Activations: `ag_relu`, `ag_sigmoid`, `ag_tanh`, `ag_softmax`.
+* Reduction / math ops: `ag_sum`, `ag_mean`, `ag_log`, `ag_exp`, `ag_pow`, `ag_clamp`.
+* Shape ops: `ag_reshape`, `ag_transpose`.
+* Loss functions: `ag_mse_loss`, `ag_cross_entropy_loss`, `ag_softmax_cross_entropy_loss` (numerically-stable fused).
+* `optimizer_sgd()` — SGD with optional momentum.
+* `optimizer_adam()` — Adam with bias-corrected moment estimates.
+* `ag_linear()` — Glorot-initialised dense layer (closure-based, returns `$forward`, `$params()`).
+* `ag_gradcheck()` — central finite-difference gradient checker (like `torch.autograd.gradcheck`).
+
+## Layer objects (environment-based, train/eval modes)
+
+* `ag_sequential(...)` — ordered layer container; collects all parameters for the optimizer.
+* `ag_dropout(rate)` — inverted dropout; identity in eval mode.
+* `ag_batch_norm(num_features)` — batch normalisation with running statistics and learnable γ/β.
+* `ag_embedding(vocab_size, dim)` — token lookup with scatter-add backward.
+* `ag_train(model)` / `ag_eval(model)` — switch all sub-layers between train and eval mode.
+
+## Training utilities
+
+* `ag_dataloader(x, y, batch_size, shuffle, col_major)` — mini-batch iterator with shuffle and `$epoch()` helper.
+* `lr_scheduler_step(optimizer, step_size, gamma)` — step-decay learning rate.
+* `lr_scheduler_cosine(optimizer, T_max, lr_min, restart)` — cosine-annealing (with optional SGDR warm restarts).
+* `clip_grad_norm(params, grads, max_norm)` — clips all gradients by global L2 norm in-place.
+
+# ggmlR 0.5.9
+
+* `ggml_layer_lstm()` — LSTM recurrent layer (unrolled BPTT).
+* `ggml_layer_gru()` — GRU recurrent layer (unrolled BPTT).
+* `ggml_layer_global_max_pooling_2d()` — reduces `[H,W,C]` to `[C]` via max pooling.
+* `ggml_layer_global_average_pooling_2d()` — reduces `[H,W,C]` to `[C]` via average pooling.
+* `ggml_save_model()` — saves full model (architecture + weights) to RDS file.
+* `ggml_load_model()` — restores a model saved with `ggml_save_model()`.
+* `ggml_dense()`, `ggml_conv_2d()`, `ggml_conv_1d()`, `ggml_batch_norm()`, `ggml_embedding()`, `ggml_lstm()`, `ggml_gru()` — layer object constructors returning a reusable `ggml_layer` object.
+* `ggml_apply(tensor, layer)` — applies a `ggml_layer` object to a tensor node; shared weights by object identity.
+
+# ggmlR 0.5.7
+
+* `ggml_layer_dropout()` — dropout with deterministic or stochastic (per-epoch Bernoulli mask) mode.
+* `ggml_layer_embedding()` — token embedding lookup for integer inputs.
+* `ggml_input()` gains `dtype` argument (`"float32"` or `"int32"`).
+* Multi-output support in `ggml_model()` and `ggml_predict()`.
+
+# ggmlR 0.5.6
+
+* `ggml_input()` — declare a symbolic input tensor node (Functional API).
+* `ggml_model()` — assemble a `ggml_functional_model` from input/output nodes.
+* `ggml_layer_add()` — element-wise addition of tensor nodes (residual connections).
+* `ggml_layer_concatenate()` — concatenate tensor nodes along an axis.
+* All `ggml_layer_*()` functions now accept a `ggml_tensor_node` as first argument (Functional API mode).
+* `ggml_compile()`, `ggml_fit()`, `ggml_evaluate()`, `ggml_predict()` are now S3 generics with methods for `ggml_functional_model`.
+
 # ggmlR 0.5.5
 
-## API Refactoring
-
-* `ggml_fit()` is now a dispatcher:
-  - If the first argument is a `ggml_sequential_model`, delegates to the
-    Keras-style high-level API (same signature as before: `model, x, y,
-    epochs, batch_size, validation_split, verbose`).
-  - Otherwise, delegates to `ggml_fit_opt()` — the low-level R-side epoch
-    loop with callbacks (`sched, ctx_compute, inputs, outputs, dataset, ...`).
-* `ggml_fit_opt()` — new exported function (previously named `ggml_fit` in
-  `optimizer.R`). Accepts the full low-level optimizer API with callbacks,
-  learning-rate control, and validation split.
-
-## Training Callbacks (Keras-style API)
-
-* `ggml_fit()` now accepts `callbacks = list(...)` — a list of callback objects
-  with hooks `on_epoch_begin(epoch, logs, state)` and `on_epoch_end(epoch, logs, state)`.
-  `state` is a mutable environment; set `state$stop <- TRUE` to stop training early.
-* `ggml_fit()` now runs the epoch loop in R (instead of C), returning a `data.frame`
-  with columns `epoch`, `train_loss`, `train_accuracy`, `val_loss`, `val_accuracy`.
-* New built-in callback factories (`R/callbacks.R`):
-  - `ggml_callback_early_stopping(monitor, patience, min_delta, mode)` — stops training
-    when the monitored metric stagnates; supports "min"/"max"/"auto" mode.
-  - `ggml_schedule_step_decay(step_size, gamma)` — multiplies LR by `gamma` every
-    `step_size` epochs.
-  - `ggml_schedule_cosine_decay(eta_min, T_max)` — anneals LR along a cosine curve
-    from the initial value down to `eta_min`.
-  - `ggml_schedule_reduce_on_plateau(monitor, factor, patience, min_lr, min_delta, mode)` —
-    reduces LR by `factor` when the monitored metric stops improving.
-
-## Learning Rate Control
-
-* New C functions `R_ggml_opt_init_for_fit()`, `R_ggml_opt_set_lr()`, `R_ggml_opt_get_lr()`
-  allow updating the optimizer learning rate between epochs without recreating the
-  optimizer context — AdamW momentum state is fully preserved.
-* New R wrappers: `ggml_opt_init_for_fit()`, `ggml_opt_set_lr()`, `ggml_opt_get_lr()`.
-
-## Testing
-
-* Added `tests/testthat/test-callbacks.R` — 67 tests covering callbacks, LR control,
-  and `ggml_fit()` integration.
+* `ggml_fit_opt()` — low-level optimizer loop with callbacks and learning-rate control.
+* `ggml_callback_early_stopping()` — stops training when a metric stagnates.
+* `ggml_schedule_step_decay()` — step learning-rate decay.
+* `ggml_schedule_cosine_decay()` — cosine learning-rate annealing.
+* `ggml_schedule_reduce_on_plateau()` — reduces LR when metric stops improving.
+* `ggml_opt_init_for_fit()`, `ggml_opt_set_lr()`, `ggml_opt_get_lr()` — learning-rate control without recreating the optimizer context.
 
 # ggmlR 0.5.4
 
-## Vulkan on Windows
-
-* Added Vulkan GPU support on Windows via `configure.win`
-* Auto-detects Vulkan SDK through `VULKAN_SDK` environment variable
-* Detects `glslc.exe` for shader compilation (from SDK or PATH)
-* Compiles SPIR-V shaders at build time using Rtools g++
-* Links against `vulkan-1.lib` (Windows) vs `libvulkan` (Linux)
-* Supports `--with-vulkan` / `--without-vulkan` flags (same as Linux)
-* CPU-only build works without Vulkan SDK installed
-
-## Vulkan Auto-Detection
-
-* Vulkan GPU support is now auto-detected at build time on both Linux and Windows
-* Linux: enabled when `libvulkan-dev` and `glslc` are installed
-* Windows: enabled when `VULKAN_SDK` environment variable is set
-* `--with-vulkan` forces Vulkan (errors if deps missing), `--without-vulkan` disables it
-
-## Logging
-
-* GGML debug messages (scheduler realloc, graph allocation) are now suppressed at runtime
-* R log callback is automatically activated on package load via `.onLoad`
-* Backend selection message ("Using Vulkan GPU backend" / "Using CPU backend") now prints only once per session
-
-## Other
-
-* Removed vignettes to speed up package build (installation instructions in README)
-* Fixed `snprintf` buffer truncation warning in `r_interface_vulkan.c`
+* Vulkan GPU backend support on Windows via `configure.win`.
+* Vulkan auto-detected at build time on Linux and Windows.
 
 # ggmlR 0.5.3
 
-## Vulkan GPU Backend
-
-* Vulkan backend now covers 90%+ of ML/DL operations on GPU, including:
-  - Matrix multiplication (`mul_mat`) with cooperative matrix extensions
-  - Quantized GEMM for all quantization types (Q4_0, Q4_1, Q8_0, F16)
-  - Element-wise operations (`add`, `mul`, `div`, `sqr`, `sqrt`)
-  - Activations (`gelu`, `silu`, `relu`, `soft_max`)
-  - Normalization (`norm`, `rms_norm`, `group_norm`)
-  - Attention mechanisms (`rope`, `rope_neox`, `flash_attn`)
-  - Pooling (`pool_2d`) and convolutions (`conv_1d`, `conv_2d`)
-  - Reshaping (`transpose`, `permute`, `view`, `concat`)
-* All Sequential API layers are GPU-accelerated when Vulkan is enabled:
-  - `ggml_layer_dense()`, `ggml_layer_conv_1d()`, `ggml_layer_conv_2d()`
-  - `ggml_layer_max_pooling_2d()`, `ggml_layer_batch_norm()`
-  - Training operations (AdamW, SGD) with gradient computation
-* Cross-platform GPU support: NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno
-* Batch command submissions and pipeline optimization for reduced overhead
-* Typical 5x-20x speedup over CPU for ML workloads
-
-## New Layers
-
-* `ggml_layer_conv_1d()` — 1D convolution layer with stride, padding ("valid"/"same"), and activation support. Uses `ggml_conv_1d` backend. Kernel shape: [K, IC, OC].
-* `ggml_layer_batch_norm()` — batch normalization via `ggml_norm()` with learnable gamma (scale) and beta (shift). Supports 1D, 2D, and 3D inputs.
-
-## New Features
-
-* `ggml_predict_classes()` — convenience wrapper returning 1-based integer class indices (argmax of `ggml_predict()` output)
-* `summary.ggml_sequential_model()` — detailed model summary: layer-by-layer parameter counts (trainable/non-trainable), input shape, estimated weight memory
-* Training history from `ggml_fit()`:
-  - `ggml_fit()` now returns model with `model$history` (class `ggml_history`)
-  - `print(history)` — final epoch metrics
-  - `plot(history)` — loss and accuracy curves over epochs (train + validation)
-  - C-level epoch loop collects loss/accuracy per epoch via `ggml_opt_epoch()`
-
-## Keras-like Sequential API
-
-* Added Keras-like Sequential model API for building and training neural networks:
-  - `ggml_model_sequential()` — create sequential model
-  - `ggml_layer_dense()` — fully connected layer
-  - `ggml_layer_conv_2d()` — 2D convolution layer
-  - `ggml_layer_max_pooling_2d()` — 2D max pooling layer
-  - `ggml_layer_flatten()` — flatten layer
-  - `ggml_compile()` — compile model with optimizer and loss
-  - `ggml_fit()` — train model on data
-  - `ggml_evaluate()` — evaluate model on test data
-  - `ggml_predict()` — get prediction probabilities without labels
-  - `ggml_save_weights()` / `ggml_load_weights()` — save/load trained weights (RDS format)
-  - `print.ggml_sequential_model()` — model summary with parameter counts
-* Added `ggml_set_input()` / `ggml_set_output()` — mark tensors as graph inputs/outputs
-* Automatic shape inference for all layer types
-* Weight initialization: He uniform (conv), Glorot uniform (dense)
-
-## Bug Fixes
-
-* Fixed `ggml_evaluate()` returning random accuracy (~11% on MNIST) — trained weights were not carried over to the evaluation graph; `nn_build_graph()` now reuses weights from the trained model instead of re-initializing randomly
-* Fixed segfault in `ggml_opt_fit()` — `fprintf(stderr, ...)` crashes when R sets `stderr` to NULL; replaced with safe wrapper macro
-* Fixed missing input/output tensor flags causing segfault in optimizer
+* `ggml_layer_conv_1d()` — 1D convolution layer.
+* `ggml_layer_batch_norm()` — batch normalization layer.
+* `ggml_predict_classes()` — argmax wrapper returning 1-based class indices.
+* `summary.ggml_sequential_model()` — detailed model summary with parameter counts.
+* `ggml_fit()` now returns `model$history` (class `ggml_history`) with `print` and `plot` methods.
+* Sequential API: `ggml_model_sequential()`, `ggml_layer_dense()`, `ggml_layer_conv_2d()`, `ggml_layer_max_pooling_2d()`, `ggml_layer_flatten()`, `ggml_compile()`, `ggml_fit()`, `ggml_evaluate()`, `ggml_predict()`, `ggml_save_weights()`, `ggml_load_weights()`.
+* Vulkan GPU backend covering 90%+ of ML operations.
 
 # ggmlR 0.5.2
 
-## New Features (LLM and Stable Diffusion support)
-
-* Backend engine for LLM inference (`llamaR`) and Stable Diffusion image generation (`sdR`) with Vulkan GPU acceleration
-
-## Bug Fixes
-
-* Fixed duplicate symbol linker error on macOS ARM64 (x86 guards for 5 repack functions in `arch/x86/repack.cpp`)
-* Fixed UBSan "applying non-zero offset to null pointer" in `ggml.c:ggml_graph_nbytes()` — upstream ggml uses NULL pointer arithmetic for size calculation; patched to use `uintptr_t` arithmetic (CRAN m1-san)
-
-## New Features (Stable Diffusion support)
-
-* Added `ggml_timestep_embedding()` — sinusoidal timestep embeddings for diffusion models
-* Added N-D indexed tensor access:
-  - `ggml_set_f32_nd()` / `ggml_get_f32_nd()` — set/get float by [i0,i1,i2,i3] index
-  - `ggml_set_i32_nd()` / `ggml_get_i32_nd()` — set/get int32 by index
-  - Backend-aware: auto-detects CPU data vs backend buffer
-* Added tensor utilities:
-  - `ggml_tensor_nb()` — get tensor byte strides (nb0..nb3)
-  - `ggml_tensor_num()` — count tensors in context
-  - `ggml_tensor_copy()` — direct memcpy between same-size tensors
-  - `ggml_tensor_set_f32_scalar()` — fill all elements with a single value
-  - `ggml_get_first_tensor()` / `ggml_get_next_tensor()` — iterate tensors in context
-  - `ggml_backend_tensor_get_f32_first()` — read first f32 from backend/CPU tensor
-  - `ggml_backend_tensor_get_and_sync()` — read raw bytes with backend synchronization
+* `ggml_timestep_embedding()` — sinusoidal timestep embeddings.
+* N-D tensor access: `ggml_set_f32_nd()`, `ggml_get_f32_nd()`, `ggml_set_i32_nd()`, `ggml_get_i32_nd()`.
+* Tensor utilities: `ggml_tensor_nb()`, `ggml_tensor_num()`, `ggml_tensor_copy()`, `ggml_tensor_set_f32_scalar()`, `ggml_get_first_tensor()`, `ggml_get_next_tensor()`.
 
 # ggmlR 0.5.1
 
-## New Features
-
-* Export static library `libggml.a` for linking by dependent packages (llamaR)
-* Added `gguf.cpp` for GGUF file format support
-* Headers exported via `inst/include/` for `LinkingTo`
-
-## CRAN Submission Fixes
-
-* Expanded acronyms in DESCRIPTION: 'AdamW' (Adam with Weight decay),
-  'SGD' (Stochastic Gradient Descent), 'MSE' (Mean Squared Error),
-  GPU (Graphics Processing Unit)
-* Added all contributors and copyright holders to Authors@R:
-  - Georgi Gerganov (GGML library author)
-  - Jeffrey Quesnelle and Bowen Peng (ops.cpp contributors)
-  - Mozilla Foundation (llamafile/sgemm.cpp)
-* Replaced `\dontrun{}` with `\donttest{}` in all examples
-* Added `\value` documentation to all exported functions and constants
-
-## Internal
-
-* `r_ggml_io.o` moved to GGML_OBJECTS for proper symbol export
-* Static library excluded from source tarball via `.Rbuildignore`
+* Static library `libggml.a` exported for linking by dependent packages.
+* `gguf.cpp` added for GGUF file format support.
+* Headers exported via `inst/include/` for `LinkingTo`.
 
 # ggmlR 0.5.0
 
-## Major Features
-
-* Added full optimization/training API (39 new functions)
-  - `ggml_opt_init()`, `ggml_opt_free()`, `ggml_opt_reset()` — optimizer lifecycle
-  - `ggml_opt_fit()` — high-level training loop
-  - `ggml_opt_epoch()` — single epoch with R callback support
-  - `ggml_opt_eval()`, `ggml_opt_alloc()` — model evaluation
-  - `ggml_opt_prepare_alloc()` — non-static graph support
-  - `ggml_opt_grad_acc()` — gradient accumulator access
-
-* Dataset management
-  - `ggml_opt_dataset_init()`, `ggml_opt_dataset_free()`
-  - `ggml_opt_dataset_data()`, `ggml_opt_dataset_labels()`
-  - `ggml_opt_dataset_shuffle()`, `ggml_opt_dataset_get_batch()`
-
-* Training results
-  - `ggml_opt_result_init()`, `ggml_opt_result_free()`, `ggml_opt_result_reset()`
-  - `ggml_opt_result_ndata()`, `ggml_opt_result_loss()`, `ggml_opt_result_accuracy()`
-  - `ggml_opt_result_pred()` — get predictions as integer vector
-
-* Loss functions: MSE, cross-entropy, mean, sum
-* Optimizers: AdamW, SGD
-
-## R Callback Support
-
-* `ggml_opt_epoch()` now supports custom R callback functions
-* Callbacks receive: train flag, batch index, max batches, start time, result pointer
-* Built-in progress bar callback available via `callback_train = TRUE`
-
-## Extended Backend API (~50 new functions)
-
-* Device management
-  - `ggml_backend_dev_count()`, `ggml_backend_dev_get()`, `ggml_backend_dev_by_name()`
-  - `ggml_backend_dev_by_type()` — find devices by type (CPU, GPU, etc.)
-  - `ggml_backend_dev_supports_op()`, `ggml_backend_dev_supports_buft()`
-  - `ggml_backend_dev_memory()`, `ggml_backend_dev_description()`, `ggml_backend_dev_get_props()`
-  - `ggml_backend_dev_init()` — initialize backend from device
-
-* Device type constants: `ggml_backend_device_type_cpu/gpu/igpu/accel()`
-* Buffer usage constants: `ggml_backend_buffer_usage_any/weights/compute()`
-
-* Backend registry
-  - `ggml_backend_reg_count()`, `ggml_backend_reg_get()`, `ggml_backend_reg_by_name()`
-  - `ggml_backend_load()`, `ggml_backend_unload()`, `ggml_backend_load_all()`
-
-* Events for synchronization
-  - `ggml_backend_event_new()`, `ggml_backend_event_free()`
-  - `ggml_backend_event_record()`, `ggml_backend_event_synchronize()`, `ggml_backend_event_wait()`
-
-* Async operations
-  - `ggml_backend_tensor_set_async()`, `ggml_backend_tensor_get_async()`
-  - `ggml_backend_tensor_copy_async()`
-
-* Graph planning
-  - `ggml_backend_graph_plan_create()`, `ggml_backend_graph_plan_free()`
-  - `ggml_backend_graph_plan_compute()`
-
-* Buffer management
-  - `ggml_backend_buffer_clear()`, `ggml_backend_buffer_set_usage()`
-  - `ggml_backend_buffer_get_usage()`, `ggml_backend_buffer_reset()`, `ggml_backend_buffer_is_host()`
-
-* Direct backend initialization
-  - `ggml_backend_init_by_name()`, `ggml_backend_init_by_type()`, `ggml_backend_init_best()`
-  - `ggml_backend_synchronize()`, `ggml_backend_get_device()`
-
-## Testing
-
-* Added 67 tests for optimization functions
-* Added 60 tests for extended backend functions
-* R CMD check: 0 errors, 0 warnings
-
-# ggmlR 0.4.1
-
-* Fixed spelling notes for CRAN submission
-* Updated documentation
+* Full optimization/training API: `ggml_opt_init()`, `ggml_opt_free()`, `ggml_opt_fit()`, `ggml_opt_epoch()`, `ggml_opt_eval()`.
+* Dataset management: `ggml_opt_dataset_init()`, `ggml_opt_dataset_data()`, `ggml_opt_dataset_labels()`, `ggml_opt_dataset_shuffle()`.
+* Training results: `ggml_opt_result_init()`, `ggml_opt_result_loss()`, `ggml_opt_result_accuracy()`, `ggml_opt_result_pred()`.
+* Extended backend API: device management, registry, async operations, graph planning, buffer management (~50 new functions).
+* Loss functions: MSE, cross-entropy. Optimizers: AdamW, SGD.
 
 # ggmlR 0.4.0
 
-* Added multi-GPU backend scheduler API (14 new functions)
-* Added Vulkan GPU backend support (10 new functions)
-* Fixed integer overflow for large tensors (>2 GB)
-* Improved OpenMP handling for mixed C/C++ code
+* Multi-GPU backend scheduler API.
+* Vulkan GPU backend support.
 
 # ggmlR 0.2.0
 
-* Initial CRAN submission
-* R bindings for 'GGML' tensor library
-* Core tensor operations: creation, arithmetic, reshaping
-* Neural network operations: attention, convolutions, normalization
-* Activation functions: GELU, SiLU, ReLU, and variants
-* Quantization support (Q4_0, Q4_1, Q8_0)
-* OpenMP parallelization for CPU backend
-* Computation graph API for building and executing models
+* Initial release: R bindings for GGML tensor library.
+* Core tensor operations, neural network ops, activation functions, quantization (Q4_0, Q4_1, Q8_0), OpenMP parallelization, computation graph API.

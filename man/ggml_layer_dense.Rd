@@ -4,7 +4,14 @@
 \alias{ggml_layer_dense}
 \title{Add Dense (Fully Connected) Layer}
 \usage{
-ggml_layer_dense(model, units, activation = NULL, input_shape = NULL)
+ggml_layer_dense(
+  model,
+  units,
+  activation = NULL,
+  input_shape = NULL,
+  name = NULL,
+  trainable = TRUE
+)
 }
 \arguments{
 \item{model}{A ggml_sequential_model object}
@@ -14,6 +21,10 @@ ggml_layer_dense(model, units, activation = NULL, input_shape = NULL)
 \item{activation}{Activation function name: "relu", "sigmoid", "tanh", "softmax", or NULL}
 
 \item{input_shape}{Integer or integer vector specifying the input shape (only needed for the first layer)}
+
+\item{name}{Optional character name for the layer.}
+
+\item{trainable}{Logical; whether the layer weights are updated during training.}
 }
 \value{
 The model object with the dense layer appended (invisibly).

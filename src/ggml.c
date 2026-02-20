@@ -6675,6 +6675,22 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, ggml_sigmoid(ctx, src0)));
                     }
                 } break;
+                case GGML_UNARY_OP_TANH: {
+                    // tanh'(x) = 1 - tanh(x)^2
+                    // tensor already holds tanh(src0)
+                    if (src0_needs_grads) {
+                        struct ggml_tensor * dtanh = ggml_scale_bias(ctx, ggml_sqr(ctx, tensor), -1.0f, 1.0f);
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, dtanh));
+                    }
+                } break;
+                case GGML_UNARY_OP_SIGMOID: {
+                    // sigmoid'(x) = sigmoid(x) * (1 - sigmoid(x))
+                    // tensor already holds sigmoid(src0)
+                    if (src0_needs_grads) {
+                        struct ggml_tensor * dsigmoid = ggml_mul(ctx, tensor, ggml_scale_bias(ctx, tensor, -1.0f, 1.0f));
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, dsigmoid));
+                    }
+                } break;
                 default: {
                     fprintf(stderr, "%s: unsupported unary op for backward pass: %s\n",
                         __func__, ggml_unary_op_name(ggml_get_unary_op(tensor)));
@@ -6702,6 +6718,36 @@ static void ggml_compute_backward(
                 default: {
                     GGML_ABORT("unsupported glu op for backward pass: %s", ggml_glu_op_name(ggml_get_glu_op(tensor)));
                 } //break;
+            }
+        } break;
+        case GGML_OP_CONCAT: {
+            const int dim = ggml_get_op_params_i32(tensor, 0);
+            // grad has shape [ne0, ne1, ne2, ne3] with natural contiguous strides
+            // src0 occupies [0 .. src0->ne[dim]) along dimension dim
+            // src1 occupies [src0->ne[dim] .. tensor->ne[dim]) along dimension dim
+            if (src0_needs_grads) {
+                int64_t ne[GGML_MAX_DIMS];
+                for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+                    ne[d] = (d == dim) ? src0->ne[d] : tensor->ne[d];
+                }
+                struct ggml_tensor * grad_view0 = ggml_view_4d(ctx, grad,
+                    ne[0], ne[1], ne[2], ne[3],
+                    grad->nb[1], grad->nb[2], grad->nb[3],
+                    0);
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_reshape(ctx, ggml_cont(ctx, grad_view0), src0));
+            }
+            if (src1_needs_grads) {
+                int64_t ne[GGML_MAX_DIMS];
+                for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+                    ne[d] = (d == dim) ? src1->ne[d] : tensor->ne[d];
+                }
+                // byte offset to start of src1's slice along dim
+                size_t offset = (size_t)src0->ne[dim] * grad->nb[dim];
+                struct ggml_tensor * grad_view1 = ggml_view_4d(ctx, grad,
+                    ne[0], ne[1], ne[2], ne[3],
+                    grad->nb[1], grad->nb[2], grad->nb[3],
+                    offset);
+                ggml_add_or_set(ctx, cgraph, isrc1, ggml_reshape(ctx, ggml_cont(ctx, grad_view1), src1));
             }
         } break;
         case GGML_OP_NONE: {

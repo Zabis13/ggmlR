@@ -34,12 +34,16 @@
 - [x] Тест `ggml_evaluate()` — проверка что accuracy после evaluate совпадает с train
 - [x] `ggml_predict()` — предсказание без меток
 - [x] Сохранение/загрузка весов модели (save/load)
+- [x] `validation_data = list(x_val, y_val)` в `ggml_fit()` — как в Keras
+- [x] `class_weight` и `sample_weight` в `ggml_fit()` и `ggml_evaluate()`
 
 ### Новые слои
 - [x] `ggml_layer_batch_norm()` — batch normalization через ggml_norm + gamma/beta
 - [x] `ggml_layer_conv_1d()` — 1D свёртка через ggml_conv_1d (shape inference работает; training требует fix backend_sched для im2col F16)
-- [ ] `ggml_layer_embedding()` — для NLP задач (требует I32 input в fit/predict)
-- [ ] Dropout layer (с отключением на inference) — требует C-расширения
+- [x] `ggml_layer_embedding()` — для NLP задач, I32 вход, ggml_get_rows lookup, Uniform(-0.05, 0.05) init
+- [x] `ggml_layer_dropout()` — детерминированный режим (`stochastic=FALSE`) и inverted dropout (`stochastic=TRUE`) с Bernoulli-маской на epoch; маска через ggml_mul (backward корректен)
+- [x] `ggml_layer_global_max_pooling_2d()` / `ggml_layer_global_average_pooling_2d()`
+- [x] `ggml_layer_lstm()` / `ggml_layer_gru()` — рекуррентные слои
 
 ### API удобства
 - [x] `summary(model)` — детальный вывод (trainable/non-trainable params, memory)
@@ -53,11 +57,41 @@
   - [x] R: готовые расписания — `ggml_schedule_step_decay()`, `ggml_schedule_cosine_decay()`, `ggml_schedule_reduce_on_plateau()`
   - [x] R: `ggml_fit()` — цикл эпох в R, параметр `callbacks = list(on_epoch_begin=..., on_epoch_end=...)`, возвращает `data.frame`
   - [x] Тесты: `tests/testthat/test-callbacks.R` — 67 тестов
+- [x] `ggml_get_layer(model, index=)` / `ggml_get_layer(model, name=)` — доступ к слою по индексу или имени
+- [x] `ggml_pop_layer(model)` — удаление последнего слоя
+- [x] Именованные слои — автогенерация (`dense_1`, `conv_2d_1`, ...) и кастомные имена (`name=`)
+- [x] `ggml_freeze_weights(model, from, to)` / `ggml_unfreeze_weights()` — заморозка весов, `layer$trainable`
 
-### Архитектура
-- [ ] Functional API — модели с ветвлениями, skip connections
-- [ ] `ggml_layer_add()` / `ggml_layer_concat()` — merge слои
+### Архитектура (Functional API)
+
+#### Блок 1 — Основа (реализован)
+- [x] `ggml_input()` — создание входного узла графа
+- [x] `ggml_model(inputs, outputs)` — сборка модели из узлов
+- [x] Нелинейная топология — skip connections, residual blocks
+- [x] `ggml_layer_add()` — поэлементное сложение тензоров (residual/skip connections)
+- [x] `ggml_layer_concatenate()` — конкатенация вдоль оси (только forward pass; ggml CONCAT не имеет backward)
+- [x] Двойная диспетчеризация в `ggml_layer_*()` — принимают и `ggml_sequential_model`, и `ggml_tensor_node`
+- [x] S3-диспетчеризация `ggml_compile/fit/evaluate/predict` по классу модели
+- [x] Топологическая сортировка DAG-графа (`nn_topo_sort`)
+- [x] Ленивое построение графа при fit/evaluate/predict (`nn_build_functional_graph`)
+- [x] 51 тест в `tests/testthat/test-nn-functional.R`
+
+#### Блок 2 — Базовые слои (реализован)
+- [x] `ggml_layer_dropout(stochastic=FALSE)` — детерминированный expected-value dropout
+- [x] `ggml_layer_dropout(stochastic=TRUE)` — inverted dropout с Bernoulli-маской на epoch
+- [x] `ggml_layer_embedding(vocab_size, dim)` — token embedding lookup (I32 вход)
+- [x] `ggml_input(dtype="int32")` — поддержка целочисленных входов
+- [x] Multi-output: `ggml_model(outputs=list(...))`, `ggml_predict()` возвращает list матриц
+- [x] Восстановление весов между fit/predict/evaluate (через `model$node_weights`)
+- [x] 90 тестов в `test-nn-functional.R`
+
+#### Блок 3 — Расширения
+- [x] Shared layers — повторное использование одного слоя (по имени `name=`) для Siamese/multi-branch топологий; `ggml_set_param` вызывается один раз на shared веса
+- [ ] Несколько входов (multi-input `ggml_model`)
+- [x] Сохранение/загрузка архитектуры (не только весов)
 - [ ] Загрузка pre-trained весов из .gguf
+- [ ] `ggml_layer_concatenate()` с backward pass (требует патча ggml C)
+- [ ] Dropout маска per-batch (требует C-расширения)
 
 ### Данные
 - [ ] Data augmentation (flip, rotate, crop)
@@ -83,5 +117,3 @@
 #### Deployment
 - [ ] Экспорт в GGUF + генерация Plumber API (2 строки кода)
 - [ ] Vetiver integration через единый S3-метод
-
-

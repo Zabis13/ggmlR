@@ -649,3 +649,613 @@ test_that("ggml_fit fails on uncompiled model", {
 
   expect_error(ggml_fit(model, x, y), "compiled")
 })
+
+# ============================================================================
+# validation_data
+# ============================================================================
+
+test_that("ggml_fit accepts validation_data", {
+  set.seed(42)
+  n <- 128
+  x <- matrix(runif(n * 4), nrow = n, ncol = 4)
+  y <- matrix(0, nrow = n, ncol = 2)
+  for (i in seq_len(n)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+
+  x_val <- matrix(runif(32 * 4), nrow = 32, ncol = 4)
+  y_val <- matrix(0, nrow = 32, ncol = 2)
+  for (i in seq_len(32)) { y_val[i, if (sum(x_val[i,]) > 2) 1L else 2L] <- 1 }
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(8, activation = "relu") |>
+    ggml_layer_dense(2, activation = "softmax")
+  model$input_shape <- 4L
+  model <- ggml_compile(model, optimizer = "adam",
+                        loss = "categorical_crossentropy")
+
+  expect_no_error({
+    model <- ggml_fit(model, x, y, epochs = 2, batch_size = 32,
+                      validation_data = list(x_val, y_val), verbose = 0)
+  })
+
+  # val metrics should be populated
+  expect_equal(length(model$history$val_loss), 2)
+  expect_equal(length(model$history$val_accuracy), 2)
+
+  cleanup_model(model)
+})
+
+test_that("ggml_fit validation_data rejects bad input", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(2)
+  model$input_shape <- 4L
+  model <- ggml_compile(model, loss = "categorical_crossentropy")
+
+  x <- matrix(runif(64 * 4), nrow = 64, ncol = 4)
+  y <- matrix(0, nrow = 64, ncol = 2)
+  for (i in seq_len(64)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+
+  expect_error(
+    ggml_fit(model, x, y, epochs = 1, validation_data = x),
+    "list"
+  )
+
+  cleanup_model(model)
+})
+
+# ============================================================================
+# class_weight / sample_weight in ggml_fit
+# ============================================================================
+
+test_that("ggml_fit accepts class_weight", {
+  set.seed(1)
+  n <- 128
+  x <- matrix(runif(n * 4), nrow = n, ncol = 4)
+  y <- matrix(0, nrow = n, ncol = 2)
+  for (i in seq_len(n)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(8, activation = "relu") |>
+    ggml_layer_dense(2, activation = "softmax")
+  model$input_shape <- 4L
+  model <- ggml_compile(model, optimizer = "adam",
+                        loss = "categorical_crossentropy")
+
+  expect_no_error({
+    model <- ggml_fit(model, x, y, epochs = 2, batch_size = 32,
+                      class_weight = c("0" = 1, "1" = 2), verbose = 0)
+  })
+
+  cleanup_model(model)
+})
+
+test_that("ggml_fit accepts sample_weight", {
+  set.seed(1)
+  n <- 128
+  x <- matrix(runif(n * 4), nrow = n, ncol = 4)
+  y <- matrix(0, nrow = n, ncol = 2)
+  for (i in seq_len(n)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+  sw <- runif(n, 0.5, 1.5)
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(8, activation = "relu") |>
+    ggml_layer_dense(2, activation = "softmax")
+  model$input_shape <- 4L
+  model <- ggml_compile(model, optimizer = "adam",
+                        loss = "categorical_crossentropy")
+
+  expect_no_error({
+    model <- ggml_fit(model, x, y, epochs = 2, batch_size = 32,
+                      sample_weight = sw, verbose = 0)
+  })
+
+  cleanup_model(model)
+})
+
+test_that("ggml_fit rejects class_weight and sample_weight together", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(2)
+  model$input_shape <- 4L
+  model <- ggml_compile(model, loss = "categorical_crossentropy")
+
+  x <- matrix(runif(64 * 4), nrow = 64, ncol = 4)
+  y <- matrix(0, nrow = 64, ncol = 2)
+  for (i in seq_len(64)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+
+  expect_error(
+    ggml_fit(model, x, y, epochs = 1,
+             class_weight = c("0" = 1, "1" = 2),
+             sample_weight = rep(1, 64)),
+    "not both"
+  )
+
+  cleanup_model(model)
+})
+
+test_that("ggml_fit rejects sample_weight with wrong length", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(2)
+  model$input_shape <- 4L
+  model <- ggml_compile(model, loss = "categorical_crossentropy")
+
+  x <- matrix(runif(64 * 4), nrow = 64, ncol = 4)
+  y <- matrix(0, nrow = 64, ncol = 2)
+  for (i in seq_len(64)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+
+  expect_error(
+    ggml_fit(model, x, y, epochs = 1, sample_weight = rep(1, 10)),
+    "length"
+  )
+
+  cleanup_model(model)
+})
+
+# ============================================================================
+# class_weight / sample_weight in ggml_evaluate
+# ============================================================================
+
+test_that("ggml_evaluate accepts sample_weight", {
+  set.seed(42)
+  n <- 128
+  x <- matrix(runif(n * 4), nrow = n, ncol = 4)
+  y <- matrix(0, nrow = n, ncol = 2)
+  for (i in seq_len(n)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(8, activation = "relu") |>
+    ggml_layer_dense(2, activation = "softmax")
+  model$input_shape <- 4L
+  model <- ggml_compile(model, optimizer = "adam",
+                        loss = "categorical_crossentropy")
+  model <- ggml_fit(model, x, y, epochs = 3, batch_size = 32, verbose = 0)
+
+  sw <- runif(n, 0.5, 1.5)
+  expect_no_error({
+    result <- ggml_evaluate(model, x, y, batch_size = 32, sample_weight = sw)
+  })
+  expect_true(!is.null(result$loss))
+  expect_true(!is.null(result$accuracy))
+
+  cleanup_model(model)
+})
+
+test_that("ggml_evaluate accepts class_weight", {
+  set.seed(42)
+  n <- 128
+  x <- matrix(runif(n * 4), nrow = n, ncol = 4)
+  y <- matrix(0, nrow = n, ncol = 2)
+  for (i in seq_len(n)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(8, activation = "relu") |>
+    ggml_layer_dense(2, activation = "softmax")
+  model$input_shape <- 4L
+  model <- ggml_compile(model, optimizer = "adam",
+                        loss = "categorical_crossentropy")
+  model <- ggml_fit(model, x, y, epochs = 3, batch_size = 32, verbose = 0)
+
+  expect_no_error({
+    result <- ggml_evaluate(model, x, y, batch_size = 32,
+                            class_weight = c("0" = 1, "1" = 2))
+  })
+  expect_true(!is.null(result$loss))
+
+  cleanup_model(model)
+})
+
+test_that("ggml_evaluate rejects class_weight and sample_weight together", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(2)
+  model$input_shape <- 4L
+  model <- ggml_compile(model, loss = "categorical_crossentropy")
+
+  x <- matrix(runif(64 * 4), nrow = 64, ncol = 4)
+  y <- matrix(0, nrow = 64, ncol = 2)
+  for (i in seq_len(64)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+
+  # Need weights to be applied after fit so just check error before
+  expect_error(
+    ggml_evaluate(model, x, y,
+                  sample_weight = rep(1, 64),
+                  class_weight = c("0" = 1, "1" = 2)),
+    "not both"
+  )
+
+  cleanup_model(model)
+})
+
+# ============================================================================
+# Layer names
+# ============================================================================
+
+test_that("layers get auto-generated names", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64, activation = "relu") |>
+    ggml_layer_dense(10, activation = "softmax")
+
+  expect_equal(model$layers[[1]]$name, "dense_1")
+  expect_equal(model$layers[[2]]$name, "dense_2")
+})
+
+test_that("layers accept custom names", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64, activation = "relu", name = "hidden") |>
+    ggml_layer_dense(10, activation = "softmax", name = "output")
+
+  expect_equal(model$layers[[1]]$name, "hidden")
+  expect_equal(model$layers[[2]]$name, "output")
+})
+
+test_that("mixed layer types get independent counters", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_conv_2d(32, c(3,3), input_shape = c(28, 28, 1)) |>
+    ggml_layer_conv_2d(64, c(3,3)) |>
+    ggml_layer_flatten() |>
+    ggml_layer_dense(128) |>
+    ggml_layer_dense(10)
+
+  expect_equal(model$layers[[1]]$name, "conv_2d_1")
+  expect_equal(model$layers[[2]]$name, "conv_2d_2")
+  expect_equal(model$layers[[3]]$name, "flatten_1")
+  expect_equal(model$layers[[4]]$name, "dense_1")
+  expect_equal(model$layers[[5]]$name, "dense_2")
+})
+
+# ============================================================================
+# ggml_get_layer
+# ============================================================================
+
+test_that("ggml_get_layer retrieves by index", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64, activation = "relu") |>
+    ggml_layer_dense(10, activation = "softmax")
+
+  layer <- ggml_get_layer(model, index = 1)
+  expect_equal(layer$type, "dense")
+  expect_equal(layer$config$units, 64L)
+
+  layer2 <- ggml_get_layer(model, index = 2)
+  expect_equal(layer2$config$units, 10L)
+})
+
+test_that("ggml_get_layer retrieves by name", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64, activation = "relu", name = "hidden") |>
+    ggml_layer_dense(10, activation = "softmax", name = "output")
+
+  layer <- ggml_get_layer(model, name = "hidden")
+  expect_equal(layer$config$units, 64L)
+
+  layer2 <- ggml_get_layer(model, name = "output")
+  expect_equal(layer2$config$units, 10L)
+})
+
+test_that("ggml_get_layer retrieves by auto-generated name", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64) |>
+    ggml_layer_dense(10)
+
+  layer <- ggml_get_layer(model, name = "dense_2")
+  expect_equal(layer$config$units, 10L)
+})
+
+test_that("ggml_get_layer errors on out-of-range index", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(10)
+
+  expect_error(ggml_get_layer(model, index = 0), "out of range")
+  expect_error(ggml_get_layer(model, index = 2), "out of range")
+})
+
+test_that("ggml_get_layer errors on unknown name", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(10)
+
+  expect_error(ggml_get_layer(model, name = "nonexistent"), "No layer")
+})
+
+test_that("ggml_get_layer errors when neither index nor name given", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(10)
+
+  expect_error(ggml_get_layer(model), "either index or name")
+})
+
+test_that("ggml_get_layer errors when both index and name given", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(10)
+
+  expect_error(ggml_get_layer(model, index = 1, name = "dense_1"), "not both")
+})
+
+# ============================================================================
+# ggml_pop_layer
+# ============================================================================
+
+test_that("ggml_pop_layer removes last layer", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64, activation = "relu") |>
+    ggml_layer_dense(10, activation = "softmax")
+
+  model <- ggml_pop_layer(model)
+  expect_equal(length(model$layers), 1L)
+  expect_equal(model$layers[[1]]$config$units, 64L)
+})
+
+test_that("ggml_pop_layer clears input_shape when all layers removed", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(10, input_shape = 4L)
+
+  model <- ggml_pop_layer(model)
+  expect_equal(length(model$layers), 0L)
+  expect_null(model$input_shape)
+})
+
+test_that("ggml_pop_layer errors on empty model", {
+  model <- ggml_model_sequential()
+  expect_error(ggml_pop_layer(model), "no layers")
+})
+
+test_that("ggml_pop_layer errors on compiled model", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(8, activation = "relu") |>
+    ggml_layer_dense(2, activation = "softmax")
+  model$input_shape <- 4L
+  model <- ggml_compile(model, loss = "categorical_crossentropy")
+
+  expect_error(ggml_pop_layer(model), "compiled")
+
+  cleanup_model(model)
+})
+
+# ============================================================================
+# layer$trainable
+# ============================================================================
+
+test_that("layers default to trainable = TRUE", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64) |>
+    ggml_layer_dense(10)
+
+  expect_true(model$layers[[1]]$trainable)
+  expect_true(model$layers[[2]]$trainable)
+})
+
+test_that("trainable = FALSE can be set in constructor", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64, trainable = FALSE) |>
+    ggml_layer_dense(10)
+
+  expect_false(model$layers[[1]]$trainable)
+  expect_true(model$layers[[2]]$trainable)
+})
+
+# ============================================================================
+# ggml_freeze_weights / ggml_unfreeze_weights
+# ============================================================================
+
+test_that("ggml_freeze_weights freezes all layers", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64) |>
+    ggml_layer_dense(32) |>
+    ggml_layer_dense(10)
+
+  model <- ggml_freeze_weights(model)
+
+  expect_false(model$layers[[1]]$trainable)
+  expect_false(model$layers[[2]]$trainable)
+  expect_false(model$layers[[3]]$trainable)
+})
+
+test_that("ggml_freeze_weights freezes a range of layers", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64) |>
+    ggml_layer_dense(32) |>
+    ggml_layer_dense(10)
+
+  model <- ggml_freeze_weights(model, from = 1, to = 2)
+
+  expect_false(model$layers[[1]]$trainable)
+  expect_false(model$layers[[2]]$trainable)
+  expect_true(model$layers[[3]]$trainable)
+})
+
+test_that("ggml_unfreeze_weights unfreezes all layers", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64) |>
+    ggml_layer_dense(10)
+
+  model <- ggml_freeze_weights(model)
+  model <- ggml_unfreeze_weights(model)
+
+  expect_true(model$layers[[1]]$trainable)
+  expect_true(model$layers[[2]]$trainable)
+})
+
+test_that("ggml_unfreeze_weights unfreezes a range", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(64) |>
+    ggml_layer_dense(32) |>
+    ggml_layer_dense(10)
+
+  model <- ggml_freeze_weights(model)
+  model <- ggml_unfreeze_weights(model, from = 3)
+
+  expect_false(model$layers[[1]]$trainable)
+  expect_false(model$layers[[2]]$trainable)
+  expect_true(model$layers[[3]]$trainable)
+})
+
+test_that("ggml_freeze_weights errors on invalid range", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(10)
+
+  expect_error(ggml_freeze_weights(model, from = 0), "Invalid range")
+  expect_error(ggml_freeze_weights(model, to = 2), "Invalid range")
+  expect_error(ggml_freeze_weights(model, from = 2, to = 1), "Invalid range")
+})
+
+test_that("frozen layers are not updated during training", {
+  set.seed(42)
+  n <- 128
+  x <- matrix(runif(n * 4), nrow = n, ncol = 4)
+  y <- matrix(0, nrow = n, ncol = 2)
+  for (i in seq_len(n)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(8, activation = "relu") |>
+    ggml_layer_dense(2, activation = "softmax")
+  model$input_shape <- 4L
+
+  # Freeze first layer, only train second
+  model <- ggml_freeze_weights(model, from = 1, to = 1)
+  model <- ggml_compile(model, optimizer = "adam",
+                        loss = "categorical_crossentropy")
+  model <- ggml_fit(model, x, y, epochs = 5, batch_size = 32, verbose = 0)
+
+  # First layer weights should remain at initial values (zeros for bias)
+  bias1 <- ggml_backend_tensor_get_data(model$layers[[1]]$weights$bias)
+  expect_true(all(bias1 == 0))
+
+  cleanup_model(model)
+})
+
+# ============================================================================
+# Block 4 — LSTM / GRU (Sequential)
+# ============================================================================
+
+test_that("ggml_layer_lstm adds lstm layer to sequential model", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_lstm(16L, input_shape = c(5L, 4L)) |>
+    ggml_layer_dense(2L, activation = "softmax")
+  expect_equal(length(model$layers), 2L)
+  expect_equal(model$layers[[1]]$type, "lstm")
+  expect_equal(model$layers[[1]]$config$units, 16L)
+})
+
+test_that("ggml_layer_gru adds gru layer to sequential model", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_gru(16L, input_shape = c(5L, 4L)) |>
+    ggml_layer_dense(2L, activation = "softmax")
+  expect_equal(length(model$layers), 2L)
+  expect_equal(model$layers[[1]]$type, "gru")
+})
+
+test_that("sequential LSTM model fits without error", {
+  n        <- 32L
+  seq_len  <- 5L
+  input_sz <- 4L
+  vals <- ((seq_len(n * seq_len * input_sz) - 1L) %% 20L - 10L) / 200.0
+  x <- array(vals, dim = c(n, seq_len, input_sz))
+  y <- matrix(0.0, nrow = n, ncol = 2L)
+  for (i in seq_len(n)) y[i, (i %% 2L) + 1L] <- 1.0
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_lstm(8L, input_shape = c(seq_len, input_sz)) |>
+    ggml_layer_dense(2L, activation = "softmax")
+  model <- ggml_compile(model, loss = "categorical_crossentropy")
+  expect_no_error(model <- ggml_fit(model, x, y, epochs = 2L, batch_size = 16L, verbose = 0L))
+  expect_true(all(is.finite(model$history$train_loss)))
+  cleanup_model(model)
+})
+
+test_that("sequential GRU model fits without error", {
+  n        <- 32L
+  seq_len  <- 5L
+  input_sz <- 4L
+  vals <- ((seq_len(n * seq_len * input_sz) - 1L) %% 20L - 10L) / 200.0
+  x <- array(vals, dim = c(n, seq_len, input_sz))
+  y <- matrix(0.0, nrow = n, ncol = 2L)
+  for (i in seq_len(n)) y[i, (i %% 2L) + 1L] <- 1.0
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_gru(8L, input_shape = c(seq_len, input_sz)) |>
+    ggml_layer_dense(2L, activation = "softmax")
+  model <- ggml_compile(model, loss = "categorical_crossentropy")
+  expect_no_error(model <- ggml_fit(model, x, y, epochs = 2L, batch_size = 16L, verbose = 0L))
+  expect_true(all(is.finite(model$history$train_loss)))
+  cleanup_model(model)
+})
+
+# ============================================================================
+# Block 4 — GlobalMaxPooling2D (Sequential)
+# ============================================================================
+
+test_that("ggml_layer_global_max_pooling_2d adds layer to sequential model", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_conv_2d(8L, c(3L, 3L), activation = "relu",
+                       input_shape = c(8L, 8L, 1L)) |>
+    ggml_layer_global_max_pooling_2d() |>
+    ggml_layer_dense(2L, activation = "softmax")
+  expect_equal(length(model$layers), 3L)
+  expect_equal(model$layers[[2]]$type, "global_max_pooling_2d")
+})
+
+test_that("sequential GlobalMaxPooling2D model fits without error", {
+  set.seed(73)
+  n  <- 32L
+  x  <- array(runif(n * 8L * 8L * 1L), dim = c(n, 8L, 8L, 1L))
+  y  <- matrix(0.0, nrow = n, ncol = 2L)
+  for (i in seq_len(n)) y[i, (i %% 2L) + 1L] <- 1.0
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_conv_2d(4L, c(3L, 3L), activation = "relu",
+                       input_shape = c(8L, 8L, 1L)) |>
+    ggml_layer_global_max_pooling_2d() |>
+    ggml_layer_dense(2L, activation = "softmax")
+  model <- ggml_compile(model, loss = "categorical_crossentropy")
+  expect_no_error(model <- ggml_fit(model, x, y, epochs = 2L, batch_size = 16L, verbose = 0L))
+  expect_true(all(is.finite(model$history$train_loss)))
+  cleanup_model(model)
+})
+
+# ============================================================================
+# Block 4 — Save / Load (Sequential)
+# ============================================================================
+
+test_that("ggml_save_model and ggml_load_model round-trip sequential dense model", {
+  set.seed(81)
+  n <- 64L
+  x <- matrix(runif(n * 4L), nrow = n)
+  y <- matrix(0.0, nrow = n, ncol = 2L)
+  for (i in seq_len(n)) y[i, if (sum(x[i, ]) > 2) 1L else 2L] <- 1.0
+
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(8L, activation = "relu", input_shape = 4L) |>
+    ggml_layer_dense(2L, activation = "softmax")
+  model <- ggml_compile(model, loss = "categorical_crossentropy")
+  model <- ggml_fit(model, x, y, epochs = 2L, batch_size = 32L, verbose = 0L)
+
+  tmp <- tempfile(fileext = ".rds")
+  on.exit({ unlink(tmp); cleanup_model(model) })
+  ggml_save_model(model, tmp)
+
+  model2 <- ggml_load_model(tmp)
+  on.exit({ unlink(tmp); cleanup_model(model); cleanup_model(model2) }, add = TRUE)
+  expect_s3_class(model2, "ggml_sequential_model")
+  expect_true(model2$compiled)
+
+  p1 <- ggml_predict(model,  x, batch_size = 32L)
+  p2 <- ggml_predict(model2, x, batch_size = 32L)
+  expect_equal(p1, p2, tolerance = 1e-5)
+})
+
+test_that("ggml_load_model Sequential preserves layer configs", {
+  model <- ggml_model_sequential() |>
+    ggml_layer_dense(16L, activation = "relu", input_shape = 4L) |>
+    ggml_layer_dense(2L, activation = "softmax")
+  model <- ggml_compile(model, optimizer = "sgd", loss = "mse")
+
+  x <- matrix(runif(32L * 4L), 32L, 4L)
+  y <- matrix(0.0, 32L, 2L); for (i in seq_len(32L)) y[i, 1L] <- 1.0
+  model <- ggml_fit(model, x, y, epochs = 1L, batch_size = 32L, verbose = 0L)
+
+  tmp <- tempfile(fileext = ".rds")
+  on.exit({ unlink(tmp); cleanup_model(model) })
+  ggml_save_model(model, tmp)
+
+  m2 <- ggml_load_model(tmp)
+  on.exit({ unlink(tmp); cleanup_model(model); cleanup_model(m2) }, add = TRUE)
+  expect_equal(m2$layers[[1]]$config$units, 16L)
+  expect_equal(m2$compilation$optimizer, "sgd")
+  expect_equal(m2$compilation$loss, "mse")
+})

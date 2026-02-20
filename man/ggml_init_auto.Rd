@@ -7,7 +7,7 @@
 ggml_init_auto(..., extra_mb = 10, type = GGML_TYPE_F32, no_alloc = FALSE)
 }
 \arguments{
-\item{...}{Named arguments with tensor dimensions}
+\item{...}{Named arguments with tensor dimensions (integer vectors)}
 
 \item{extra_mb}{Extra megabytes to add (default: 10)}
 
@@ -19,12 +19,11 @@ ggml_init_auto(..., extra_mb = 10, type = GGML_TYPE_F32, no_alloc = FALSE)
 GGML context
 }
 \description{
-Creates a context with automatically calculated size based on planned tensors
+Creates a context with automatically calculated size based on planned tensors.
 }
 \examples{
 \donttest{
-# For two 1000x1000 matrices
-ctx <- ggml_init_auto(mat1 = c(1000, 1000), mat2 = c(1000, 1000))
+ctx <- ggml_init_auto(mat1 = c(1000L, 1000L), mat2 = c(1000L, 1000L))
 ggml_free(ctx)
 }
 }

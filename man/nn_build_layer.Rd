@@ -4,7 +4,7 @@
 \alias{nn_build_layer}
 \title{Build a layer's forward pass}
 \usage{
-nn_build_layer(ctx, input_tensor, layer)
+nn_build_layer(ctx, input_tensor, layer, training = TRUE, ctx_weights = NULL)
 }
 \description{
 Build a layer's forward pass

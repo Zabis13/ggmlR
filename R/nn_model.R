@@ -42,6 +42,223 @@ ggml_model_sequential <- function() {
 }
 
 # ============================================================================
+# Layer access and manipulation
+# ============================================================================
+
+#' Get a Layer from a Sequential Model
+#'
+#' Retrieves a layer by name or by integer index (1-based).
+#'
+#' @param model A ggml_sequential_model object
+#' @param index Integer index of the layer (1-based), or NULL
+#' @param name Character name of the layer, or NULL
+#' @return The layer list object
+#' @export
+#' @examples
+#' \donttest{
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_dense(64, activation = "relu", name = "hidden") |>
+#'   ggml_layer_dense(10, activation = "softmax", name = "output")
+#'
+#' ggml_get_layer(model, index = 1)
+#' ggml_get_layer(model, name = "output")
+#' }
+ggml_get_layer <- function(model, index = NULL, name = NULL) {
+  if (is.null(index) && is.null(name)) {
+    stop("Provide either index or name.")
+  }
+  if (!is.null(index) && !is.null(name)) {
+    stop("Provide either index or name, not both.")
+  }
+  if (!is.null(index)) {
+    n <- length(model$layers)
+    if (index < 1L || index > n) {
+      stop("Layer index ", index, " out of range (model has ", n, " layers).")
+    }
+    return(model$layers[[index]])
+  }
+  # by name
+  for (layer in model$layers) {
+    if (!is.null(layer$name) && layer$name == name) return(layer)
+  }
+  stop("No layer with name '", name, "'.")
+}
+
+#' Remove the Last Layer from a Sequential Model
+#'
+#' Removes the last layer from the model. The model must not be compiled.
+#'
+#' @param model A ggml_sequential_model object
+#' @return The model with the last layer removed.
+#' @export
+#' @examples
+#' \donttest{
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_dense(64, activation = "relu") |>
+#'   ggml_layer_dense(10, activation = "softmax")
+#'
+#' model <- ggml_pop_layer(model)
+#' length(model$layers)  # 1
+#' }
+ggml_pop_layer <- function(model) {
+  if (model$compiled) {
+    stop("Cannot pop layers from a compiled model.")
+  }
+  n <- length(model$layers)
+  if (n == 0L) {
+    stop("Model has no layers to remove.")
+  }
+  model$layers <- model$layers[-n]
+  if (n == 1L) model$input_shape <- NULL
+  model
+}
+
+# ============================================================================
+# Freeze / unfreeze weights
+# ============================================================================
+
+#' Freeze Layer Weights
+#'
+#' Sets \code{trainable = FALSE} on layers, preventing their weights from being
+#' updated during training. Accepts optional \code{from} / \code{to} to freeze
+#' a range of layers by index, or \code{layer_names} to freeze by name.
+#' If none are provided, all layers are frozen.
+#'
+#' @param model A model object (ggml_sequential_model or ggml_functional_model)
+#' @param from Integer index of the first layer to freeze (default: 1)
+#' @param to Integer index of the last layer to freeze (default: last layer)
+#' @param layer_names Character vector of layer names to freeze (overrides from/to)
+#' @param ... Additional arguments passed to methods
+#' @return The model with selected layers frozen.
+#' @export
+#' @examples
+#' \donttest{
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_dense(64, activation = "relu") |>
+#'   ggml_layer_dense(10, activation = "softmax")
+#'
+#' # Freeze all layers
+#' model <- ggml_freeze_weights(model)
+#'
+#' # Freeze only the first layer
+#' model <- ggml_freeze_weights(model, from = 1, to = 1)
+#' }
+ggml_freeze_weights <- function(model, from = 1L, to = length(model$layers),
+                                 layer_names = NULL, ...) {
+  UseMethod("ggml_freeze_weights")
+}
+
+#' @export
+ggml_freeze_weights.ggml_sequential_model <- function(model,
+                                                        from = 1L,
+                                                        to = length(model$layers),
+                                                        layer_names = NULL, ...) {
+  n <- length(model$layers)
+  if (n == 0L) stop("Model has no layers.")
+  if (!is.null(layer_names)) {
+    names_all <- vapply(model$layers, function(l) if (!is.null(l$name)) l$name else "", character(1))
+    idx <- which(names_all %in% layer_names)
+    if (length(idx) == 0L) stop("No layers found with names: ", paste(layer_names, collapse = ", "))
+    for (i in idx) model$layers[[i]]$trainable <- FALSE
+  } else {
+    from <- as.integer(from); to <- as.integer(to)
+    if (from < 1L || to > n || from > to)
+      stop("Invalid range: from=", from, " to=", to, " (model has ", n, " layers).")
+    for (i in from:to) model$layers[[i]]$trainable <- FALSE
+  }
+  model
+}
+
+#' @export
+ggml_freeze_weights.ggml_functional_model <- function(model,
+                                                        from = NULL, to = NULL,
+                                                        layer_names = NULL, ...) {
+  nodes <- nn_topo_sort(model$outputs)
+  frozen <- if (is.null(model$frozen_nodes)) list() else model$frozen_nodes
+  if (!is.null(layer_names)) {
+    for (node in nodes) {
+      nm <- if (!is.null(node$config$name)) node$config$name else ""
+      if (nm %in% layer_names) frozen[[node$id]] <- FALSE
+    }
+  } else {
+    for (node in nodes) {
+      if (!is.null(node$node_type) && node$node_type != "input")
+        frozen[[node$id]] <- FALSE
+    }
+  }
+  model$frozen_nodes <- frozen
+  model
+}
+
+#' Unfreeze Layer Weights
+#'
+#' Sets \code{trainable = TRUE} on layers. Accepts optional \code{from} / \code{to}
+#' to unfreeze a range of layers, or \code{layer_names} to unfreeze by name.
+#' If none are provided, all layers are unfrozen.
+#'
+#' @param model A model object (ggml_sequential_model or ggml_functional_model)
+#' @param from Integer index of the first layer to unfreeze (default: 1)
+#' @param to Integer index of the last layer to unfreeze (default: last layer)
+#' @param layer_names Character vector of layer names to unfreeze (overrides from/to)
+#' @param ... Additional arguments passed to methods
+#' @return The model with selected layers unfrozen.
+#' @export
+#' @examples
+#' \donttest{
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_dense(64, activation = "relu") |>
+#'   ggml_layer_dense(10, activation = "softmax")
+#'
+#' model <- ggml_freeze_weights(model)
+#' model <- ggml_unfreeze_weights(model, from = 2)  # unfreeze last layer only
+#' }
+ggml_unfreeze_weights <- function(model, from = 1L, to = length(model$layers),
+                                   layer_names = NULL, ...) {
+  UseMethod("ggml_unfreeze_weights")
+}
+
+#' @export
+ggml_unfreeze_weights.ggml_sequential_model <- function(model,
+                                                          from = 1L,
+                                                          to = length(model$layers),
+                                                          layer_names = NULL, ...) {
+  n <- length(model$layers)
+  if (n == 0L) stop("Model has no layers.")
+  if (!is.null(layer_names)) {
+    names_all <- vapply(model$layers, function(l) if (!is.null(l$name)) l$name else "", character(1))
+    idx <- which(names_all %in% layer_names)
+    if (length(idx) == 0L) stop("No layers found with names: ", paste(layer_names, collapse = ", "))
+    for (i in idx) model$layers[[i]]$trainable <- TRUE
+  } else {
+    from <- as.integer(from); to <- as.integer(to)
+    if (from < 1L || to > n || from > to)
+      stop("Invalid range: from=", from, " to=", to, " (model has ", n, " layers).")
+    for (i in from:to) model$layers[[i]]$trainable <- TRUE
+  }
+  model
+}
+
+#' @export
+ggml_unfreeze_weights.ggml_functional_model <- function(model,
+                                                          from = NULL, to = NULL,
+                                                          layer_names = NULL, ...) {
+  frozen <- if (is.null(model$frozen_nodes)) list() else model$frozen_nodes
+  if (!is.null(layer_names)) {
+    nodes <- nn_topo_sort(model$outputs)
+    ids_to_unfreeze <- vapply(nodes, function(n) {
+      nm <- if (!is.null(n$config$name)) n$config$name else ""
+      if (nm %in% layer_names) n$id else ""
+    }, character(1))
+    ids_to_unfreeze <- ids_to_unfreeze[nzchar(ids_to_unfreeze)]
+    for (id in ids_to_unfreeze) frozen[[id]] <- NULL
+  } else {
+    frozen <- list()
+  }
+  model$frozen_nodes <- frozen
+  model
+}
+
+# ============================================================================
 # Compile
 # ============================================================================
 
@@ -72,6 +289,15 @@ ggml_compile <- function(model, optimizer = "adam",
                           loss = "categorical_crossentropy",
                           metrics = c("accuracy"),
                           backend = "auto") {
+  UseMethod("ggml_compile")
+}
+
+#' @rdname ggml_compile
+#' @export
+ggml_compile.ggml_sequential_model <- function(model, optimizer = "adam",
+                                                loss = "categorical_crossentropy",
+                                                metrics = c("accuracy"),
+                                                backend = "auto") {
   if (length(model$layers) == 0) {
     stop("Model has no layers. Add layers before compiling.")
   }
@@ -164,9 +390,10 @@ nn_build_graph <- function(model, batch_size) {
                                   input_shape[2], input_shape[1],
                                   input_shape[3], batch_size)
   } else if (length(input_shape) == 2) {
-    # 1D sequence: R [L, C] -> ggml [L, C, N]
+    # Sequence: R [seq_len, input_size] -> ggml [input_size, seq_len, N]
+    # (input_size is dim0 so each time step's features are contiguous)
     inputs <- ggml_new_tensor_3d(ctx_weights, GGML_TYPE_F32,
-                                  input_shape[1], input_shape[2], batch_size)
+                                  input_shape[2], input_shape[1], batch_size)
   } else {
     # Flat vector: R [features] -> ggml [features, N]
     inputs <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32,
@@ -224,6 +451,53 @@ nn_build_graph <- function(model, batch_size) {
       layer$weights$beta <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_features)
       ggml_set_name(layer$weights$gamma, paste0("bn_", i, "_gamma"))
       ggml_set_name(layer$weights$beta, paste0("bn_", i, "_beta"))
+
+    } else if (layer$type == "lstm") {
+      # input_shape: c(seq_len, input_size)
+      input_sz <- layer$input_shape[2]
+      units    <- layer$config$units
+      nm       <- layer$name
+
+      layer$weights$W_gates <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32,
+                                                    input_sz, 4L * units)
+      layer$weights$U_gates <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32,
+                                                    units, 4L * units)
+      layer$weights$b_gates <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32,
+                                                    4L * units)
+      layer$weights$h0      <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32,
+                                                    units)
+      layer$weights$c0      <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32,
+                                                    units)
+      ggml_set_name(layer$weights$W_gates, paste0(nm, "_W_gates"))
+      ggml_set_name(layer$weights$U_gates, paste0(nm, "_U_gates"))
+      ggml_set_name(layer$weights$b_gates, paste0(nm, "_b_gates"))
+      ggml_set_name(layer$weights$h0,      paste0(nm, "_h0"))
+      ggml_set_name(layer$weights$c0,      paste0(nm, "_c0"))
+
+    } else if (layer$type == "gru") {
+      input_sz <- layer$input_shape[2]
+      units    <- layer$config$units
+      nm       <- layer$name
+
+      layer$weights$W_zh <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32,
+                                                 input_sz, 2L * units)
+      layer$weights$U_zh <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32,
+                                                 units, 2L * units)
+      layer$weights$b_zh <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32,
+                                                 2L * units)
+      layer$weights$W_n  <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32,
+                                                 input_sz, units)
+      layer$weights$U_n  <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32,
+                                                 units, units)
+      layer$weights$b_n  <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, units)
+      layer$weights$h0   <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, units)
+      ggml_set_name(layer$weights$W_zh, paste0(nm, "_W_zh"))
+      ggml_set_name(layer$weights$U_zh, paste0(nm, "_U_zh"))
+      ggml_set_name(layer$weights$b_zh, paste0(nm, "_b_zh"))
+      ggml_set_name(layer$weights$W_n,  paste0(nm, "_W_n"))
+      ggml_set_name(layer$weights$U_n,  paste0(nm, "_U_n"))
+      ggml_set_name(layer$weights$b_n,  paste0(nm, "_b_n"))
+      ggml_set_name(layer$weights$h0,   paste0(nm, "_h0"))
     }
 
     layers_built[[i]] <- layer
@@ -257,8 +531,10 @@ nn_build_graph <- function(model, batch_size) {
         nn_init_he_uniform(layer$weights$kernel, fan_in)
         nn_init_zeros(layer$weights$bias)
       }
-      ggml_set_param(layer$weights$kernel)
-      ggml_set_param(layer$weights$bias)
+      if (isTRUE(layer$trainable)) {
+        ggml_set_param(layer$weights$kernel)
+        ggml_set_param(layer$weights$bias)
+      }
 
     } else if (layer$type == "conv_2d") {
       if (has_weights_data && !is.null(old_layer$weights_data$kernel)) {
@@ -279,8 +555,10 @@ nn_build_graph <- function(model, batch_size) {
         nn_init_he_uniform(layer$weights$kernel, fan_in)
         nn_init_zeros(layer$weights$bias)
       }
-      ggml_set_param(layer$weights$kernel)
-      ggml_set_param(layer$weights$bias)
+      if (isTRUE(layer$trainable)) {
+        ggml_set_param(layer$weights$kernel)
+        ggml_set_param(layer$weights$bias)
+      }
 
     } else if (layer$type == "dense") {
       if (has_weights_data && !is.null(old_layer$weights_data$weight)) {
@@ -300,8 +578,10 @@ nn_build_graph <- function(model, batch_size) {
         nn_init_glorot_uniform(layer$weights$weight, fan_in, fan_out)
         nn_init_zeros(layer$weights$bias)
       }
-      ggml_set_param(layer$weights$weight)
-      ggml_set_param(layer$weights$bias)
+      if (isTRUE(layer$trainable)) {
+        ggml_set_param(layer$weights$weight)
+        ggml_set_param(layer$weights$bias)
+      }
 
     } else if (layer$type == "batch_norm") {
       if (has_weights_data && !is.null(old_layer$weights_data$gamma)) {
@@ -318,8 +598,79 @@ nn_build_graph <- function(model, batch_size) {
         ggml_backend_tensor_set_data(layer$weights$gamma, rep(1.0, n))
         nn_init_zeros(layer$weights$beta)
       }
-      ggml_set_param(layer$weights$gamma)
-      ggml_set_param(layer$weights$beta)
+      if (isTRUE(layer$trainable)) {
+        ggml_set_param(layer$weights$gamma)
+        ggml_set_param(layer$weights$beta)
+      }
+
+    } else if (layer$type == "lstm") {
+      units    <- layer$config$units
+      input_sz <- layer$input_shape[2]
+      # Restore or init W_gates
+      if (!is.null(old_layer$weights$W_gates)) {
+        ggml_backend_tensor_set_data(layer$weights$W_gates,
+          ggml_backend_tensor_get_data(old_layer$weights$W_gates))
+        ggml_backend_tensor_set_data(layer$weights$U_gates,
+          ggml_backend_tensor_get_data(old_layer$weights$U_gates))
+        ggml_backend_tensor_set_data(layer$weights$b_gates,
+          ggml_backend_tensor_get_data(old_layer$weights$b_gates))
+      } else if (!is.null(old_layer$weights_data$W_gates)) {
+        ggml_backend_tensor_set_data(layer$weights$W_gates, old_layer$weights_data$W_gates)
+        ggml_backend_tensor_set_data(layer$weights$U_gates, old_layer$weights_data$U_gates)
+        ggml_backend_tensor_set_data(layer$weights$b_gates, old_layer$weights_data$b_gates)
+      } else {
+        nn_init_recurrent_uniform(layer$weights$W_gates)
+        nn_init_recurrent_uniform(layer$weights$U_gates)
+        nn_init_zeros(layer$weights$b_gates)
+      }
+      nn_init_zeros(layer$weights$h0)
+      nn_init_zeros(layer$weights$c0)
+      if (isTRUE(layer$trainable)) {
+        ggml_set_param(layer$weights$W_gates)
+        ggml_set_param(layer$weights$U_gates)
+        ggml_set_param(layer$weights$b_gates)
+      }
+
+    } else if (layer$type == "gru") {
+      units    <- layer$config$units
+      input_sz <- layer$input_shape[2]
+      if (!is.null(old_layer$weights$W_zh)) {
+        ggml_backend_tensor_set_data(layer$weights$W_zh,
+          ggml_backend_tensor_get_data(old_layer$weights$W_zh))
+        ggml_backend_tensor_set_data(layer$weights$U_zh,
+          ggml_backend_tensor_get_data(old_layer$weights$U_zh))
+        ggml_backend_tensor_set_data(layer$weights$b_zh,
+          ggml_backend_tensor_get_data(old_layer$weights$b_zh))
+        ggml_backend_tensor_set_data(layer$weights$W_n,
+          ggml_backend_tensor_get_data(old_layer$weights$W_n))
+        ggml_backend_tensor_set_data(layer$weights$U_n,
+          ggml_backend_tensor_get_data(old_layer$weights$U_n))
+        ggml_backend_tensor_set_data(layer$weights$b_n,
+          ggml_backend_tensor_get_data(old_layer$weights$b_n))
+      } else if (!is.null(old_layer$weights_data$W_zh)) {
+        ggml_backend_tensor_set_data(layer$weights$W_zh, old_layer$weights_data$W_zh)
+        ggml_backend_tensor_set_data(layer$weights$U_zh, old_layer$weights_data$U_zh)
+        ggml_backend_tensor_set_data(layer$weights$b_zh, old_layer$weights_data$b_zh)
+        ggml_backend_tensor_set_data(layer$weights$W_n,  old_layer$weights_data$W_n)
+        ggml_backend_tensor_set_data(layer$weights$U_n,  old_layer$weights_data$U_n)
+        ggml_backend_tensor_set_data(layer$weights$b_n,  old_layer$weights_data$b_n)
+      } else {
+        nn_init_recurrent_uniform(layer$weights$W_zh)
+        nn_init_recurrent_uniform(layer$weights$U_zh)
+        nn_init_zeros(layer$weights$b_zh)
+        nn_init_recurrent_uniform(layer$weights$W_n)
+        nn_init_recurrent_uniform(layer$weights$U_n)
+        nn_init_zeros(layer$weights$b_n)
+      }
+      nn_init_zeros(layer$weights$h0)
+      if (isTRUE(layer$trainable)) {
+        ggml_set_param(layer$weights$W_zh)
+        ggml_set_param(layer$weights$U_zh)
+        ggml_set_param(layer$weights$b_zh)
+        ggml_set_param(layer$weights$W_n)
+        ggml_set_param(layer$weights$U_n)
+        ggml_set_param(layer$weights$b_n)
+      }
     }
   }
 
@@ -364,6 +715,9 @@ nn_build_graph <- function(model, batch_size) {
 #'   \item{epochs}{Number of training epochs (default: 1)}
 #'   \item{batch_size}{Batch size (default: 32)}
 #'   \item{validation_split}{Fraction of data for validation (default: 0)}
+#'   \item{validation_data}{Optional list(x_val, y_val) for validation. Overrides validation_split.}
+#'   \item{class_weight}{Named vector of weights per class, e.g. c("0"=1, "1"=10). Cannot be used with sample_weight.}
+#'   \item{sample_weight}{Numeric vector of per-sample weights (length = nrow(x)). Cannot be used with class_weight.}
 #'   \item{verbose}{0 = silent, 1 = progress (default: 1)}
 #' }
 #'
@@ -389,21 +743,107 @@ nn_build_graph <- function(model, batch_size) {
 #'   \code{epoch}, \code{train_loss}, \code{train_accuracy},
 #'   \code{val_loss}, \code{val_accuracy}.
 #' @seealso \code{\link{ggml_fit_opt}}, \code{\link{ggml_compile}}
+#' @examples
+#' \donttest{
+#' n <- 128
+#' x <- matrix(runif(n * 4), nrow = n, ncol = 4)
+#' y <- matrix(0, nrow = n, ncol = 2)
+#' for (i in seq_len(n)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+#'
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_dense(8, activation = "relu") |>
+#'   ggml_layer_dense(2, activation = "softmax")
+#' model$input_shape <- 4L
+#' model <- ggml_compile(model, optimizer = "adam",
+#'                       loss = "categorical_crossentropy")
+#'
+#' # Basic training
+#' model <- ggml_fit(model, x, y, epochs = 5, batch_size = 32, verbose = 0)
+#'
+#' # With validation_data
+#' x_val <- matrix(runif(32 * 4), nrow = 32, ncol = 4)
+#' y_val <- matrix(0, nrow = 32, ncol = 2)
+#' for (i in seq_len(32)) { y_val[i, if (sum(x_val[i,]) > 2) 1L else 2L] <- 1 }
+#' model <- ggml_fit(model, x, y, epochs = 3, batch_size = 32,
+#'                   validation_data = list(x_val, y_val), verbose = 0)
+#'
+#' # With class_weight (useful for imbalanced classes)
+#' model <- ggml_fit(model, x, y, epochs = 3, batch_size = 32,
+#'                   class_weight = c("0" = 1, "1" = 2), verbose = 0)
+#'
+#' # With sample_weight
+#' sw <- runif(n, 0.5, 1.5)
+#' model <- ggml_fit(model, x, y, epochs = 3, batch_size = 32,
+#'                   sample_weight = sw, verbose = 0)
+#' }
 #' @export
-ggml_fit <- function(...) {
-  args <- list(...)
-  first <- if (!is.null(args[[1]])) args[[1]] else args[["model"]]
-  if (inherits(first, "ggml_sequential_model")) {
-    do.call(ggml_fit_sequential, args)
-  } else {
-    do.call(ggml_fit_opt, args)
+ggml_fit <- function(model, ...) {
+  # Detect low-level call: all keyword args, no positional 'model'
+  # (sched = ..., ctx_compute = ..., etc.)
+  if (missing(model)) {
+    return(do.call(ggml_fit_opt, list(...)))
   }
+  UseMethod("ggml_fit")
+}
+
+#' @rdname ggml_fit
+#' @export
+ggml_fit.ggml_sequential_model <- function(model, ...) {
+  ggml_fit_sequential(model, ...)
+}
+
+#' @rdname ggml_fit
+#' @export
+ggml_fit.default <- function(model, ...) {
+  # Positional first arg — forward to low-level optimizer loop
+  ggml_fit_opt(model, ...)
 }
 
 ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
-                                validation_split = 0.0, verbose = 1) {
+                                validation_split = 0.0, validation_data = NULL,
+                                class_weight = NULL, sample_weight = NULL,
+                                verbose = 1) {
   if (!model$compiled) {
     stop("Model must be compiled before training. Call ggml_compile() first.")
+  }
+
+  # Apply class_weight / sample_weight by scaling labels (one-hot)
+  # For cross-entropy: CE(p, w*y_onehot) = w * CE(p, y_onehot)
+  if (!is.null(class_weight) && !is.null(sample_weight)) {
+    stop("Specify either class_weight or sample_weight, not both.")
+  }
+  if (!is.null(class_weight)) {
+    # class_weight: named vector or list, e.g. c("0"=1, "1"=10) or list("0"=1, "1"=10)
+    # y must be one-hot; true class = argmax per row
+    true_classes <- max.col(y) - 1L  # 0-based
+    keys <- as.character(true_classes)
+    w <- unlist(class_weight)[keys]
+    if (anyNA(w)) stop("class_weight must cover all classes present in y.")
+    y <- y * w  # scale each row
+  }
+  if (!is.null(sample_weight)) {
+    if (length(sample_weight) != nrow(y)) {
+      stop("sample_weight length must match number of training samples.")
+    }
+    y <- y * sample_weight  # scale each row
+  }
+
+  if (!is.null(validation_data)) {
+    if (!is.list(validation_data) || length(validation_data) < 2) {
+      stop("validation_data must be a list: list(x_val, y_val)")
+    }
+    x_val <- validation_data[[1]]
+    y_val <- validation_data[[2]]
+    n_val <- if (is.matrix(x_val)) nrow(x_val) else dim(x_val)[1]
+    n_train <- if (is.matrix(x)) nrow(x) else dim(x)[1]
+    # Combine train + val; val_split = fraction of combined that is val
+    if (is.matrix(x)) {
+      x <- rbind(x, x_val)
+    } else {
+      x <- abind_first(x, x_val)
+    }
+    y <- rbind(y, y_val)
+    validation_split <- n_val / (n_train + n_val)
   }
 
   input_shape <- model$input_shape
@@ -440,8 +880,8 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
     # Image data: R [N, H, W, C] -> ggml [W, H, C, N]
     x_ggml <- as.vector(aperm(x, c(3, 2, 4, 1)))
   } else if (length(input_shape) == 2) {
-    # 1D sequence: R [N, L, C] -> ggml [L, C, N]
-    x_ggml <- as.vector(aperm(x, c(2, 3, 1)))
+    # Sequence: R [N, seq_len, input_size] -> ggml [input_size, seq_len, N]
+    x_ggml <- as.vector(aperm(x, c(3, 2, 1)))
   } else if (length(input_shape) == 1) {
     # Vector data: R [N, features] -> ggml [features, N]
     x_ggml <- as.vector(t(x))
@@ -523,11 +963,64 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
 #' @param x Test data
 #' @param y Test labels (one-hot encoded)
 #' @param batch_size Batch size for evaluation
-#' @return Named list with loss and accuracy
+#' @param sample_weight Numeric vector of per-sample weights (length = nrow(x)).
+#' @param class_weight Named vector of weights per class, e.g. c("0"=1, "1"=10). Cannot be used with sample_weight.
+#' @return Named list with \code{loss} and \code{accuracy}.
+#' @examples
+#' \donttest{
+#' n <- 128
+#' x <- matrix(runif(n * 4), nrow = n, ncol = 4)
+#' y <- matrix(0, nrow = n, ncol = 2)
+#' for (i in seq_len(n)) { y[i, if (sum(x[i,]) > 2) 1L else 2L] <- 1 }
+#'
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_dense(8, activation = "relu") |>
+#'   ggml_layer_dense(2, activation = "softmax")
+#' model$input_shape <- 4L
+#' model <- ggml_compile(model, optimizer = "adam",
+#'                       loss = "categorical_crossentropy")
+#' model <- ggml_fit(model, x, y, epochs = 5, batch_size = 32, verbose = 0)
+#'
+#' # Basic evaluation
+#' result <- ggml_evaluate(model, x, y, batch_size = 32)
+#'
+#' # With sample_weight
+#' sw <- runif(n, 0.5, 1.5)
+#' result <- ggml_evaluate(model, x, y, batch_size = 32, sample_weight = sw)
+#'
+#' # With class_weight
+#' result <- ggml_evaluate(model, x, y, batch_size = 32,
+#'                         class_weight = c("0" = 1, "1" = 2))
+#' }
 #' @export
-ggml_evaluate <- function(model, x, y, batch_size = 32) {
+ggml_evaluate <- function(model, ...) {
+  UseMethod("ggml_evaluate")
+}
+
+#' @rdname ggml_evaluate
+#' @export
+ggml_evaluate.ggml_sequential_model <- function(model, x, y, batch_size = 32,
+                                                  sample_weight = NULL,
+                                                  class_weight = NULL, ...) {
   if (!model$compiled) {
     stop("Model must be compiled before evaluation.")
+  }
+
+  if (!is.null(class_weight) && !is.null(sample_weight)) {
+    stop("Specify either class_weight or sample_weight, not both.")
+  }
+  if (!is.null(class_weight)) {
+    true_classes <- max.col(y) - 1L
+    keys <- as.character(true_classes)
+    w <- unlist(class_weight)[keys]
+    if (anyNA(w)) stop("class_weight must cover all classes present in y.")
+    y <- y * w
+  }
+  if (!is.null(sample_weight)) {
+    if (length(sample_weight) != nrow(y)) {
+      stop("sample_weight length must match number of samples.")
+    }
+    y <- y * sample_weight
   }
 
   input_shape <- model$input_shape
@@ -561,7 +1054,8 @@ ggml_evaluate <- function(model, x, y, batch_size = 32) {
   if (length(input_shape) == 3) {
     x_ggml <- as.vector(aperm(x, c(3, 2, 4, 1)))
   } else if (length(input_shape) == 2) {
-    x_ggml <- as.vector(aperm(x, c(2, 3, 1)))
+    # Sequence: R [N, seq_len, input_size] -> ggml [input_size, seq_len, N]
+    x_ggml <- as.vector(aperm(x, c(3, 2, 1)))
   } else {
     x_ggml <- as.vector(t(x))
   }
@@ -625,7 +1119,13 @@ ggml_evaluate <- function(model, x, y, batch_size = 32) {
 #' @param batch_size Batch size for inference
 #' @return Matrix of predictions with shape \code{[N, output_units]}
 #' @export
-ggml_predict <- function(model, x, batch_size = 32L) {
+ggml_predict <- function(model, ...) {
+  UseMethod("ggml_predict")
+}
+
+#' @rdname ggml_predict
+#' @export
+ggml_predict.ggml_sequential_model <- function(model, x, batch_size = 32L, ...) {
   if (!model$compiled) {
     stop("Model must be compiled before prediction.")
   }
@@ -662,7 +1162,8 @@ ggml_predict <- function(model, x, batch_size = 32L) {
   if (length(input_shape) == 3) {
     x_ggml <- as.vector(aperm(x, c(3, 2, 4, 1)))
   } else if (length(input_shape) == 2) {
-    x_ggml <- as.vector(aperm(x, c(2, 3, 1)))
+    # Sequence: R [N, seq_len, input_size] -> ggml [input_size, seq_len, N]
+    x_ggml <- as.vector(aperm(x, c(3, 2, 1)))
   } else {
     x_ggml <- as.vector(t(x))
   }
@@ -986,6 +1487,21 @@ nn_count_layer_params <- function(layer) {
            else layer$input_shape[3]
       n * 2L  # gamma + beta
     } else 0
+  } else if (layer$type == "lstm") {
+    if (!is.null(layer$input_shape)) {
+      input_sz <- layer$input_shape[2]
+      units    <- layer$config$units
+      # W_gates + U_gates + b_gates
+      input_sz * 4L * units + units * 4L * units + 4L * units
+    } else 0
+  } else if (layer$type == "gru") {
+    if (!is.null(layer$input_shape)) {
+      input_sz <- layer$input_shape[2]
+      units    <- layer$config$units
+      # W_zh + U_zh + b_zh + W_n + U_n + b_n
+      input_sz * 2L * units + units * 2L * units + 2L * units +
+        input_sz * units + units * units + units
+    } else 0
   } else {
     0
   }
@@ -1048,4 +1564,211 @@ plot.ggml_history <- function(x, ...) {
   }
 
   invisible(x)
+}
+
+# ============================================================================
+# Save / load full model (architecture + weights)
+# ============================================================================
+
+#' Save a Full Model (Architecture + Weights)
+#'
+#' Saves both the architecture and trained weights of a model to an RDS file.
+#' Unlike \code{ggml_save_weights()}, which requires the model to be manually
+#' reconstructed before loading, \code{ggml_save_model()} saves everything
+#' needed to restore the model with a single call to \code{ggml_load_model()}.
+#'
+#' @section Supported model types:
+#' \itemize{
+#'   \item \code{ggml_sequential_model} — input shape, layer configs, trained
+#'     weights, and compilation settings are all saved.
+#'   \item \code{ggml_functional_model} — input/output node graphs (pure R
+#'     lists, no ggml pointers) and trained \code{node_weights} are saved.
+#' }
+#'
+#' @param model A trained \code{ggml_sequential_model} or
+#'   \code{ggml_functional_model}.
+#' @param path File path (typically \code{.rds}).
+#' @return The model (invisibly).
+#' @export
+#' @examples
+#' \donttest{
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_dense(16L, activation = "relu", input_shape = 4L) |>
+#'   ggml_layer_dense(2L,  activation = "softmax")
+#' model <- ggml_compile(model, optimizer = "adam",
+#'                        loss = "categorical_crossentropy")
+#' x <- matrix(runif(64 * 4), 64, 4)
+#' y <- matrix(c(rep(c(1,0), 32), rep(c(0,1), 32)), 64, 2)
+#' model <- ggml_fit(model, x, y, epochs = 1L, batch_size = 32L, verbose = 0L)
+#' tmp <- tempfile(fileext = ".rds")
+#' ggml_save_model(model, tmp)
+#' model2 <- ggml_load_model(tmp)
+#' }
+ggml_save_model <- function(model, path) {
+  UseMethod("ggml_save_model")
+}
+
+#' @export
+ggml_save_model.ggml_sequential_model <- function(model, path) {
+  if (!model$compiled) stop("Model must be compiled before saving.")
+
+  # Strip live ggml tensors; keep only serialisable config + weight values
+  layers_clean <- lapply(model$layers, function(l) {
+    wdata <- list()
+    if (l$type %in% c("conv_1d", "conv_2d") && !is.null(l$weights$kernel)) {
+      wdata$kernel <- ggml_backend_tensor_get_data(l$weights$kernel)
+      wdata$bias   <- ggml_backend_tensor_get_data(l$weights$bias)
+    } else if (l$type == "dense" && !is.null(l$weights$weight)) {
+      wdata$weight <- ggml_backend_tensor_get_data(l$weights$weight)
+      wdata$bias   <- ggml_backend_tensor_get_data(l$weights$bias)
+    } else if (l$type == "batch_norm" && !is.null(l$weights$gamma)) {
+      wdata$gamma <- ggml_backend_tensor_get_data(l$weights$gamma)
+      wdata$beta  <- ggml_backend_tensor_get_data(l$weights$beta)
+    } else if (l$type == "lstm" && !is.null(l$weights$W_gates)) {
+      wdata$W_gates <- ggml_backend_tensor_get_data(l$weights$W_gates)
+      wdata$U_gates <- ggml_backend_tensor_get_data(l$weights$U_gates)
+      wdata$b_gates <- ggml_backend_tensor_get_data(l$weights$b_gates)
+    } else if (l$type == "gru" && !is.null(l$weights$W_zh)) {
+      wdata$W_zh <- ggml_backend_tensor_get_data(l$weights$W_zh)
+      wdata$U_zh <- ggml_backend_tensor_get_data(l$weights$U_zh)
+      wdata$b_zh <- ggml_backend_tensor_get_data(l$weights$b_zh)
+      wdata$W_n  <- ggml_backend_tensor_get_data(l$weights$W_n)
+      wdata$U_n  <- ggml_backend_tensor_get_data(l$weights$U_n)
+      wdata$b_n  <- ggml_backend_tensor_get_data(l$weights$b_n)
+    } else if (l$type == "embedding" && !is.null(l$weights$weight)) {
+      wdata$weight <- ggml_backend_tensor_get_data(l$weights$weight)
+    }
+    list(type        = l$type,
+         name        = l$name,
+         trainable   = l$trainable,
+         config      = l$config,
+         input_shape = l$input_shape,
+         output_shape= l$output_shape,
+         weights_data= wdata)
+  })
+
+  saveRDS(list(
+    model_class  = "ggml_sequential_model",
+    input_shape  = model$input_shape,
+    layers       = layers_clean,
+    compilation  = list(
+      optimizer = model$compilation$optimizer,
+      loss      = model$compilation$loss,
+      metrics   = model$compilation$metrics
+    ),
+    version = 2L
+  ), path)
+  invisible(model)
+}
+
+#' @export
+ggml_save_model.ggml_functional_model <- function(model, path) {
+  if (!model$compiled) stop("Model must be compiled before saving.")
+
+  # node_weights: list of node_id -> list of ggml tensors
+  # Extract numeric data from each tensor
+  nw_data <- NULL
+  if (!is.null(model$node_weights)) {
+    nw_data <- lapply(model$node_weights, function(wlist) {
+      lapply(wlist, function(t) {
+        if (is.null(t)) NULL else ggml_backend_tensor_get_data(t)
+      })
+    })
+  }
+
+  saveRDS(list(
+    model_class  = "ggml_functional_model",
+    inputs       = model$inputs,     # pure R ggml_tensor_node lists
+    outputs      = model$outputs,
+    compilation  = list(
+      optimizer = model$compilation$optimizer,
+      loss      = model$compilation$loss,
+      metrics   = model$compilation$metrics
+    ),
+    node_weights_data = nw_data,
+    version = 2L
+  ), path)
+  invisible(model)
+}
+
+#' Load a Full Model (Architecture + Weights)
+#'
+#' Restores a model previously saved with \code{ggml_save_model()}.  The
+#' returned model is compiled and ready for \code{ggml_predict()} /
+#' \code{ggml_evaluate()}.  Call \code{ggml_fit()} again to continue training.
+#'
+#' @param path File path to an RDS file written by \code{ggml_save_model()}.
+#' @param backend Backend selection: \code{"auto"}, \code{"cpu"}, or
+#'   \code{"vulkan"}.
+#' @return A compiled model object.
+#' @export
+#' @examples
+#' \donttest{
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_dense(16L, activation = "relu", input_shape = 4L) |>
+#'   ggml_layer_dense(2L,  activation = "softmax")
+#' model <- ggml_compile(model, optimizer = "adam",
+#'                        loss = "categorical_crossentropy")
+#' x <- matrix(runif(64 * 4), 64, 4)
+#' y <- matrix(c(rep(c(1,0), 32), rep(c(0,1), 32)), 64, 2)
+#' model <- ggml_fit(model, x, y, epochs = 1L, batch_size = 32L, verbose = 0L)
+#' tmp <- tempfile(fileext = ".rds")
+#' ggml_save_model(model, tmp)
+#' model2 <- ggml_load_model(tmp)
+#' }
+ggml_load_model <- function(path, backend = "auto") {
+  data <- readRDS(path)
+  if (is.null(data$version) || data$version < 2L) {
+    stop("This file was saved with ggml_save_weights(). ",
+         "Use ggml_load_weights() instead, or re-save with ggml_save_model().")
+  }
+
+  if (data$model_class == "ggml_sequential_model") {
+    # Reconstruct sequential model
+    model <- ggml_model_sequential()
+    model$input_shape <- data$input_shape
+
+    for (ldata in data$layers) {
+      layer <- list(
+        type         = ldata$type,
+        name         = ldata$name,
+        trainable    = ldata$trainable,
+        config       = ldata$config,
+        input_shape  = ldata$input_shape,
+        output_shape = ldata$output_shape,
+        weights      = list(),
+        weights_data = ldata$weights_data
+      )
+      model$layers <- c(model$layers, list(layer))
+    }
+
+    model <- ggml_compile(model,
+      optimizer = data$compilation$optimizer,
+      loss      = data$compilation$loss,
+      metrics   = data$compilation$metrics,
+      backend   = backend
+    )
+    return(invisible(model))
+
+  } else if (data$model_class == "ggml_functional_model") {
+    model <- ggml_model(inputs = data$inputs, outputs = data$outputs)
+    model <- ggml_compile(model,
+      optimizer = data$compilation$optimizer,
+      loss      = data$compilation$loss,
+      metrics   = data$compilation$metrics,
+      backend   = backend
+    )
+
+    # Ensure no stale ggml tensor pointers from the freshly-created model.
+    model$node_weights <- NULL
+
+    # Restore node_weights as R-vector lists so nn_build_functional_graph
+    # picks them up via the swd (saved_weights_data) path.
+    if (!is.null(data$node_weights_data)) {
+      model$node_weights_data <- data$node_weights_data
+    }
+    return(invisible(model))
+  } else {
+    stop("Unknown model class in saved file: ", data$model_class)
+  }
 }

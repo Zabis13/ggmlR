@@ -239,15 +239,15 @@ test_that("ggml_callback_early_stopping sets state$stop after patience", {
   state$stop <- FALSE
 
   # Epoch 1: first value — sets best, no stop
-  cb$on_epoch_end(1, list(val_loss = 1.0), state)
+  suppressMessages(cb$on_epoch_end(1, list(val_loss = 1.0), state))
   expect_false(state$stop)
 
   # Epoch 2: no improvement (wait=1, patience=2)
-  cb$on_epoch_end(2, list(val_loss = 1.0), state)
+  suppressMessages(cb$on_epoch_end(2, list(val_loss = 1.0), state))
   expect_false(state$stop)
 
   # Epoch 3: no improvement (wait=2 >= patience=2) → stop
-  cb$on_epoch_end(3, list(val_loss = 1.0), state)
+  suppressMessages(cb$on_epoch_end(3, list(val_loss = 1.0), state))
   expect_true(state$stop)
 })
 
@@ -256,12 +256,12 @@ test_that("ggml_callback_early_stopping resets wait on improvement", {
   state <- new.env(parent = emptyenv())
   state$stop <- FALSE
 
-  cb$on_epoch_end(1, list(val_loss = 1.0), state)
-  cb$on_epoch_end(2, list(val_loss = 1.0), state)  # wait=1
-  cb$on_epoch_end(3, list(val_loss = 0.5), state)  # improvement → wait=0
+  suppressMessages(cb$on_epoch_end(1, list(val_loss = 1.0), state))
+  suppressMessages(cb$on_epoch_end(2, list(val_loss = 1.0), state))  # wait=1
+  suppressMessages(cb$on_epoch_end(3, list(val_loss = 0.5), state))  # improvement → wait=0
   expect_false(state$stop)
 
-  cb$on_epoch_end(4, list(val_loss = 0.5), state)  # wait=1
+  suppressMessages(cb$on_epoch_end(4, list(val_loss = 0.5), state))  # wait=1
   expect_false(state$stop)
 })
 
@@ -270,8 +270,8 @@ test_that("ggml_callback_early_stopping mode=max works", {
   state <- new.env(parent = emptyenv())
   state$stop <- FALSE
 
-  cb$on_epoch_end(1, list(train_accuracy = 0.8), state)
-  cb$on_epoch_end(2, list(train_accuracy = 0.7), state)  # wait=1 >= patience=1 → stop
+  suppressMessages(cb$on_epoch_end(1, list(train_accuracy = 0.8), state))
+  suppressMessages(cb$on_epoch_end(2, list(train_accuracy = 0.7), state))  # wait=1 >= patience=1 → stop
   expect_true(state$stop)
 })
 
@@ -289,14 +289,14 @@ test_that("ggml_callback_early_stopping stops ggml_fit early", {
   on.exit(cleanup_setup(s))
 
   # patience=1: should stop after 2 epochs with no improvement
-  hist <- ggml_fit(
+  hist <- suppressMessages(ggml_fit(
     s$sched, s$ctx_compute, s$inputs, s$outputs, s$dataset,
     nepoch = 20L, nbatch_logical = 10L,
     val_split = 0.2, silent = TRUE,
     callbacks = list(
       ggml_callback_early_stopping(monitor = "val_loss", patience = 1)
     )
-  )
+  ))
 
   # Should have stopped before 20 epochs
   expect_lt(nrow(hist), 20)
@@ -331,15 +331,15 @@ test_that("ggml_schedule_step_decay reduces LR at step boundary", {
   cb <- ggml_schedule_step_decay(step_size = 2, gamma = 0.5)
 
   # Epoch 1: no reduction
-  cb$on_epoch_begin(1, list(), state)
+  suppressMessages(cb$on_epoch_begin(1, list(), state))
   expect_equal(ggml_opt_get_lr(ctx_list$lr_ud)["adamw"], initial_lr, tolerance = 1e-6)
 
   # Epoch 2: no reduction (step boundary is at epoch 3: (3-1) %% 2 == 0)
-  cb$on_epoch_begin(2, list(), state)
+  suppressMessages(cb$on_epoch_begin(2, list(), state))
   expect_equal(ggml_opt_get_lr(ctx_list$lr_ud)["adamw"], initial_lr, tolerance = 1e-6)
 
   # Epoch 3: (3-1) %% 2 == 0 → reduce
-  cb$on_epoch_begin(3, list(), state)
+  suppressMessages(cb$on_epoch_begin(3, list(), state))
   expect_equal(ggml_opt_get_lr(ctx_list$lr_ud)["adamw"],
                initial_lr * 0.5, tolerance = 1e-6)
 })
@@ -432,9 +432,9 @@ test_that("ggml_schedule_reduce_on_plateau reduces LR after patience epochs", {
   cb <- ggml_schedule_reduce_on_plateau(monitor = "val_loss", factor = 0.5,
                                          patience = 2, min_lr = 1e-9)
 
-  cb$on_epoch_end(1, list(val_loss = 1.0), state)  # best=1.0, wait=0
-  cb$on_epoch_end(2, list(val_loss = 1.0), state)  # wait=1
-  cb$on_epoch_end(3, list(val_loss = 1.0), state)  # wait=2 >= patience → reduce
+  suppressMessages(cb$on_epoch_end(1, list(val_loss = 1.0), state))  # best=1.0, wait=0
+  suppressMessages(cb$on_epoch_end(2, list(val_loss = 1.0), state))  # wait=1
+  suppressMessages(cb$on_epoch_end(3, list(val_loss = 1.0), state))  # wait=2 >= patience → reduce
 
   lr_new <- ggml_opt_get_lr(ctx_list$lr_ud)["adamw"]
   expect_equal(lr_new, initial_lr * 0.5, tolerance = 1e-6)
@@ -460,8 +460,8 @@ test_that("ggml_schedule_reduce_on_plateau respects min_lr floor", {
   cb <- ggml_schedule_reduce_on_plateau(monitor = "val_loss", factor = 0.1,
                                          patience = 1, min_lr = min_lr)
 
-  cb$on_epoch_end(1, list(val_loss = 1.0), state)
-  cb$on_epoch_end(2, list(val_loss = 1.0), state)  # reduce: max(1e-8 * 0.1, 1e-7) = 1e-7
+  suppressMessages(cb$on_epoch_end(1, list(val_loss = 1.0), state))
+  suppressMessages(cb$on_epoch_end(2, list(val_loss = 1.0), state))  # reduce: max(1e-8 * 0.1, 1e-7) = 1e-7
 
   lr_new <- ggml_opt_get_lr(ctx_list$lr_ud)["adamw"]
   expect_gte(lr_new, min_lr - 1e-10)
@@ -486,18 +486,18 @@ test_that("ggml_schedule_reduce_on_plateau resets wait after reduction", {
   cb <- ggml_schedule_reduce_on_plateau(monitor = "val_loss", factor = 0.5,
                                          patience = 2, min_lr = 1e-9)
 
-  cb$on_epoch_end(1, list(val_loss = 1.0), state)  # best=1.0, wait=0
-  cb$on_epoch_end(2, list(val_loss = 1.0), state)  # wait=1
-  cb$on_epoch_end(3, list(val_loss = 1.0), state)  # wait=2 >= 2 → reduce, wait=0
+  suppressMessages(cb$on_epoch_end(1, list(val_loss = 1.0), state))  # best=1.0, wait=0
+  suppressMessages(cb$on_epoch_end(2, list(val_loss = 1.0), state))  # wait=1
+  suppressMessages(cb$on_epoch_end(3, list(val_loss = 1.0), state))  # wait=2 >= 2 → reduce, wait=0
   lr_after_first_reduce <- unname(ggml_opt_get_lr(ctx_list$lr_ud)["adamw"])
   expect_equal(lr_after_first_reduce, initial_lr * 0.5, tolerance = 1e-6)
 
   # After reset, wait=0: next 2 non-improving epochs needed before second reduce
-  cb$on_epoch_end(4, list(val_loss = 1.0), state)  # wait=1
+  suppressMessages(cb$on_epoch_end(4, list(val_loss = 1.0), state))  # wait=1
   lr_after_fourth <- unname(ggml_opt_get_lr(ctx_list$lr_ud)["adamw"])
   expect_equal(lr_after_fourth, lr_after_first_reduce, tolerance = 1e-8)  # no reduction yet
 
-  cb$on_epoch_end(5, list(val_loss = 1.0), state)  # wait=2 >= 2 → second reduce
+  suppressMessages(cb$on_epoch_end(5, list(val_loss = 1.0), state))  # wait=2 >= 2 → second reduce
   lr_after_second_reduce <- unname(ggml_opt_get_lr(ctx_list$lr_ud)["adamw"])
   expect_equal(lr_after_second_reduce, lr_after_first_reduce * 0.5, tolerance = 1e-7)
 })
@@ -510,47 +510,47 @@ test_that("ggml_fit with step_decay callback runs without error", {
   s <- make_linear_setup()
   on.exit(cleanup_setup(s))
 
-  expect_no_error(
+  expect_no_error(suppressMessages(
     ggml_fit(s$sched, s$ctx_compute, s$inputs, s$outputs, s$dataset,
              nepoch = 4L, nbatch_logical = 10L, silent = TRUE,
              callbacks = list(ggml_schedule_step_decay(step_size = 2, gamma = 0.5)))
-  )
+  ))
 })
 
 test_that("ggml_fit with cosine_decay callback runs without error", {
   s <- make_linear_setup()
   on.exit(cleanup_setup(s))
 
-  expect_no_error(
+  expect_no_error(suppressMessages(
     ggml_fit(s$sched, s$ctx_compute, s$inputs, s$outputs, s$dataset,
              nepoch = 4L, nbatch_logical = 10L, silent = TRUE,
              callbacks = list(ggml_schedule_cosine_decay(T_max = 4)))
-  )
+  ))
 })
 
 test_that("ggml_fit with reduce_on_plateau callback runs without error", {
   s <- make_linear_setup()
   on.exit(cleanup_setup(s))
 
-  expect_no_error(
+  expect_no_error(suppressMessages(
     ggml_fit(s$sched, s$ctx_compute, s$inputs, s$outputs, s$dataset,
              nepoch = 4L, nbatch_logical = 10L, val_split = 0.2, silent = TRUE,
              callbacks = list(ggml_schedule_reduce_on_plateau(patience = 2)))
-  )
+  ))
 })
 
 test_that("ggml_fit with multiple callbacks runs without error", {
   s <- make_linear_setup()
   on.exit(cleanup_setup(s))
 
-  expect_no_error(
+  expect_no_error(suppressMessages(
     ggml_fit(s$sched, s$ctx_compute, s$inputs, s$outputs, s$dataset,
              nepoch = 6L, nbatch_logical = 10L, val_split = 0.2, silent = TRUE,
              callbacks = list(
                ggml_schedule_cosine_decay(T_max = 6),
                ggml_callback_early_stopping(monitor = "val_loss", patience = 3)
              ))
-  )
+  ))
 })
 
 test_that("custom on_epoch_end callback receives correct epoch number", {

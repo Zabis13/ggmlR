@@ -1,8 +1,26 @@
+#' Bind Two Arrays Along the First Dimension
+#'
+#' Concatenates two arrays along the first dimension (samples axis).
+#'
+#' @param a First array
+#' @param b Second array (must match dimensions of \code{a} except along dim 1)
+#' @return Combined array
+#' @keywords internal
+abind_first <- function(a, b) {
+  da <- dim(a)
+  db <- dim(b)
+  if (length(da) != length(db) || !all(da[-1] == db[-1])) {
+    stop("validation_data dimensions do not match training data dimensions")
+  }
+  out <- array(c(a, b), dim = c(da[1] + db[1], da[-1]))
+  out
+}
+
 #' Create Context with Auto-sizing
 #'
-#' Creates a context with automatically calculated size based on planned tensors
+#' Creates a context with automatically calculated size based on planned tensors.
 #'
-#' @param ... Named arguments with tensor dimensions
+#' @param ... Named arguments with tensor dimensions (integer vectors)
 #' @param extra_mb Extra megabytes to add (default: 10)
 #' @param type Tensor type (default: GGML_TYPE_F32)
 #' @param no_alloc If TRUE, don't allocate memory for tensors (default: FALSE)
@@ -10,8 +28,7 @@
 #' @export
 #' @examples
 #' \donttest{
-#' # For two 1000x1000 matrices
-#' ctx <- ggml_init_auto(mat1 = c(1000, 1000), mat2 = c(1000, 1000))
+#' ctx <- ggml_init_auto(mat1 = c(1000L, 1000L), mat2 = c(1000L, 1000L))
 #' ggml_free(ctx)
 #' }
 ggml_init_auto <- function(..., extra_mb = 10, type = GGML_TYPE_F32, no_alloc = FALSE) {

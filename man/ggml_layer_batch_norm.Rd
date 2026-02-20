@@ -4,12 +4,16 @@
 \alias{ggml_layer_batch_norm}
 \title{Add Batch Normalization Layer}
 \usage{
-ggml_layer_batch_norm(model, eps = 1e-05)
+ggml_layer_batch_norm(model, eps = 1e-05, name = NULL, trainable = TRUE)
 }
 \arguments{
 \item{model}{A ggml_sequential_model object}
 
 \item{eps}{Small constant for numerical stability (default 1e-5)}
+
+\item{name}{Optional character name for the layer.}
+
+\item{trainable}{Logical; whether the layer weights are updated during training.}
 }
 \value{
 The model object with the batch_norm layer appended (invisibly).

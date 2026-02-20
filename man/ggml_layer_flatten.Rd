@@ -4,10 +4,14 @@
 \alias{ggml_layer_flatten}
 \title{Add Flatten Layer}
 \usage{
-ggml_layer_flatten(model)
+ggml_layer_flatten(model, name = NULL, trainable = TRUE)
 }
 \arguments{
 \item{model}{A ggml_sequential_model object}
+
+\item{name}{Optional character name for the layer.}
+
+\item{trainable}{Logical; reserved for API consistency (no weights).}
 }
 \value{
 The model object with the flatten layer appended (invisibly).
