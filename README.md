@@ -215,7 +215,7 @@ m <- ggml_model(inputs = list(x1, x2), outputs = out)
 | Shared layers | reuse layer object | `ggml_dense()` + `ggml_apply()` |
 | Multi-input data | list of arrays | `list()` of R matrices |
 | Multi-output predict | list of numpy arrays | R list of matrices |
-| Backend | TensorFlow / JAX / PyTorch | ggml (CPU + Vulkan GPU) |
+| Backend | TensorFlow / JAX / PyTorch | ggml (Vulkan GPU, CPU fallback) |
 
 ## Dynamic Autograd Engine (PyTorch-style)
 

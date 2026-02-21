@@ -465,12 +465,15 @@ dp_train <- function(make_model,
 
   for (iter in seq_len(n_iter)) {
 
-    # partition data round-robin across replicas for this iteration
-    sample_idx  <- ((iter - 1L) %% n_data) + 1L
-    sample      <- data[[sample_idx]]
+    # each replica gets a different sample (true data-parallel):
+    # replica i processes data[[ base + i ]], round-robin over dataset
+    base <- ((iter - 1L) * n_gpu) %% n_data
 
-    # run forward+backward on each replica
-    results <- lapply(seq_len(n_gpu), function(i) .replica_step(i, sample))
+    # run forward+backward on each replica with its own sample
+    results <- lapply(seq_len(n_gpu), function(i) {
+      idx <- (base + i - 1L) %% n_data + 1L
+      .replica_step(i, data[[idx]])
+    })
 
     # average loss
     iter_loss <- mean(vapply(results, `[[`, numeric(1L), "loss"), na.rm = TRUE)
@@ -497,6 +500,8 @@ dp_train <- function(make_model,
       cat(sprintf("[dp_train] iter %4d / %d  loss = %.6f\n", iter, n_iter, iter_loss))
     }
   }
+
+  tryCatch(ag_device(orig_device), error = function(e) NULL)
 
   list(
     params       = replicas[[1L]]$parameters(),
