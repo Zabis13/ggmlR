@@ -45,7 +45,7 @@ test_that("ag_matmul CPU path unchanged after refactor", {
   A <- ag_param(matrix(c(1, 0, 0, 1), 2, 2))
   B <- ag_tensor(matrix(c(1, 2, 3, 4), 2, 2))
   out <- ag_matmul(A, B)
-  expect_equal(.ag_data(out), .ag_data(B))
+  expect_equal(ggmlR:::.ag_data(out), ggmlR:::.ag_data(B))
 })
 
 test_that("ag_relu CPU path unchanged after refactor", {
@@ -83,7 +83,7 @@ test_that("full training loop (CPU) still reduces loss", {
     grads <- backward(loss)
     opt$step(grads)
     opt$zero_grad()
-    losses[i] <- .ag_data(loss)[1]
+    losses[i] <- ggmlR:::.ag_data(loss)[1]
   }
 
   expect_lt(mean(losses[21:30]), mean(losses[1:10]))
@@ -138,7 +138,7 @@ test_that("ag_matmul GPU forward equals CPU forward (tol=1e-4)", {
   with_grad_tape({
     out <- ag_matmul(A, B)
   })
-  result <- .ag_data(out)
+  result <- ggmlR:::.ag_data(out)
 
   expect_equal(result, expected, tolerance = 1e-4)
   reset_to_cpu()
@@ -155,7 +155,7 @@ test_that("ag_relu GPU forward equals CPU forward", {
   with_grad_tape({
     out <- ag_relu(x)
   })
-  result <- .ag_data(out)
+  result <- ggmlR:::.ag_data(out)
 
   expect_equal(result, expected, tolerance = 1e-6)
   reset_to_cpu()
@@ -236,7 +236,7 @@ test_that("training loop on GPU reduces loss over 10 epochs", {
     grads <- backward(loss)
     opt$step(grads)
     opt$zero_grad()
-    losses[i] <- as.numeric(.ag_data(loss))
+    losses[i] <- as.numeric(ggmlR:::.ag_data(loss))
   }
 
   expect_lt(losses[10L], losses[1L])
@@ -254,5 +254,183 @@ test_that("ag_to_device(tensor, 'cpu') correctly copies GPU data", {
   cpu_t <- ag_to_device(gpu_t, "cpu")
   expect_equal(cpu_t$device, "cpu")
   expect_equal(cpu_t$data, d, tolerance = 1e-6)
+  reset_to_cpu()
+})
+
+test_that("ag_softmax GPU forward equals CPU forward", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(21)
+  x_mat <- matrix(runif(12, -2, 2), 3, 4)
+  # CPU reference: column-wise softmax
+  mx  <- apply(x_mat, 2, max)
+  mx  <- matrix(mx, 3, 4, byrow = TRUE)
+  e   <- exp(x_mat - mx)
+  expected <- e / matrix(colSums(e), 3, 4, byrow = TRUE)
+
+  ag_device("gpu")
+  x <- ag_tensor(x_mat, device = "gpu")
+  with_grad_tape({ out <- ag_softmax(x) })
+  result <- ggmlR:::.ag_data(out)
+
+  expect_equal(result, expected, tolerance = 1e-5)
+  reset_to_cpu()
+})
+
+test_that("ag_add GPU with [m,1] broadcast equals CPU", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(22)
+  a_mat <- matrix(runif(12), 3, 4)
+  b_mat <- matrix(runif(3),  3, 1)
+  expected <- a_mat + as.vector(b_mat)
+
+  ag_device("gpu")
+  A <- ag_tensor(a_mat, device = "gpu")
+  B <- ag_param(b_mat, device = "gpu")
+  with_grad_tape({ out <- ag_add(A, B) })
+  result <- ggmlR:::.ag_data(out)
+
+  expect_equal(result, expected, tolerance = 1e-5)
+  reset_to_cpu()
+})
+
+test_that("ag_dtype('bf16') + ag_matmul GPU result close to f32", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(51)
+  a_mat <- matrix(runif(6), 2, 3)
+  b_mat <- matrix(runif(6), 3, 2)
+  expected <- a_mat %*% b_mat
+
+  ag_device("gpu"); ag_dtype("bf16")
+  A <- ag_param(a_mat, device = "gpu")
+  B <- ag_tensor(b_mat, device = "gpu")
+  expect_equal(A$dtype, "bf16")
+  with_grad_tape({ out <- ag_matmul(A, B) })
+  result <- ggmlR:::.ag_data(out)
+
+  # bf16 has ~3 decimal digits of precision
+  expect_equal(result, expected, tolerance = 1e-2)
+  expect_equal(out$dtype, "bf16")
+  ag_dtype("f32"); reset_to_cpu()
+})
+
+test_that("ag_dtype('f16') + ag_relu GPU result close to f32", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(52)
+  x_mat <- matrix(runif(8, -1, 1), 2, 4)
+  expected <- pmax(x_mat, 0)
+
+  ag_device("gpu"); ag_dtype("f16")
+  x <- ag_param(x_mat, device = "gpu")
+  with_grad_tape({ out <- ag_relu(x) })
+  result <- ggmlR:::.ag_data(out)
+
+  expect_equal(result, expected, tolerance = 1e-2)
+  ag_dtype("f32"); reset_to_cpu()
+})
+
+test_that("ag_default_dtype returns f32 by default", {
+  ag_dtype("f32")
+  expect_equal(ag_default_dtype(), "f32")
+})
+
+test_that("ag_dtype switches and returns previous", {
+  ag_dtype("f32")
+  prev <- ag_dtype("bf16")
+  expect_equal(prev, "f32")
+  expect_equal(ag_default_dtype(), "bf16")
+  ag_dtype("f32")
+})
+
+test_that("ag_sum GPU dim=1 (rowSums) equals CPU", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(31)
+  x_mat <- matrix(runif(12), 3, 4)
+  ag_device("gpu")
+  x <- ag_tensor(x_mat, device = "gpu")
+  with_grad_tape({ out <- ag_sum(x, dim = 1L) })
+  expect_equal(ggmlR:::.ag_data(out), matrix(rowSums(x_mat), 3, 1), tolerance = 1e-5)
+  reset_to_cpu()
+})
+
+test_that("ag_sum GPU dim=2 (colSums) equals CPU", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(32)
+  x_mat <- matrix(runif(12), 3, 4)
+  ag_device("gpu")
+  x <- ag_tensor(x_mat, device = "gpu")
+  with_grad_tape({ out <- ag_sum(x, dim = 2L) })
+  expect_equal(ggmlR:::.ag_data(out), matrix(colSums(x_mat), 1, 4), tolerance = 1e-5)
+  reset_to_cpu()
+})
+
+test_that("ag_mean GPU dim=1 (rowMeans) equals CPU", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(33)
+  x_mat <- matrix(runif(12), 3, 4)
+  ag_device("gpu")
+  x <- ag_tensor(x_mat, device = "gpu")
+  with_grad_tape({ out <- ag_mean(x, dim = 1L) })
+  expect_equal(ggmlR:::.ag_data(out), matrix(rowMeans(x_mat), 3, 1), tolerance = 1e-5)
+  reset_to_cpu()
+})
+
+test_that("ag_mean GPU dim=2 (colMeans) equals CPU", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(34)
+  x_mat <- matrix(runif(12), 3, 4)
+  ag_device("gpu")
+  x <- ag_tensor(x_mat, device = "gpu")
+  with_grad_tape({ out <- ag_mean(x, dim = 2L) })
+  expect_equal(ggmlR:::.ag_data(out), matrix(colMeans(x_mat), 1, 4), tolerance = 1e-5)
+  reset_to_cpu()
+})
+
+test_that("ag_pow GPU p=2 (sqr) equals CPU", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(41)
+  x_mat <- matrix(runif(6, 0.1, 2), 2, 3)
+  ag_device("gpu")
+  x <- ag_tensor(x_mat, device = "gpu")
+  with_grad_tape({ out <- ag_pow(x, 2) })
+  expect_equal(ggmlR:::.ag_data(out), x_mat^2, tolerance = 1e-5)
+  reset_to_cpu()
+})
+
+test_that("ag_pow GPU p=0.5 (sqrt) equals CPU", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(42)
+  x_mat <- matrix(runif(6, 0.1, 2), 2, 3)
+  ag_device("gpu")
+  x <- ag_tensor(x_mat, device = "gpu")
+  with_grad_tape({ out <- ag_pow(x, 0.5) })
+  expect_equal(ggmlR:::.ag_data(out), x_mat^0.5, tolerance = 1e-5)
+  reset_to_cpu()
+})
+
+test_that("ag_pow GPU p=3 (general) equals CPU", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(43)
+  x_mat <- matrix(runif(6, 0.1, 2), 2, 3)
+  ag_device("gpu")
+  x <- ag_tensor(x_mat, device = "gpu")
+  with_grad_tape({ out <- ag_pow(x, 3) })
+  expect_equal(ggmlR:::.ag_data(out), x_mat^3, tolerance = 1e-4)
+  reset_to_cpu()
+})
+
+test_that("ag_add GPU with [1,n] broadcast equals CPU", {
+  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  set.seed(23)
+  a_mat <- matrix(runif(12), 3, 4)
+  b_mat <- matrix(runif(4),  1, 4)
+  expected <- a_mat + rep(b_mat, each = 3)
+
+  ag_device("gpu")
+  A <- ag_tensor(a_mat, device = "gpu")
+  B <- ag_param(b_mat, device = "gpu")
+  with_grad_tape({ out <- ag_add(A, B) })
+  result <- ggmlR:::.ag_data(out)
+
+  expect_equal(result, expected, tolerance = 1e-5)
   reset_to_cpu()
 })

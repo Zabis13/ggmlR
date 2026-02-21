@@ -4,7 +4,11 @@
 \alias{ag_tensor}
 \title{Create a dynamic tensor (no gradient tracking)}
 \usage{
-ag_tensor(data, device = .ag_device_state$device)
+ag_tensor(
+  data,
+  device = .ag_device_state$device,
+  dtype = .ag_device_state$dtype
+)
 }
 \arguments{
 \item{data}{Numeric matrix or vector}

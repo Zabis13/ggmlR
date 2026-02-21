@@ -12,6 +12,7 @@
 #'   \item \code{GGML_TYPE_Q4_1}: 4-bit quantization type 1
 #'   \item \code{GGML_TYPE_Q8_0}: 8-bit quantization type 0
 #'   \item \code{GGML_TYPE_I32}: 32-bit integer
+#'   \item \code{GGML_TYPE_BF16}: 16-bit brain float (bfloat16)
 #' }
 #' @export
 #' @examples
@@ -41,6 +42,10 @@ GGML_TYPE_Q8_0 <- 8L
 #' @rdname GGML_TYPE_F32
 #' @export
 GGML_TYPE_I32  <- 26L
+
+#' @rdname GGML_TYPE_F32
+#' @export
+GGML_TYPE_BF16 <- 30L
 
 #' Create 1D Tensor
 #' @param ctx GGML context

@@ -61,7 +61,8 @@ ag_next_id <- function() {
 #'   compute operations will be dispatched to the ggml backend.
 #' @return An ag_tensor object (environment)
 #' @export
-ag_tensor <- function(data, device = .ag_device_state$device) {
+ag_tensor <- function(data, device = .ag_device_state$device,
+                      dtype = .ag_device_state$dtype) {
   if (is.vector(data) && !is.list(data)) data <- matrix(data, ncol = 1L)
   e <- new.env(parent = emptyenv())
   e$id            <- ag_next_id()
@@ -70,6 +71,7 @@ ag_tensor <- function(data, device = .ag_device_state$device) {
   e$requires_grad <- FALSE
   e$grad_fn       <- NULL
   e$device        <- device
+  e$dtype         <- dtype
   class(e) <- "ag_tensor"
   e
 }
@@ -80,8 +82,9 @@ ag_tensor <- function(data, device = .ag_device_state$device) {
 #' @param device \code{"cpu"} (default) or \code{"gpu"}
 #' @return An ag_tensor with requires_grad = TRUE
 #' @export
-ag_param <- function(data, device = .ag_device_state$device) {
-  t <- ag_tensor(data, device = device)
+ag_param <- function(data, device = .ag_device_state$device,
+                     dtype = .ag_device_state$dtype) {
+  t <- ag_tensor(data, device = device, dtype = dtype)
   t$requires_grad <- TRUE
   t
 }
@@ -97,8 +100,10 @@ is_ag_tensor <- function(x) inherits(x, "ag_tensor")
 #' @export
 print.ag_tensor <- function(x, ...) {
   d <- .ag_data(x)
+  dtype_str <- if (!is.null(x$dtype) && x$dtype != "f32") paste0(" [", x$dtype, "]") else ""
   cat("ag_tensor [", paste(dim(d), collapse = "x"), "]",
       if (!is.null(x$device) && x$device == "gpu") " [gpu]" else "",
+      dtype_str,
       if (x$requires_grad) " (requires_grad)" else "",
       "\n", sep = "")
   print(d)
@@ -190,8 +195,7 @@ ag_matmul <- function(A, B) {
     #   We need ggml_mul_mat(B_transposed_view, A) but that gets complex.
     #   Simpler: use ggml_out_prod(A,B) = A @ B^T, or just transpose result.
     #   Easiest correct route: compute in R and wrap in ag_tensor with gpu device.
-    result <- a_data %*% b_data
-    out    <- ag_tensor(result, device = "gpu")
+    out <- ag_tensor(.ag_gpu_matmul(a_data, b_data), device = "gpu", dtype = .ag_device_state$dtype)
   } else {
     out <- ag_tensor(a_data %*% b_data)
   }
@@ -235,15 +239,23 @@ ag_add <- function(A, B) {
   b_orig <- b_data
 
   # Broadcasting: if b is [m, 1] and a is [m, n], broadcast
-  if (!is.null(dim(b_data)) && !is.null(dim(a_data))) {
+  needs_broadcast <- !is.null(dim(b_data)) && !is.null(dim(a_data)) &&
+    ((ncol(b_data) == 1L && ncol(a_data) > 1L) ||
+     (nrow(b_data) == 1L && nrow(a_data) > 1L))
+
+  if (needs_broadcast) {
     if (ncol(b_data) == 1L && ncol(a_data) > 1L) {
       b_data <- matrix(b_data[, 1L], nrow = nrow(b_data), ncol = ncol(a_data))
-    } else if (nrow(b_data) == 1L && nrow(a_data) > 1L) {
+    } else {
       b_data <- matrix(b_data[1L, ], nrow = nrow(a_data), ncol = ncol(b_data), byrow = TRUE)
     }
   }
 
-  out <- ag_tensor(a_data + b_data, device = device)
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_add(a_data, b_data), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(a_data + b_data, device = device)
+  }
   out$requires_grad <- (is_ag_tensor(A) && A$requires_grad) ||
                        (is_ag_tensor(B) && B$requires_grad)
 
@@ -281,17 +293,51 @@ ag_sub <- function(A, B) {
   b_data <- .ag_data(B)
   device <- .ag_result_device(A, B)
 
-  out <- ag_tensor(a_data - b_data, device = device)
+  b_orig <- b_data
+
+  # Broadcasting: expand b to match a shape for GPU/elementwise computation
+  needs_broadcast <- !is.null(dim(b_data)) && !is.null(dim(a_data)) &&
+    ((ncol(b_data) == 1L && ncol(a_data) > 1L) ||
+     (nrow(b_data) == 1L && nrow(a_data) > 1L))
+
+  if (needs_broadcast && device != "gpu") {
+    if (ncol(b_data) == 1L && ncol(a_data) > 1L) {
+      b_data <- matrix(b_data[, 1L], nrow = nrow(b_data), ncol = ncol(a_data))
+    } else {
+      b_data <- matrix(b_data[1L, ], nrow = nrow(a_data), ncol = ncol(b_data), byrow = TRUE)
+    }
+  }
+
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_sub(a_data, b_orig), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(a_data - b_data, device = device)
+  }
   out$requires_grad <- (is_ag_tensor(A) && A$requires_grad) ||
                        (is_ag_tensor(B) && B$requires_grad)
 
   if (out$requires_grad) {
     A_ref <- A; B_ref <- B
     grad_fn <- function(grad_out) {
-      list(
-        A = if (is_ag_tensor(A_ref) && A_ref$requires_grad)  grad_out else NULL,
-        B = if (is_ag_tensor(B_ref) && B_ref$requires_grad) -grad_out else NULL
-      )
+      ga <- if (is_ag_tensor(A_ref) && A_ref$requires_grad) {
+        # reduce if A was broadcast-expanded (unlikely but handle symmetrically)
+        g <- grad_out
+        if (!is.null(dim(a_data)) && nrow(a_data) == 1L && nrow(g) > 1L)
+          g <- matrix(colSums(g), 1L)
+        if (!is.null(dim(a_data)) && ncol(a_data) == 1L && ncol(g) > 1L)
+          g <- matrix(rowSums(g), ncol = 1L)
+        g
+      } else NULL
+      gb <- if (is_ag_tensor(B_ref) && B_ref$requires_grad) {
+        g <- -grad_out
+        # reduce along broadcast dims
+        if (!is.null(dim(b_orig)) && nrow(b_orig) == 1L && nrow(g) > 1L)
+          g <- matrix(colSums(g), 1L)
+        if (!is.null(dim(b_orig)) && ncol(b_orig) == 1L && ncol(g) > 1L)
+          g <- matrix(rowSums(g), ncol = 1L)
+        g
+      } else NULL
+      list(A = ga, B = gb)
     }
     out$grad_fn <- grad_fn
     ag_record(out, grad_fn, list(A = A, B = B))
@@ -310,7 +356,11 @@ ag_mul <- function(A, B) {
   b_data <- .ag_data(B)
   device <- .ag_result_device(A, B)
 
-  out <- ag_tensor(a_data * b_data, device = device)
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_mul(a_data, b_data), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(a_data * b_data, device = device)
+  }
   out$requires_grad <- (is_ag_tensor(A) && A$requires_grad) ||
                        (is_ag_tensor(B) && B$requires_grad)
 
@@ -318,9 +368,23 @@ ag_mul <- function(A, B) {
     a_snap <- a_data; b_snap <- b_data
     A_ref  <- A;     B_ref  <- B
     grad_fn <- function(grad_out) {
+      # Handle broadcast: if a shape != b shape, reduce gradient along broadcast dims
+      .mul_grad <- function(grad, snap_self, snap_other) {
+        # raw gradient: grad_out * other
+        g <- grad_out * snap_other[
+          rep(seq_len(nrow(snap_other)), length.out = nrow(grad_out)),
+          rep(seq_len(ncol(snap_other)), length.out = ncol(grad_out)),
+          drop = FALSE
+        ]
+        # reduce rows if snap_self had 1 row
+        if (nrow(snap_self) == 1L && nrow(g) > 1L) g <- matrix(colSums(g), 1L, ncol(g))
+        # reduce cols if snap_self had 1 col
+        if (ncol(snap_self) == 1L && ncol(g) > 1L) g <- matrix(rowSums(g), nrow(g), 1L)
+        g
+      }
       list(
-        A = if (is_ag_tensor(A_ref) && A_ref$requires_grad) grad_out * b_snap else NULL,
-        B = if (is_ag_tensor(B_ref) && B_ref$requires_grad) grad_out * a_snap else NULL
+        A = if (is_ag_tensor(A_ref) && A_ref$requires_grad) .mul_grad(grad_out, a_snap, b_snap) else NULL,
+        B = if (is_ag_tensor(B_ref) && B_ref$requires_grad) .mul_grad(grad_out, b_snap, a_snap) else NULL
       )
     }
     out$grad_fn <- grad_fn
@@ -338,7 +402,11 @@ ag_mul <- function(A, B) {
 ag_scale <- function(x, scalar) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  out    <- ag_tensor(x_data * scalar, device = device)
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_scale(x_data, scalar), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(x_data * scalar, device = device)
+  }
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
     x_ref <- x
@@ -359,7 +427,11 @@ ag_scale <- function(x, scalar) {
 ag_relu <- function(x) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  out    <- ag_tensor(pmax(x_data, 0), device = device)
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_relu(x_data), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(pmax(x_data, 0), device = device)
+  }
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
 
   if (out$requires_grad) {
@@ -382,8 +454,12 @@ ag_relu <- function(x) {
 ag_sigmoid <- function(x) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  s      <- 1.0 / (1.0 + exp(-x_data))
-  out    <- ag_tensor(s, device = device)
+  if (device == "gpu") {
+    s <- .ag_gpu_sigmoid(x_data)
+  } else {
+    s <- 1.0 / (1.0 + exp(-x_data))
+  }
+  out <- ag_tensor(s, device = device, dtype = .ag_device_state$dtype)
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
 
   if (out$requires_grad) {
@@ -403,8 +479,12 @@ ag_sigmoid <- function(x) {
 ag_tanh <- function(x) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  t_val  <- tanh(x_data)
-  out    <- ag_tensor(t_val, device = device)
+  if (device == "gpu") {
+    t_val <- .ag_gpu_tanh(x_data)
+  } else {
+    t_val <- tanh(x_data)
+  }
+  out <- ag_tensor(t_val, device = device, dtype = .ag_device_state$dtype)
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
 
   if (out$requires_grad) {
@@ -427,14 +507,18 @@ ag_tanh <- function(x) {
 ag_softmax <- function(x) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  # Numerically stable softmax
-  mx <- apply(x_data, 2, max)
-  mx <- matrix(mx, nrow = nrow(x_data), ncol = ncol(x_data), byrow = TRUE)
-  e  <- exp(x_data - mx)
-  s  <- matrix(colSums(e), nrow = nrow(x_data), ncol = ncol(x_data), byrow = TRUE)
-  p  <- e / s
+  if (device == "gpu") {
+    p <- .ag_gpu_softmax(x_data)
+  } else {
+    # Numerically stable softmax (column-wise)
+    mx <- apply(x_data, 2, max)
+    mx <- matrix(mx, nrow = nrow(x_data), ncol = ncol(x_data), byrow = TRUE)
+    e  <- exp(x_data - mx)
+    s  <- matrix(colSums(e), nrow = nrow(x_data), ncol = ncol(x_data), byrow = TRUE)
+    p  <- e / s
+  }
 
-  out <- ag_tensor(p, device = device)
+  out <- ag_tensor(p, device = device, dtype = .ag_device_state$dtype)
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
 
   if (out$requires_grad) {
@@ -810,27 +894,38 @@ ag_linear <- function(in_features, out_features, activation = NULL) {
 ag_sum <- function(x, dim = NULL, keepdim = FALSE) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  if (is.null(dim)) {
+  if (device == "gpu") {
+    if (is.null(dim)) {
+      out_data <- .ag_gpu_sum_all(x_data)
+    } else if (dim == 1L) {
+      out_data <- .ag_gpu_sum_rows(x_data)   # [nrow,1] — keepdim=TRUE same shape
+    } else {
+      out_data <- .ag_gpu_sum_cols(x_data)   # [1,ncol] — keepdim=TRUE same shape
+    }
+  } else if (is.null(dim)) {
     out_data <- matrix(sum(x_data))
   } else if (dim == 1L) {
-    out_data <- matrix(rowSums(x_data), ncol = if (keepdim) ncol(x_data) else 1L)
+    # dim=1: reduce rows → [nrow,1]
+    out_data <- matrix(rowSums(x_data), nrow(x_data), 1L)
   } else {
-    out_data <- matrix(colSums(x_data), nrow = if (keepdim) nrow(x_data) else 1L)
+    # dim=2: reduce cols → [1,ncol]; keepdim keeps shape [1,ncol]
+    out_data <- matrix(colSums(x_data), 1L, ncol(x_data))
   }
-  out <- ag_tensor(out_data, device = device)
+  out <- ag_tensor(out_data, device = device, dtype = .ag_device_state$dtype)
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
     orig_shape <- dim(x_data)
     dim_arg    <- dim
-    keepdim_arg <- keepdim
     grad_fn <- function(grad_out) {
       if (is.null(dim_arg)) {
         list(x = matrix(as.numeric(grad_out), orig_shape[1L], orig_shape[2L]))
       } else if (dim_arg == 1L) {
-        g <- if (keepdim_arg) grad_out else matrix(grad_out, orig_shape[1L], 1L)
+        # grad_out [nrow,1] → broadcast to [nrow,ncol]
+        g <- matrix(grad_out, orig_shape[1L], 1L)
         list(x = matrix(g, orig_shape[1L], orig_shape[2L]))
       } else {
-        g <- if (keepdim_arg) grad_out else matrix(grad_out, 1L, orig_shape[2L])
+        # grad_out [1,ncol] → broadcast to [nrow,ncol]
+        g <- matrix(grad_out, 1L, orig_shape[2L])
         list(x = matrix(rep(g, each = orig_shape[1L]), orig_shape[1L], orig_shape[2L]))
       }
     }
@@ -851,14 +946,27 @@ ag_mean <- function(x, dim = NULL, keepdim = FALSE) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
   n_all  <- length(x_data)
-  if (is.null(dim)) {
+  if (device == "gpu") {
+    if (is.null(dim)) {
+      out_data <- .ag_gpu_mean_all(x_data)
+      n_div    <- n_all
+    } else if (dim == 1L) {
+      out_data <- .ag_gpu_mean_rows(x_data)   # [nrow,1]
+      n_div    <- ncol(x_data)
+    } else {
+      out_data <- .ag_gpu_mean_cols(x_data)   # [1,ncol]
+      n_div    <- nrow(x_data)
+    }
+  } else if (is.null(dim)) {
     out_data <- matrix(mean(x_data))
     n_div    <- n_all
   } else if (dim == 1L) {
-    out_data <- matrix(rowMeans(x_data), ncol = if (keepdim) ncol(x_data) else 1L)
+    # dim=1: reduce rows → [nrow,1]
+    out_data <- matrix(rowMeans(x_data), nrow(x_data), 1L)
     n_div    <- ncol(x_data)
   } else {
-    out_data <- matrix(colMeans(x_data), nrow = if (keepdim) nrow(x_data) else 1L)
+    # dim=2: reduce cols → [1,ncol]
+    out_data <- matrix(colMeans(x_data), 1L, ncol(x_data))
     n_div    <- nrow(x_data)
   }
   out <- ag_tensor(out_data, device = device)
@@ -866,15 +974,16 @@ ag_mean <- function(x, dim = NULL, keepdim = FALSE) {
   if (out$requires_grad) {
     orig_shape <- dim(x_data)
     dim_arg    <- dim
-    keepdim_arg <- keepdim
     grad_fn <- function(grad_out) {
       if (is.null(dim_arg)) {
         list(x = matrix(as.numeric(grad_out) / n_div, orig_shape[1L], orig_shape[2L]))
       } else if (dim_arg == 1L) {
-        g <- if (keepdim_arg) grad_out else matrix(grad_out, orig_shape[1L], 1L)
+        # grad_out [nrow,1] → broadcast to [nrow,ncol]
+        g <- matrix(grad_out, orig_shape[1L], 1L)
         list(x = matrix(g / n_div, orig_shape[1L], orig_shape[2L]))
       } else {
-        g <- if (keepdim_arg) grad_out else matrix(grad_out, 1L, orig_shape[2L])
+        # grad_out [1,ncol] → broadcast to [nrow,ncol]
+        g <- matrix(grad_out, 1L, orig_shape[2L])
         list(x = matrix(rep(g, each = orig_shape[1L]) / n_div,
                         orig_shape[1L], orig_shape[2L]))
       }
@@ -893,7 +1002,11 @@ ag_mean <- function(x, dim = NULL, keepdim = FALSE) {
 ag_log <- function(x) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  out    <- ag_tensor(log(x_data), device = device)
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_log(x_data), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(log(x_data), device = device)
+  }
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
     x_snap <- x_data
@@ -912,8 +1025,12 @@ ag_log <- function(x) {
 ag_exp <- function(x) {
   x_data  <- .ag_data(x)
   device  <- if (is_ag_tensor(x)) x$device else "cpu"
-  e_val   <- exp(x_data)
-  out     <- ag_tensor(e_val, device = device)
+  if (device == "gpu") {
+    e_val <- .ag_gpu_exp(x_data)
+  } else {
+    e_val <- exp(x_data)
+  }
+  out <- ag_tensor(e_val, device = device, dtype = .ag_device_state$dtype)
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
     e_snap <- e_val
@@ -938,7 +1055,11 @@ ag_reshape <- function(x, nrow, ncol) {
   n          <- length(x_data)
   nrow       <- if (nrow == -1L) n %/% ncol else as.integer(nrow)
   ncol       <- if (ncol == -1L) n %/% nrow else as.integer(ncol)
-  out        <- ag_tensor(matrix(x_data, nrow, ncol), device = device)
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_reshape(x_data, nrow, ncol), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(matrix(x_data, nrow, ncol), device = device)
+  }
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
     grad_fn <- function(grad_out) {
@@ -958,7 +1079,11 @@ ag_reshape <- function(x, nrow, ncol) {
 ag_transpose <- function(x) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  out    <- ag_tensor(t(x_data), device = device)
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_transpose(x_data), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(t(x_data), device = device)
+  }
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
     grad_fn <- function(grad_out) list(x = t(grad_out))
@@ -981,7 +1106,13 @@ ag_transpose <- function(x) {
 ag_clamp <- function(x, lo = -Inf, hi = Inf) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  out    <- ag_tensor(pmin(pmax(x_data, lo), hi), device = device)
+  lo_fin <- if (is.finite(lo)) lo else -3.402823e+38
+  hi_fin <- if (is.finite(hi)) hi else  3.402823e+38
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_clamp(x_data, lo_fin, hi_fin), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(pmin(pmax(x_data, lo), hi), device = device)
+  }
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
     mask <- (x_data > lo & x_data < hi) * 1.0
@@ -1001,7 +1132,11 @@ ag_clamp <- function(x, lo = -Inf, hi = Inf) {
 ag_pow <- function(x, p) {
   x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  out    <- ag_tensor(x_data ^ p, device = device)
+  if (device == "gpu") {
+    out <- ag_tensor(.ag_gpu_pow(x_data, p), device = "gpu", dtype = .ag_device_state$dtype)
+  } else {
+    out <- ag_tensor(x_data ^ p, device = device)
+  }
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
     x_snap <- x_data
@@ -1023,6 +1158,17 @@ ag_pow <- function(x, p) {
     if (is_ag_tensor(a) && isTRUE(a$device == "gpu")) return("gpu")
   }
   "cpu"
+}
+
+# Return dtype of result: prefer non-f32 dtype from inputs, else global default.
+.ag_result_dtype <- function(...) {
+  args <- list(...)
+  for (a in args) {
+    if (is_ag_tensor(a) && !is.null(a$dtype) && a$dtype != "f32") return(a$dtype)
+  }
+  if (length(args) > 0 && is_ag_tensor(args[[1L]]) && !is.null(args[[1L]]$dtype))
+    return(args[[1L]]$dtype)
+  .ag_device_state$dtype
 }
 
 # ============================================================================

@@ -4,7 +4,11 @@
 \alias{ag_param}
 \title{Create a parameter tensor (gradient tracked)}
 \usage{
-ag_param(data, device = .ag_device_state$device)
+ag_param(
+  data,
+  device = .ag_device_state$device,
+  dtype = .ag_device_state$dtype
+)
 }
 \arguments{
 \item{data}{Numeric matrix or vector}

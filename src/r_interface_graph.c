@@ -1927,6 +1927,40 @@ SEXP R_ggml_backend_tensor_set(SEXP tensor_ptr, SEXP data_sexp, SEXP offset_sexp
 
         int * r_data = INTEGER(data_sexp);
         ggml_backend_tensor_set(tensor, r_data, offset, size);
+    } else if (tensor->type == GGML_TYPE_F16) {
+        int n = length(data_sexp);
+        size_t size = n * sizeof(ggml_fp16_t);
+
+        ggml_fp16_t * buffer = (ggml_fp16_t *) malloc(size);
+        if (buffer == NULL) {
+            error("Failed to allocate buffer");
+        }
+
+        double * r_data = REAL(data_sexp);
+        for (int i = 0; i < n; i++) {
+            buffer[i] = ggml_fp32_to_fp16((float) r_data[i]);
+        }
+
+        ggml_backend_tensor_set(tensor, buffer, offset, size);
+        free(buffer);
+    } else if (tensor->type == GGML_TYPE_BF16) {
+        int n = length(data_sexp);
+        size_t size = n * sizeof(ggml_bf16_t);
+
+        ggml_bf16_t * buffer = (ggml_bf16_t *) malloc(size);
+        if (buffer == NULL) {
+            error("Failed to allocate buffer");
+        }
+
+        double * r_data = REAL(data_sexp);
+        float * tmp = (float *) malloc(n * sizeof(float));
+        if (tmp == NULL) { free(buffer); error("Failed to allocate tmp buffer"); }
+        for (int i = 0; i < n; i++) tmp[i] = (float) r_data[i];
+        ggml_fp32_to_bf16_row(tmp, buffer, (int64_t) n);
+        free(tmp);
+
+        ggml_backend_tensor_set(tensor, buffer, offset, size);
+        free(buffer);
     } else {
         error("Unsupported tensor type for ggml_backend_tensor_set");
     }
@@ -1971,6 +2005,49 @@ SEXP R_ggml_backend_tensor_get(SEXP tensor_ptr, SEXP offset_sexp, SEXP size_sexp
         SEXP result = PROTECT(allocVector(INTSXP, n_elements));
         ggml_backend_tensor_get(tensor, INTEGER(result), offset, size);
 
+        UNPROTECT(1);
+        return result;
+    } else if (tensor->type == GGML_TYPE_F16) {
+        size_t size = n_elements * sizeof(ggml_fp16_t);
+
+        ggml_fp16_t * buffer = (ggml_fp16_t *) malloc(size);
+        if (buffer == NULL) {
+            error("Failed to allocate buffer");
+        }
+
+        ggml_backend_tensor_get(tensor, buffer, offset, size);
+
+        SEXP result = PROTECT(allocVector(REALSXP, n_elements));
+        double * r_data = REAL(result);
+        for (int64_t i = 0; i < n_elements; i++) {
+            r_data[i] = (double) ggml_fp16_to_fp32(buffer[i]);
+        }
+
+        free(buffer);
+        UNPROTECT(1);
+        return result;
+    } else if (tensor->type == GGML_TYPE_BF16) {
+        size_t size = n_elements * sizeof(ggml_bf16_t);
+
+        ggml_bf16_t * buffer = (ggml_bf16_t *) malloc(size);
+        if (buffer == NULL) {
+            error("Failed to allocate buffer");
+        }
+
+        ggml_backend_tensor_get(tensor, buffer, offset, size);
+
+        float * tmp = (float *) malloc(n_elements * sizeof(float));
+        if (tmp == NULL) { free(buffer); error("Failed to allocate tmp buffer"); }
+        ggml_bf16_to_fp32_row(buffer, tmp, (int64_t) n_elements);
+        free(buffer);
+
+        SEXP result = PROTECT(allocVector(REALSXP, n_elements));
+        double * r_data = REAL(result);
+        for (int64_t i = 0; i < n_elements; i++) {
+            r_data[i] = (double) tmp[i];
+        }
+
+        free(tmp);
         UNPROTECT(1);
         return result;
     } else {

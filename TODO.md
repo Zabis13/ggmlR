@@ -117,3 +117,27 @@
 #### Deployment
 - [ ] Экспорт в GGUF + генерация Plumber API (2 строки кода)
 - [ ] Vetiver integration через единый S3-метод
+
+---
+
+### Autograd / GPU (текущая работа)
+
+#### Сделано
+- [x] GPU dispatch для всех `ag_*` операций (matmul, add, sub, mul, scale, relu, sigmoid, tanh, softmax, log, exp, clamp, sum/mean all/dim=1/2, pow, transpose, reshape)
+- [x] Mixed precision: `ag_dtype()` / `ag_default_dtype()`, `GGML_TYPE_BF16`, dtype в `ag_tensor` / `ag_param`
+- [x] BF16 → F16 fallback для Vulkan (`.ag_compute_dtype()`)
+- [x] C-уровень: F16/BF16 в `R_ggml_backend_tensor_set/get` (`r_interface_graph.c`)
+- [x] Новые Vulkan f16 шейдеры: `scale_f16`, `sqr_f16`, `sqrt_f16`, `soft_max_f16`
+- [x] `ag_multihead_attention` — self/cross attention, causal mask, dropout, train/eval (30 тестов)
+- [x] Пример `transformer_encoder_demo.R` — Transformer Encoder block + tiny LM
+
+#### Открытые баги
+- [ ] **`ag_mul` CPU broadcast** — `[d,s] * [1,s]` и `[d,s] * [d,1]` падают на CPU (R не делает broadcast)
+- [ ] **`ag_sub` CPU broadcast** — аналогичная проблема при `x[d,s] - mu[1,s]`
+- [ ] **`ggml_sum_rows` f16 на Vulkan** — не поддерживается; нужен `sum_rows_f16` шейдер (агент запущен)
+- [ ] **NaN в обучении при f16** — overflow при больших loss + LR; gradient clipping добавлен, но не проверен из-за бага #1
+
+#### Следующие фичи
+- [ ] Gradient checkpointing — экономия памяти при глубоких сетях
+- [ ] Flash Attention — эффективный attention через ggml_flash_attn_ext
+- [ ] Optimizer states в f32 при f16 весах (true mixed precision training)

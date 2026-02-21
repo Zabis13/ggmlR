@@ -412,3 +412,244 @@ ag_embedding <- function(vocab_size, dim) {
 ag_train.ag_embedding <- function(model) { model$training <- TRUE;  invisible(model) }
 #' @export
 ag_eval.ag_embedding  <- function(model) { model$training <- FALSE; invisible(model) }
+
+# ============================================================================
+# ag_multihead_attention
+# ============================================================================
+
+#' Create a Multi-Head Attention layer
+#'
+#' Implements scaled dot-product multi-head attention as in "Attention Is All
+#' You Need" (Vaswani et al., 2017).
+#'
+#' Calling convention (mirrors PyTorch \code{nn.MultiheadAttention}):
+#' \itemize{
+#'   \item \code{layer$forward(q)} — self-attention (\code{k = v = q})
+#'   \item \code{layer$forward(q, k, v)} — cross-attention
+#' }
+#'
+#' Tensor layout: \strong{\code{[d_model, seq_len]}} — columns are tokens,
+#' consistent with the rest of the ag_* API.
+#'
+#' Forward pass:
+#' \preformatted{
+#'   Q = W_q \%*\% q            [d_k * n_heads, seq_len]
+#'   K = W_k \%*\% k            [d_k * n_heads, seq_len]
+#'   V = W_v \%*\% v            [d_v * n_heads, seq_len]
+#'
+#'   for each head h:
+#'     q_h = Q[h*d_k+1 : (h+1)*d_k, ]    [d_k, seq_len]
+#'     k_h = K[h*d_k+1 : (h+1)*d_k, ]    [d_k, seq_len]
+#'     v_h = V[h*d_v+1 : (h+1)*d_v, ]    [d_v, seq_len]
+#'     A_h = softmax(t(q_h) \%*\% k_h / sqrt(d_k))   [seq_len, seq_len]
+#'     if causal_mask: A_h[i,j] = 0 for j > i
+#'     head_h = v_h \%*\% A_h             [d_v, seq_len]
+#'
+#'   concat = rbind(head_1, ..., head_H)  [d_v*n_heads, seq_len]
+#'   out    = W_o \%*\% concat + b_o      [d_model, seq_len]
+#' }
+#'
+#' @param d_model Model (embedding) dimension
+#' @param n_heads Number of attention heads. \code{d_model} must be divisible
+#'   by \code{n_heads}.
+#' @param dropout Attention dropout probability (default 0, applied in
+#'   training mode only)
+#' @param bias Logical: add bias to output projection (default TRUE)
+#' @return An \code{ag_multihead_attention} environment with
+#'   \code{$forward(q, k, v, causal_mask)} and \code{$parameters()}
+#' @export
+#' @examples
+#' \donttest{
+#' # Self-attention
+#' mha <- ag_multihead_attention(64L, 8L)
+#' x   <- ag_tensor(matrix(rnorm(64 * 10), 64, 10))  # [d_model=64, seq_len=10]
+#' out <- mha$forward(x)                              # [64, 10]
+#'
+#' # Cross-attention
+#' q   <- ag_tensor(matrix(rnorm(64 * 10), 64, 10))
+#' kv  <- ag_tensor(matrix(rnorm(64 * 15), 64, 15))
+#' out <- mha$forward(q, kv, kv)
+#'
+#' # Causal (GPT-style)
+#' out <- mha$forward(x, causal_mask = TRUE)
+#' }
+ag_multihead_attention <- function(d_model, n_heads, dropout = 0.0, bias = TRUE) {
+  d_model  <- as.integer(d_model)
+  n_heads  <- as.integer(n_heads)
+  stopifnot(d_model %% n_heads == 0L)
+
+  d_k <- d_model %/% n_heads   # key/query head dim
+  d_v <- d_model %/% n_heads   # value head dim (equal to d_k here)
+  scale <- 1.0 / sqrt(d_k)
+
+  # Glorot uniform initialisation
+  .glorot <- function(fan_in, fan_out) {
+    lim <- sqrt(6.0 / (fan_in + fan_out))
+    matrix(stats::runif(fan_out * fan_in, -lim, lim), fan_out, fan_in)
+  }
+
+  env <- new.env(parent = emptyenv())
+  env$W_q   <- ag_param(.glorot(d_model, d_model))   # [d_model, d_model]
+  env$W_k   <- ag_param(.glorot(d_model, d_model))
+  env$W_v   <- ag_param(.glorot(d_model, d_model))
+  env$W_o   <- ag_param(.glorot(d_model, d_model))   # [d_model, d_v*n_heads]
+  env$b_o   <- if (bias) ag_param(matrix(0.0, d_model, 1L)) else NULL
+  env$d_model  <- d_model
+  env$n_heads  <- n_heads
+  env$d_k      <- d_k
+  env$d_v      <- d_v
+  env$scale    <- scale
+  env$dropout  <- dropout
+  env$training <- TRUE
+  env$name     <- sprintf("multihead_attention(d=%d, h=%d)", d_model, n_heads)
+
+  env$forward <- function(q, k = q, v = k, causal_mask = FALSE) {
+    # Project: [d_model, seq_len] -> [d_model, seq_len]
+    Q <- ag_matmul(env$W_q, q)
+    K <- ag_matmul(env$W_k, k)
+    V <- ag_matmul(env$W_v, v)
+
+    seq_q  <- ncol(if (is_ag_tensor(Q)) Q$data else Q)
+    seq_kv <- ncol(if (is_ag_tensor(K)) K$data else K)
+
+    # Collect head outputs: list of [d_v, seq_q]
+    heads <- vector("list", env$n_heads)
+
+    for (h in seq_len(env$n_heads)) {
+      row_start <- (h - 1L) * env$d_k + 1L
+      row_end_k <- h * env$d_k
+      row_end_v <- h * env$d_v
+
+      # Slice head: use ag_reshape trick — extract rows via index
+      # ag_* has no slice op yet, so we use a thin wrapper below
+      q_h <- .ag_row_slice(Q, row_start, row_end_k)   # [d_k, seq_q]
+      k_h <- .ag_row_slice(K, row_start, row_end_k)   # [d_k, seq_kv]
+      v_h <- .ag_row_slice(V, row_start, row_end_v)   # [d_v, seq_kv]
+
+      # Scaled attention scores: [seq_q, seq_kv]
+      scores <- ag_scale(ag_matmul(ag_transpose(q_h), k_h), env$scale)
+
+      # Causal mask: set upper triangle (j > i) to -Inf before softmax
+      if (isTRUE(causal_mask)) {
+        scores <- .ag_causal_mask(scores, seq_q, seq_kv)
+      }
+
+      # Softmax over key dimension (each query attends over all keys)
+      # scores is [seq_q, seq_kv]; softmax should be column-wise
+      # ag_softmax applies over rows (ne0) — need softmax over rows of scores
+      # i.e. for each query row, softmax over seq_kv keys
+      # scores[i,j] = query i attends to key j
+      # softmax over j for each i = row-wise softmax = transpose trick
+      attn <- ag_transpose(ag_softmax(ag_transpose(scores)))  # [seq_q, seq_kv]
+
+      # Optional attention dropout
+      if (env$training && env$dropout > 0) {
+        attn_data <- if (is_ag_tensor(attn)) attn$data else attn
+        mask_vals <- matrix(
+          (stats::runif(length(attn_data)) > env$dropout) / (1 - env$dropout),
+          nrow(attn_data), ncol(attn_data)
+        )
+        attn <- ag_mul(attn, ag_tensor(mask_vals))
+      }
+
+      # Weighted sum: [d_v, seq_kv] %*% [seq_kv, seq_q]^T
+      # = v_h %*% t(attn) but attn is [seq_q, seq_kv]
+      # head = V_h %*% attn^T  [d_v, seq_q]
+      heads[[h]] <- ag_matmul(v_h, ag_transpose(attn))
+    }
+
+    # Concatenate heads row-wise: [d_v*n_heads, seq_q]
+    concat <- .ag_row_concat(heads)
+
+    # Output projection
+    out <- ag_matmul(env$W_o, concat)
+    if (!is.null(env$b_o)) out <- ag_add(out, env$b_o)
+    out
+  }
+
+  env$parameters <- function() {
+    p <- list(W_q = env$W_q, W_k = env$W_k, W_v = env$W_v, W_o = env$W_o)
+    if (!is.null(env$b_o)) p[["b_o"]] <- env$b_o
+    p
+  }
+
+  class(env) <- c("ag_multihead_attention", "ag_layer")
+  env
+}
+
+#' @export
+ag_train.ag_multihead_attention <- function(model) {
+  model$training <- TRUE; invisible(model)
+}
+#' @export
+ag_eval.ag_multihead_attention <- function(model) {
+  model$training <- FALSE; invisible(model)
+}
+
+# ============================================================================
+# Internal helpers for ag_multihead_attention
+# ============================================================================
+
+# Extract rows [from, to] from an ag_tensor [d, seq] -> [to-from+1, seq]
+# Implemented via linear projection with a fixed identity-slice matrix.
+# The slice matrix is not tracked for gradients (it's a constant).
+.ag_row_slice <- function(x, from, to) {
+  x_data <- if (is_ag_tensor(x)) x$data else x
+  d      <- nrow(x_data)
+  n_rows <- to - from + 1L
+  # Selector matrix S: [n_rows, d] — row i selects row (from+i-1) of x
+  S      <- matrix(0.0, n_rows, d)
+  for (i in seq_len(n_rows)) S[i, from + i - 1L] <- 1.0
+
+  S_t <- ag_tensor(S)   # not a param, no gradient
+
+  # Result = S %*% x   [n_rows, seq]
+  # But we want gradient to flow back through x only.
+  # ag_matmul(S_t, x) works since S_t$requires_grad = FALSE
+  ag_matmul(S_t, x)
+}
+
+# Concatenate a list of ag_tensors row-wise: list of [d, seq] -> [d*n, seq]
+.ag_row_concat <- function(tensors) {
+  if (length(tensors) == 1L) return(tensors[[1L]])
+
+  # Get data from all tensors for shape checks
+  data_list <- lapply(tensors, function(t) if (is_ag_tensor(t)) t$data else t)
+  total_rows <- sum(vapply(data_list, nrow, integer(1L)))
+  n_cols     <- ncol(data_list[[1L]])
+
+  # Build result by stacking: use ag_add with a zero base + place each block
+  # Simplest correct approach: sum of ag_tensors projected into position
+  # using fixed position matrices (no gradient on position matrices)
+
+  d_list <- vapply(data_list, nrow, integer(1L))
+  row_offsets <- c(0L, cumsum(d_list[-length(d_list)]))
+
+  result <- NULL
+  for (i in seq_along(tensors)) {
+    # Expand matrix E_i: [total_rows, d_i] — places d_i rows at offset
+    d_i    <- d_list[[i]]
+    offset <- row_offsets[[i]]
+    E_i    <- matrix(0.0, total_rows, d_i)
+    for (r in seq_len(d_i)) E_i[offset + r, r] <- 1.0
+
+    # E_i %*% tensor_i  ->  [total_rows, n_cols]
+    block <- ag_matmul(ag_tensor(E_i), tensors[[i]])
+    result <- if (is.null(result)) block else ag_add(result, block)
+  }
+  result
+}
+
+# Apply causal mask: set scores[i,j] = -Inf for j > i (future positions)
+# scores: ag_tensor [seq_q, seq_kv]
+.ag_causal_mask <- function(scores, seq_q, seq_kv) {
+  scores_data <- if (is_ag_tensor(scores)) scores$data else scores
+  mask <- matrix(0.0, seq_q, seq_kv)
+  for (i in seq_len(seq_q)) {
+    for (j in seq_len(seq_kv)) {
+      if (j > i) mask[i, j] <- -Inf
+    }
+  }
+  # Add mask as constant (no gradient)
+  ag_add(scores, ag_tensor(mask))
+}
