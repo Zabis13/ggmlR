@@ -14,6 +14,9 @@ ag_param(
 \item{data}{Numeric matrix or vector}
 
 \item{device}{\code{"cpu"} (default) or \code{"gpu"}}
+
+\item{dtype}{Floating-point precision: \code{"f32"} (default), \code{"f16"},
+or \code{"bf16"}. Ignored on CPU; controls upload precision on GPU.}
 }
 \value{
 An ag_tensor with requires_grad = TRUE

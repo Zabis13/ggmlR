@@ -412,3 +412,81 @@ test_that("print.lr_scheduler_cosine works without error", {
   sch <- lr_scheduler_cosine(opt, T_max = 10L)
   expect_output(print(sch), "lr_scheduler_cosine")
 })
+
+# ---- ag_mul broadcast -------------------------------------------------------
+
+test_that("ag_mul broadcast [d,s] * [1,s]: forward correct", {
+  A <- ag_tensor(matrix(c(1,2,3,4,5,6), 3, 2))   # [3,2]
+  B <- ag_tensor(matrix(c(2, 3), 1, 2))            # [1,2]
+  C <- ag_mul(A, B)
+  expect_equal(dim(C$data), c(3L, 2L))
+  expect_equal(C$data, matrix(c(2,4,6, 12,15,18), 3, 2))
+})
+
+test_that("ag_mul broadcast [d,s] * [d,1]: forward correct", {
+  A <- ag_tensor(matrix(c(1,2,3,4,5,6), 3, 2))   # [3,2]
+  B <- ag_tensor(matrix(c(10, 20, 30), 3, 1))      # [3,1]
+  C <- ag_mul(A, B)
+  expect_equal(dim(C$data), c(3L, 2L))
+  expect_equal(C$data, matrix(c(10,40,90, 40,100,180), 3, 2))
+})
+
+test_that("gradcheck: ag_mul broadcast [d,s] * [1,s]", {
+  set.seed(50)
+  A <- ag_param(matrix(rnorm(12), 4, 3))
+  B <- ag_param(matrix(rnorm(3),  1, 3))
+  ok <- ag_gradcheck(
+    fn     = function(ins) ag_mse_loss(ag_mul(ins$A, ins$B), matrix(0, 4, 3)),
+    inputs = list(A = A, B = B), atol = 1e-4, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+test_that("gradcheck: ag_mul broadcast [d,s] * [d,1]", {
+  set.seed(51)
+  A <- ag_param(matrix(rnorm(12), 4, 3))
+  B <- ag_param(matrix(rnorm(4),  4, 1))
+  ok <- ag_gradcheck(
+    fn     = function(ins) ag_mse_loss(ag_mul(ins$A, ins$B), matrix(0, 4, 3)),
+    inputs = list(A = A, B = B), atol = 1e-4, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+# ---- ag_softmax_cross_entropy_loss: integer targets -------------------------
+
+test_that("ag_softmax_cross_entropy_loss: integer targets == one-hot", {
+  set.seed(60)
+  logits <- matrix(rnorm(16 * 8), 16, 8)
+  idx    <- c(2L, 0L, 5L, 1L, 3L, 7L, 4L, 6L)   # 0-based
+
+  oh <- matrix(0.0, 16, 8)
+  for (i in seq_along(idx)) oh[idx[i] + 1L, i] <- 1.0
+
+  lt1 <- ag_param(logits); lt2 <- ag_param(logits)
+  with_grad_tape({ l1 <- ag_softmax_cross_entropy_loss(lt1, idx) })
+  with_grad_tape({ l2 <- ag_softmax_cross_entropy_loss(lt2, oh)  })
+
+  expect_equal(as.numeric(l1$data), as.numeric(l2$data), tolerance = 1e-6)
+})
+
+test_that("ag_softmax_cross_entropy_loss: integer targets give sensible loss", {
+  # Uniform logits -> loss ~ log(vocab_size)
+  set.seed(61)
+  logits  <- ag_param(matrix(0.0, 8, 4))
+  targets <- c(0L, 1L, 2L, 3L)
+  with_grad_tape({ loss <- ag_softmax_cross_entropy_loss(logits, targets) })
+  expect_equal(as.numeric(loss$data), log(8), tolerance = 1e-5)
+})
+
+test_that("gradcheck: ag_softmax_cross_entropy_loss with integer targets", {
+  set.seed(62)
+  W   <- ag_param(matrix(runif(24, -0.5, 0.5), 8, 3))
+  x   <- ag_tensor(matrix(runif(3), 3, 1))
+  idx <- 2L   # single position
+  ok  <- ag_gradcheck(
+    fn     = function(ins) ag_softmax_cross_entropy_loss(ag_matmul(ins$W, x), idx),
+    inputs = list(W = W), atol = 1e-4, quiet = TRUE
+  )
+  expect_true(ok)
+})

@@ -59,6 +59,8 @@ ag_next_id <- function() {
 #' @param data Numeric matrix or vector
 #' @param device \code{"cpu"} (default) or \code{"gpu"}. When \code{"gpu"},
 #'   compute operations will be dispatched to the ggml backend.
+#' @param dtype Floating-point precision: \code{"f32"} (default), \code{"f16"},
+#'   or \code{"bf16"}. Ignored on CPU; controls upload precision on GPU.
 #' @return An ag_tensor object (environment)
 #' @export
 ag_tensor <- function(data, device = .ag_device_state$device,
@@ -80,6 +82,8 @@ ag_tensor <- function(data, device = .ag_device_state$device,
 #'
 #' @param data Numeric matrix or vector
 #' @param device \code{"cpu"} (default) or \code{"gpu"}
+#' @param dtype Floating-point precision: \code{"f32"} (default), \code{"f16"},
+#'   or \code{"bf16"}. Ignored on CPU; controls upload precision on GPU.
 #' @return An ag_tensor with requires_grad = TRUE
 #' @export
 ag_param <- function(data, device = .ag_device_state$device,
@@ -356,6 +360,23 @@ ag_mul <- function(A, B) {
   b_data <- .ag_data(B)
   device <- .ag_result_device(A, B)
 
+  # Save original shapes before any broadcast expansion (needed for backward reduce).
+  a_orig <- a_data
+  b_orig <- b_data
+
+  # CPU broadcast: expand smaller tensor to match larger before element-wise multiply.
+  # R does not broadcast matrices automatically ([d,s] * [1,s] fails or recycles wrong).
+  if (device != "gpu") {
+    nr_a <- nrow(a_data); nc_a <- ncol(a_data)
+    nr_b <- nrow(b_data); nc_b <- ncol(b_data)
+    nr   <- max(nr_a, nr_b)
+    nc   <- max(nc_a, nc_b)
+    if (nr_a < nr) a_data <- a_data[rep(seq_len(nr_a), length.out = nr), , drop = FALSE]
+    if (nc_a < nc) a_data <- a_data[, rep(seq_len(nc_a), length.out = nc), drop = FALSE]
+    if (nr_b < nr) b_data <- b_data[rep(seq_len(nr_b), length.out = nr), , drop = FALSE]
+    if (nc_b < nc) b_data <- b_data[, rep(seq_len(nc_b), length.out = nc), drop = FALSE]
+  }
+
   if (device == "gpu") {
     out <- ag_tensor(.ag_gpu_mul(a_data, b_data), device = "gpu", dtype = .ag_device_state$dtype)
   } else {
@@ -365,26 +386,28 @@ ag_mul <- function(A, B) {
                        (is_ag_tensor(B) && B$requires_grad)
 
   if (out$requires_grad) {
+    # Snapshots of expanded data (for grad_out * other computation).
     a_snap <- a_data; b_snap <- b_data
     A_ref  <- A;     B_ref  <- B
     grad_fn <- function(grad_out) {
-      # Handle broadcast: if a shape != b shape, reduce gradient along broadcast dims
-      .mul_grad <- function(grad, snap_self, snap_other) {
-        # raw gradient: grad_out * other
-        g <- grad_out * snap_other[
-          rep(seq_len(nrow(snap_other)), length.out = nrow(grad_out)),
-          rep(seq_len(ncol(snap_other)), length.out = ncol(grad_out)),
+      nr_g <- nrow(grad_out); nc_g <- ncol(grad_out)
+      # Expand snap via rep-indexing to match grad_out shape, then reduce back.
+      .mul_grad <- function(snap_self_orig, snap_other) {
+        other_exp <- snap_other[
+          rep(seq_len(nrow(snap_other)), length.out = nr_g),
+          rep(seq_len(ncol(snap_other)), length.out = nc_g),
           drop = FALSE
         ]
-        # reduce rows if snap_self had 1 row
-        if (nrow(snap_self) == 1L && nrow(g) > 1L) g <- matrix(colSums(g), 1L, ncol(g))
-        # reduce cols if snap_self had 1 col
-        if (ncol(snap_self) == 1L && ncol(g) > 1L) g <- matrix(rowSums(g), nrow(g), 1L)
+        g <- grad_out * other_exp
+        if (nrow(snap_self_orig) == 1L && nr_g > 1L)
+          g <- matrix(colSums(g), 1L, nc_g)
+        if (ncol(snap_self_orig) == 1L && nc_g > 1L)
+          g <- matrix(rowSums(g), nrow(g), 1L)
         g
       }
       list(
-        A = if (is_ag_tensor(A_ref) && A_ref$requires_grad) .mul_grad(grad_out, a_snap, b_snap) else NULL,
-        B = if (is_ag_tensor(B_ref) && B_ref$requires_grad) .mul_grad(grad_out, b_snap, a_snap) else NULL
+        A = if (is_ag_tensor(A_ref) && A_ref$requires_grad) .mul_grad(a_orig, b_snap) else NULL,
+        B = if (is_ag_tensor(B_ref) && B_ref$requires_grad) .mul_grad(b_orig, a_snap) else NULL
       )
     }
     out$grad_fn <- grad_fn
@@ -614,6 +637,19 @@ ag_softmax_cross_entropy_loss <- function(logits, target) {
   l_data <- .ag_data(logits)
   t_data <- .ag_data(target)
   device <- if (is_ag_tensor(logits)) logits$device else "cpu"
+
+  # Auto-convert 0-based integer indices to one-hot matrix [classes, seq_len].
+  # Accepts: integer vector, numeric vector without dim, or integer matrix [1, seq_len].
+  if (is.integer(t_data) ||
+      (is.numeric(t_data) && is.null(dim(t_data))) ||
+      (!is.null(dim(t_data)) && nrow(t_data) == 1L && nrow(l_data) > 1L)) {
+    idx    <- as.integer(t_data)          # 0-based indices, length = seq_len
+    n_cls  <- nrow(l_data)
+    n_seq  <- ncol(l_data)
+    oh     <- matrix(0.0, n_cls, n_seq)
+    for (i in seq_along(idx)) oh[idx[i] + 1L, i] <- 1.0
+    t_data <- oh
+  }
 
   # Numerically stable softmax
   mx     <- apply(l_data, 2, max)

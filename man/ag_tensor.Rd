@@ -15,6 +15,9 @@ ag_tensor(
 
 \item{device}{\code{"cpu"} (default) or \code{"gpu"}. When \code{"gpu"},
 compute operations will be dispatched to the ggml backend.}
+
+\item{dtype}{Floating-point precision: \code{"f32"} (default), \code{"f16"},
+or \code{"bf16"}. Ignored on CPU; controls upload precision on GPU.}
 }
 \value{
 An ag_tensor object (environment)

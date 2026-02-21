@@ -332,7 +332,8 @@ ag_to_device <- function(tensor, device) {
 }
 
 # ag_sum(dim=2) = colSums: ggml_sum_rows(a[m,n]) -> [1,n]
-# ggml_sum_rows only supports f32 on Vulkan; fall back to CPU for other dtypes.
+# ggml-vulkan pipeline selection requires src0->type == F32 (ggml-vulkan.cpp:8792).
+# f16 shader exists but is unreachable via current C++ dispatch — CPU fallback required.
 .ag_gpu_sum_cols <- function(x_data) {
   if (.ag_device_state$dtype != "f32") {
     return(matrix(colSums(x_data), 1L, ncol(x_data)))
@@ -350,6 +351,7 @@ ag_to_device <- function(tensor, device) {
 }
 
 # ag_mean(dim=2) = colMeans = colSums / nrow
+# Same f16 restriction as sum_cols — CPU fallback for non-f32.
 .ag_gpu_mean_cols <- function(x_data) {
   nr <- nrow(x_data)
   if (.ag_device_state$dtype != "f32") {
