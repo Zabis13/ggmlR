@@ -263,3 +263,80 @@ test_that("integration: dataloader + scheduler + clip_grad trains", {
   # lr should have decayed after epochs 5 and 10
   expect_lt(opt$lr, 0.05)
 })
+
+# ============================================================================
+# dp_train
+# ============================================================================
+
+test_that("dp_train: 1 replica converges on simple regression", {
+  set.seed(7L)
+  D_IN <- 3L; D_OUT <- 2L; N <- 32L
+  X <- matrix(rnorm(D_IN * N), D_IN, N)
+  Y <- X[1:D_OUT, ] * 0.5 + 0.1   # deterministic target to ensure convergence
+  data <- lapply(seq_len(N), function(i)
+    list(x = X[, i, drop = FALSE], y = Y[, i, drop = FALSE]))
+
+  make_model <- function() {
+    W <- ag_param(matrix(rnorm(D_OUT * D_IN) * 0.1, D_OUT, D_IN))
+    b <- ag_param(matrix(0.0, D_OUT, 1L))
+    list(forward    = function(x) ag_add(ag_matmul(W, x), b),
+         parameters = function() list(W = W, b = b))
+  }
+
+  result <- dp_train(
+    make_model = make_model,
+    data       = data,
+    loss_fn    = function(out, tgt) ag_mse_loss(out, tgt),
+    forward_fn = function(model, s) model$forward(s$x),
+    target_fn  = function(s) s$y,
+    n_gpu = 1L, n_iter = 60L, lr = 1e-2, verbose = FALSE
+  )
+
+  expect_named(result, c("params", "loss_history", "model"))
+  expect_length(result$loss_history, 60L)
+  expect_lt(mean(tail(result$loss_history, 10)), result$loss_history[1])
+})
+
+test_that("dp_train: 2 replicas — initial weight sync and no NaN", {
+  set.seed(8L)
+  D_IN <- 3L; D_OUT <- 2L
+  make_model <- function() {
+    W <- ag_param(matrix(rnorm(D_OUT * D_IN) * 0.1, D_OUT, D_IN))
+    list(forward    = function(x) ag_matmul(W, x),
+         parameters = function() list(W = W))
+  }
+  # data: each sample is a list(x, y) with compatible dims
+  data <- lapply(1:8, function(i)
+    list(x = matrix(rnorm(D_IN), D_IN, 1L), y = matrix(rnorm(D_OUT), D_OUT, 1L)))
+
+  result <- dp_train(
+    make_model = make_model,
+    data       = data,
+    loss_fn    = function(out, tgt) ag_mse_loss(out, tgt),
+    forward_fn = function(model, s) model$forward(s$x),
+    target_fn  = function(s) s$y,
+    n_gpu = 2L, n_iter = 8L, lr = 1e-2, verbose = FALSE
+  )
+  expect_named(result, c("params", "loss_history", "model"))
+  expect_length(result$loss_history, 8L)
+  expect_false(any(is.nan(result$loss_history)))
+})
+
+test_that("dp_train: returns loss_history of correct length", {
+  set.seed(9L)
+  make_model <- function() {
+    W <- ag_param(matrix(rnorm(4) * 0.1, 2, 2))
+    list(forward    = function(x) ag_matmul(W, x),
+         parameters = function() list(W = W))
+  }
+  data <- lapply(1:8, function(i) matrix(rnorm(2), 2, 1))
+
+  result <- dp_train(
+    make_model = make_model,
+    data       = data,
+    loss_fn    = function(out, tgt) ag_mse_loss(out, tgt),
+    n_gpu = 1L, n_iter = 20L, lr = 1e-3, verbose = FALSE
+  )
+  expect_length(result$loss_history, 20L)
+  expect_true(all(is.finite(result$loss_history)))
+})

@@ -124,7 +124,7 @@ print.ag_tensor <- function(x, ...) {
 
 ag_record <- function(output, grad_fn, inputs) {
   if (!.ag_tape$enabled) return(invisible(NULL))
-  any_grad <- any(vapply(inputs, function(i) isTRUE(i$requires_grad), logical(1)))
+  any_grad <- any(vapply(inputs, function(i) is_ag_tensor(i) && isTRUE(i$requires_grad), logical(1)))
   if (!any_grad) return(invisible(NULL))
   .ag_tape$nodes <- c(.ag_tape$nodes, list(list(
     output_id = output$id,

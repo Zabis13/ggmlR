@@ -275,3 +275,232 @@ clip_grad_norm <- function(params, grads, max_norm) {
 
   invisible(global_norm)
 }
+
+# ============================================================================
+# Data Parallel Training
+# ============================================================================
+
+#' Data-parallel training across multiple GPUs
+#'
+#' Runs synchronous data-parallel training:
+#' \enumerate{
+#'   \item \code{make_model()} is called \code{n_gpu} times to create one
+#'     independent model replica per GPU (each with its own parameters).
+#'   \item Each iteration: the current data item is forwarded through every
+#'     replica in parallel; gradients are computed via \code{backward()}.
+#'   \item Gradients are averaged across all replicas (element-wise mean).
+#'   \item One optimizer step is taken on replica 0; updated weights are then
+#'     broadcast to replicas 1 … N-1 so all replicas stay in sync.
+#' }
+#'
+#' Because all replicas live in the same R process and \code{ag_param} uses
+#' environment (reference) semantics, no IPC or NCCL is required — weight
+#' synchronisation is a simple in-place copy.
+#'
+#' @param make_model A zero-argument function that returns a model object with
+#'   at least \code{$forward(x)} and \code{$parameters()} methods.  Called
+#'   \code{n_gpu} times; each call must produce independent parameters.
+#' @param data A list of training samples.  Each element is passed directly to
+#'   \code{forward_fn} (or to \code{model$forward()} if \code{forward_fn} is
+#'   \code{NULL}).
+#' @param loss_fn A function \code{(logits, target) -> scalar ag_tensor}.
+#'   If \code{NULL}, \code{forward_fn} must return the loss directly.
+#' @param forward_fn Optional function \code{(model, sample) -> logits}.
+#'   If \code{NULL}, the sample is passed directly as
+#'   \code{model$forward(sample)}.
+#' @param target_fn Optional function \code{(sample) -> target}.  Used when
+#'   \code{loss_fn} is not \code{NULL} to extract the target from a sample.
+#'   If \code{NULL}, \code{sample} itself is used as the target.
+#' @param n_gpu Number of GPU replicas (default: all available Vulkan devices,
+#'   minimum 1).
+#' @param n_iter Number of training iterations (passes over \code{data}).
+#' @param lr Learning rate for Adam optimizer (default 1e-3).
+#' @param max_norm Gradient clipping threshold (default \code{Inf} = no clip).
+#' @param verbose Print loss every \code{verbose} iterations, or \code{FALSE}
+#'   to suppress output.
+#' @return A list with:
+#'   \describe{
+#'     \item{\code{params}}{Named list of final parameters (from replica 0).}
+#'     \item{\code{loss_history}}{Numeric vector of per-iteration mean loss.}
+#'     \item{\code{model}}{Replica 0 model object.}
+#'   }
+#' @export
+#' @examples
+#' \donttest{
+#' make_model <- function() {
+#'   W <- ag_param(matrix(rnorm(4), 2, 2))
+#'   list(
+#'     forward    = function(x) ag_matmul(W, x),
+#'     parameters = function() list(W = W)
+#'   )
+#' }
+#' data <- lapply(1:8, function(i) matrix(rnorm(2), 2, 1))
+#' result <- dp_train(
+#'   make_model = make_model,
+#'   data       = data,
+#'   loss_fn    = function(out, tgt) ag_mse_loss(out, tgt),
+#'   target_fn  = function(s) s,
+#'   n_gpu      = 1L,
+#'   n_iter     = 10L,
+#'   lr         = 1e-3,
+#'   verbose    = FALSE
+#' )
+#' }
+dp_train <- function(make_model,
+                     data,
+                     loss_fn    = NULL,
+                     forward_fn = NULL,
+                     target_fn  = NULL,
+                     n_gpu      = NULL,
+                     n_iter     = 10L,
+                     lr         = 1e-3,
+                     max_norm   = Inf,
+                     verbose    = 10L) {
+
+  # ---- determine n_gpu ----
+  if (is.null(n_gpu)) {
+    n_avail <- tryCatch(ggml_vulkan_device_count(), error = function(e) 0L)
+    n_gpu   <- max(1L, n_avail)
+  }
+  n_gpu <- as.integer(n_gpu)
+
+  # save device so we can restore it on exit
+  orig_device <- .ag_device_state$device
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
+
+  # ---- create replicas ----
+  replicas <- vector("list", n_gpu)
+  for (i in seq_len(n_gpu)) {
+    dev <- if (n_gpu > 1L) {
+      tryCatch({ ag_device("gpu"); "gpu" }, error = function(e) "cpu")
+    } else {
+      .ag_device_state$device
+    }
+    replicas[[i]] <- make_model()
+  }
+
+  # ---- parameter name order (from replica 0) ----
+  param_names <- names(replicas[[1L]]$parameters())
+
+  # ---- broadcast initial weights from replica 0 to all others ----
+  # make_model() initialises each replica with independent random weights;
+  # we must sync before the first step so all replicas start identically.
+  if (n_gpu > 1L) {
+    p0 <- replicas[[1L]]$parameters()
+    for (i in seq(2L, n_gpu)) {
+      pi <- replicas[[i]]$parameters()
+      for (nm in param_names) pi[[nm]]$data <- p0[[nm]]$data
+    }
+  }
+
+  # ---- optimizer on replica 0 ----
+  opt <- optimizer_adam(replicas[[1L]]$parameters(), lr = lr)
+
+  # ---- helper: copy weights from replica 0 to replica i ----
+  .sync_weights <- function(i) {
+    p0 <- replicas[[1L]]$parameters()
+    pi <- replicas[[i]]$parameters()
+    for (nm in param_names) {
+      pi[[nm]]$data <- p0[[nm]]$data
+    }
+  }
+
+  # ---- helper: wrap plain matrix/vector in ag_tensor if needed ----
+  .as_ag <- function(x) {
+    if (is_ag_tensor(x)) x else ag_tensor(if (is.matrix(x)) x else matrix(x, ncol = 1L))
+  }
+
+  # ---- helper: run one forward+backward on replica i, sample s ----
+  .replica_step <- function(i, s) {
+    model <- replicas[[i]]
+
+    with_grad_tape({
+      logits <- if (is.null(forward_fn)) {
+        model$forward(.as_ag(s))
+      } else {
+        forward_fn(model, s)
+      }
+
+      loss <- if (is.null(loss_fn)) {
+        logits   # forward_fn already returns loss
+      } else {
+        tgt <- if (is.null(target_fn)) s else target_fn(s)
+        loss_fn(logits, tgt)
+      }
+    })
+
+    grads <- backward(loss)
+    list(loss = as.numeric(.ag_data(loss)), grads = grads)
+  }
+
+  # ---- helper: average gradients from all replicas into grads0 ----
+  .average_grads <- function(grad_list) {
+    # grad_list: list of grads environments, one per replica
+    # Result written into grad_list[[1]] in-place
+    if (length(grad_list) == 1L) return(grad_list[[1L]])
+
+    p0 <- replicas[[1L]]$parameters()
+    for (nm in param_names) {
+      key <- as.character(p0[[nm]]$id)
+      g0  <- get0(key, envir = grad_list[[1L]])
+      if (is.null(g0)) next
+
+      # sum contributions from replicas 2..N
+      g_sum <- g0
+      for (j in seq(2L, length(grad_list))) {
+        pj  <- replicas[[j]]$parameters()
+        # replica j has its own param id for the same "slot"
+        key_j <- as.character(pj[[nm]]$id)
+        gj    <- get0(key_j, envir = grad_list[[j]])
+        if (!is.null(gj)) g_sum <- g_sum + gj
+      }
+      assign(key, g_sum / length(grad_list), envir = grad_list[[1L]])
+    }
+    grad_list[[1L]]
+  }
+
+  # ---- training loop ----
+  loss_history <- numeric(n_iter)
+  n_data       <- length(data)
+
+  for (iter in seq_len(n_iter)) {
+
+    # partition data round-robin across replicas for this iteration
+    sample_idx  <- ((iter - 1L) %% n_data) + 1L
+    sample      <- data[[sample_idx]]
+
+    # run forward+backward on each replica
+    results <- lapply(seq_len(n_gpu), function(i) .replica_step(i, sample))
+
+    # average loss
+    iter_loss <- mean(vapply(results, `[[`, numeric(1L), "loss"), na.rm = TRUE)
+    loss_history[[iter]] <- iter_loss
+
+    # average gradients (written into results[[1]]$grads)
+    avg_grads <- .average_grads(lapply(results, `[[`, "grads"))
+
+    # gradient clipping on averaged grads
+    if (is.finite(max_norm)) {
+      clip_grad_norm(replicas[[1L]]$parameters(), avg_grads, max_norm)
+    }
+
+    # optimizer step on replica 0
+    opt$step(avg_grads)
+    opt$zero_grad()
+
+    # broadcast updated weights to all other replicas
+    if (n_gpu > 1L) {
+      for (i in seq(2L, n_gpu)) .sync_weights(i)
+    }
+
+    if (!isFALSE(verbose) && (iter %% as.integer(verbose) == 0L || iter == 1L)) {
+      cat(sprintf("[dp_train] iter %4d / %d  loss = %.6f\n", iter, n_iter, iter_loss))
+    }
+  }
+
+  list(
+    params       = replicas[[1L]]$parameters(),
+    loss_history = loss_history,
+    model        = replicas[[1L]]
+  )
+}

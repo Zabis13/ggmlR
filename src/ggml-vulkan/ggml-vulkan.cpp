@@ -8790,7 +8790,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_SUM_ROWS:
     case GGML_OP_MEAN:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_sum_rows[dst->type == GGML_TYPE_F16];
+            return ctx->device->pipeline_sum_rows[0];
+        }
+        if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+            return ctx->device->pipeline_sum_rows[1];
         }
         return nullptr;
     case GGML_OP_CUMSUM:

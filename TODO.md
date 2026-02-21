@@ -131,11 +131,15 @@
 - [x] `ag_multihead_attention` — self/cross attention, causal mask, dropout, train/eval (30 тестов)
 - [x] Пример `transformer_encoder_demo.R` — Transformer Encoder block + tiny LM
 
-#### Открытые баги
-- [ ] **`ag_mul` CPU broadcast** — `[d,s] * [1,s]` и `[d,s] * [d,1]` падают на CPU (R не делает broadcast)
-- [ ] **`ag_sub` CPU broadcast** — аналогичная проблема при `x[d,s] - mu[1,s]`
-- [ ] **`ggml_sum_rows` f16 на Vulkan** — не поддерживается; нужен `sum_rows_f16` шейдер (агент запущен)
-- [ ] **NaN в обучении при f16** — overflow при больших loss + LR; gradient clipping добавлен, но не проверен из-за бага #1
+#### Баги (исправлено в 0.6.1)
+- [x] **`ag_mul` CPU broadcast** — `[d,s] * [1,s]` и `[d,s] * [d,1]` — `rep`-индексация + корректный reduce в backward
+- [x] **`ag_sub` CPU broadcast** — аналогичное исправление
+- [x] **`ggml_sum_rows` f16 на Vulkan** — добавлена F16→F16 ветка в `ggml-vulkan.cpp` (`pipeline_sum_rows[1]`)
+- [x] **NaN в обучении при f16** — целочисленные targets → one-hot внутри `ag_softmax_cross_entropy_loss`; `ag_record` защищён от нетензорных входов
+- [x] **`dp_train` утечка device state** — сохранение/восстановление через `on.exit()`
+
+#### Новые фичи (0.6.1)
+- [x] `dp_train()` — data-parallel training: N реплик, синхронизация весов, усреднение градиентов
 
 #### Следующие фичи
 - [ ] Gradient checkpointing — экономия памяти при глубоких сетях

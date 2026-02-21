@@ -1,8 +1,17 @@
-# ggmlR — Keras-like Neural Networks for R
+# ggmlR — Neural Networks for R
 
 [![R-hub check on the R Consortium cluster](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml/badge.svg)](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml)
 
-A native R package for building, training, and deploying neural networks with a Keras-like API. Backed by the [ggml](https://github.com/ggml-org/ggml) C library with CPU and optional Vulkan GPU acceleration. No Python, no TensorFlow — everything runs inside your R session.
+A native R package for building, training, and deploying neural networks. Backed by the [ggml](https://github.com/ggml-org/ggml) C library, designed primarily for **Vulkan GPU acceleration** with full CPU fallback — no Python, no TensorFlow, everything runs inside your R session.
+
+> **GPU-first design**: when a Vulkan-capable GPU is available (NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno), all operations run on GPU automatically. On machines without a GPU the package falls back to CPU transparently — no code changes needed.
+
+Two complementary APIs:
+
+| API | Style | When to use |
+|---|---|---|
+| Sequential / Functional | Keras-like, static graph | Production models, CRAN-standard workflow |
+| Dynamic autograd (`ag_*`) | PyTorch-like, eager | Research, custom architectures, Transformers |
 
 Also serves as the backend engine for [llamaR](https://github.com/Zabis13/llamaR) (LLM inference) and [sdR](https://github.com/Zabis13/sdR) (Stable Diffusion).
 
@@ -208,6 +217,108 @@ m <- ggml_model(inputs = list(x1, x2), outputs = out)
 | Multi-output predict | list of numpy arrays | R list of matrices |
 | Backend | TensorFlow / JAX / PyTorch | ggml (CPU + Vulkan GPU) |
 
+## Dynamic Autograd Engine (PyTorch-style)
+
+Build and train arbitrary architectures with eager execution and automatic differentiation.
+
+```r
+library(ggmlR)
+
+# Define parameters
+W <- ag_param(matrix(rnorm(4 * 8) * 0.1, 8, 4))
+b <- ag_param(matrix(0, 8, 1))
+
+# Forward + backward
+with_grad_tape({
+  h    <- ag_add(ag_matmul(W, x_batch), b)
+  h    <- ag_relu(h)
+  loss <- ag_mse_loss(h, y_batch)
+})
+grads <- backward(loss)
+
+opt <- optimizer_adam(list(W = W, b = b), lr = 1e-3)
+opt$step(grads)
+opt$zero_grad()
+```
+
+### Transformer encoder block
+
+```r
+model <- ag_sequential(
+  ag_linear(64L, 128L, activation = "relu"),
+  ag_batch_norm(128L),
+  ag_dropout(0.1),
+  ag_linear(128L, 10L)
+)
+
+params <- model$parameters()
+opt    <- optimizer_adam(params, lr = 1e-3)
+sch    <- lr_scheduler_cosine(opt, T_max = 50L, lr_min = 1e-5)
+
+dl <- ag_dataloader(x_train, y_train, batch_size = 32L, shuffle = TRUE)
+
+for (epoch in 1:50) {
+  for (batch in dl$epoch()) {
+    with_grad_tape({
+      out  <- model$forward(batch$x)
+      loss <- ag_softmax_cross_entropy_loss(out, batch$y)
+    })
+    grads <- backward(loss)
+    clip_grad_norm(params, grads, max_norm = 1.0)
+    opt$step(grads)
+    opt$zero_grad()
+  }
+  sch$step()
+}
+```
+
+### Data-parallel training
+
+`dp_train()` splits data across N replicas, averages gradients, and keeps weights in sync automatically.
+
+```r
+make_model <- function() {
+  W <- ag_param(matrix(rnorm(4 * 2) * 0.1, 2, 4))
+  b <- ag_param(matrix(0, 2, 1))
+  list(
+    forward    = function(x) ag_add(ag_matmul(W, x), b),
+    parameters = function() list(W = W, b = b)
+  )
+}
+
+result <- dp_train(
+  make_model  = make_model,
+  data        = my_dataset,           # list of samples
+  loss_fn     = function(out, tgt) ag_mse_loss(out, tgt),
+  forward_fn  = function(model, s) model$forward(s$x),
+  target_fn   = function(s) s$y,
+  n_gpu       = 2L,                   # number of replicas
+  n_iter      = 100L,
+  lr          = 1e-3,
+  max_norm    = 5.0
+)
+
+result$loss_history   # numeric vector, one value per iteration
+result$model          # trained replica 0
+```
+
+### Autograd op reference
+
+| Category | Functions |
+|---|---|
+| Linear | `ag_matmul`, `ag_add`, `ag_sub`, `ag_mul`, `ag_scale` |
+| Activations | `ag_relu`, `ag_sigmoid`, `ag_tanh`, `ag_softmax` |
+| Reductions | `ag_sum`, `ag_mean` (with `dim`, `keepdim`) |
+| Math | `ag_log`, `ag_exp`, `ag_pow`, `ag_clamp` |
+| Shape | `ag_reshape`, `ag_transpose` |
+| Attention | `ag_multihead_attention` |
+| Loss | `ag_mse_loss`, `ag_cross_entropy_loss`, `ag_softmax_cross_entropy_loss` |
+| Layers | `ag_linear`, `ag_batch_norm`, `ag_dropout`, `ag_embedding` |
+| Containers | `ag_sequential` |
+| Optimizers | `optimizer_sgd`, `optimizer_adam` |
+| Schedulers | `lr_scheduler_step`, `lr_scheduler_cosine` |
+| Utilities | `clip_grad_norm`, `ag_gradcheck`, `dp_train` |
+
 ## Save / Load
 
 ```r
@@ -217,11 +328,15 @@ model <- ggml_load_model("my_model.rds")
 
 ## GPU Acceleration
 
-ggmlR auto-detects Vulkan at build time. When available, 90%+ of operations run on GPU with 5×–20× speedup over CPU.
+ggmlR is designed GPU-first: Vulkan is auto-detected at build time and, when available, 90%+ of operations run on GPU with 5×–20× speedup over CPU. On machines without a Vulkan-capable GPU the package falls back to CPU transparently — no code changes required.
 
 ```r
-ggml_vulkan_available()   # TRUE if GPU detected
+ggml_vulkan_available()   # TRUE if a Vulkan GPU was detected
 ggml_vulkan_status()      # device name, memory, capabilities
+
+# Dynamic autograd: switch device at runtime
+ag_device("gpu")   # move subsequent ops to GPU (f16 by default)
+ag_device("cpu")   # fall back to CPU
 ```
 
 Supported GPUs: NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno.

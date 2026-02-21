@@ -36,6 +36,28 @@ test_that("ag_sum(dim=2): shape and value", {
   expect_equal(as.numeric(s$data), c(3, 7, 11))
 })
 
+test_that("ag_sum(dim=1, keepdim=TRUE): shape preserved", {
+  x <- ag_tensor(matrix(1:6, 2, 3))
+  s <- ag_sum(x, dim = 1L, keepdim = TRUE)
+  expect_equal(dim(s$data), c(2L, 1L))
+})
+
+test_that("ag_sum(dim=2, keepdim=TRUE): shape preserved", {
+  x <- ag_tensor(matrix(1:6, 2, 3))
+  s <- ag_sum(x, dim = 2L, keepdim = TRUE)
+  expect_equal(dim(s$data), c(1L, 3L))
+})
+
+test_that("gradcheck: ag_sum(dim=2, keepdim=TRUE)", {
+  set.seed(3)
+  W <- ag_param(matrix(runif(6, 0.5, 1.5), 2, 3))
+  ok <- ag_gradcheck(
+    fn = function(ins) ag_sum(ag_sum(ins$W, dim = 2L, keepdim = TRUE)),
+    inputs = list(W = W), atol = 1e-4, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
 test_that("gradcheck: ag_sum(all)", {
   set.seed(1)
   W <- ag_param(matrix(runif(6, -1, 1), 2, 3))
@@ -287,6 +309,57 @@ test_that("gradcheck: ag_sub", {
   ok <- ag_gradcheck(
     fn = function(ins) ag_mse_loss(ag_sub(ins$A, ins$B), matrix(0, 2, 2)),
     inputs = list(A = A, B = B), atol = 1e-4, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+test_that("ag_sub broadcast [d,s] - [1,s]: forward correct", {
+  A <- ag_tensor(matrix(c(1,2,3,4,5,6), 3, 2))   # [3,2]
+  B <- ag_tensor(matrix(c(1, 2), 1, 2))            # [1,2]
+  C <- ag_sub(A, B)
+  expect_equal(dim(C$data), c(3L, 2L))
+  expect_equal(C$data, matrix(c(0,1,2, 2,3,4), 3, 2))
+})
+
+test_that("gradcheck: ag_sub broadcast [d,s] - [1,s]", {
+  set.seed(21)
+  A <- ag_param(matrix(rnorm(12), 4, 3))
+  B <- ag_param(matrix(rnorm(3),  1, 3))
+  ok <- ag_gradcheck(
+    fn     = function(ins) ag_mse_loss(ag_sub(ins$A, ins$B), matrix(0, 4, 3)),
+    inputs = list(A = A, B = B), atol = 1e-4, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+test_that("ag_mean(dim=1, keepdim=TRUE): shape preserved", {
+  x <- ag_tensor(matrix(1:6, 2, 3))
+  m <- ag_mean(x, dim = 1L, keepdim = TRUE)
+  expect_equal(dim(m$data), c(2L, 1L))
+})
+
+test_that("ag_mean(dim=2, keepdim=TRUE): shape preserved", {
+  x <- ag_tensor(matrix(1:6, 2, 3))
+  m <- ag_mean(x, dim = 2L, keepdim = TRUE)
+  expect_equal(dim(m$data), c(1L, 3L))
+})
+
+test_that("gradcheck: ag_mean(dim=1, keepdim=TRUE)", {
+  set.seed(22)
+  W <- ag_param(matrix(rnorm(12), 4, 3))
+  ok <- ag_gradcheck(
+    fn = function(ins) ag_sum(ag_mean(ins$W, dim = 1L, keepdim = TRUE)),
+    inputs = list(W = W), atol = 1e-4, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+test_that("gradcheck: ag_mean(dim=2, keepdim=TRUE)", {
+  set.seed(23)
+  W <- ag_param(matrix(rnorm(12), 4, 3))
+  ok <- ag_gradcheck(
+    fn = function(ins) ag_sum(ag_mean(ins$W, dim = 2L, keepdim = TRUE)),
+    inputs = list(W = W), atol = 1e-4, quiet = TRUE
   )
   expect_true(ok)
 })

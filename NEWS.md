@@ -1,3 +1,10 @@
+# ggmlR 0.6.1
+
+* `dp_train(make_model, data, loss_fn, forward_fn, target_fn, n_gpu, n_iter, lr, max_norm, verbose)` — data-parallel training across multiple replicas. Weights are broadcast from replica 0 before the first step; gradients are averaged across replicas each iteration; weights are re-broadcast after each optimizer update. Returns `list(params, loss_history, model)`.
+* `ag_mul` and `ag_sub` now support CPU broadcast: `[d×s] * [1×s]` and `[d×s] * [d×1]` shapes work correctly with proper gradient reduction.
+* `ag_softmax_cross_entropy_loss` accepts integer target vectors (0-based class indices) and converts them to one-hot automatically.
+* `ggml_sum_rows` f16 on Vulkan: F16→F16 dispatch now supported natively (no CPU fallback).
+
 # ggmlR 0.6.0
 
 ## Dynamic autograd engine (PyTorch-style training)
