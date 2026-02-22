@@ -2,9 +2,11 @@
 
 # Configure script for ggmlR
 # Vulkan backend: auto-detected, or forced via --with-vulkan / --without-vulkan
+# SIMD flags: disabled by default, enabled via --with-simd
 
 # Default values
 USE_VULKAN="auto"
+USE_SIMD="no"
 VULKAN_CPPFLAGS=""
 VULKAN_LIBS=""
 VULKAN_OBJECTS=""
@@ -18,6 +20,9 @@ for arg in "$@"; do
       ;;
     --without-vulkan)
       USE_VULKAN="no"
+      ;;
+    --with-simd)
+      USE_SIMD="yes"
       ;;
     --host=*)
       HOST="${arg#--host=}"
@@ -85,50 +90,49 @@ if [ "$USE_VULKAN" = "auto" ] || [ "$USE_VULKAN" = "yes" ]; then
   fi
 fi
 
-# --- Detect CPU SIMD features ---
+# --- CPU SIMD flags ---
 #
-# ggml uses compile-time #if defined(__AVX2__) guards to enable SIMD code paths.
-# Without appropriate -m flags, all ggml_cpu_has_*() return 0 and inference
-# falls back to slow scalar code.
+# CRAN policy forbids non-portable compilation flags like -mavx2, -msse4.2 etc.
+# SIMD is disabled by default. Users who want SIMD acceleration on their own
+# machine can enable it with:
+#   install.packages("ggmlR", configure.args = "--with-simd")
 #
-# We probe individual SIMD flags for portability (CRAN policy forbids
-# -march=native because binaries are built on one machine and distributed
-# to users with different CPUs).
-#
-echo "Detecting CPU SIMD features..."
-CC_CMD="${CC:-cc}"
-
 SIMD_CFLAGS=""
-check_cflag() {
-  if echo "int main(){return 0;}" | $CC_CMD $1 -x c -o /dev/null - 2>/dev/null; then
-    SIMD_CFLAGS="$SIMD_CFLAGS $1"
-    echo "  Found: $1"
-    return 0
+if [ "$USE_SIMD" = "yes" ]; then
+  echo "SIMD: enabled by --with-simd, detecting supported flags..."
+  CC_CMD="${CC:-cc}"
+
+  check_cflag() {
+    if echo "int main(){return 0;}" | $CC_CMD $1 -x c -o /dev/null - 2>/dev/null; then
+      SIMD_CFLAGS="$SIMD_CFLAGS $1"
+      echo "  Found: $1"
+      return 0
+    fi
+    return 1
+  }
+
+  SIMD_ARCH=$(uname -m 2>/dev/null || echo "unknown")
+  case "$SIMD_ARCH" in
+    x86_64|i386|i686|amd64)
+      check_cflag -msse3
+      check_cflag -mssse3
+      check_cflag -msse4.1
+      check_cflag -msse4.2
+      check_cflag -mavx
+      check_cflag -mavx2
+      check_cflag -mfma
+      check_cflag -mf16c
+      ;;
+    *)
+      echo "  Non-x86 architecture ($SIMD_ARCH), skipping x86 SIMD flags"
+      ;;
+  esac
+
+  if [ -z "$SIMD_CFLAGS" ]; then
+    echo "  No SIMD flags detected, using scalar fallback"
   fi
-  return 1
-}
-
-# Only probe x86 SIMD flags on x86 platforms to avoid
-# non-portable compilation flags NOTE on ARM/other architectures
-SIMD_ARCH=$(uname -m 2>/dev/null || echo "unknown")
-case "$SIMD_ARCH" in
-  x86_64|i386|i686|amd64)
-    check_cflag -msse3
-    check_cflag -mssse3
-    check_cflag -msse4.1
-    check_cflag -msse4.2
-    check_cflag -mavx
-    check_cflag -mavx2
-    check_cflag -mfma
-    check_cflag -mf16c
-    ;;
-  *)
-    echo "  Non-x86 architecture ($SIMD_ARCH), skipping x86 SIMD flags"
-    ;;
-esac
-
-if [ -z "$SIMD_CFLAGS" ]; then
-  echo "  No SIMD flags detected, using scalar fallback"
+else
+  echo "SIMD: disabled (default). Use --with-simd to enable."
 fi
 
 # --- Detect OpenMP support ---
@@ -303,4 +307,9 @@ if [ "$USE_VULKAN" = "yes" ]; then
   echo "  Vulkan: ENABLED"
 else
   echo "  Vulkan: disabled"
+fi
+if [ "$USE_SIMD" = "yes" ]; then
+  echo "  SIMD:   ENABLED ($SIMD_CFLAGS )"
+else
+  echo "  SIMD:   disabled"
 fi

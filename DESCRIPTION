@@ -22,14 +22,14 @@ Authors@R: c(
 Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     learning, designed primarily for 'Vulkan' GPU acceleration with full CPU
     fallback. 'Vulkan' support is auto-detected at build time on Linux (when
-    'libvulkan-dev' and 'glslc' are installed) and on Windows (when 'Vulkan
-    SDK' is installed and 'VULKAN_SDK' environment variable is set); all
+    'libvulkan-dev' and 'glslc' are installed) and on Windows (when 'Vulkan'
+    'SDK' is installed and 'VULKAN_SDK' environment variable is set); all
     operations fall back to CPU transparently when no GPU is available.
     Implements tensor operations, neural network layers, quantization, and a
     'Keras'-like sequential model API for building and training networks.
     Includes 'AdamW' (Adam with Weight decay) and 'SGD' (Stochastic Gradient
     Descent) optimizers with 'MSE' (Mean Squared Error) and cross-entropy
-    losses. Also provides a dynamic autograd engine ('PyTorch'-style) with
+    losses. Also provides a dynamic 'autograd' engine ('PyTorch'-style) with
     data-parallel training via 'dp_train()', broadcast arithmetic, 'f16'
     (half-precision) support on 'Vulkan' GPU, and a multi-head attention layer
     for building Transformer architectures. Serves as backend for 'LLM' (Large
@@ -42,7 +42,7 @@ URL: https://github.com/Zabis13/ggmlR
 BugReports: https://github.com/Zabis13/ggmlR/issues
 Encoding: UTF-8
 SystemRequirements: C++17, GNU make, libvulkan-dev, glslc (optional, for
-    GPU on Linux), Vulkan SDK (optional, for GPU on Windows)
+    GPU on Linux), 'Vulkan' 'SDK' (optional, for GPU on Windows)
 Suggests:
     testthat (>= 3.0.0)
 RoxygenNote: 7.3.3

@@ -1,30 +1,29 @@
-## Reason for quick resubmission
+## Resubmission
 
-This is a critical bugfix release addressing:
-- Installation failures on macOS ARM64 (M1/M2/M3) platforms
-- Missing symbol errors preventing package loading
-- CRAN check failures on 3 of 8 platforms
-
-Previous version 0.5.1 had ERROR status on M1 Mac checks.
+Changes since previous submission:
+- Removed non-portable SIMD compilation flags (-mavx2, -msse4.2, etc.)
+  that triggered NOTE on CRAN. SIMD is now opt-in via
+  `configure.args = "--with-simd"`.
+- Fixed misspelled words in DESCRIPTION ('Vulkan', 'SDK', 'autograd').
 
 ## R CMD check results
 
-0 errors | 0 warnings | 3 notes
+0 errors | 0 warnings | 4 notes
 
 * **installed package size**: The package includes a static library (lib/)
   for downstream packages (llamaR, sdR) and a shared library (libs/) with
   the GGML tensor computation engine. The size is inherent to the compiled
   C/C++ codebase.
 
+* **checking for future file timestamps**: Unable to verify current time.
+  This is a transient network/NTP issue on the check machine, not a
+  package problem.
+
 * **GNU make is a SystemRequirements**: GNU make is listed in
   SystemRequirements and is needed for the build.
 
-* **Non-portable compilation flags** (-msse3, -mssse3, -msse4.1, -msse4.2,
-  -mavx, -mavx2, -mfma, -mf16c): These x86 SIMD flags are detected and
-  added only on x86_64 platforms by the configure script. On ARM and other
-  architectures no SIMD flags are added. The flags are essential for
-  performant tensor computation — without them, inference speed drops
-  significantly.
+* **compilation flags used**: `-mno-omit-leaf-frame-pointer` is added by
+  the system compiler/R configuration, not by the package itself.
 
 ## Test environments
 

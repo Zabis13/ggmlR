@@ -1,18 +1,18 @@
 # Data-Parallel Training Demo (dp_train)
 #
-# Демонстрирует честный data-parallel: каждая реплика получает
-# свой уникальный сэмпл на каждой итерации (effective batch = n_replicas).
+# Demonstrates true data-parallel: each replica receives
+# its own unique sample at each iteration (effective batch = n_replicas).
 #
-#   - dp_train() с 1, 2 и N репликами (авто-детект GPU)
-#   - Синхронизацию начальных весов между репликами
-#   - Обучение MLP на синтетической регрессионной задаче
-#   - clip_grad_norm внутри dp_train
-#   - Встроенные проверки в конце файла
+#   - dp_train() with 1, 2 and N replicas (auto-detect GPU)
+#   - Synchronisation of initial weights across replicas
+#   - MLP training on a synthetic regression task
+#   - clip_grad_norm inside dp_train
+#   - Built-in checks at the end of the file
 #
-# Запуск:
+# Usage:
 #   Rscript inst/examples/dp_train_demo.R
 #
-# Тензорный макет: [features, 1] — один сэмпл за шаг на реплику.
+# Tensor layout: [features, 1] — one sample per step per replica.
 
 library(ggmlR)
 
@@ -22,20 +22,20 @@ n_avail <- tryCatch(ggml_vulkan_device_count(), error = function(e) 0L)
 cat(sprintf("Vulkan GPUs available: %d\n", n_avail))
 
 # =============================================================================
-# 0.  Гиперпараметры
+# 0.  Hyperparameters
 # =============================================================================
 
 set.seed(42L)
 
-D_IN   <- 4L    # входных признаков
-D_HID  <- 16L   # скрытый слой
-D_OUT  <- 2L    # выходов
-N      <- 128L  # сэмплов в датасете
+D_IN   <- 4L    # input features
+D_HID  <- 16L   # hidden layer size
+D_OUT  <- 2L    # outputs
+N      <- 128L  # dataset samples
 N_ITER <- 100L
 LR     <- 5e-3
 
 # =============================================================================
-# 1.  Синтетический датасет  y = W_true * x + noise
+# 1.  Synthetic dataset  y = W_true * x + noise
 # =============================================================================
 
 W_true <- matrix(c(0.5, -0.3, 0.8, -0.1,
@@ -44,7 +44,7 @@ W_true <- matrix(c(0.5, -0.3, 0.8, -0.1,
 X <- matrix(rnorm(D_IN * N), D_IN, N)
 Y <- W_true %*% X + matrix(rnorm(D_OUT * N, sd = 0.05), D_OUT, N)
 
-# Список сэмплов — каждый: list(x=[D_IN,1], y=[D_OUT,1])
+# List of samples — each: list(x=[D_IN,1], y=[D_OUT,1])
 dataset <- lapply(seq_len(N), function(i)
   list(x = X[, i, drop = FALSE],
        y = Y[, i, drop = FALSE]))
@@ -54,7 +54,7 @@ cat("True data-parallel: each replica sees a DIFFERENT sample per iteration.\n")
 cat(sprintf("Effective batch size = n_replicas (e.g. 4 replicas => batch=4)\n\n"))
 
 # =============================================================================
-# 2.  Фабрика моделей  (Linear -> ReLU -> Linear)
+# 2.  Model factory  (Linear -> ReLU -> Linear)
 # =============================================================================
 
 make_model <- function() {
@@ -77,7 +77,7 @@ target_fn  <- function(s)        s$y
 loss_fn    <- function(out, tgt) ag_mse_loss(out, tgt)
 
 # =============================================================================
-# 3.  Тренировка: 1 реплика (CPU, batch=1)
+# 3.  Training: 1 replica (CPU, batch=1)
 # =============================================================================
 
 cat("--- 1 replica  (CPU, effective batch = 1) ---\n")
@@ -92,7 +92,7 @@ cat(sprintf("Loss: %.4f → %.4f\n\n",
             result_1$loss_history[1], tail(result_1$loss_history, 1)))
 
 # =============================================================================
-# 4.  Тренировка: 2 реплики (GPU если есть, иначе CPU)
+# 4.  Training: 2 replicas (GPU if available, otherwise CPU)
 # =============================================================================
 
 n_rep2 <- 2L
@@ -109,7 +109,7 @@ cat(sprintf("Loss: %.4f → %.4f\n\n",
             result_2$loss_history[1], tail(result_2$loss_history, 1)))
 
 # =============================================================================
-# 5.  Тренировка: N реплик по числу GPU (или 4 CPU-реплики если GPU нет)
+# 5.  Training: N replicas matching GPU count (or 4 CPU replicas if no GPU)
 # =============================================================================
 
 n_repN <- if (n_avail >= 2L) n_avail else 4L
@@ -126,7 +126,7 @@ cat(sprintf("Loss: %.4f → %.4f\n\n",
             result_N$loss_history[1], tail(result_N$loss_history, 1)))
 
 # =============================================================================
-# 6.  Инференс обученной модели (replica 0 из последнего запуска)
+# 6.  Inference with trained model (replica 0 from last run)
 # =============================================================================
 
 cat("--- Inference (replica 0 from last run) ---\n")
@@ -139,7 +139,7 @@ cat("Predictions (4 samples):\n")
 print(round(pred$data, 3))
 
 # =============================================================================
-# 7.  Встроенные проверки
+# 7.  Built-in checks
 # =============================================================================
 
 cat("\n--- Checks ---\n")
@@ -152,17 +152,17 @@ check <- function(cond, msg) {
 
 third <- N_ITER %/% 3L
 
-# длина loss_history
+# loss_history length
 check(length(result_1$loss_history) == N_ITER, "loss_history length (1 replica)")
 check(length(result_2$loss_history) == N_ITER, "loss_history length (2 replicas)")
 check(length(result_N$loss_history) == N_ITER, sprintf("loss_history length (%d replicas)", n_repN))
 
-# нет NaN/Inf
+# no NaN/Inf
 check(all(is.finite(result_1$loss_history)), "no NaN/Inf (1 replica)")
 check(all(is.finite(result_2$loss_history)), "no NaN/Inf (2 replicas)")
 check(all(is.finite(result_N$loss_history)), sprintf("no NaN/Inf (%d replicas)", n_repN))
 
-# loss убывает (последняя треть < первой трети)
+# loss decreases (last third < first third)
 check(mean(tail(result_1$loss_history, third)) < mean(head(result_1$loss_history, third)),
       "loss decreased (1 replica)")
 check(mean(tail(result_2$loss_history, third)) < mean(head(result_2$loss_history, third)),
@@ -170,21 +170,21 @@ check(mean(tail(result_2$loss_history, third)) < mean(head(result_2$loss_history
 check(mean(tail(result_N$loss_history, third)) < mean(head(result_N$loss_history, third)),
       sprintf("loss decreased (%d replicas)", n_repN))
 
-# структура результата
+# result structure
 check(all(c("params", "loss_history", "model") %in% names(result_N)),
       "result has params / loss_history / model")
 
-# каждая реплика видела разные данные — проверяем косвенно:
-# при 2 репликах effective batch вдвое больше => сходимость за те же итерации
-# должна быть не хуже чем при 1 реплике
+# each replica saw different data — checked indirectly:
+# with 2 replicas the effective batch is twice as large => convergence over
+# the same number of iterations should be no worse than with 1 replica
 check(mean(tail(result_2$loss_history, third)) <=
       mean(tail(result_1$loss_history, third)) * 1.5,
       "2-replica loss not worse than 1-replica (true DP sanity)")
 
-# device восстановлен
+# device restored
 check(ag_default_device() == "cpu", "device restored to CPU after dp_train")
 
-# инференс конечен
+# inference output finite
 check(all(is.finite(pred$data)), "inference output is finite")
 
 cat(if (ok) "\nAll checks passed.\n" else "\nSome checks FAILED.\n")
