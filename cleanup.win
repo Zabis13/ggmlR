@@ -4,7 +4,7 @@ REM Removes compiled objects, shared libraries, and generated files
 
 REM Remove compiled objects and libraries
 del /Q src\*.o src\*.so src\*.dll src\*.dylib src\*.a 2>NUL
-del /Q inst\lib\*.a 2>NUL
+REM del /Q inst\lib\*.a 2>NUL
 del /Q src\ggml-cpu\*.o 2>NUL
 del /Q src\ggml-cpu\arch\x86\*.o 2>NUL
 del /Q src\ggml-cpu\arch\arm\*.o 2>NUL
