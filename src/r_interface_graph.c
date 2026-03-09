@@ -4403,7 +4403,7 @@ SEXP R_ggml_timestep_embedding(SEXP ctx_ptr, SEXP a_ptr, SEXP dim_sexp, SEXP max
 }
 
 // ============================================================================
-// CPU-side tensor data access (for sdR / stable-diffusion port)
+// CPU-side tensor data access (for sd2R / stable-diffusion port)
 // ============================================================================
 
 // Set single f32 value at [i0, i1, i2, i3] via direct memory access

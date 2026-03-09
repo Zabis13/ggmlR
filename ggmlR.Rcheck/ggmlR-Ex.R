@@ -1,0 +1,4706 @@
+pkgname <- "ggmlR"
+source(file.path(R.home("share"), "R", "examples-header.R"))
+options(warn = 1)
+base::assign(".ExTimings", "ggmlR-Ex.timings", pos = 'CheckExEnv')
+base::cat("name\tuser\tsystem\telapsed\n", file=base::get(".ExTimings", pos = 'CheckExEnv'))
+base::assign(".format_ptime",
+function(x) {
+  if(!is.na(x[4L])) x[1L] <- x[1L] + x[4L]
+  if(!is.na(x[5L])) x[2L] <- x[2L] + x[5L]
+  options(OutDec = '.')
+  format(x[1L:3L], digits = 7L)
+},
+pos = 'CheckExEnv')
+
+### * </HEADER>
+library('ggmlR')
+
+base::assign(".oldSearch", base::search(), pos = 'CheckExEnv')
+base::assign(".old_wd", base::getwd(), pos = 'CheckExEnv')
+cleanEx()
+nameEx("GGML_GLU_OP_REGLU")
+### * GGML_GLU_OP_REGLU
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: GGML_GLU_OP_REGLU
+### Title: GLU Operation Types
+### Aliases: GGML_GLU_OP_REGLU GGML_GLU_OP_GEGLU GGML_GLU_OP_SWIGLU
+###   GGML_GLU_OP_SWIGLU_OAI GGML_GLU_OP_GEGLU_ERF GGML_GLU_OP_GEGLU_QUICK
+### Keywords: datasets
+
+### ** Examples
+
+## No test: 
+GGML_GLU_OP_REGLU       # 0 - ReLU gating
+GGML_GLU_OP_GEGLU       # 1 - GELU gating
+GGML_GLU_OP_SWIGLU      # 2 - SiLU/Swish gating
+GGML_GLU_OP_SWIGLU_OAI  # 3 - SwiGLU OpenAI
+GGML_GLU_OP_GEGLU_ERF   # 4 - GELU with erf
+GGML_GLU_OP_GEGLU_QUICK # 5 - Fast GELU
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("GGML_GLU_OP_REGLU", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("GGML_SORT_ORDER_ASC")
+### * GGML_SORT_ORDER_ASC
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: GGML_SORT_ORDER_ASC
+### Title: Sort Order Constants
+### Aliases: GGML_SORT_ORDER_ASC GGML_SORT_ORDER_DESC
+### Keywords: datasets
+
+### ** Examples
+
+## No test: 
+GGML_SORT_ORDER_ASC   # 0 - Ascending order
+GGML_SORT_ORDER_DESC  # 1 - Descending order
+
+# Usage with ggml_argsort
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(3, 1, 4, 1, 5))
+# Get ascending sort indices
+idx_asc <- ggml_argsort(ctx, a, GGML_SORT_ORDER_ASC)
+# Get descending sort indices
+idx_desc <- ggml_argsort(ctx, a, GGML_SORT_ORDER_DESC)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("GGML_SORT_ORDER_ASC", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("GGML_TYPE_F32")
+### * GGML_TYPE_F32
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: GGML_TYPE_F32
+### Title: GGML Data Types
+### Aliases: GGML_TYPE_F32 GGML_TYPE_F16 GGML_TYPE_Q4_0 GGML_TYPE_Q4_1
+###   GGML_TYPE_Q8_0 GGML_TYPE_I32
+### Keywords: datasets
+
+### ** Examples
+
+## No test: 
+GGML_TYPE_F32
+GGML_TYPE_F16
+GGML_TYPE_I32
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("GGML_TYPE_F32", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_abs")
+### * ggml_abs
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_abs
+### Title: Absolute Value (Graph)
+### Aliases: ggml_abs
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(-2, -1, 1, 2))
+result <- ggml_abs(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [2, 1, 1, 2]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_abs", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_add")
+### * ggml_add
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_add
+### Title: Add tensors
+### Aliases: ggml_add
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(b, c(5, 4, 3, 2, 1))
+result <- ggml_add(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(b, c(5, 4, 3, 2, 1))
+result <- ggml_add(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_add", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_add1")
+### * ggml_add1
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_add1
+### Title: Add Scalar to Tensor (Graph)
+### Aliases: ggml_add1
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+scalar <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(scalar, 10)
+result <- ggml_add1(ctx, a, scalar)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_add1", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_add_inplace")
+### * ggml_add_inplace
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_add_inplace
+### Title: Element-wise Addition In-place (Graph)
+### Aliases: ggml_add_inplace
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(b, c(5, 4, 3, 2, 1))
+result <- ggml_add_inplace(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_add_inplace", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_are_same_layout")
+### * ggml_are_same_layout
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_are_same_layout
+### Title: Check if Two Tensors Have the Same Layout
+### Aliases: ggml_are_same_layout
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 4)
+b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 4)
+same <- ggml_are_same_layout(a, b)  # TRUE
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_are_same_layout", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_argmax")
+### * ggml_argmax
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_argmax
+### Title: Argmax (Graph)
+### Aliases: ggml_argmax
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 5, 3, 2, 4))
+result <- ggml_argmax(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_i32(result)  # 1 (0-indexed)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_argmax", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_argsort")
+### * ggml_argsort
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_argsort
+### Title: Argsort - Get Sorting Indices (Graph)
+### Aliases: ggml_argsort
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+# Create tensor with values to sort
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(3, 1, 4, 1, 5))
+# Get indices for ascending sort
+indices <- ggml_argsort(ctx, a, GGML_SORT_ORDER_ASC)
+graph <- ggml_build_forward_expand(ctx, indices)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_i32(indices)
+# result: [1, 3, 0, 2, 4] (0-indexed positions for sorted order)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_argsort", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_backend_graph_compute_async")
+### * ggml_backend_graph_compute_async
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_backend_graph_compute_async
+### Title: Compute graph asynchronously
+### Aliases: ggml_backend_graph_compute_async
+
+### ** Examples
+
+## No test: 
+cpu <- ggml_backend_cpu_init()
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 100)
+b <- ggml_relu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, b)
+ggml_set_f32(a, rnorm(100))
+# Start async computation
+status <- ggml_backend_graph_compute_async(cpu, graph)
+# Do other work while computation runs...
+ggml_backend_synchronize(cpu)
+ggml_backend_free(cpu)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_backend_graph_compute_async", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_backend_multi_buffer_alloc_buffer")
+### * ggml_backend_multi_buffer_alloc_buffer
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_backend_multi_buffer_alloc_buffer
+### Title: Allocate multi-buffer
+### Aliases: ggml_backend_multi_buffer_alloc_buffer
+
+### ** Examples
+
+## No test: 
+cpu <- ggml_backend_cpu_init()
+ctx1 <- ggml_init(1024, no_alloc = TRUE)
+ctx2 <- ggml_init(2048, no_alloc = TRUE)
+a <- ggml_new_tensor_1d(ctx1, GGML_TYPE_F32, 10)
+b <- ggml_new_tensor_1d(ctx2, GGML_TYPE_F32, 20)
+buf1 <- ggml_backend_alloc_ctx_tensors(ctx1, cpu)
+buf2 <- ggml_backend_alloc_ctx_tensors(ctx2, cpu)
+multi <- ggml_backend_multi_buffer_alloc_buffer(list(buf1, buf2))
+ggml_backend_buffer_free(multi)
+ggml_backend_free(cpu)
+ggml_free(ctx1)
+ggml_free(ctx2)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_backend_multi_buffer_alloc_buffer", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_backend_sched_free")
+### * ggml_backend_sched_free
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_backend_sched_free
+### Title: Free backend scheduler
+### Aliases: ggml_backend_sched_free
+
+### ** Examples
+
+## No test: 
+cpu <- ggml_backend_cpu_init()
+sched <- ggml_backend_sched_new(list(cpu))
+ggml_backend_sched_free(sched)
+ggml_backend_free(cpu)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_backend_sched_free", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_backend_sched_graph_compute")
+### * ggml_backend_sched_graph_compute
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_backend_sched_graph_compute
+### Title: Compute graph using scheduler
+### Aliases: ggml_backend_sched_graph_compute
+
+### ** Examples
+
+## No test: 
+# Multi-GPU example
+if (ggml_vulkan_available() && ggml_vulkan_device_count() >= 2) {
+  gpu1 <- ggml_vulkan_init(0)
+  gpu2 <- ggml_vulkan_init(1)
+  sched <- ggml_backend_sched_new(list(gpu1, gpu2))
+
+  ctx <- ggml_init(64 * 1024 * 1024)
+  a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10000)
+  b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10000)
+  ggml_set_f32(a, rnorm(10000))
+  ggml_set_f32(b, rnorm(10000))
+
+  c <- ggml_add(ctx, a, b)
+  graph <- ggml_build_forward_expand(ctx, c)
+
+  # Reserve memory
+  ggml_backend_sched_reserve(sched, graph)
+
+  # Compute using both GPUs
+  ggml_backend_sched_graph_compute(sched, graph)
+
+  result <- ggml_get_f32(c)
+
+  cat("Splits:", ggml_backend_sched_get_n_splits(sched), "\n")
+  cat("Copies:", ggml_backend_sched_get_n_copies(sched), "\n")
+
+  ggml_free(ctx)
+  ggml_backend_sched_free(sched)
+  ggml_vulkan_free(gpu1)
+  ggml_vulkan_free(gpu2)
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_backend_sched_graph_compute", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_backend_sched_new")
+### * ggml_backend_sched_new
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_backend_sched_new
+### Title: Create a new backend scheduler
+### Aliases: ggml_backend_sched_new
+
+### ** Examples
+
+## No test: 
+if (ggml_vulkan_available() && ggml_vulkan_device_count() >= 2) {
+  # Create two GPU backends (CPU is added automatically)
+  gpu1 <- ggml_vulkan_init(0)
+  gpu2 <- ggml_vulkan_init(1)
+
+  # Create scheduler with both GPUs + CPU (automatic)
+  sched <- ggml_backend_sched_new(list(gpu1, gpu2), parallel = TRUE)
+
+  # The scheduler now has 3 backends: GPU1, GPU2, CPU
+  cat("Backends:", ggml_backend_sched_get_n_backends(sched), "\\n")
+
+  # Use scheduler...
+
+  # Cleanup
+  ggml_backend_sched_free(sched)
+  ggml_vulkan_free(gpu1)
+  ggml_vulkan_free(gpu2)
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_backend_sched_new", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_backend_sched_reserve")
+### * ggml_backend_sched_reserve
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_backend_sched_reserve
+### Title: Reserve memory for scheduler
+### Aliases: ggml_backend_sched_reserve
+
+### ** Examples
+
+## No test: 
+cpu <- ggml_backend_cpu_init()
+sched <- ggml_backend_sched_new(list(cpu))
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1000)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1000)
+c <- ggml_add(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, c)
+ggml_backend_sched_reserve(sched, graph)
+ggml_backend_sched_free(sched)
+ggml_backend_free(cpu)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_backend_sched_reserve", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_blck_size")
+### * ggml_blck_size
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_blck_size
+### Title: Get Block Size
+### Aliases: ggml_blck_size
+
+### ** Examples
+
+ggml_blck_size(GGML_TYPE_F32)  # 1
+ggml_blck_size(GGML_TYPE_Q4_0) # 32
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_blck_size", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_build_forward_expand")
+### * ggml_build_forward_expand
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_build_forward_expand
+### Title: Build forward expand
+### Aliases: ggml_build_forward_expand
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(b, c(5, 4, 3, 2, 1))
+result <- ggml_add(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_set_f32(a, 1:10)
+ggml_set_f32(b, 11:20)
+c <- ggml_add(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, c)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(c)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_build_forward_expand", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_can_repeat")
+### * ggml_can_repeat
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_can_repeat
+### Title: Check If Tensor Can Be Repeated
+### Aliases: ggml_can_repeat
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 8)
+ggml_can_repeat(a, b)  # TRUE - a can broadcast along dim 1
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_can_repeat", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_compile")
+### * ggml_compile
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_compile
+### Title: Compile a Sequential Model
+### Aliases: ggml_compile
+
+### ** Examples
+
+## No test: 
+model <- ggml_model_sequential() |>
+  ggml_layer_conv_2d(32, c(3,3), activation = "relu",
+                     input_shape = c(28, 28, 1)) |>
+  ggml_layer_max_pooling_2d(c(2, 2)) |>
+  ggml_layer_flatten() |>
+  ggml_layer_dense(10, activation = "softmax")
+model <- ggml_compile(model, optimizer = "adam",
+                      loss = "categorical_crossentropy")
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_compile", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_concat")
+### * ggml_concat
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_concat
+### Title: Concatenate Tensors (Graph)
+### Aliases: ggml_concat
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 3)
+b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 2)
+ggml_set_f32(a, rnorm(12))
+ggml_set_f32(b, rnorm(8))
+# Concatenate along dimension 1: result is 4x5
+c <- ggml_concat(ctx, a, b, 1)
+graph <- ggml_build_forward_expand(ctx, c)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_concat", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_cont")
+### * ggml_cont
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_cont
+### Title: Make Contiguous (Graph)
+### Aliases: ggml_cont
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 4)
+ggml_set_f32(a, 1:12)
+transposed <- ggml_transpose(ctx, a)
+contiguous <- ggml_cont(ctx, transposed)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_cont", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_cos")
+### * ggml_cos
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_cos
+### Title: Cosine (Graph)
+### Aliases: ggml_cos
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(0, pi/3, pi/2, pi))
+result <- ggml_cos(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [1, 0.5, 0, -1]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_cos", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_count_equal")
+### * ggml_count_equal
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_count_equal
+### Title: Count Equal Elements (Graph)
+### Aliases: ggml_count_equal
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+pred <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 100)
+labels <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 100)
+# ... set values ...
+correct <- ggml_count_equal(ctx, pred, labels)
+graph <- ggml_build_forward_expand(ctx, correct)
+ggml_graph_compute(ctx, graph)
+# correct now contains count of matching elements
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_count_equal", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_cpu_add")
+### * ggml_cpu_add
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_cpu_add
+### Title: Element-wise Addition (CPU Direct)
+### Aliases: ggml_cpu_add
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(b, c(5, 4, 3, 2, 1))
+ggml_cpu_add(a, b)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_cpu_add", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_cpu_features")
+### * ggml_cpu_features
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_cpu_features
+### Title: Get All CPU Features
+### Aliases: ggml_cpu_features
+
+### ** Examples
+
+features <- ggml_cpu_features()
+print(features)
+# On typical x86-64: sse3=TRUE, avx=TRUE, avx2=TRUE, ...
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_cpu_features", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_cpu_has_sse3")
+### * ggml_cpu_has_sse3
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_cpu_has_sse3
+### Title: CPU Feature Detection - SSE3
+### Aliases: ggml_cpu_has_sse3
+
+### ** Examples
+
+ggml_cpu_has_sse3()
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_cpu_has_sse3", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_cpu_mul")
+### * ggml_cpu_mul
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_cpu_mul
+### Title: Element-wise Multiplication (CPU Direct)
+### Aliases: ggml_cpu_mul
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(b, c(2, 2, 2, 2, 2))
+ggml_cpu_mul(a, b)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_cpu_mul", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_cpy")
+### * ggml_cpy
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_cpy
+### Title: Copy Tensor with Type Conversion (Graph)
+### Aliases: ggml_cpy
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+# Create F32 tensor
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 100)
+ggml_set_f32(a, rnorm(100))
+# Create F16 tensor for output
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F16, 100)
+# Copy with F32 -> F16 conversion
+result <- ggml_cpy(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_cpy", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_cycles")
+### * ggml_cycles
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_cycles
+### Title: Get CPU Cycles
+### Aliases: ggml_cycles
+
+### ** Examples
+
+## No test: 
+ggml_cycles()
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_cycles", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_cycles_per_ms")
+### * ggml_cycles_per_ms
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_cycles_per_ms
+### Title: Get CPU Cycles per Millisecond
+### Aliases: ggml_cycles_per_ms
+
+### ** Examples
+
+## No test: 
+ggml_cycles_per_ms()
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_cycles_per_ms", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_diag")
+### * ggml_diag
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_diag
+### Title: Diagonal Matrix (Graph)
+### Aliases: ggml_diag
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+ggml_set_f32(a, c(1, 2, 3))
+d <- ggml_diag(ctx, a)  # 3x3 diagonal matrix
+graph <- ggml_build_forward_expand(ctx, d)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_diag", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_diag_mask_inf")
+### * ggml_diag_mask_inf
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_diag_mask_inf
+### Title: Diagonal Mask with -Inf (Graph)
+### Aliases: ggml_diag_mask_inf
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+# Create attention scores matrix
+scores <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 4)
+ggml_set_f32(scores, rep(1, 16))
+# Apply causal mask
+masked <- ggml_diag_mask_inf(ctx, scores, 0)
+graph <- ggml_build_forward_expand(ctx, masked)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_diag_mask_inf", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_div")
+### * ggml_div
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_div
+### Title: Element-wise Division (Graph)
+### Aliases: ggml_div
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(10, 20, 30, 40, 50))
+ggml_set_f32(b, c(2, 2, 2, 2, 2))
+result <- ggml_div(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_div", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_dup")
+### * ggml_dup
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_dup
+### Title: Duplicate Tensor (Graph)
+### Aliases: ggml_dup
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+b <- ggml_dup(ctx, a)
+graph <- ggml_build_forward_expand(ctx, b)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(b)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_dup", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_dup_tensor")
+### * ggml_dup_tensor
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_dup_tensor
+### Title: Duplicate Tensor
+### Aliases: ggml_dup_tensor
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 100)
+b <- ggml_dup_tensor(ctx, a)
+ggml_nelements(b)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_dup_tensor", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_elu")
+### * ggml_elu
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_elu
+### Title: ELU Activation (Graph)
+### Aliases: ggml_elu
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+r <- ggml_elu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_elu", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_estimate_memory")
+### * ggml_estimate_memory
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_estimate_memory
+### Title: Estimate Required Memory
+### Aliases: ggml_estimate_memory
+
+### ** Examples
+
+## No test: 
+# For 1000x1000 F32 matrix
+ggml_estimate_memory(GGML_TYPE_F32, 1000, 1000)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_estimate_memory", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_exp")
+### * ggml_exp
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_exp
+### Title: Exponential (Graph)
+### Aliases: ggml_exp
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+ggml_set_f32(a, c(0, 1, 2))
+result <- ggml_exp(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [1, e, e^2]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_exp", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_flash_attn_ext")
+### * ggml_flash_attn_ext
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_flash_attn_ext
+### Title: Flash Attention (Graph)
+### Aliases: ggml_flash_attn_ext
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(64 * 1024 * 1024)
+head_dim <- 64
+n_head <- 8
+n_head_kv <- 2  # GQA with 4:1 ratio
+seq_len <- 32
+q <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, n_head, seq_len, 1)
+k <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, n_head_kv, seq_len, 1)
+v <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, n_head_kv, seq_len, 1)
+ggml_set_f32(q, rnorm(head_dim * n_head * seq_len))
+ggml_set_f32(k, rnorm(head_dim * n_head_kv * seq_len))
+ggml_set_f32(v, rnorm(head_dim * n_head_kv * seq_len))
+# Scale = 1/sqrt(head_dim)
+scale <- 1.0 / sqrt(head_dim)
+# Compute attention
+out <- ggml_flash_attn_ext(ctx, q, k, v, NULL, scale, 0.0, 0.0)
+graph <- ggml_build_forward_expand(ctx, out)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_flash_attn_ext", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_free")
+### * ggml_free
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_free
+### Title: Free GGML context
+### Aliases: ggml_free
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_free", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_gallocr_alloc_graph")
+### * ggml_gallocr_alloc_graph
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_gallocr_alloc_graph
+### Title: Allocate Memory for Graph
+### Aliases: ggml_gallocr_alloc_graph
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+galloc <- ggml_gallocr_new()
+
+# Create graph
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+b <- ggml_relu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, b)
+
+# Allocate and compute
+ggml_gallocr_alloc_graph(galloc, graph)
+ggml_graph_compute(ctx, graph)
+
+ggml_gallocr_free(galloc)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_gallocr_alloc_graph", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_gallocr_new")
+### * ggml_gallocr_new
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_gallocr_new
+### Title: Create Graph Allocator
+### Aliases: ggml_gallocr_new
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+galloc <- ggml_gallocr_new()
+
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+b <- ggml_relu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, b)
+
+# Allocate graph
+ggml_gallocr_alloc_graph(galloc, graph)
+
+ggml_gallocr_free(galloc)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_gallocr_new", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_geglu")
+### * ggml_geglu
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_geglu
+### Title: GeGLU (GELU Gated Linear Unit) (Graph)
+### Aliases: ggml_geglu
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 3)
+ggml_set_f32(a, rnorm(24))
+r <- ggml_geglu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # Shape: 4x3
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_geglu", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_gelu")
+### * ggml_gelu
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_gelu
+### Title: GELU Activation (Graph)
+### Aliases: ggml_gelu
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+result <- ggml_gelu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_gelu", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_gelu_erf")
+### * ggml_gelu_erf
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_gelu_erf
+### Title: Exact GELU Activation (Graph)
+### Aliases: ggml_gelu_erf
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+r <- ggml_gelu_erf(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_gelu_erf", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_gelu_quick")
+### * ggml_gelu_quick
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_gelu_quick
+### Title: GELU Quick Activation (Graph)
+### Aliases: ggml_gelu_quick
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+result <- ggml_gelu_quick(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_gelu_quick", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_get_f32")
+### * ggml_get_f32
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_get_f32
+### Title: Get F32 data
+### Aliases: ggml_get_f32
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+tensor <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(tensor, c(1, 2, 3, 4, 5))
+ggml_get_f32(tensor)
+ggml_free(ctx)
+## End(No test)
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(t, c(1, 2, 3, 4, 5))
+ggml_get_f32(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_get_f32", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_get_i32")
+### * ggml_get_i32
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_get_i32
+### Title: Get I32 Data
+### Aliases: ggml_get_i32
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+pos <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 10)
+ggml_set_i32(pos, 0:9)
+ggml_get_i32(pos)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_get_i32", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_get_max_tensor_size")
+### * ggml_get_max_tensor_size
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_get_max_tensor_size
+### Title: Get Maximum Tensor Size
+### Aliases: ggml_get_max_tensor_size
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+ggml_get_max_tensor_size(ctx)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_get_max_tensor_size", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_get_mem_size")
+### * ggml_get_mem_size
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_get_mem_size
+### Title: Get Context Memory Size
+### Aliases: ggml_get_mem_size
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+ggml_get_mem_size(ctx)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_get_mem_size", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_get_n_threads")
+### * ggml_get_n_threads
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_get_n_threads
+### Title: Get Number of Threads
+### Aliases: ggml_get_n_threads
+
+### ** Examples
+
+## No test: 
+ggml_get_n_threads()
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_get_n_threads", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_get_no_alloc")
+### * ggml_get_no_alloc
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_get_no_alloc
+### Title: Get No Allocation Mode
+### Aliases: ggml_get_no_alloc
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+ggml_get_no_alloc(ctx)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_get_no_alloc", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_get_rows")
+### * ggml_get_rows
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_get_rows
+### Title: Get Rows by Indices (Graph)
+### Aliases: ggml_get_rows
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+# Create embedding matrix: 10 tokens, 4-dim embeddings
+embeddings <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 10)
+ggml_set_f32(embeddings, rnorm(40))
+# Token indices to look up
+indices <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 3)
+ggml_set_i32(indices, c(0L, 5L, 2L))
+# Get embeddings for tokens 0, 5, 2
+result <- ggml_get_rows(ctx, embeddings, indices)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_get_rows", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_glu")
+### * ggml_glu
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_glu
+### Title: Generic GLU (Gated Linear Unit) (Graph)
+### Aliases: ggml_glu
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+# Create tensor with 10 columns (will be split into 5 + 5)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 4)
+ggml_set_f32(a, rnorm(40))
+# Apply SwiGLU
+r <- ggml_glu(ctx, a, GGML_GLU_OP_SWIGLU, FALSE)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # Shape: 5x4
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_glu", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_graph_compute")
+### * ggml_graph_compute
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_graph_compute
+### Title: Compute graph
+### Aliases: ggml_graph_compute
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+result <- ggml_relu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_set_f32(a, 1:10)
+ggml_set_f32(b, 11:20)
+c <- ggml_add(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, c)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(c)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_graph_compute", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_graph_compute_with_ctx")
+### * ggml_graph_compute_with_ctx
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_graph_compute_with_ctx
+### Title: Compute Graph with Context (Alternative Method)
+### Aliases: ggml_graph_compute_with_ctx
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_set_f32(a, 1:10)
+c <- ggml_relu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, c)
+ggml_graph_compute_with_ctx(ctx, graph)
+result <- ggml_get_f32(c)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_graph_compute_with_ctx", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_graph_dump_dot")
+### * ggml_graph_dump_dot
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_graph_dump_dot
+### Title: Export Graph to DOT Format
+### Aliases: ggml_graph_dump_dot
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+b <- ggml_relu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, b)
+ggml_graph_dump_dot(graph, NULL, tempfile(fileext = ".dot"))
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_graph_dump_dot", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_graph_node")
+### * ggml_graph_node
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_graph_node
+### Title: Get Graph Node
+### Aliases: ggml_graph_node
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+b <- ggml_add(ctx, a, a)
+graph <- ggml_build_forward_expand(ctx, b)
+# Get the last node (output)
+output <- ggml_graph_node(graph, -1)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_graph_node", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_graph_view")
+### * ggml_graph_view
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_graph_view
+### Title: Create a View of a Subgraph
+### Aliases: ggml_graph_view
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+b <- ggml_relu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, b)
+n_nodes <- ggml_graph_n_nodes(graph)
+view <- ggml_graph_view(graph, 0, n_nodes)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_graph_view", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_group_norm")
+### * ggml_group_norm
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_group_norm
+### Title: Group Normalization (Graph)
+### Aliases: ggml_group_norm
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+# 4 channels, 2 groups (2 channels per group)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 8)
+ggml_set_f32(a, rnorm(32))
+result <- ggml_group_norm(ctx, a, n_groups = 2)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_group_norm", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_group_norm_inplace")
+### * ggml_group_norm_inplace
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_group_norm_inplace
+### Title: Group Normalization In-place (Graph)
+### Aliases: ggml_group_norm_inplace
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 8)
+ggml_set_f32(a, rnorm(32))
+result <- ggml_group_norm_inplace(ctx, a, n_groups = 2)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_group_norm_inplace", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_hardsigmoid")
+### * ggml_hardsigmoid
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_hardsigmoid
+### Title: Hard Sigmoid Activation (Graph)
+### Aliases: ggml_hardsigmoid
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-4, -1, 0, 1, 4))
+r <- ggml_hardsigmoid(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # [0, 0.333, 0.5, 0.667, 1]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_hardsigmoid", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_hardswish")
+### * ggml_hardswish
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_hardswish
+### Title: Hard Swish Activation (Graph)
+### Aliases: ggml_hardswish
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-4, -1, 0, 1, 4))
+r <- ggml_hardswish(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_hardswish", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_init")
+### * ggml_init
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_init
+### Title: Initialize GGML context
+### Aliases: ggml_init
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_init", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_init_auto")
+### * ggml_init_auto
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_init_auto
+### Title: Create Context with Auto-sizing
+### Aliases: ggml_init_auto
+
+### ** Examples
+
+## No test: 
+# For two 1000x1000 matrices
+ctx <- ggml_init_auto(mat1 = c(1000, 1000), mat2 = c(1000, 1000))
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_init_auto", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_is_available")
+### * ggml_is_available
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_is_available
+### Title: Check if GGML is available
+### Aliases: ggml_is_available
+
+### ** Examples
+
+## No test: 
+ggml_is_available()
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_is_available", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_is_contiguous")
+### * ggml_is_contiguous
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_is_contiguous
+### Title: Check if Tensor is Contiguous
+### Aliases: ggml_is_contiguous
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_is_contiguous(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_is_contiguous", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_is_permuted")
+### * ggml_is_permuted
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_is_permuted
+### Title: Check if Tensor is Permuted
+### Aliases: ggml_is_permuted
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 20)
+ggml_is_permuted(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_is_permuted", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_is_quantized")
+### * ggml_is_quantized
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_is_quantized
+### Title: Check If Type is Quantized
+### Aliases: ggml_is_quantized
+
+### ** Examples
+
+ggml_is_quantized(GGML_TYPE_F32)  # FALSE
+ggml_is_quantized(GGML_TYPE_Q4_0) # TRUE
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_is_quantized", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_is_transposed")
+### * ggml_is_transposed
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_is_transposed
+### Title: Check if Tensor is Transposed
+### Aliases: ggml_is_transposed
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 20)
+ggml_is_transposed(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_is_transposed", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_l2_norm")
+### * ggml_l2_norm
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_l2_norm
+### Title: L2 Normalization (Graph)
+### Aliases: ggml_l2_norm
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(3, 0, 0, 4))  # Length = 5
+result <- ggml_l2_norm(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [0.6, 0, 0, 0.8] unit vector
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_l2_norm", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_l2_norm_inplace")
+### * ggml_l2_norm_inplace
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_l2_norm_inplace
+### Title: L2 Normalization In-place (Graph)
+### Aliases: ggml_l2_norm_inplace
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(3, 0, 0, 4))
+result <- ggml_l2_norm_inplace(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_l2_norm_inplace", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_layer_batch_norm")
+### * ggml_layer_batch_norm
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_layer_batch_norm
+### Title: Add Batch Normalization Layer
+### Aliases: ggml_layer_batch_norm
+
+### ** Examples
+
+## No test: 
+model <- ggml_model_sequential() |>
+  ggml_layer_dense(128, input_shape = 784) |>
+  ggml_layer_batch_norm() |>
+  ggml_layer_dense(10, activation = "softmax")
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_layer_batch_norm", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_layer_conv_1d")
+### * ggml_layer_conv_1d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_layer_conv_1d
+### Title: Add 1D Convolution Layer
+### Aliases: ggml_layer_conv_1d
+
+### ** Examples
+
+## No test: 
+model <- ggml_model_sequential() |>
+  ggml_layer_conv_1d(32, 3, activation = "relu",
+                     input_shape = c(100, 1))
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_layer_conv_1d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_layer_conv_2d")
+### * ggml_layer_conv_2d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_layer_conv_2d
+### Title: Add 2D Convolution Layer
+### Aliases: ggml_layer_conv_2d
+
+### ** Examples
+
+## No test: 
+model <- ggml_model_sequential() |>
+  ggml_layer_conv_2d(32, c(3,3), activation = "relu",
+                     input_shape = c(28, 28, 1))
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_layer_conv_2d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_layer_dense")
+### * ggml_layer_dense
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_layer_dense
+### Title: Add Dense (Fully Connected) Layer
+### Aliases: ggml_layer_dense
+
+### ** Examples
+
+## No test: 
+model <- ggml_model_sequential() |>
+  ggml_layer_conv_2d(32, c(3,3), activation = "relu",
+                     input_shape = c(28, 28, 1)) |>
+  ggml_layer_flatten() |>
+  ggml_layer_dense(128, activation = "relu")
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_layer_dense", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_layer_flatten")
+### * ggml_layer_flatten
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_layer_flatten
+### Title: Add Flatten Layer
+### Aliases: ggml_layer_flatten
+
+### ** Examples
+
+## No test: 
+model <- ggml_model_sequential() |>
+  ggml_layer_conv_2d(32, c(3,3), activation = "relu",
+                     input_shape = c(28, 28, 1)) |>
+  ggml_layer_flatten()
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_layer_flatten", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_layer_max_pooling_2d")
+### * ggml_layer_max_pooling_2d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_layer_max_pooling_2d
+### Title: Add 2D Max Pooling Layer
+### Aliases: ggml_layer_max_pooling_2d
+
+### ** Examples
+
+## No test: 
+model <- ggml_model_sequential() |>
+  ggml_layer_conv_2d(32, c(3,3), activation = "relu",
+                     input_shape = c(28, 28, 1)) |>
+  ggml_layer_max_pooling_2d(c(2, 2))
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_layer_max_pooling_2d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_leaky_relu")
+### * ggml_leaky_relu
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_leaky_relu
+### Title: Leaky ReLU Activation (Graph)
+### Aliases: ggml_leaky_relu
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+r <- ggml_leaky_relu(ctx, a, negative_slope = 0.1)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # [-0.2, -0.1, 0, 1, 2]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_leaky_relu", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_log")
+### * ggml_log
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_log
+### Title: Natural Logarithm (Graph)
+### Aliases: ggml_log
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+ggml_set_f32(a, c(1, exp(1), exp(2)))
+result <- ggml_log(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [0, 1, 2]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_log", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_log_set_r")
+### * ggml_log_set_r
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_log_set_r
+### Title: Enable R-compatible GGML Logging
+### Aliases: ggml_log_set_r
+
+### ** Examples
+
+## No test: 
+ggml_log_set_r()
+# Now GGML messages will appear in R console
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_log_set_r", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_mean")
+### * ggml_mean
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_mean
+### Title: Mean (Graph)
+### Aliases: ggml_mean
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(2, 4, 6, 8, 10))
+result <- ggml_mean(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # 6
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_mean", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_model_sequential")
+### * ggml_model_sequential
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_model_sequential
+### Title: Create a Sequential Neural Network Model
+### Aliases: ggml_model_sequential
+
+### ** Examples
+
+## Not run: 
+##D model <- ggml_model_sequential() |>
+##D   ggml_layer_conv_2d(32, c(3,3), activation = "relu",
+##D                      input_shape = c(28, 28, 1)) |>
+##D   ggml_layer_max_pooling_2d(c(2,2)) |>
+##D   ggml_layer_flatten() |>
+##D   ggml_layer_dense(128, activation = "relu") |>
+##D   ggml_layer_dense(10, activation = "softmax")
+## End(Not run)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_model_sequential", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_mul")
+### * ggml_mul
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_mul
+### Title: Multiply tensors
+### Aliases: ggml_mul
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(b, c(2, 2, 2, 2, 2))
+result <- ggml_mul(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(b, c(2, 2, 2, 2, 2))
+result <- ggml_mul(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_mul", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_mul_mat")
+### * ggml_mul_mat
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_mul_mat
+### Title: Matrix Multiplication (Graph)
+### Aliases: ggml_mul_mat
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+A <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 3)
+B <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 2)
+ggml_set_f32(A, 1:12)
+ggml_set_f32(B, 1:8)
+C <- ggml_mul_mat(ctx, A, B)
+graph <- ggml_build_forward_expand(ctx, C)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(C)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_mul_mat", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_mul_mat_id")
+### * ggml_mul_mat_id
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_mul_mat_id
+### Title: Matrix Multiplication with Expert Selection (Graph)
+### Aliases: ggml_mul_mat_id
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(64 * 1024 * 1024)
+# 4 experts, each with 8x16 weights (small for example)
+experts <- ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 8, 16, 4)
+ggml_set_f32(experts, rnorm(8 * 16 * 4))
+input <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 2)
+ggml_set_f32(input, rnorm(16))
+# Select expert 0 for token 0, expert 2 for token 1
+ids <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 2)
+ggml_set_i32(ids, c(0L, 2L))
+output <- ggml_mul_mat_id(ctx, experts, input, ids)
+graph <- ggml_build_forward_expand(ctx, output)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_mul_mat_id", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_n_dims")
+### * ggml_n_dims
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_n_dims
+### Title: Get Number of Dimensions
+### Aliases: ggml_n_dims
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 20)
+ggml_n_dims(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_n_dims", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_nbytes")
+### * ggml_nbytes
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_nbytes
+### Title: Get number of bytes
+### Aliases: ggml_nbytes
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+tensor <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_nbytes(tensor)
+ggml_free(ctx)
+## End(No test)
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_nbytes(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_nbytes", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_neg")
+### * ggml_neg
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_neg
+### Title: Negation (Graph)
+### Aliases: ggml_neg
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, -2, 3, -4))
+result <- ggml_neg(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [-1, 2, -3, 4]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_neg", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_nelements")
+### * ggml_nelements
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_nelements
+### Title: Get number of elements
+### Aliases: ggml_nelements
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+tensor <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 20)
+ggml_nelements(tensor)
+ggml_free(ctx)
+## End(No test)
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 20)
+ggml_nelements(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_nelements", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_new_f32")
+### * ggml_new_f32
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_new_f32
+### Title: Create Scalar F32 Tensor
+### Aliases: ggml_new_f32
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+scalar <- ggml_new_f32(ctx, 3.14)
+ggml_get_f32(scalar)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_new_f32", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_new_i32")
+### * ggml_new_i32
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_new_i32
+### Title: Create Scalar I32 Tensor
+### Aliases: ggml_new_i32
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+scalar <- ggml_new_i32(ctx, 42)
+ggml_get_i32(scalar)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_new_i32", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_new_tensor")
+### * ggml_new_tensor
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_new_tensor
+### Title: Create Tensor with Arbitrary Dimensions
+### Aliases: ggml_new_tensor
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor(ctx, GGML_TYPE_F32, 3, c(10, 20, 30))
+ggml_nelements(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_new_tensor", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_new_tensor_1d")
+### * ggml_new_tensor_1d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_new_tensor_1d
+### Title: Create 1D tensor
+### Aliases: ggml_new_tensor_1d
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+tensor <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_nelements(tensor)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_new_tensor_1d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_new_tensor_2d")
+### * ggml_new_tensor_2d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_new_tensor_2d
+### Title: Create 2D tensor
+### Aliases: ggml_new_tensor_2d
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+tensor <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 20)
+ggml_nelements(tensor)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_new_tensor_2d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_new_tensor_3d")
+### * ggml_new_tensor_3d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_new_tensor_3d
+### Title: Create 3D Tensor
+### Aliases: ggml_new_tensor_3d
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 10, 20, 30)
+ggml_nelements(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_new_tensor_3d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_new_tensor_4d")
+### * ggml_new_tensor_4d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_new_tensor_4d
+### Title: Create 4D Tensor
+### Aliases: ggml_new_tensor_4d
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 8, 8, 3, 2)
+ggml_nelements(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_new_tensor_4d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_norm")
+### * ggml_norm
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_norm
+### Title: Layer Normalization (Graph)
+### Aliases: ggml_norm
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_norm(ctx, a, eps = 1e-5)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)  # Normalized values
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_norm", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_norm_inplace")
+### * ggml_norm_inplace
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_norm_inplace
+### Title: Layer Normalization In-place (Graph)
+### Aliases: ggml_norm_inplace
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_norm_inplace(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_norm_inplace", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_op_can_inplace")
+### * ggml_op_can_inplace
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_op_can_inplace
+### Title: Check if Operation Can Be Done In-place
+### Aliases: ggml_op_can_inplace
+
+### ** Examples
+
+## No test: 
+# Check if operation code 1 (ADD) can be in-place
+can_inplace <- ggml_op_can_inplace(1L)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_op_can_inplace", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_opt_epoch")
+### * ggml_opt_epoch
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_opt_epoch
+### Title: Run one training epoch
+### Aliases: ggml_opt_epoch
+
+### ** Examples
+
+# Requires full optimizer setup - see ggml_opt_fit() for simpler API
+if (FALSE) {
+result_train <- ggml_opt_result_init()
+result_eval <- ggml_opt_result_init()
+ggml_opt_epoch(opt_ctx, dataset, result_train, result_eval,
+               idata_split = 900, callback_train = TRUE)
+ggml_opt_result_free(result_train)
+ggml_opt_result_free(result_eval)
+}
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_opt_epoch", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_opt_fit")
+### * ggml_opt_fit
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_opt_fit
+### Title: Fit model to dataset
+### Aliases: ggml_opt_fit
+
+### ** Examples
+
+# Full training requires building a computation graph
+# See package vignettes for complete examples
+if (FALSE) {
+cpu <- ggml_backend_cpu_init()
+sched <- ggml_backend_sched_new(list(cpu))
+dataset <- ggml_opt_dataset_init(GGML_TYPE_F32, GGML_TYPE_F32, 10, 1, 1000)
+# ... build model graph with ctx_compute, inputs, outputs ...
+ggml_opt_fit(sched, ctx_compute, inputs, outputs, dataset,
+             nepoch = 10, val_split = 0.1)
+ggml_opt_dataset_free(dataset)
+ggml_backend_sched_free(sched)
+ggml_backend_free(cpu)
+}
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_opt_fit", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_out_prod")
+### * ggml_out_prod
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_out_prod
+### Title: Outer Product (Graph)
+### Aliases: ggml_out_prod
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3))
+ggml_set_f32(b, c(1, 2, 3, 4))
+c <- ggml_out_prod(ctx, a, b)  # Result: 3x4 matrix
+graph <- ggml_build_forward_expand(ctx, c)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_out_prod", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_pad")
+### * ggml_pad
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_pad
+### Title: Pad Tensor with Zeros (Graph)
+### Aliases: ggml_pad
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 5, 3)
+ggml_set_f32(a, 1:15)
+# Pad to 8x4
+b <- ggml_pad(ctx, a, 3, 1)  # Add 3 zeros to dim0, 1 to dim1
+graph <- ggml_build_forward_expand(ctx, b)
+ggml_graph_compute(ctx, graph)
+# Result shape: [8, 4]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_pad", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_permute")
+### * ggml_permute
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_permute
+### Title: Permute Tensor Dimensions (Graph)
+### Aliases: ggml_permute
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+# Create 4D tensor: (2, 3, 4, 5)
+t <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 2, 3, 4, 5)
+# Swap axes 0 and 1: result shape (3, 2, 4, 5)
+t_perm <- ggml_permute(ctx, t, 1, 0, 2, 3)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_permute", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_pool_1d")
+### * ggml_pool_1d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_pool_1d
+### Title: 1D Pooling (Graph)
+### Aliases: ggml_pool_1d GGML_OP_POOL_MAX GGML_OP_POOL_AVG
+### Keywords: datasets
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8)
+ggml_set_f32(a, c(1, 3, 2, 4, 5, 2, 8, 1))
+
+# Max pooling with kernel 2, stride 2
+max_pool <- ggml_pool_1d(ctx, a, GGML_OP_POOL_MAX, k0 = 2)
+# Result: [3, 4, 5, 8] (max of each pair)
+
+# Average pooling with kernel 2, stride 2
+avg_pool <- ggml_pool_1d(ctx, a, GGML_OP_POOL_AVG, k0 = 2)
+# Result: [2, 3, 3.5, 4.5] (mean of each pair)
+
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_pool_1d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_print_mem_status")
+### * ggml_print_mem_status
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_print_mem_status
+### Title: Print Context Memory Status
+### Aliases: ggml_print_mem_status
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+ggml_print_mem_status(ctx)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_print_mem_status", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_print_objects")
+### * ggml_print_objects
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_print_objects
+### Title: Print Objects in Context
+### Aliases: ggml_print_objects
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_print_objects(ctx)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_print_objects", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_quantize_chunk")
+### * ggml_quantize_chunk
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_quantize_chunk
+### Title: Quantize Data Chunk
+### Aliases: ggml_quantize_chunk
+
+### ** Examples
+
+## No test: 
+# Quantize 256 floats to Q8_0 (block size 32)
+data <- rnorm(256)
+quantized <- ggml_quantize_chunk(GGML_TYPE_Q8_0, data, 1, 256)
+ggml_quantize_free()  # Clean up
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_quantize_chunk", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_reglu")
+### * ggml_reglu
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_reglu
+### Title: ReGLU (ReLU Gated Linear Unit) (Graph)
+### Aliases: ggml_reglu
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 3)
+ggml_set_f32(a, rnorm(24))
+r <- ggml_reglu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # Shape: 4x3
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_reglu", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_relu")
+### * ggml_relu
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_relu
+### Title: ReLU Activation (Graph)
+### Aliases: ggml_relu
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+result <- ggml_relu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_relu", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_repeat")
+### * ggml_repeat
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_repeat
+### Title: Repeat (Graph)
+### Aliases: ggml_repeat
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, 2)
+ggml_set_f32(a, c(1, 2))
+b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2)
+result <- ggml_repeat(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [1, 1, 1, 2, 2, 2]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_repeat", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_reset")
+### * ggml_reset
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_reset
+### Title: Reset GGML Context
+### Aliases: ggml_reset
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 100)
+ggml_reset(ctx)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 200)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_reset", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_reshape_1d")
+### * ggml_reshape_1d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_reshape_1d
+### Title: Reshape to 1D (Graph)
+### Aliases: ggml_reshape_1d
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 4)
+ggml_set_f32(a, 1:12)
+result <- ggml_reshape_1d(ctx, a, 12)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_reshape_1d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_reshape_2d")
+### * ggml_reshape_2d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_reshape_2d
+### Title: Reshape to 2D (Graph)
+### Aliases: ggml_reshape_2d
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 12)
+ggml_set_f32(a, 1:12)
+result <- ggml_reshape_2d(ctx, a, 3, 4)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_reshape_2d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_reshape_3d")
+### * ggml_reshape_3d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_reshape_3d
+### Title: Reshape to 3D (Graph)
+### Aliases: ggml_reshape_3d
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 24)
+ggml_set_f32(a, 1:24)
+result <- ggml_reshape_3d(ctx, a, 2, 3, 4)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_reshape_3d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_reshape_4d")
+### * ggml_reshape_4d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_reshape_4d
+### Title: Reshape to 4D (Graph)
+### Aliases: ggml_reshape_4d
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 120)
+ggml_set_f32(a, 1:120)
+result <- ggml_reshape_4d(ctx, a, 2, 3, 4, 5)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_reshape_4d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_rms_norm")
+### * ggml_rms_norm
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_rms_norm
+### Title: RMS Normalization (Graph)
+### Aliases: ggml_rms_norm
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_rms_norm(ctx, a, eps = 1e-5)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)
+# sqrt(mean(output^2)) should be ~1
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_rms_norm", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_rms_norm_inplace")
+### * ggml_rms_norm_inplace
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_rms_norm_inplace
+### Title: RMS Normalization In-place (Graph)
+### Aliases: ggml_rms_norm_inplace
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_rms_norm_inplace(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_rms_norm_inplace", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_rope")
+### * ggml_rope
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_rope
+### Title: Rotary Position Embedding (Graph)
+### Aliases: ggml_rope
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+# Query tensor: head_dim=8, n_head=4, seq_len=16, batch=1
+q <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 8, 4, 16, 1)
+ggml_set_f32(q, rnorm(8 * 4 * 16))
+# Position indices
+pos <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 16)
+ggml_set_i32(pos, 0:15)
+# Apply RoPE
+q_rope <- ggml_rope(ctx, q, pos, 8, GGML_ROPE_TYPE_NORM)
+graph <- ggml_build_forward_expand(ctx, q_rope)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_rope", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_rope_ext")
+### * ggml_rope_ext
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_rope_ext
+### Title: Extended RoPE with Frequency Scaling (Graph)
+### Aliases: ggml_rope_ext
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+q <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 64, 8, 32, 1)
+ggml_set_f32(q, rnorm(64 * 8 * 32))
+pos <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 32)
+ggml_set_i32(pos, 0:31)
+# Standard RoPE with default freq_base
+q_rope <- ggml_rope_ext(ctx, q, pos, NULL,
+                        n_dims = 64, mode = 0L,
+                        n_ctx_orig = 4096,
+                        freq_base = 10000, freq_scale = 1.0,
+                        ext_factor = 0.0, attn_factor = 1.0,
+                        beta_fast = 32, beta_slow = 1)
+graph <- ggml_build_forward_expand(ctx, q_rope)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_rope_ext", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_scale")
+### * ggml_scale
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_scale
+### Title: Scale (Graph)
+### Aliases: ggml_scale
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_scale(ctx, a, 2.0)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [2, 4, 6, 8]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_scale", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_set_abort_callback_r")
+### * ggml_set_abort_callback_r
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_set_abort_callback_r
+### Title: Enable R-compatible Abort Handling
+### Aliases: ggml_set_abort_callback_r
+
+### ** Examples
+
+## No test: 
+ggml_set_abort_callback_r()
+# Now GGML aborts will become R errors
+result <- tryCatch({
+  # ... ggml operations that might fail ...
+}, error = function(e) {
+  message("GGML error caught: ", e$message)
+})
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_set_abort_callback_r", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_set_f32")
+### * ggml_set_f32
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_set_f32
+### Title: Set F32 data
+### Aliases: ggml_set_f32
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+tensor <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(tensor, c(1, 2, 3, 4, 5))
+ggml_get_f32(tensor)
+ggml_free(ctx)
+## End(No test)
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(t, c(1, 2, 3, 4, 5))
+ggml_get_f32(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_set_f32", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_set_i32")
+### * ggml_set_i32
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_set_i32
+### Title: Set I32 Data
+### Aliases: ggml_set_i32
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+pos <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 10)
+ggml_set_i32(pos, 0:9)
+ggml_get_i32(pos)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_set_i32", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_set_n_threads")
+### * ggml_set_n_threads
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_set_n_threads
+### Title: Set Number of Threads
+### Aliases: ggml_set_n_threads
+
+### ** Examples
+
+## No test: 
+# Use 4 threads
+ggml_set_n_threads(4)
+
+# Use all available cores
+ggml_set_n_threads(parallel::detectCores())
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_set_n_threads", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_set_no_alloc")
+### * ggml_set_no_alloc
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_set_no_alloc
+### Title: Set No Allocation Mode
+### Aliases: ggml_set_no_alloc
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+ggml_set_no_alloc(ctx, TRUE)
+ggml_get_no_alloc(ctx)
+ggml_set_no_alloc(ctx, FALSE)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_set_no_alloc", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_set_zero")
+### * ggml_set_zero
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_set_zero
+### Title: Set Tensor to Zero
+### Aliases: ggml_set_zero
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_set_f32(t, 1:10)
+ggml_set_zero(t)
+ggml_get_f32(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_set_zero", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_sgn")
+### * ggml_sgn
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_sgn
+### Title: Sign Function (Graph)
+### Aliases: ggml_sgn
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -0.5, 0, 0.5, 2))
+r <- ggml_sgn(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # c(-1, -1, 0, 1, 1)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_sgn", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_sigmoid")
+### * ggml_sigmoid
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_sigmoid
+### Title: Sigmoid Activation (Graph)
+### Aliases: ggml_sigmoid
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+result <- ggml_sigmoid(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_sigmoid", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_silu")
+### * ggml_silu
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_silu
+### Title: SiLU Activation (Graph)
+### Aliases: ggml_silu
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+result <- ggml_silu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_silu", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_sin")
+### * ggml_sin
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_sin
+### Title: Sine (Graph)
+### Aliases: ggml_sin
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(0, pi/6, pi/2, pi))
+result <- ggml_sin(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [0, 0.5, 1, 0]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_sin", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_soft_max")
+### * ggml_soft_max
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_soft_max
+### Title: Softmax (Graph)
+### Aliases: ggml_soft_max
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_soft_max(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)
+# Output sums to 1.0
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_soft_max", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_soft_max_ext")
+### * ggml_soft_max_ext
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_soft_max_ext
+### Title: Extended Softmax with Masking and Scaling (Graph)
+### Aliases: ggml_soft_max_ext
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+scores <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 10)
+ggml_set_f32(scores, rnorm(100))
+attn <- ggml_soft_max_ext(ctx, scores, NULL, 1.0, max_bias = 0.0)
+graph <- ggml_build_forward_expand(ctx, attn)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_soft_max_ext", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_soft_max_inplace")
+### * ggml_soft_max_inplace
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_soft_max_inplace
+### Title: Softmax In-place (Graph)
+### Aliases: ggml_soft_max_inplace
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_soft_max_inplace(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_soft_max_inplace", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_softplus")
+### * ggml_softplus
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_softplus
+### Title: Softplus Activation (Graph)
+### Aliases: ggml_softplus
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+r <- ggml_softplus(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_softplus", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_sqr")
+### * ggml_sqr
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_sqr
+### Title: Square (Graph)
+### Aliases: ggml_sqr
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_sqr(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [1, 4, 9, 16]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_sqr", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_sqrt")
+### * ggml_sqrt
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_sqrt
+### Title: Square Root (Graph)
+### Aliases: ggml_sqrt
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 4, 9, 16))
+result <- ggml_sqrt(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [1, 2, 3, 4]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_sqrt", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_step")
+### * ggml_step
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_step
+### Title: Step Function (Graph)
+### Aliases: ggml_step
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -0.5, 0, 0.5, 2))
+r <- ggml_step(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # c(0, 0, 0, 1, 1)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_step", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_sub")
+### * ggml_sub
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_sub
+### Title: Element-wise Subtraction (Graph)
+### Aliases: ggml_sub
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(5, 4, 3, 2, 1))
+ggml_set_f32(b, c(1, 1, 1, 1, 1))
+result <- ggml_sub(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_sub", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_sum")
+### * ggml_sum
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_sum
+### Title: Sum (Graph)
+### Aliases: ggml_sum
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+result <- ggml_sum(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # 15
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_sum", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_sum_rows")
+### * ggml_sum_rows
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_sum_rows
+### Title: Sum Rows (Graph)
+### Aliases: ggml_sum_rows
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2)
+ggml_set_f32(a, c(1, 2, 3, 4, 5, 6))
+result <- ggml_sum_rows(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+output <- ggml_get_f32(result)  # [6, 15]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_sum_rows", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_swiglu")
+### * ggml_swiglu
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_swiglu
+### Title: SwiGLU (Swish/SiLU Gated Linear Unit) (Graph)
+### Aliases: ggml_swiglu
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 3)
+ggml_set_f32(a, rnorm(24))
+r <- ggml_swiglu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # Shape: 4x3
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_swiglu", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_tanh")
+### * ggml_tanh
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_tanh
+### Title: Tanh Activation (Graph)
+### Aliases: ggml_tanh
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(-2, -1, 0, 1, 2))
+result <- ggml_tanh(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_tanh", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_tensor_overhead")
+### * ggml_tensor_overhead
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_tensor_overhead
+### Title: Get Tensor Overhead
+### Aliases: ggml_tensor_overhead
+
+### ** Examples
+
+## No test: 
+ggml_tensor_overhead()
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_tensor_overhead", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_tensor_shape")
+### * ggml_tensor_shape
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_tensor_shape
+### Title: Get Tensor Shape
+### Aliases: ggml_tensor_shape
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 20)
+ggml_tensor_shape(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_tensor_shape", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_tensor_type")
+### * ggml_tensor_type
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_tensor_type
+### Title: Get Tensor Type
+### Aliases: ggml_tensor_type
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+t <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+ggml_tensor_type(t)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_tensor_type", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_test")
+### * ggml_test
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_test
+### Title: Test GGML
+### Aliases: ggml_test
+
+### ** Examples
+
+## No test: 
+ggml_test()
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_test", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_time_init")
+### * ggml_time_init
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_time_init
+### Title: Initialize GGML Timer
+### Aliases: ggml_time_init
+
+### ** Examples
+
+## No test: 
+ggml_time_init()
+start <- ggml_time_ms()
+Sys.sleep(0.01)
+elapsed <- ggml_time_ms() - start
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_time_init", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_time_ms")
+### * ggml_time_ms
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_time_ms
+### Title: Get Time in Milliseconds
+### Aliases: ggml_time_ms
+
+### ** Examples
+
+## No test: 
+ggml_time_init()
+start <- ggml_time_ms()
+Sys.sleep(0.01)
+elapsed <- ggml_time_ms() - start
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_time_ms", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_time_us")
+### * ggml_time_us
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_time_us
+### Title: Get Time in Microseconds
+### Aliases: ggml_time_us
+
+### ** Examples
+
+## No test: 
+ggml_time_init()
+start <- ggml_time_us()
+Sys.sleep(0.001)
+elapsed <- ggml_time_us() - start
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_time_us", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_top_k")
+### * ggml_top_k
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_top_k
+### Title: Top-K Indices (Graph)
+### Aliases: ggml_top_k
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+# Logits from model output
+logits <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 100)
+ggml_set_f32(logits, rnorm(100))
+# Get top 5 logits for sampling
+top5 <- ggml_top_k(ctx, logits, 5)
+graph <- ggml_build_forward_expand(ctx, top5)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_top_k", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_transpose")
+### * ggml_transpose
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_transpose
+### Title: Transpose (Graph)
+### Aliases: ggml_transpose
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2)
+ggml_set_f32(a, 1:6)
+result <- ggml_transpose(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+shape <- ggml_tensor_shape(result)  # [2, 3]
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_transpose", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_type_name")
+### * ggml_type_name
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_type_name
+### Title: Get Type Name
+### Aliases: ggml_type_name
+
+### ** Examples
+
+ggml_type_name(GGML_TYPE_F32)  # "f32"
+ggml_type_name(GGML_TYPE_Q4_0) # "q4_0"
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_type_name", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_type_sizef")
+### * ggml_type_sizef
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_type_sizef
+### Title: Get Type Size as Float
+### Aliases: ggml_type_sizef
+
+### ** Examples
+
+ggml_type_sizef(GGML_TYPE_F32)  # 4.0
+ggml_type_sizef(GGML_TYPE_F16)  # 2.0
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_type_sizef", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_upscale")
+### * ggml_upscale
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_upscale
+### Title: Upscale Tensor (Graph)
+### Aliases: ggml_upscale GGML_SCALE_MODE_NEAREST GGML_SCALE_MODE_BILINEAR
+###   GGML_SCALE_MODE_BICUBIC
+### Keywords: datasets
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+img <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 8)
+ggml_set_f32(img, rnorm(64))
+
+# Nearest neighbor (fastest, pixelated)
+up_nearest <- ggml_upscale(ctx, img, 2, GGML_SCALE_MODE_NEAREST)
+
+# Bilinear (smooth)
+up_bilinear <- ggml_upscale(ctx, img, 2, GGML_SCALE_MODE_BILINEAR)
+
+# Bicubic (smoothest)
+up_bicubic <- ggml_upscale(ctx, img, 2, GGML_SCALE_MODE_BICUBIC)
+
+graph <- ggml_build_forward_expand(ctx, up_nearest)
+ggml_graph_compute(ctx, graph)
+# Result is 16x16
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_upscale", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_used_mem")
+### * ggml_used_mem
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_used_mem
+### Title: Get Used Memory
+### Aliases: ggml_used_mem
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 100)
+ggml_used_mem(ctx)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_used_mem", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_version")
+### * ggml_version
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_version
+### Title: Get GGML version
+### Aliases: ggml_version
+
+### ** Examples
+
+## No test: 
+ggml_version()
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_version", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_view_1d")
+### * ggml_view_1d
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_view_1d
+### Title: 1D View with Byte Offset (Graph)
+### Aliases: ggml_view_1d
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 100)
+# View elements 10-19 (offset = 10 * 4 bytes = 40)
+v <- ggml_view_1d(ctx, a, 10, 40)
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_view_1d", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_view_tensor")
+### * ggml_view_tensor
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_view_tensor
+### Title: View Tensor
+### Aliases: ggml_view_tensor
+
+### ** Examples
+
+## No test: 
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+view <- ggml_view_tensor(ctx, a)
+# view shares data with a
+ggml_free(ctx)
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_view_tensor", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_available")
+### * ggml_vulkan_available
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_available
+### Title: Check if Vulkan support is available
+### Aliases: ggml_vulkan_available
+
+### ** Examples
+
+ggml_vulkan_available()
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_available", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_backend_name")
+### * ggml_vulkan_backend_name
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_backend_name
+### Title: Get Vulkan backend name
+### Aliases: ggml_vulkan_backend_name
+
+### ** Examples
+
+## No test: 
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  backend <- ggml_vulkan_init(0)
+  print(ggml_vulkan_backend_name(backend))
+  ggml_vulkan_free(backend)
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_backend_name", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_device_count")
+### * ggml_vulkan_device_count
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_device_count
+### Title: Get number of Vulkan devices
+### Aliases: ggml_vulkan_device_count
+
+### ** Examples
+
+## No test: 
+if (ggml_vulkan_available()) {
+  ggml_vulkan_device_count()
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_device_count", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_device_description")
+### * ggml_vulkan_device_description
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_device_description
+### Title: Get Vulkan device description
+### Aliases: ggml_vulkan_device_description
+
+### ** Examples
+
+## No test: 
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  ggml_vulkan_device_description(0)
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_device_description", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_device_memory")
+### * ggml_vulkan_device_memory
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_device_memory
+### Title: Get Vulkan device memory
+### Aliases: ggml_vulkan_device_memory
+
+### ** Examples
+
+## No test: 
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  mem <- ggml_vulkan_device_memory(0)
+  cat("Free:", mem$free / 1e9, "GB\n")
+  cat("Total:", mem$total / 1e9, "GB\n")
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_device_memory", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_free")
+### * ggml_vulkan_free
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_free
+### Title: Free Vulkan backend
+### Aliases: ggml_vulkan_free
+
+### ** Examples
+
+## No test: 
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  backend <- ggml_vulkan_init(0)
+  ggml_vulkan_free(backend)
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_free", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_init")
+### * ggml_vulkan_init
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_init
+### Title: Initialize Vulkan backend
+### Aliases: ggml_vulkan_init
+
+### ** Examples
+
+## No test: 
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  backend <- ggml_vulkan_init(0)
+  print(ggml_vulkan_backend_name(backend))
+  ggml_vulkan_free(backend)
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_init", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_is_backend")
+### * ggml_vulkan_is_backend
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_is_backend
+### Title: Check if backend is Vulkan
+### Aliases: ggml_vulkan_is_backend
+
+### ** Examples
+
+## No test: 
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  vk_backend <- ggml_vulkan_init(0)
+  cpu_backend <- ggml_backend_cpu_init()
+
+  ggml_vulkan_is_backend(vk_backend)  # TRUE
+  ggml_vulkan_is_backend(cpu_backend) # FALSE
+
+  ggml_vulkan_free(vk_backend)
+  ggml_backend_free(cpu_backend)
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_is_backend", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_list_devices")
+### * ggml_vulkan_list_devices
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_list_devices
+### Title: List all Vulkan devices
+### Aliases: ggml_vulkan_list_devices
+
+### ** Examples
+
+## No test: 
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  devices <- ggml_vulkan_list_devices()
+  print(devices)
+}
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_list_devices", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_vulkan_status")
+### * ggml_vulkan_status
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_vulkan_status
+### Title: Print Vulkan status
+### Aliases: ggml_vulkan_status
+
+### ** Examples
+
+ggml_vulkan_status()
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_vulkan_status", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("ggml_with_temp_ctx")
+### * ggml_with_temp_ctx
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: ggml_with_temp_ctx
+### Title: Execute with Temporary Context
+### Aliases: ggml_with_temp_ctx
+
+### ** Examples
+
+## No test: 
+# Create tensors in temporary context
+result <- ggml_with_temp_ctx(1024 * 1024, {
+  a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+  ggml_set_f32(a, 1:10)
+  ggml_get_f32(a)
+})
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("ggml_with_temp_ctx", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+cleanEx()
+nameEx("rope_types")
+### * rope_types
+
+flush(stderr()); flush(stdout())
+
+base::assign(".ptime", proc.time(), pos = "CheckExEnv")
+### Name: rope_types
+### Title: RoPE Mode Constants
+### Aliases: rope_types GGML_ROPE_TYPE_NORM GGML_ROPE_TYPE_NEOX
+###   GGML_ROPE_TYPE_MROPE GGML_ROPE_TYPE_VISION
+### Keywords: datasets
+
+### ** Examples
+
+## No test: 
+GGML_ROPE_TYPE_NORM    # 0 - Standard RoPE (LLaMA, Mistral)
+GGML_ROPE_TYPE_NEOX    # 2 - GPT-NeoX style
+GGML_ROPE_TYPE_MROPE   # 8 - Multi-RoPE (Qwen2-VL)
+GGML_ROPE_TYPE_VISION  # 24 - Vision models
+## End(No test)
+
+
+
+base::assign(".dptime", (proc.time() - get(".ptime", pos = "CheckExEnv")), pos = "CheckExEnv")
+base::cat("rope_types", base::get(".format_ptime", pos = 'CheckExEnv')(get(".dptime", pos = "CheckExEnv")), "\n", file=base::get(".ExTimings", pos = 'CheckExEnv'), append=TRUE, sep="\t")
+### * <FOOTER>
+###
+cleanEx()
+options(digits = 7L)
+base::cat("Time elapsed: ", proc.time() - base::get("ptime", pos = 'CheckExEnv'),"\n")
+grDevices::dev.off()
+###
+### Local variables: ***
+### mode: outline-minor ***
+### outline-regexp: "\\(> \\)?### [*]+" ***
+### End: ***
+quit('no')

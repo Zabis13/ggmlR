@@ -13,7 +13,7 @@ Two complementary APIs:
 | Sequential / Functional | Keras-like, static graph | Production models, CRAN-standard workflow |
 | Dynamic autograd (`ag_*`) | PyTorch-like, eager | Research, custom architectures, Transformers |
 
-Also serves as the backend engine for [llamaR](https://github.com/Zabis13/llamaR) (LLM inference) and [sdR](https://github.com/Zabis13/sdR) (Stable Diffusion).
+Also serves as the backend engine for [llamaR](https://github.com/Zabis13/llamaR) (LLM inference) and [sd2R](https://github.com/Zabis13/sd2R) (Stable Diffusion).
 
 ## Installation
 
@@ -368,7 +368,7 @@ Supported GPUs: NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno.
 ## See Also
 
 - [llamaR](https://github.com/Zabis13/llamaR) — LLM inference in R
-- [sdR](https://github.com/Zabis13/sdR) — Stable Diffusion in R
+- [sd2R](https://github.com/Zabis13/sd2R) — Stable Diffusion in R
 - [ggml](https://github.com/ggml-org/ggml) — underlying C library
 
 ## License

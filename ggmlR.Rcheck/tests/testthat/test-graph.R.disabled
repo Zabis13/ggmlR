@@ -1,0 +1,29 @@
+test_that("computation graph works", {
+  ctx <- ggml_init(16 * 1024 * 1024)
+
+  # Simple computation: (a + b) * c
+  a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+  b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+  c <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+
+  ggml_set_f32(a, c(1, 2, 3))
+  ggml_set_f32(b, c(4, 5, 6))
+  ggml_set_f32(c, c(2, 2, 2))
+
+  # Build computation
+  sum_ab <- ggml_add(ctx, a, b)
+  result <- ggml_mul(ctx, sum_ab, c)
+
+  # Execute
+  graph <- ggml_build_forward_expand(ctx, result)
+  ggml_graph_compute(ctx, graph)
+
+  output <- ggml_get_f32(result)
+
+  # (1+4)*2=10, (2+5)*2=14, (3+6)*2=18
+  expected <- c(10, 14, 18)
+
+  expect_equal(output, expected, tolerance = 1e-6)
+
+  ggml_free(ctx)
+})

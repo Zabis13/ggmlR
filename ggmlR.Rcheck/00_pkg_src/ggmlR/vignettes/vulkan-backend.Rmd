@@ -1,0 +1,73 @@
+---
+title: "Vulkan GPU Backend"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vulkan GPU Backend}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval = FALSE
+)
+```
+
+## Enabling Vulkan GPU
+
+ggmlR auto-detects Vulkan at build time. Install the dependencies before
+installing the package:
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt install libvulkan-dev glslc
+```
+
+**Windows:**
+Install [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) (sets `VULKAN_SDK`
+automatically).
+
+Then install ggmlR:
+```{r install, eval = FALSE}
+install.packages("ggmlR")
+# or force Vulkan:
+install.packages("ggmlR", configure.args = "--with-vulkan")
+```
+
+## Checking Availability
+
+```{r check}
+library(ggmlR)
+
+ggml_vulkan_available()
+#> TRUE
+
+ggml_vulkan_status()
+#> Vulkan: AVAILABLE
+#>   Devices: 1
+#>   [0] NVIDIA GeForce RTX 4090
+#>       Memory: 23.56 GB free / 24.00 GB total
+```
+
+## Using GPU in Models
+
+The Keras-like API uses GPU automatically when available:
+```{r model}
+model <- ggml_model_sequential(input_shape = c(28, 28, 1)) |>
+  ggml_layer_conv_2d(filters = 32, kernel_size = 3, activation = "relu") |>
+  ggml_layer_flatten() |>
+  ggml_layer_dense(units = 10, activation = "softmax")
+
+# backend = "auto" uses GPU if available, CPU otherwise
+model <- ggml_compile(model, optimizer = "adamw", loss = "cross_entropy")
+```
+
+To force a specific backend:
+```{r backend}
+model <- ggml_compile(model, optimizer = "adamw",
+                      loss = "cross_entropy", backend = "vulkan")
+model <- ggml_compile(model, optimizer = "adamw",
+                      loss = "cross_entropy", backend = "cpu")
+```

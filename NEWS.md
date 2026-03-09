@@ -1,3 +1,7 @@
+# ggmlR 0.6.2
+* Fixed Windows cleanup script that removed `inst/lib/libggml.a`, breaking static linking from dependent packages (e.g. llamaR).
+
+
 # ggmlR 0.6.1
 
 * `dp_train(make_model, data, loss_fn, forward_fn, target_fn, n_gpu, n_iter, lr, max_norm, verbose)` — data-parallel training across multiple replicas. Weights are broadcast from replica 0 before the first step; gradients are averaged across replicas each iteration; weights are re-broadcast after each optimizer update. Returns `list(params, loss_history, model)`.

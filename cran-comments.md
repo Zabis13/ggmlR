@@ -11,7 +11,7 @@ Changes since previous submission:
 0 errors | 0 warnings | 4 notes
 
 * **installed package size**: The package includes a static library (lib/)
-  for downstream packages (llamaR, sdR) and a shared library (libs/) with
+  for downstream packages (llamaR, sd2R) and a shared library (libs/) with
   the GGML tensor computation engine. The size is inherent to the compiled
   C/C++ codebase.
 

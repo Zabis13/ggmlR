@@ -1,0 +1,70 @@
+test_that("cpu addition works", {
+  ctx <- ggml_init(1024 * 1024)
+  
+  a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+  b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+  
+  ggml_set_f32(a, c(1, 2, 3, 4, 5))
+  ggml_set_f32(b, c(5, 4, 3, 2, 1))
+  
+  result <- ggml_cpu_add(a, b)
+  expected <- c(6, 6, 6, 6, 6)
+  
+  expect_equal(result, expected, tolerance = 1e-6)
+  
+  ggml_free(ctx)
+})
+
+test_that("cpu multiplication works", {
+  ctx <- ggml_init(1024 * 1024)
+  
+  a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+  b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+  
+  ggml_set_f32(a, c(1, 2, 3, 4, 5))
+  ggml_set_f32(b, c(2, 2, 2, 2, 2))
+  
+  result <- ggml_cpu_mul(a, b)
+  expected <- c(2, 4, 6, 8, 10)
+  
+  expect_equal(result, expected, tolerance = 1e-6)
+  
+  ggml_free(ctx)
+})
+
+test_that("operations work with 2D tensors", {
+  ctx <- ggml_init(1024 * 1024)
+  
+  a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 4)
+  b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 4)
+  
+  data_a <- 1:12
+  data_b <- rep(2, 12)
+  
+  ggml_set_f32(a, data_a)
+  ggml_set_f32(b, data_b)
+  
+  result_add <- ggml_cpu_add(a, b)
+  expected_add <- data_a + data_b
+  
+  expect_equal(result_add, expected_add, tolerance = 1e-6)
+  
+  ggml_free(ctx)
+})
+
+test_that("operations fail with size mismatch", {
+  ctx <- ggml_init(1024 * 1024)
+  
+  a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+  b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3)
+  
+  ggml_set_f32(a, c(1, 2, 3, 4, 5))
+  ggml_set_f32(b, c(1, 2, 3))
+  
+  expect_error(
+    ggml_cpu_add(a, b),
+    "same number of elements"
+  )
+  
+  ggml_free(ctx)
+})

@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html>
+<head><title>R: 'GGML' Tensor Operations for Machine Learning</title>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+<link rel="stylesheet" type="text/css" href="R.css" />
+</head><body><div class="container">
+<h1> 'GGML' Tensor Operations for Machine Learning
+<img class="toplogo" src="../../../doc/html/Rlogo.svg" alt="[R logo]" />
+</h1>
+<hr/>
+<div style="text-align: center;">
+<a href="../../../doc/html/packages.html"><img class="arrow" src="../../../doc/html/left.jpg" alt="[Up]" /></a>
+<a href="../../../doc/html/index.html"><img class="arrow" src="../../../doc/html/up.jpg" alt="[Top]" /></a>
+</div><h2>Documentation for package &lsquo;ggmlR&rsquo; version 0.5.4</h2>
+
+<ul><li><a href="../DESCRIPTION">DESCRIPTION file</a>.</li>
+<li><a href="../doc/index.html">User guides, package vignettes and other documentation.</a></li>
+<li><a href="../NEWS">Package NEWS</a>.</li>
+</ul>
+
+<h2>Help Pages</h2>
+
+
+<p style="text-align: center;">
+<a href="#D">D</a>
+<a href="#G">G</a>
+<a href="#I">I</a>
+<a href="#P">P</a>
+<a href="#Q">Q</a>
+<a href="#R">R</a>
+<a href="#S">S</a>
+</p>
+
+
+<h2><a id="D">-- D --</a></h2>
+
+<table style="width: 100%;">
+<tr><td style="width: 25%;"><a href="dequantize_row_iq2_xxs.html">dequantize_row_iq1_m</a></td>
+<td>Dequantize Row (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_iq2_xxs.html">dequantize_row_iq1_s</a></td>
+<td>Dequantize Row (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_iq2_xxs.html">dequantize_row_iq2_s</a></td>
+<td>Dequantize Row (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_iq2_xxs.html">dequantize_row_iq2_xs</a></td>
+<td>Dequantize Row (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_iq2_xxs.html">dequantize_row_iq2_xxs</a></td>
+<td>Dequantize Row (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_iq2_xxs.html">dequantize_row_iq3_s</a></td>
+<td>Dequantize Row (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_iq2_xxs.html">dequantize_row_iq3_xxs</a></td>
+<td>Dequantize Row (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_iq2_xxs.html">dequantize_row_iq4_nl</a></td>
+<td>Dequantize Row (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_iq2_xxs.html">dequantize_row_iq4_xs</a></td>
+<td>Dequantize Row (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_mxfp4.html">dequantize_row_mxfp4</a></td>
+<td>Dequantize Row (MXFP4)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q2_K.html">dequantize_row_q2_K</a></td>
+<td>Dequantize Row (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q2_K.html">dequantize_row_q3_K</a></td>
+<td>Dequantize Row (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q4_0.html">dequantize_row_q4_0</a></td>
+<td>Dequantize Row (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q4_0.html">dequantize_row_q4_1</a></td>
+<td>Dequantize Row (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q2_K.html">dequantize_row_q4_K</a></td>
+<td>Dequantize Row (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q4_0.html">dequantize_row_q5_0</a></td>
+<td>Dequantize Row (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q4_0.html">dequantize_row_q5_1</a></td>
+<td>Dequantize Row (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q2_K.html">dequantize_row_q5_K</a></td>
+<td>Dequantize Row (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q2_K.html">dequantize_row_q6_K</a></td>
+<td>Dequantize Row (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q4_0.html">dequantize_row_q8_0</a></td>
+<td>Dequantize Row (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_q2_K.html">dequantize_row_q8_K</a></td>
+<td>Dequantize Row (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_tq1_0.html">dequantize_row_tq1_0</a></td>
+<td>Dequantize Row (Ternary)</td></tr>
+<tr><td style="width: 25%;"><a href="dequantize_row_tq1_0.html">dequantize_row_tq2_0</a></td>
+<td>Dequantize Row (Ternary)</td></tr>
+</table>
+
+<h2><a id="G">-- G --</a></h2>
+
+<table style="width: 100%;">
+<tr><td style="width: 25%;"><a href="ggml_abort_is_r_enabled.html">ggml_abort_is_r_enabled</a></td>
+<td>Check if R Abort Handler is Enabled</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_abs.html">ggml_abs</a></td>
+<td>Absolute Value (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_abs_inplace.html">ggml_abs_inplace</a></td>
+<td>Absolute Value In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_add.html">ggml_add</a></td>
+<td>Add tensors</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_add1.html">ggml_add1</a></td>
+<td>Add Scalar to Tensor (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_add_inplace.html">ggml_add_inplace</a></td>
+<td>Element-wise Addition In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_are_same_layout.html">ggml_are_same_layout</a></td>
+<td>Check if Two Tensors Have the Same Layout</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_are_same_shape.html">ggml_are_same_shape</a></td>
+<td>Compare Tensor Shapes</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_are_same_stride.html">ggml_are_same_stride</a></td>
+<td>Compare Tensor Strides</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_argmax.html">ggml_argmax</a></td>
+<td>Argmax (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_argsort.html">ggml_argsort</a></td>
+<td>Argsort - Get Sorting Indices (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_alloc_ctx_tensors.html">ggml_backend_alloc_ctx_tensors</a></td>
+<td>Allocate Context Tensors to Backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_clear.html">ggml_backend_buffer_clear</a></td>
+<td>Clear buffer memory</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_free.html">ggml_backend_buffer_free</a></td>
+<td>Free Backend Buffer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_get_size.html">ggml_backend_buffer_get_size</a></td>
+<td>Get Backend Buffer Size</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_get_usage.html">ggml_backend_buffer_get_usage</a></td>
+<td>Get buffer usage</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_is_host.html">ggml_backend_buffer_is_host</a></td>
+<td>Check if buffer is host memory</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_is_multi_buffer.html">ggml_backend_buffer_is_multi_buffer</a></td>
+<td>Check if buffer is a multi-buffer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_name.html">ggml_backend_buffer_name</a></td>
+<td>Get Backend Buffer Name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_reset.html">ggml_backend_buffer_reset</a></td>
+<td>Reset buffer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_set_usage.html">ggml_backend_buffer_set_usage</a></td>
+<td>Set buffer usage hint</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_usage_any.html">ggml_backend_buffer_usage_any</a></td>
+<td>Buffer usage: Any</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_usage_compute.html">ggml_backend_buffer_usage_compute</a></td>
+<td>Buffer usage: Compute</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_buffer_usage_weights.html">ggml_backend_buffer_usage_weights</a></td>
+<td>Buffer usage: Weights</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_cpu_init.html">ggml_backend_cpu_init</a></td>
+<td>Initialize CPU Backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_cpu_set_n_threads.html">ggml_backend_cpu_set_n_threads</a></td>
+<td>Set CPU Backend Threads</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_device_register.html">ggml_backend_device_register</a></td>
+<td>Register a device</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_device_type_accel.html">ggml_backend_device_type_accel</a></td>
+<td>Device type: Accelerator</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_device_type_cpu.html">ggml_backend_device_type_cpu</a></td>
+<td>Device type: CPU</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_device_type_gpu.html">ggml_backend_device_type_gpu</a></td>
+<td>Device type: GPU</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_device_type_igpu.html">ggml_backend_device_type_igpu</a></td>
+<td>Device type: Integrated GPU</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_by_name.html">ggml_backend_dev_by_name</a></td>
+<td>Get device by name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_by_type.html">ggml_backend_dev_by_type</a></td>
+<td>Get device by type</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_count.html">ggml_backend_dev_count</a></td>
+<td>Get number of available devices</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_description.html">ggml_backend_dev_description</a></td>
+<td>Get device description</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_get.html">ggml_backend_dev_get</a></td>
+<td>Get device by index</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_get_props.html">ggml_backend_dev_get_props</a></td>
+<td>Get device properties</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_init.html">ggml_backend_dev_init</a></td>
+<td>Initialize backend from device</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_memory.html">ggml_backend_dev_memory</a></td>
+<td>Get device memory</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_name.html">ggml_backend_dev_name</a></td>
+<td>Get device name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_offload_op.html">ggml_backend_dev_offload_op</a></td>
+<td>Check if device should offload operation</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_supports_buft.html">ggml_backend_dev_supports_buft</a></td>
+<td>Check if device supports buffer type</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_supports_op.html">ggml_backend_dev_supports_op</a></td>
+<td>Check if device supports operation</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_dev_type.html">ggml_backend_dev_type</a></td>
+<td>Get device type</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_event_free.html">ggml_backend_event_free</a></td>
+<td>Free event</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_event_new.html">ggml_backend_event_new</a></td>
+<td>Create new event</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_event_record.html">ggml_backend_event_record</a></td>
+<td>Record event</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_event_synchronize.html">ggml_backend_event_synchronize</a></td>
+<td>Synchronize event</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_event_wait.html">ggml_backend_event_wait</a></td>
+<td>Wait for event</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_free.html">ggml_backend_free</a></td>
+<td>Free Backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_get_device.html">ggml_backend_get_device</a></td>
+<td>Get device from backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_graph_compute.html">ggml_backend_graph_compute</a></td>
+<td>Compute Graph with Backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_graph_compute_async.html">ggml_backend_graph_compute_async</a></td>
+<td>Compute graph asynchronously</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_graph_plan_compute.html">ggml_backend_graph_plan_compute</a></td>
+<td>Execute graph plan</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_graph_plan_create.html">ggml_backend_graph_plan_create</a></td>
+<td>Create graph execution plan</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_graph_plan_free.html">ggml_backend_graph_plan_free</a></td>
+<td>Free graph execution plan</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_init_best.html">ggml_backend_init_best</a></td>
+<td>Initialize best available backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_init_by_name.html">ggml_backend_init_by_name</a></td>
+<td>Initialize backend by name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_init_by_type.html">ggml_backend_init_by_type</a></td>
+<td>Initialize backend by type</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_load.html">ggml_backend_load</a></td>
+<td>Load backend from dynamic library</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_load_all.html">ggml_backend_load_all</a></td>
+<td>Load all available backends</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_multi_buffer_alloc_buffer.html">ggml_backend_multi_buffer_alloc_buffer</a></td>
+<td>Allocate multi-buffer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_multi_buffer_set_usage.html">ggml_backend_multi_buffer_set_usage</a></td>
+<td>Set usage for all buffers in a multi-buffer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_name.html">ggml_backend_name</a></td>
+<td>Get Backend Name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_register.html">ggml_backend_register</a></td>
+<td>Register a backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_reg_by_name.html">ggml_backend_reg_by_name</a></td>
+<td>Get backend registry by name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_reg_count.html">ggml_backend_reg_count</a></td>
+<td>Get number of registered backends</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_reg_dev_count.html">ggml_backend_reg_dev_count</a></td>
+<td>Get number of devices in registry</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_reg_dev_get.html">ggml_backend_reg_dev_get</a></td>
+<td>Get device from registry</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_reg_get.html">ggml_backend_reg_get</a></td>
+<td>Get backend registry by index</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_reg_name.html">ggml_backend_reg_name</a></td>
+<td>Get registry name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_alloc_graph.html">ggml_backend_sched_alloc_graph</a></td>
+<td>Allocate graph on scheduler</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_free.html">ggml_backend_sched_free</a></td>
+<td>Free backend scheduler</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_get_backend.html">ggml_backend_sched_get_backend</a></td>
+<td>Get backend from scheduler</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_get_n_backends.html">ggml_backend_sched_get_n_backends</a></td>
+<td>Get number of backends in scheduler</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_get_n_copies.html">ggml_backend_sched_get_n_copies</a></td>
+<td>Get number of tensor copies</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_get_n_splits.html">ggml_backend_sched_get_n_splits</a></td>
+<td>Get number of graph splits</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_get_tensor_backend.html">ggml_backend_sched_get_tensor_backend</a></td>
+<td>Get tensor backend assignment</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_graph_compute.html">ggml_backend_sched_graph_compute</a></td>
+<td>Compute graph using scheduler</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_graph_compute_async.html">ggml_backend_sched_graph_compute_async</a></td>
+<td>Compute graph asynchronously</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_new.html">ggml_backend_sched_new</a></td>
+<td>Create a new backend scheduler</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_reserve.html">ggml_backend_sched_reserve</a></td>
+<td>Reserve memory for scheduler</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_reset.html">ggml_backend_sched_reset</a></td>
+<td>Reset scheduler</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_set_tensor_backend.html">ggml_backend_sched_set_tensor_backend</a></td>
+<td>Set tensor backend assignment</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_sched_synchronize.html">ggml_backend_sched_synchronize</a></td>
+<td>Synchronize scheduler</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_synchronize.html">ggml_backend_synchronize</a></td>
+<td>Synchronize backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_tensor_copy_async.html">ggml_backend_tensor_copy_async</a></td>
+<td>Copy tensor asynchronously between backends</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_tensor_get_and_sync.html">ggml_backend_tensor_get_and_sync</a></td>
+<td>Backend Tensor Get and Sync</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_tensor_get_async.html">ggml_backend_tensor_get_async</a></td>
+<td>Get tensor data asynchronously</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_tensor_get_data.html">ggml_backend_tensor_get_data</a></td>
+<td>Get Tensor Data via Backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_tensor_get_f32_first.html">ggml_backend_tensor_get_f32_first</a></td>
+<td>Get First Float from Backend Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_tensor_set_async.html">ggml_backend_tensor_set_async</a></td>
+<td>Set tensor data asynchronously</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_tensor_set_data.html">ggml_backend_tensor_set_data</a></td>
+<td>Set Tensor Data via Backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_backend_unload.html">ggml_backend_unload</a></td>
+<td>Unload backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_blck_size.html">ggml_blck_size</a></td>
+<td>Get Block Size</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_build_forward_expand.html">ggml_build_forward_expand</a></td>
+<td>Build forward expand</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_can_repeat.html">ggml_can_repeat</a></td>
+<td>Check If Tensor Can Be Repeated</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_ceil.html">ggml_ceil</a></td>
+<td>Ceiling (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_ceil_inplace.html">ggml_ceil_inplace</a></td>
+<td>Ceiling In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_clamp.html">ggml_clamp</a></td>
+<td>Clamp (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_compile.html">ggml_compile</a></td>
+<td>Compile a Sequential Model</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_concat.html">ggml_concat</a></td>
+<td>Concatenate Tensors (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cont.html">ggml_cont</a></td>
+<td>Make Contiguous (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_conv_1d.html">ggml_conv_1d</a></td>
+<td>1D Convolution (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_conv_2d.html">ggml_conv_2d</a></td>
+<td>2D Convolution (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_conv_transpose_1d.html">ggml_conv_transpose_1d</a></td>
+<td>Transposed 1D Convolution (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cos.html">ggml_cos</a></td>
+<td>Cosine (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_count_equal.html">ggml_count_equal</a></td>
+<td>Count Equal Elements (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_add.html">ggml_cpu_add</a></td>
+<td>Element-wise Addition (CPU Direct)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_features.html">ggml_cpu_features</a></td>
+<td>Get All CPU Features</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_get_rvv_vlen.html">ggml_cpu_get_rvv_vlen</a></td>
+<td>Get RISC-V Vector Length</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_get_sve_cnt.html">ggml_cpu_get_sve_cnt</a></td>
+<td>Get SVE Vector Length (ARM)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_amx_int8.html">ggml_cpu_has_amx_int8</a></td>
+<td>CPU Feature Detection - AMX INT8</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_arm_fma.html">ggml_cpu_has_arm_fma</a></td>
+<td>CPU Feature Detection - ARM FMA</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_avx.html">ggml_cpu_has_avx</a></td>
+<td>CPU Feature Detection - AVX</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_avx2.html">ggml_cpu_has_avx2</a></td>
+<td>CPU Feature Detection - AVX2</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_avx512.html">ggml_cpu_has_avx512</a></td>
+<td>CPU Feature Detection - AVX-512</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_avx512_bf16.html">ggml_cpu_has_avx512_bf16</a></td>
+<td>CPU Feature Detection - AVX-512 BF16</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_avx512_vbmi.html">ggml_cpu_has_avx512_vbmi</a></td>
+<td>CPU Feature Detection - AVX-512 VBMI</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_avx512_vnni.html">ggml_cpu_has_avx512_vnni</a></td>
+<td>CPU Feature Detection - AVX-512 VNNI</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_avx_vnni.html">ggml_cpu_has_avx_vnni</a></td>
+<td>CPU Feature Detection - AVX-VNNI</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_bmi2.html">ggml_cpu_has_bmi2</a></td>
+<td>CPU Feature Detection - BMI2</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_dotprod.html">ggml_cpu_has_dotprod</a></td>
+<td>CPU Feature Detection - Dot Product (ARM)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_f16c.html">ggml_cpu_has_f16c</a></td>
+<td>CPU Feature Detection - F16C</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_fma.html">ggml_cpu_has_fma</a></td>
+<td>CPU Feature Detection - FMA</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_fp16_va.html">ggml_cpu_has_fp16_va</a></td>
+<td>CPU Feature Detection - FP16 Vector Arithmetic (ARM)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_llamafile.html">ggml_cpu_has_llamafile</a></td>
+<td>CPU Feature Detection - Llamafile</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_matmul_int8.html">ggml_cpu_has_matmul_int8</a></td>
+<td>CPU Feature Detection - INT8 Matrix Multiply (ARM)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_neon.html">ggml_cpu_has_neon</a></td>
+<td>CPU Feature Detection - NEON (ARM)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_riscv_v.html">ggml_cpu_has_riscv_v</a></td>
+<td>CPU Feature Detection - RISC-V Vector</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_sme.html">ggml_cpu_has_sme</a></td>
+<td>CPU Feature Detection - SME (ARM)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_sse3.html">ggml_cpu_has_sse3</a></td>
+<td>CPU Feature Detection - SSE3</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_ssse3.html">ggml_cpu_has_ssse3</a></td>
+<td>CPU Feature Detection - SSSE3</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_sve.html">ggml_cpu_has_sve</a></td>
+<td>CPU Feature Detection - SVE (ARM)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_vsx.html">ggml_cpu_has_vsx</a></td>
+<td>CPU Feature Detection - VSX (PowerPC)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_vxe.html">ggml_cpu_has_vxe</a></td>
+<td>CPU Feature Detection - VXE (IBM z/Architecture)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_has_wasm_simd.html">ggml_cpu_has_wasm_simd</a></td>
+<td>CPU Feature Detection - WebAssembly SIMD</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpu_mul.html">ggml_cpu_mul</a></td>
+<td>Element-wise Multiplication (CPU Direct)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cpy.html">ggml_cpy</a></td>
+<td>Copy Tensor with Type Conversion (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cycles.html">ggml_cycles</a></td>
+<td>Get CPU Cycles</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_cycles_per_ms.html">ggml_cycles_per_ms</a></td>
+<td>Get CPU Cycles per Millisecond</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_diag.html">ggml_diag</a></td>
+<td>Diagonal Matrix (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_diag_mask_inf.html">ggml_diag_mask_inf</a></td>
+<td>Diagonal Mask with -Inf (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_diag_mask_inf_inplace.html">ggml_diag_mask_inf_inplace</a></td>
+<td>Diagonal Mask with -Inf In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_diag_mask_zero.html">ggml_diag_mask_zero</a></td>
+<td>Diagonal Mask with Zero (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_div.html">ggml_div</a></td>
+<td>Element-wise Division (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_div_inplace.html">ggml_div_inplace</a></td>
+<td>Element-wise Division In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_dup.html">ggml_dup</a></td>
+<td>Duplicate Tensor (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_dup_inplace.html">ggml_dup_inplace</a></td>
+<td>Duplicate Tensor In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_dup_tensor.html">ggml_dup_tensor</a></td>
+<td>Duplicate Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_element_size.html">ggml_element_size</a></td>
+<td>Get Element Size</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_elu.html">ggml_elu</a></td>
+<td>ELU Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_elu_inplace.html">ggml_elu_inplace</a></td>
+<td>ELU Activation In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_estimate_memory.html">ggml_estimate_memory</a></td>
+<td>Estimate Required Memory</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_evaluate.html">ggml_evaluate</a></td>
+<td>Evaluate a Trained Model</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_exp.html">ggml_exp</a></td>
+<td>Exponential (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_exp_inplace.html">ggml_exp_inplace</a></td>
+<td>Exponential In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_fit.html">ggml_fit</a></td>
+<td>Train a Sequential Model</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_flash_attn_back.html">ggml_flash_attn_back</a></td>
+<td>Flash Attention Backward (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_flash_attn_ext.html">ggml_flash_attn_ext</a></td>
+<td>Flash Attention (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_floor.html">ggml_floor</a></td>
+<td>Floor (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_floor_inplace.html">ggml_floor_inplace</a></td>
+<td>Floor In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_free.html">ggml_free</a></td>
+<td>Free GGML context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_ftype_to_ggml_type.html">ggml_ftype_to_ggml_type</a></td>
+<td>Convert ftype to ggml_type</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gallocr_alloc_graph.html">ggml_gallocr_alloc_graph</a></td>
+<td>Allocate Memory for Graph</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gallocr_free.html">ggml_gallocr_free</a></td>
+<td>Free Graph Allocator</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gallocr_get_buffer_size.html">ggml_gallocr_get_buffer_size</a></td>
+<td>Get Graph Allocator Buffer Size</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gallocr_new.html">ggml_gallocr_new</a></td>
+<td>Create Graph Allocator</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gallocr_reserve.html">ggml_gallocr_reserve</a></td>
+<td>Reserve Memory for Graph</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_geglu.html">ggml_geglu</a></td>
+<td>GeGLU (GELU Gated Linear Unit) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_geglu_quick.html">ggml_geglu_quick</a></td>
+<td>GeGLU Quick (Fast GeGLU) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_geglu_split.html">ggml_geglu_split</a></td>
+<td>GeGLU Split (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gelu.html">ggml_gelu</a></td>
+<td>GELU Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gelu_erf.html">ggml_gelu_erf</a></td>
+<td>Exact GELU Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gelu_inplace.html">ggml_gelu_inplace</a></td>
+<td>GELU Activation In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_gelu_quick.html">ggml_gelu_quick</a></td>
+<td>GELU Quick Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_f32.html">ggml_get_f32</a></td>
+<td>Get F32 data</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_f32_nd.html">ggml_get_f32_nd</a></td>
+<td>Get Single Float Value by N-D Index</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_first_tensor.html">ggml_get_first_tensor</a></td>
+<td>Get First Tensor from Context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_i32.html">ggml_get_i32</a></td>
+<td>Get I32 Data</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_i32_nd.html">ggml_get_i32_nd</a></td>
+<td>Get Single Int32 Value by N-D Index</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_max_tensor_size.html">ggml_get_max_tensor_size</a></td>
+<td>Get Maximum Tensor Size</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_mem_size.html">ggml_get_mem_size</a></td>
+<td>Get Context Memory Size</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_name.html">ggml_get_name</a></td>
+<td>Get Tensor Name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_next_tensor.html">ggml_get_next_tensor</a></td>
+<td>Get Next Tensor from Context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_no_alloc.html">ggml_get_no_alloc</a></td>
+<td>Get No Allocation Mode</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_n_threads.html">ggml_get_n_threads</a></td>
+<td>Get Number of Threads</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_op_params.html">ggml_get_op_params</a></td>
+<td>Get Tensor Operation Parameters</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_op_params_f32.html">ggml_get_op_params_f32</a></td>
+<td>Get Float Op Parameter</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_op_params_i32.html">ggml_get_op_params_i32</a></td>
+<td>Get Integer Op Parameter</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_rows.html">ggml_get_rows</a></td>
+<td>Get Rows by Indices (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_rows_back.html">ggml_get_rows_back</a></td>
+<td>Get Rows Backward (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_get_unary_op.html">ggml_get_unary_op</a></td>
+<td>Get Unary Operation from Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_glu.html">ggml_glu</a></td>
+<td>Generic GLU (Gated Linear Unit) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_GEGLU</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_GEGLU_ERF</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_GEGLU_QUICK</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_REGLU</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_SWIGLU</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_GLU_OP_REGLU.html">GGML_GLU_OP_SWIGLU_OAI</a></td>
+<td>GLU Operation Types</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_glu_split.html">ggml_glu_split</a></td>
+<td>Generic GLU Split (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_compute.html">ggml_graph_compute</a></td>
+<td>Compute graph</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_compute_with_ctx.html">ggml_graph_compute_with_ctx</a></td>
+<td>Compute Graph with Context (Alternative Method)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_dump_dot.html">ggml_graph_dump_dot</a></td>
+<td>Export Graph to DOT Format</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_get_tensor.html">ggml_graph_get_tensor</a></td>
+<td>Get Tensor from Graph by Name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_node.html">ggml_graph_node</a></td>
+<td>Get Graph Node</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_n_nodes.html">ggml_graph_n_nodes</a></td>
+<td>Get Number of Nodes in Graph</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_overhead.html">ggml_graph_overhead</a></td>
+<td>Get Graph Overhead</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_print.html">ggml_graph_print</a></td>
+<td>Print Graph Information</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_reset.html">ggml_graph_reset</a></td>
+<td>Reset Graph (for backpropagation)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_graph_view.html">ggml_graph_view</a></td>
+<td>Create a View of a Subgraph</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_group_norm.html">ggml_group_norm</a></td>
+<td>Group Normalization (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_group_norm_inplace.html">ggml_group_norm_inplace</a></td>
+<td>Group Normalization In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_hardsigmoid.html">ggml_hardsigmoid</a></td>
+<td>Hard Sigmoid Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_hardswish.html">ggml_hardswish</a></td>
+<td>Hard Swish Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_im2col.html">ggml_im2col</a></td>
+<td>Image to Column (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_init.html">ggml_init</a></td>
+<td>Initialize GGML context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_init_auto.html">ggml_init_auto</a></td>
+<td>Create Context with Auto-sizing</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_available.html">ggml_is_available</a></td>
+<td>Check if GGML is available</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_contiguous.html">ggml_is_contiguous</a></td>
+<td>Check if Tensor is Contiguous</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_contiguously_allocated.html">ggml_is_contiguously_allocated</a></td>
+<td>Check If Tensor is Contiguously Allocated</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_contiguous_0.html">ggml_is_contiguous_0</a></td>
+<td>Check Tensor Contiguity (Dimension 0)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_contiguous_1.html">ggml_is_contiguous_1</a></td>
+<td>Check Tensor Contiguity (Dimensions &gt;= 1)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_contiguous_2.html">ggml_is_contiguous_2</a></td>
+<td>Check Tensor Contiguity (Dimensions &gt;= 2)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_contiguous_channels.html">ggml_is_contiguous_channels</a></td>
+<td>Check Channel-wise Contiguity</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_contiguous_rows.html">ggml_is_contiguous_rows</a></td>
+<td>Check Row-wise Contiguity</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_permuted.html">ggml_is_permuted</a></td>
+<td>Check if Tensor is Permuted</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_quantized.html">ggml_is_quantized</a></td>
+<td>Check If Type is Quantized</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_is_transposed.html">ggml_is_transposed</a></td>
+<td>Check if Tensor is Transposed</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_l2_norm.html">ggml_l2_norm</a></td>
+<td>L2 Normalization (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_l2_norm_inplace.html">ggml_l2_norm_inplace</a></td>
+<td>L2 Normalization In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_layer_batch_norm.html">ggml_layer_batch_norm</a></td>
+<td>Add Batch Normalization Layer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_layer_conv_1d.html">ggml_layer_conv_1d</a></td>
+<td>Add 1D Convolution Layer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_layer_conv_2d.html">ggml_layer_conv_2d</a></td>
+<td>Add 2D Convolution Layer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_layer_dense.html">ggml_layer_dense</a></td>
+<td>Add Dense (Fully Connected) Layer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_layer_flatten.html">ggml_layer_flatten</a></td>
+<td>Add Flatten Layer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_layer_max_pooling_2d.html">ggml_layer_max_pooling_2d</a></td>
+<td>Add 2D Max Pooling Layer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_leaky_relu.html">ggml_leaky_relu</a></td>
+<td>Leaky ReLU Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_load_weights.html">ggml_load_weights</a></td>
+<td>Load Model Weights from File</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_log.html">ggml_log</a></td>
+<td>Natural Logarithm (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_log_inplace.html">ggml_log_inplace</a></td>
+<td>Natural Logarithm In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_log_is_r_enabled.html">ggml_log_is_r_enabled</a></td>
+<td>Check if R Logging is Enabled</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_log_set_default.html">ggml_log_set_default</a></td>
+<td>Restore Default GGML Logging</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_log_set_r.html">ggml_log_set_r</a></td>
+<td>Enable R-compatible GGML Logging</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_mean.html">ggml_mean</a></td>
+<td>Mean (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_model_sequential.html">ggml_model_sequential</a></td>
+<td>Create a Sequential Neural Network Model</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_mul.html">ggml_mul</a></td>
+<td>Multiply tensors</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_mul_inplace.html">ggml_mul_inplace</a></td>
+<td>Element-wise Multiplication In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_mul_mat.html">ggml_mul_mat</a></td>
+<td>Matrix Multiplication (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_mul_mat_id.html">ggml_mul_mat_id</a></td>
+<td>Matrix Multiplication with Expert Selection (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_nbytes.html">ggml_nbytes</a></td>
+<td>Get number of bytes</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_neg.html">ggml_neg</a></td>
+<td>Negation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_neg_inplace.html">ggml_neg_inplace</a></td>
+<td>Negation In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_nelements.html">ggml_nelements</a></td>
+<td>Get number of elements</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_f32.html">ggml_new_f32</a></td>
+<td>Create Scalar F32 Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_i32.html">ggml_new_i32</a></td>
+<td>Create Scalar I32 Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_tensor.html">ggml_new_tensor</a></td>
+<td>Create Tensor with Arbitrary Dimensions</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_tensor_1d.html">ggml_new_tensor_1d</a></td>
+<td>Create 1D tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_tensor_2d.html">ggml_new_tensor_2d</a></td>
+<td>Create 2D tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_tensor_3d.html">ggml_new_tensor_3d</a></td>
+<td>Create 3D Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_new_tensor_4d.html">ggml_new_tensor_4d</a></td>
+<td>Create 4D Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_norm.html">ggml_norm</a></td>
+<td>Layer Normalization (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_norm_inplace.html">ggml_norm_inplace</a></td>
+<td>Layer Normalization In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_nrows.html">ggml_nrows</a></td>
+<td>Get Number of Rows</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_n_dims.html">ggml_n_dims</a></td>
+<td>Get Number of Dimensions</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_alloc.html">ggml_opt_alloc</a></td>
+<td>Allocate graph for evaluation</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_context_optimizer_type.html">ggml_opt_context_optimizer_type</a></td>
+<td>Get optimizer type from context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_dataset_data.html">ggml_opt_dataset_data</a></td>
+<td>Get data tensor from dataset</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_dataset_free.html">ggml_opt_dataset_free</a></td>
+<td>Free optimization dataset</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_dataset_get_batch.html">ggml_opt_dataset_get_batch</a></td>
+<td>Get batch from dataset</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_dataset_init.html">ggml_opt_dataset_init</a></td>
+<td>Create a new optimization dataset</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_dataset_labels.html">ggml_opt_dataset_labels</a></td>
+<td>Get labels tensor from dataset</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_dataset_ndata.html">ggml_opt_dataset_ndata</a></td>
+<td>Get number of datapoints in dataset</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_dataset_shuffle.html">ggml_opt_dataset_shuffle</a></td>
+<td>Shuffle dataset</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_default_params.html">ggml_opt_default_params</a></td>
+<td>Get default optimizer parameters</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_epoch.html">ggml_opt_epoch</a></td>
+<td>Run one training epoch</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_eval.html">ggml_opt_eval</a></td>
+<td>Evaluate model</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_fit.html">ggml_opt_fit</a></td>
+<td>Fit model to dataset</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_free.html">ggml_opt_free</a></td>
+<td>Free optimizer context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_grad_acc.html">ggml_opt_grad_acc</a></td>
+<td>Get gradient accumulator for a tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_init.html">ggml_opt_init</a></td>
+<td>Initialize optimizer context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_inputs.html">ggml_opt_inputs</a></td>
+<td>Get inputs tensor from optimizer context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_labels.html">ggml_opt_labels</a></td>
+<td>Get labels tensor from optimizer context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_loss.html">ggml_opt_loss</a></td>
+<td>Get loss tensor from optimizer context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_loss_type_cross_entropy.html">ggml_opt_loss_type_cross_entropy</a></td>
+<td>Loss type: Cross Entropy</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_loss_type_mean.html">ggml_opt_loss_type_mean</a></td>
+<td>Loss type: Mean</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_loss_type_mse.html">ggml_opt_loss_type_mse</a></td>
+<td>Loss type: Mean Squared Error</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_loss_type_sum.html">ggml_opt_loss_type_sum</a></td>
+<td>Loss type: Sum</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_ncorrect.html">ggml_opt_ncorrect</a></td>
+<td>Get number of correct predictions tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_optimizer_name.html">ggml_opt_optimizer_name</a></td>
+<td>Get optimizer name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_optimizer_type_adamw.html">ggml_opt_optimizer_type_adamw</a></td>
+<td>Optimizer type: AdamW</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_optimizer_type_sgd.html">ggml_opt_optimizer_type_sgd</a></td>
+<td>Optimizer type: SGD</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_outputs.html">ggml_opt_outputs</a></td>
+<td>Get outputs tensor from optimizer context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_pred.html">ggml_opt_pred</a></td>
+<td>Get predictions tensor from optimizer context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_prepare_alloc.html">ggml_opt_prepare_alloc</a></td>
+<td>Prepare allocation for non-static graphs</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_reset.html">ggml_opt_reset</a></td>
+<td>Reset optimizer context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_result_accuracy.html">ggml_opt_result_accuracy</a></td>
+<td>Get accuracy from result</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_result_free.html">ggml_opt_result_free</a></td>
+<td>Free optimization result</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_result_init.html">ggml_opt_result_init</a></td>
+<td>Initialize optimization result</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_result_loss.html">ggml_opt_result_loss</a></td>
+<td>Get loss from result</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_result_ndata.html">ggml_opt_result_ndata</a></td>
+<td>Get number of datapoints from result</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_result_pred.html">ggml_opt_result_pred</a></td>
+<td>Get predictions from result</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_result_reset.html">ggml_opt_result_reset</a></td>
+<td>Reset optimization result</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_opt_static_graphs.html">ggml_opt_static_graphs</a></td>
+<td>Check if using static graphs</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_op_can_inplace.html">ggml_op_can_inplace</a></td>
+<td>Check if Operation Can Be Done In-place</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_op_desc.html">ggml_op_desc</a></td>
+<td>Get Operation Description from Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_op_name.html">ggml_op_name</a></td>
+<td>Get Operation Name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_pool_1d.html">GGML_OP_POOL_AVG</a></td>
+<td>1D Pooling (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_pool_1d.html">GGML_OP_POOL_MAX</a></td>
+<td>1D Pooling (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_op_symbol.html">ggml_op_symbol</a></td>
+<td>Get Operation Symbol</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_out_prod.html">ggml_out_prod</a></td>
+<td>Outer Product (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_pad.html">ggml_pad</a></td>
+<td>Pad Tensor with Zeros (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_permute.html">ggml_permute</a></td>
+<td>Permute Tensor Dimensions (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_pool_1d.html">ggml_pool_1d</a></td>
+<td>1D Pooling (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_pool_2d.html">ggml_pool_2d</a></td>
+<td>2D Pooling (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_predict.html">ggml_predict</a></td>
+<td>Get Predictions from a Trained Model</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_predict_classes.html">ggml_predict_classes</a></td>
+<td>Predict Classes from a Trained Model</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_print_mem_status.html">ggml_print_mem_status</a></td>
+<td>Print Context Memory Status</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_print_objects.html">ggml_print_objects</a></td>
+<td>Print Objects in Context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_quantize_chunk.html">ggml_quantize_chunk</a></td>
+<td>Quantize Data Chunk</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_quantize_free.html">ggml_quantize_free</a></td>
+<td>Free Quantization Resources</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_quantize_init.html">ggml_quantize_init</a></td>
+<td>Initialize Quantization Tables</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_quantize_requires_imatrix.html">ggml_quantize_requires_imatrix</a></td>
+<td>Check if Quantization Requires Importance Matrix</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_quant_block_info.html">ggml_quant_block_info</a></td>
+<td>Get Quantization Block Info</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reglu.html">ggml_reglu</a></td>
+<td>ReGLU (ReLU Gated Linear Unit) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reglu_split.html">ggml_reglu_split</a></td>
+<td>ReGLU Split (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_relu.html">ggml_relu</a></td>
+<td>ReLU Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_relu_inplace.html">ggml_relu_inplace</a></td>
+<td>ReLU Activation In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_repeat.html">ggml_repeat</a></td>
+<td>Repeat (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_repeat_back.html">ggml_repeat_back</a></td>
+<td>Repeat Backward (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reset.html">ggml_reset</a></td>
+<td>Reset GGML Context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reshape_1d.html">ggml_reshape_1d</a></td>
+<td>Reshape to 1D (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reshape_2d.html">ggml_reshape_2d</a></td>
+<td>Reshape to 2D (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reshape_3d.html">ggml_reshape_3d</a></td>
+<td>Reshape to 3D (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_reshape_4d.html">ggml_reshape_4d</a></td>
+<td>Reshape to 4D (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rms_norm.html">ggml_rms_norm</a></td>
+<td>RMS Normalization (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rms_norm_back.html">ggml_rms_norm_back</a></td>
+<td>RMS Norm Backward (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rms_norm_inplace.html">ggml_rms_norm_inplace</a></td>
+<td>RMS Normalization In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope.html">ggml_rope</a></td>
+<td>Rotary Position Embedding (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope_ext.html">ggml_rope_ext</a></td>
+<td>Extended RoPE with Frequency Scaling (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope_ext_back.html">ggml_rope_ext_back</a></td>
+<td>RoPE Extended Backward (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope_ext_inplace.html">ggml_rope_ext_inplace</a></td>
+<td>Extended RoPE Inplace (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope_inplace.html">ggml_rope_inplace</a></td>
+<td>Rotary Position Embedding In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope_multi.html">ggml_rope_multi</a></td>
+<td>Multi-RoPE for Vision Models (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_rope_multi_inplace.html">ggml_rope_multi_inplace</a></td>
+<td>Multi-RoPE Inplace (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="rope_types.html">GGML_ROPE_TYPE_MROPE</a></td>
+<td>RoPE Mode Constants</td></tr>
+<tr><td style="width: 25%;"><a href="rope_types.html">GGML_ROPE_TYPE_NEOX</a></td>
+<td>RoPE Mode Constants</td></tr>
+<tr><td style="width: 25%;"><a href="rope_types.html">GGML_ROPE_TYPE_NORM</a></td>
+<td>RoPE Mode Constants</td></tr>
+<tr><td style="width: 25%;"><a href="rope_types.html">GGML_ROPE_TYPE_VISION</a></td>
+<td>RoPE Mode Constants</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_round.html">ggml_round</a></td>
+<td>Round (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_round_inplace.html">ggml_round_inplace</a></td>
+<td>Round In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_save_weights.html">ggml_save_weights</a></td>
+<td>Save Model Weights to File</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_scale.html">ggml_scale</a></td>
+<td>Scale (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_scale_inplace.html">ggml_scale_inplace</a></td>
+<td>Scale Tensor In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_upscale.html">GGML_SCALE_MODE_BICUBIC</a></td>
+<td>Upscale Tensor (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_upscale.html">GGML_SCALE_MODE_BILINEAR</a></td>
+<td>Upscale Tensor (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_upscale.html">GGML_SCALE_MODE_NEAREST</a></td>
+<td>Upscale Tensor (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set.html">ggml_set</a></td>
+<td>Set Tensor Region (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_1d.html">ggml_set_1d</a></td>
+<td>Set 1D Tensor Region (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_2d.html">ggml_set_2d</a></td>
+<td>Set 2D Tensor Region (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_abort_callback_default.html">ggml_set_abort_callback_default</a></td>
+<td>Restore Default Abort Behavior</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_abort_callback_r.html">ggml_set_abort_callback_r</a></td>
+<td>Enable R-compatible Abort Handling</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_f32.html">ggml_set_f32</a></td>
+<td>Set F32 data</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_f32_nd.html">ggml_set_f32_nd</a></td>
+<td>Set Single Float Value by N-D Index</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_i32.html">ggml_set_i32</a></td>
+<td>Set I32 Data</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_i32_nd.html">ggml_set_i32_nd</a></td>
+<td>Set Single Int32 Value by N-D Index</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_input.html">ggml_set_input</a></td>
+<td>Mark Tensor as Input</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_name.html">ggml_set_name</a></td>
+<td>Set Tensor Name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_no_alloc.html">ggml_set_no_alloc</a></td>
+<td>Set No Allocation Mode</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_n_threads.html">ggml_set_n_threads</a></td>
+<td>Set Number of Threads</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_op_params.html">ggml_set_op_params</a></td>
+<td>Set Tensor Operation Parameters</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_op_params_f32.html">ggml_set_op_params_f32</a></td>
+<td>Set Float Op Parameter</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_op_params_i32.html">ggml_set_op_params_i32</a></td>
+<td>Set Integer Op Parameter</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_output.html">ggml_set_output</a></td>
+<td>Mark Tensor as Output</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_param.html">ggml_set_param</a></td>
+<td>Set Tensor as Trainable Parameter</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_set_zero.html">ggml_set_zero</a></td>
+<td>Set Tensor to Zero</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sgn.html">ggml_sgn</a></td>
+<td>Sign Function (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sigmoid.html">ggml_sigmoid</a></td>
+<td>Sigmoid Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sigmoid_inplace.html">ggml_sigmoid_inplace</a></td>
+<td>Sigmoid Activation In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_silu.html">ggml_silu</a></td>
+<td>SiLU Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_silu_back.html">ggml_silu_back</a></td>
+<td>SiLU Backward (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_silu_inplace.html">ggml_silu_inplace</a></td>
+<td>SiLU Activation In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sin.html">ggml_sin</a></td>
+<td>Sine (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_softplus.html">ggml_softplus</a></td>
+<td>Softplus Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_softplus_inplace.html">ggml_softplus_inplace</a></td>
+<td>Softplus Activation In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_soft_max.html">ggml_soft_max</a></td>
+<td>Softmax (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_soft_max_ext.html">ggml_soft_max_ext</a></td>
+<td>Extended Softmax with Masking and Scaling (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_soft_max_ext_back.html">ggml_soft_max_ext_back</a></td>
+<td>Softmax Backward Extended (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_soft_max_ext_back_inplace.html">ggml_soft_max_ext_back_inplace</a></td>
+<td>Extended Softmax Backward Inplace (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_soft_max_ext_inplace.html">ggml_soft_max_ext_inplace</a></td>
+<td>Extended Softmax Inplace (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_soft_max_inplace.html">ggml_soft_max_inplace</a></td>
+<td>Softmax In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_SORT_ORDER_ASC.html">GGML_SORT_ORDER_ASC</a></td>
+<td>Sort Order Constants</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_SORT_ORDER_ASC.html">GGML_SORT_ORDER_DESC</a></td>
+<td>Sort Order Constants</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sqr.html">ggml_sqr</a></td>
+<td>Square (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sqrt.html">ggml_sqrt</a></td>
+<td>Square Root (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sqrt_inplace.html">ggml_sqrt_inplace</a></td>
+<td>Square Root In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sqr_inplace.html">ggml_sqr_inplace</a></td>
+<td>Square In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_step.html">ggml_step</a></td>
+<td>Step Function (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sub.html">ggml_sub</a></td>
+<td>Element-wise Subtraction (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sub_inplace.html">ggml_sub_inplace</a></td>
+<td>Element-wise Subtraction In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sum.html">ggml_sum</a></td>
+<td>Sum (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_sum_rows.html">ggml_sum_rows</a></td>
+<td>Sum Rows (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_swiglu.html">ggml_swiglu</a></td>
+<td>SwiGLU (Swish/SiLU Gated Linear Unit) (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_swiglu_split.html">ggml_swiglu_split</a></td>
+<td>SwiGLU Split (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tanh.html">ggml_tanh</a></td>
+<td>Tanh Activation (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tanh_inplace.html">ggml_tanh_inplace</a></td>
+<td>Tanh Activation In-place (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_copy.html">ggml_tensor_copy</a></td>
+<td>Copy Tensor Data</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_nb.html">ggml_tensor_nb</a></td>
+<td>Get Tensor Strides (nb)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_num.html">ggml_tensor_num</a></td>
+<td>Count Tensors in Context</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_overhead.html">ggml_tensor_overhead</a></td>
+<td>Get Tensor Overhead</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_set_f32_scalar.html">ggml_tensor_set_f32_scalar</a></td>
+<td>Fill Tensor with Scalar</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_shape.html">ggml_tensor_shape</a></td>
+<td>Get Tensor Shape</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_tensor_type.html">ggml_tensor_type</a></td>
+<td>Get Tensor Type</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_test.html">ggml_test</a></td>
+<td>Test GGML</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_timestep_embedding.html">ggml_timestep_embedding</a></td>
+<td>Timestep Embedding (Graph Operation)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_time_init.html">ggml_time_init</a></td>
+<td>Initialize GGML Timer</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_time_ms.html">ggml_time_ms</a></td>
+<td>Get Time in Milliseconds</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_time_us.html">ggml_time_us</a></td>
+<td>Get Time in Microseconds</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_top_k.html">ggml_top_k</a></td>
+<td>Top-K Indices (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_transpose.html">ggml_transpose</a></td>
+<td>Transpose (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_F16</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_F32</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_I32</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_type_name.html">ggml_type_name</a></td>
+<td>Get Type Name</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_Q4_0</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_Q4_1</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="GGML_TYPE_F32.html">GGML_TYPE_Q8_0</a></td>
+<td>GGML Data Types</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_type_size.html">ggml_type_size</a></td>
+<td>Get Type Size in Bytes</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_type_sizef.html">ggml_type_sizef</a></td>
+<td>Get Type Size as Float</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_unary_op_name.html">ggml_unary_op_name</a></td>
+<td>Get Unary Operation Name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_upscale.html">ggml_upscale</a></td>
+<td>Upscale Tensor (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_used_mem.html">ggml_used_mem</a></td>
+<td>Get Used Memory</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_version.html">ggml_version</a></td>
+<td>Get GGML version</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_view_1d.html">ggml_view_1d</a></td>
+<td>1D View with Byte Offset (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_view_2d.html">ggml_view_2d</a></td>
+<td>2D View with Byte Offset (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_view_3d.html">ggml_view_3d</a></td>
+<td>3D View with Byte Offset (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_view_4d.html">ggml_view_4d</a></td>
+<td>4D View with Byte Offset (Graph)</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_view_tensor.html">ggml_view_tensor</a></td>
+<td>View Tensor</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_available.html">ggml_vulkan_available</a></td>
+<td>Check if Vulkan support is available</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_backend_name.html">ggml_vulkan_backend_name</a></td>
+<td>Get Vulkan backend name</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_device_count.html">ggml_vulkan_device_count</a></td>
+<td>Get number of Vulkan devices</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_device_description.html">ggml_vulkan_device_description</a></td>
+<td>Get Vulkan device description</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_device_memory.html">ggml_vulkan_device_memory</a></td>
+<td>Get Vulkan device memory</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_free.html">ggml_vulkan_free</a></td>
+<td>Free Vulkan backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_init.html">ggml_vulkan_init</a></td>
+<td>Initialize Vulkan backend</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_is_backend.html">ggml_vulkan_is_backend</a></td>
+<td>Check if backend is Vulkan</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_list_devices.html">ggml_vulkan_list_devices</a></td>
+<td>List all Vulkan devices</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_vulkan_status.html">ggml_vulkan_status</a></td>
+<td>Print Vulkan status</td></tr>
+<tr><td style="width: 25%;"><a href="ggml_with_temp_ctx.html">ggml_with_temp_ctx</a></td>
+<td>Execute with Temporary Context</td></tr>
+</table>
+
+<h2><a id="I">-- I --</a></h2>
+
+<table style="width: 100%;">
+<tr><td style="width: 25%;"><a href="iq2xs_free_impl.html">iq2xs_free_impl</a></td>
+<td>Free IQ2 Quantization Tables</td></tr>
+<tr><td style="width: 25%;"><a href="iq2xs_init_impl.html">iq2xs_init_impl</a></td>
+<td>Initialize IQ2 Quantization Tables</td></tr>
+<tr><td style="width: 25%;"><a href="iq3xs_free_impl.html">iq3xs_free_impl</a></td>
+<td>Free IQ3 Quantization Tables</td></tr>
+<tr><td style="width: 25%;"><a href="iq3xs_init_impl.html">iq3xs_init_impl</a></td>
+<td>Initialize IQ3 Quantization Tables</td></tr>
+</table>
+
+<h2><a id="P">-- P --</a></h2>
+
+<table style="width: 100%;">
+<tr><td style="width: 25%;"><a href="plot.ggml_history.html">plot.ggml_history</a></td>
+<td>Plot training history</td></tr>
+<tr><td style="width: 25%;"><a href="print.ggml_history.html">print.ggml_history</a></td>
+<td>Print method for ggml_history</td></tr>
+<tr><td style="width: 25%;"><a href="print.ggml_sequential_model.html">print.ggml_sequential_model</a></td>
+<td>Print method for ggml_sequential_model</td></tr>
+</table>
+
+<h2><a id="Q">-- Q --</a></h2>
+
+<table style="width: 100%;">
+<tr><td style="width: 25%;"><a href="quantize_iq2_xxs.html">quantize_iq1_m</a></td>
+<td>Quantize Data (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_iq2_xxs.html">quantize_iq1_s</a></td>
+<td>Quantize Data (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_iq2_xxs.html">quantize_iq2_s</a></td>
+<td>Quantize Data (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_iq2_xxs.html">quantize_iq2_xs</a></td>
+<td>Quantize Data (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_iq2_xxs.html">quantize_iq2_xxs</a></td>
+<td>Quantize Data (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_iq2_xxs.html">quantize_iq3_s</a></td>
+<td>Quantize Data (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_iq2_xxs.html">quantize_iq3_xxs</a></td>
+<td>Quantize Data (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_iq2_xxs.html">quantize_iq4_nl</a></td>
+<td>Quantize Data (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_iq2_xxs.html">quantize_iq4_xs</a></td>
+<td>Quantize Data (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_mxfp4.html">quantize_mxfp4</a></td>
+<td>Quantize Data (MXFP4)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q2_K.html">quantize_q2_K</a></td>
+<td>Quantize Data (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q2_K.html">quantize_q3_K</a></td>
+<td>Quantize Data (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q4_0.html">quantize_q4_0</a></td>
+<td>Quantize Data (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q4_0.html">quantize_q4_1</a></td>
+<td>Quantize Data (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q2_K.html">quantize_q4_K</a></td>
+<td>Quantize Data (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q4_0.html">quantize_q5_0</a></td>
+<td>Quantize Data (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q4_0.html">quantize_q5_1</a></td>
+<td>Quantize Data (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q2_K.html">quantize_q5_K</a></td>
+<td>Quantize Data (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q2_K.html">quantize_q6_K</a></td>
+<td>Quantize Data (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_q4_0.html">quantize_q8_0</a></td>
+<td>Quantize Data (Q4_0)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_iq3_xxs_ref.html">quantize_row_iq2_s_ref</a></td>
+<td>Quantize Row Reference (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_iq3_xxs_ref.html">quantize_row_iq3_s_ref</a></td>
+<td>Quantize Row Reference (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_iq3_xxs_ref.html">quantize_row_iq3_xxs_ref</a></td>
+<td>Quantize Row Reference (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_iq3_xxs_ref.html">quantize_row_iq4_nl_ref</a></td>
+<td>Quantize Row Reference (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_iq3_xxs_ref.html">quantize_row_iq4_xs_ref</a></td>
+<td>Quantize Row Reference (IQ)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_mxfp4_ref.html">quantize_row_mxfp4_ref</a></td>
+<td>Quantize Row Reference (MXFP4)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q2_K_ref.html">quantize_row_q2_K_ref</a></td>
+<td>Quantize Row Reference (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q2_K_ref.html">quantize_row_q3_K_ref</a></td>
+<td>Quantize Row Reference (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q4_0_ref.html">quantize_row_q4_0_ref</a></td>
+<td>Quantize Row Reference (Basic)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q4_0_ref.html">quantize_row_q4_1_ref</a></td>
+<td>Quantize Row Reference (Basic)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q2_K_ref.html">quantize_row_q4_K_ref</a></td>
+<td>Quantize Row Reference (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q4_0_ref.html">quantize_row_q5_0_ref</a></td>
+<td>Quantize Row Reference (Basic)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q4_0_ref.html">quantize_row_q5_1_ref</a></td>
+<td>Quantize Row Reference (Basic)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q2_K_ref.html">quantize_row_q5_K_ref</a></td>
+<td>Quantize Row Reference (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q2_K_ref.html">quantize_row_q6_K_ref</a></td>
+<td>Quantize Row Reference (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q4_0_ref.html">quantize_row_q8_0_ref</a></td>
+<td>Quantize Row Reference (Basic)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q4_0_ref.html">quantize_row_q8_1_ref</a></td>
+<td>Quantize Row Reference (Basic)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_q2_K_ref.html">quantize_row_q8_K_ref</a></td>
+<td>Quantize Row Reference (K-quants)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_tq1_0_ref.html">quantize_row_tq1_0_ref</a></td>
+<td>Quantize Row Reference (Ternary)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_row_tq1_0_ref.html">quantize_row_tq2_0_ref</a></td>
+<td>Quantize Row Reference (Ternary)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_tq1_0.html">quantize_tq1_0</a></td>
+<td>Quantize Data (Ternary)</td></tr>
+<tr><td style="width: 25%;"><a href="quantize_tq1_0.html">quantize_tq2_0</a></td>
+<td>Quantize Data (Ternary)</td></tr>
+</table>
+
+<h2><a id="R">-- R --</a></h2>
+
+<table style="width: 100%;">
+<tr><td style="width: 25%;"><a href="rope_types.html">rope_types</a></td>
+<td>RoPE Mode Constants</td></tr>
+</table>
+
+<h2><a id="S">-- S --</a></h2>
+
+<table style="width: 100%;">
+<tr><td style="width: 25%;"><a href="summary.ggml_sequential_model.html">summary.ggml_sequential_model</a></td>
+<td>Summary method for ggml_sequential_model</td></tr>
+</table>
+</div></body></html>
