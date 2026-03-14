@@ -60,6 +60,9 @@ extern "C" {
 
 /* ── Parsed structures ──────────────────────────────────────────── */
 
+/* Forward declaration for use in onnx_attr_t */
+typedef struct onnx_initializer onnx_initializer_t;
+
 typedef struct {
     char     name[ONNX_MAX_NAME];
     int32_t  type;       /* ONNX_ATTR_* */
@@ -74,6 +77,8 @@ typedef struct {
     /* For ONNX_ATTR_FLOATS */
     const float   *floats;
     int             n_floats;
+    /* For ONNX_ATTR_TENSOR (Constant op value) */
+    onnx_initializer_t *tensor;  /* owned, NULL if not set */
 } onnx_attr_t;
 
 typedef struct {
@@ -90,7 +95,7 @@ typedef struct {
     int         n_attrs;
 } onnx_node_t;
 
-typedef struct {
+struct onnx_initializer {
     char     name[ONNX_MAX_NAME];
     int32_t  data_type;      /* ONNX_DTYPE_* */
     int64_t  dims[ONNX_MAX_DIMS];
@@ -102,7 +107,7 @@ typedef struct {
        we decode into a malloc'd buffer */
     void    *decoded_data;
     size_t   decoded_size;
-} onnx_initializer_t;
+};
 
 typedef struct {
     char     name[ONNX_MAX_NAME];

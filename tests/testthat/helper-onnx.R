@@ -118,7 +118,7 @@
 
 .onnx_attr_float <- function(name, value) {
   out <- .pb_string(1L, name)    # name
-  out <- c(out, .pb_fixed32(4L, value))  # f
+  out <- c(out, .pb_fixed32(2L, value))  # f (field 2 in AttributeProto)
   out <- c(out, .pb_varint_field(20L, 1L))      # type = FLOAT
   out
 }
@@ -129,6 +129,15 @@
     out <- c(out, .pb_varint_field(8L, v))  # ints (repeated)
   }
   out <- c(out, .pb_varint_field(20L, 7L))     # type = INTS
+  out
+}
+
+# AttributeProto with TensorProto value (field 5 = t, type 20 = 4 TENSOR)
+.onnx_attr_tensor <- function(name, dims, data_type = 1L, raw_data = raw(0)) {
+  out <- .pb_string(1L, name)   # name
+  tensor <- .onnx_tensor("", dims, data_type, raw_data)
+  out <- c(out, .pb_bytes(5L, tensor))  # t (field 5)
+  out <- c(out, .pb_varint_field(20L, 4L))  # type = TENSOR
   out
 }
 

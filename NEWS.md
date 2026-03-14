@@ -9,8 +9,22 @@
 * `print.onnx_model()` — formatted summary of a loaded ONNX model.
 * Built-in zero-dependency protobuf parser: no external libraries or Python required.
 * `input_shapes` parameter for models with dynamic dimensions: specify fixed shapes at load time (e.g. `input_shapes = list(image = c(1L, 3L, 224L, 224L))`).
-* Supported ONNX ops: Conv, MatMul, Gemm, Add, Sub, Mul, Div, Relu, Sigmoid, Tanh, Softmax, MaxPool, AveragePool, GlobalAveragePool, BatchNormalization, LayerNormalization, Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Gather, Pad, Clip, Cast, Constant, Shape, Expand, Slice, Split, Where, Equal, ReduceMean, and more.
+* 40+ supported ONNX ops: Add, Sub, Mul, Div, MatMul, Gemm, Conv (1D/2D), ConvTranspose (1D/2D), Relu, Sigmoid, Tanh, GELU, SiLU, LeakyRelu, Elu, Softmax, MaxPool, AveragePool, GlobalAveragePool, BatchNormalization, LayerNormalization, GroupNormalization, RMSNormalization, Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Gather, Pad, Clip, Cast, Constant, ConstantOfShape, Shape, Expand, Slice, Split, Where, Erf, Pow, Sqrt, Exp, Log, Abs, Neg, Floor, Ceil, ReduceMean, ReduceSum, Resize/Upsample, Identity, Dropout.
 * `auto_pad` attribute (SAME_UPPER, SAME_LOWER) supported for Conv and pooling ops.
+* Numpy-style broadcast for binary ops (Add/Sub/Mul/Div): handles mismatched ranks and dimensions, with left-align, right-align, and greedy dim-matching strategies.
+* Scalar Constant tensors (0-dimensional TensorProto) correctly handled.
+
+## Tested real-world ONNX models (9/15 from ONNX Model Zoo)
+
+* mnist-8 — OK (12 nodes)
+* squeezenet1.0-8 — OK (66 nodes: Conv, Relu, MaxPool, Concat, Dropout, GlobalAveragePool, Softmax)
+* adv_inception_v3 Opset 17/18 — OK (215 nodes)
+* super-resolution-10 — OK with `input_shapes` (Conv, Reshape, Transpose)
+* bert Opset 17 — OK (533 nodes: MatMul, Add, LayerNorm, GELU/Erf, Softmax, Shape, Gather, Cast, Where, ConstantOfShape)
+* emotion-ferplus-8 — OK (52 nodes: Conv, Relu, MaxPool, Reshape, Gemm, Constant)
+* sageconv Opset 16 — OK (24 nodes: MatMul, Add, Mul, Sigmoid, ReduceSum)
+* roberta-sequence-classification-9 — OK with `input_shapes` (1180 nodes)
+* Remaining failures: bat_resnext26ts (MatMul 3D broadcast), botnet26t_256 (MatMul dims), cait_xs24 (Concat mismatch), gptneox (shape propagation), MaskRCNN (quantized ops), xcit_tiny (Concat mismatch).
 
 # ggmlR 0.6.2
 * Fixed Windows cleanup script that removed `inst/lib/libggml.a`, breaking static linking from dependent packages (e.g. llamaR).

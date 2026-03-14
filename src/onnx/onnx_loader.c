@@ -353,6 +353,15 @@ static int parse_attr(pb_reader_t *r, onnx_attr_t *a) {
                 r->cur += len;
                 break;
             }
+            case AP_T: {
+                /* TensorProto — used by Constant op */
+                pb_reader_t sub;
+                pb_read_submsg(r, &sub);
+                a->tensor = (onnx_initializer_t *)calloc(1, sizeof(onnx_initializer_t));
+                if (a->tensor)
+                    parse_tensor_proto(&sub, a->tensor);
+                break;
+            }
             case AP_INTS: {
                 if (wire == PB_WIRE_LEN) {
                     /* packed int64 */
@@ -692,11 +701,16 @@ void onnx_free(onnx_model_t *m) {
             free(m->initializers[i].decoded_data);
     }
 
-    /* Free attribute ints arrays (allocated during parsing) */
+    /* Free attribute data (allocated during parsing) */
     for (int i = 0; i < m->n_nodes; i++) {
         for (int j = 0; j < m->nodes[i].n_attrs; j++) {
             if (m->nodes[i].attrs[j].ints)
                 free((void *)m->nodes[i].attrs[j].ints);
+            if (m->nodes[i].attrs[j].tensor) {
+                if (m->nodes[i].attrs[j].tensor->decoded_data)
+                    free(m->nodes[i].attrs[j].tensor->decoded_data);
+                free(m->nodes[i].attrs[j].tensor);
+            }
         }
     }
 

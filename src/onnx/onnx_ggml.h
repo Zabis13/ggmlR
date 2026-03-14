@@ -31,6 +31,16 @@ typedef struct {
     char              (*tensor_map_keys)[ONNX_MAX_NAME];
     int                 tensor_map_size;
     int                 tensor_map_cap;
+
+    /* Deferred data for Shape op outputs (filled after sched alloc) */
+    struct ggml_tensor *shape_tensor_ptrs[64];
+    int64_t             shape_tensors_ne[64][ONNX_MAX_DIMS + 1]; /* [0]=ndims, [1..]=dims */
+    int                 n_shape_tensors;
+
+    /* Deferred data for ConstantOfShape (filled after sched alloc) */
+    struct ggml_tensor *const_fill_ptrs[64];
+    float               const_fill_vals[64];
+    int                 n_const_fills;
 } onnx_ggml_ctx_t;
 
 /* Build ggml graph from parsed ONNX model.

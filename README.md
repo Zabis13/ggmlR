@@ -357,11 +357,38 @@ result <- onnx_run(model, list(input = x_data))
 For models with dynamic dimensions, specify fixed shapes at load time:
 
 ```r
-model <- onnx_load("model.onnx",
-                    input_shapes = list(image = c(1L, 3L, 224L, 224L)))
+model <- onnx_load("bert.onnx",
+                    input_shapes = list(input = c(1L, 128L)))
 ```
 
-Supported ONNX ops include Conv, MatMul, Gemm, Add, Relu, Sigmoid, Softmax, MaxPool, AveragePool, GlobalAveragePool, BatchNormalization, LayerNormalization, Reshape, Transpose, Concat, Flatten, Gather, Pad, Clip, Cast, Constant, Shape, Expand, Slice, Split, Where, Equal, ReduceMean, and more. `auto_pad` (SAME_UPPER, SAME_LOWER) is supported for Conv and pooling ops.
+### Tested models
+
+9 out of 15 ONNX Model Zoo models load and run successfully, including:
+
+| Model | Nodes | Key ops |
+|---|---|---|
+| mnist-8 | 12 | Conv, Relu, MaxPool, Reshape, MatMul |
+| squeezenet1.0-8 | 66 | Conv, Relu, MaxPool, Concat, GlobalAveragePool, Softmax |
+| adv_inception_v3 (Opset 17/18) | 215 | Conv, BatchNorm, Relu, Concat, AveragePool |
+| bert (Opset 17) | 533 | MatMul, LayerNorm, GELU/Erf, Softmax, Shape, Gather, Where |
+| emotion-ferplus-8 | 52 | Conv, Relu, MaxPool, Gemm, Constant |
+| roberta-9 | 1180 | MatMul, LayerNorm, Erf, Softmax, Shape, Gather, Cast |
+| sageconv (Opset 16) | 24 | MatMul, Add, Mul, Sigmoid, ReduceSum |
+| super-resolution-10 | 12 | Conv, Reshape, Transpose |
+
+### Supported ops (40+)
+
+Arithmetic: Add, Sub, Mul, Div, Pow, Sqrt, Exp, Log, Abs, Neg, Floor, Ceil, Clip, Erf.
+Linear: MatMul, Gemm.
+Convolution: Conv (1D/2D), ConvTranspose (1D/2D), with `auto_pad` (SAME_UPPER, SAME_LOWER).
+Pooling: MaxPool, AveragePool, GlobalAveragePool, Resize/Upsample (nearest, bilinear).
+Normalization: BatchNorm, LayerNorm, GroupNorm, RMSNorm.
+Activations: Relu, Sigmoid, Tanh, GELU, SiLU, Softmax, LeakyRelu, Elu.
+Shape: Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Expand, Slice, Split, Gather, Pad, Shape, Cast, Identity.
+Constants: Constant (TensorProto + scalar), ConstantOfShape.
+Logic: Where.
+Reduction: ReduceMean, ReduceSum.
+Pass-through: Dropout.
 
 ## Save / Load
 
