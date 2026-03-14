@@ -30,3 +30,6 @@ inst/lib/*.a
 # Vulkan generated files
 src/ggml-vulkan/generated/
 src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen
+
+# Claude Code
+CLAUDE.md

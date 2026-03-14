@@ -39,3 +39,4 @@
 ^inst/lib/.*\.a$
 ^inst/lib$
 ^inst/lib/\.gitkeep$
+^CLAUDE\.md$

@@ -120,6 +120,13 @@ extern SEXP R_ggml_backend_event_wait(SEXP, SEXP);
 extern SEXP R_ggml_backend_graph_plan_create(SEXP, SEXP);
 extern SEXP R_ggml_backend_graph_plan_free(SEXP, SEXP);
 extern SEXP R_ggml_backend_graph_plan_compute(SEXP, SEXP);
+// ONNX loader
+extern SEXP R_onnx_load(SEXP);
+extern SEXP R_onnx_summary(SEXP);
+extern SEXP R_onnx_override_input_shapes(SEXP, SEXP, SEXP);
+extern SEXP R_onnx_build(SEXP, SEXP);
+extern SEXP R_onnx_run(SEXP, SEXP, SEXP);
+extern SEXP R_onnx_inputs(SEXP);
 // Async operations
 extern SEXP R_ggml_backend_tensor_set_async(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_backend_tensor_get_async(SEXP, SEXP, SEXP, SEXP);
@@ -1786,6 +1793,13 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_tensor_set_f32_scalar",            (DL_FUNC) &R_ggml_tensor_set_f32_scalar,             2},
     {"R_ggml_get_first_tensor",                 (DL_FUNC) &R_ggml_get_first_tensor,                  1},
     {"R_ggml_get_next_tensor",                  (DL_FUNC) &R_ggml_get_next_tensor,                   2},
+    // ONNX
+    {"R_onnx_load",                             (DL_FUNC) &R_onnx_load,                              1},
+    {"R_onnx_summary",                          (DL_FUNC) &R_onnx_summary,                           1},
+    {"R_onnx_override_input_shapes",            (DL_FUNC) &R_onnx_override_input_shapes,              3},
+    {"R_onnx_build",                            (DL_FUNC) &R_onnx_build,                             2},
+    {"R_onnx_run",                              (DL_FUNC) &R_onnx_run,                               3},
+    {"R_onnx_inputs",                           (DL_FUNC) &R_onnx_inputs,                            1},
 
     {NULL, NULL, 0}
 };

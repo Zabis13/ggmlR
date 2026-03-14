@@ -1,3 +1,17 @@
+# ggmlR 0.6.3
+
+## ONNX model import
+
+* `onnx_load(path, device, input_shapes)` — load an ONNX model file, build a ggml computation graph, and allocate tensors on Vulkan GPU or CPU. Weights are loaded via memory-mapped file (zero-copy where possible).
+* `onnx_run(model, inputs)` — run inference on a loaded ONNX model with named input data.
+* `onnx_inputs(model)` — list expected input tensor names and shapes.
+* `onnx_summary(model)` — return model metadata (IR version, opset, producer, ops used).
+* `print.onnx_model()` — formatted summary of a loaded ONNX model.
+* Built-in zero-dependency protobuf parser: no external libraries or Python required.
+* `input_shapes` parameter for models with dynamic dimensions: specify fixed shapes at load time (e.g. `input_shapes = list(image = c(1L, 3L, 224L, 224L))`).
+* Supported ONNX ops: Conv, MatMul, Gemm, Add, Sub, Mul, Div, Relu, Sigmoid, Tanh, Softmax, MaxPool, AveragePool, GlobalAveragePool, BatchNormalization, LayerNormalization, Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Gather, Pad, Clip, Cast, Constant, Shape, Expand, Slice, Split, Where, Equal, ReduceMean, and more.
+* `auto_pad` attribute (SAME_UPPER, SAME_LOWER) supported for Conv and pooling ops.
+
 # ggmlR 0.6.2
 * Fixed Windows cleanup script that removed `inst/lib/libggml.a`, breaking static linking from dependent packages (e.g. llamaR).
 

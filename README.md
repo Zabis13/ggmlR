@@ -337,6 +337,32 @@ result$model          # trained replica 0
 | Schedulers | `lr_scheduler_step`, `lr_scheduler_cosine` |
 | Utilities | `clip_grad_norm`, `ag_gradcheck`, `dp_train` |
 
+## ONNX Model Import
+
+Load pre-trained ONNX models from PyTorch, TensorFlow, or other frameworks and run inference on Vulkan GPU or CPU. No Python or external libraries required — ggmlR includes a built-in zero-dependency protobuf parser.
+
+```r
+library(ggmlR)
+
+model <- onnx_load("resnet18.onnx")
+model
+
+onnx_inputs(model)   # expected input names and shapes
+onnx_summary(model)  # IR version, opset, producer, ops
+
+# Run inference
+result <- onnx_run(model, list(input = x_data))
+```
+
+For models with dynamic dimensions, specify fixed shapes at load time:
+
+```r
+model <- onnx_load("model.onnx",
+                    input_shapes = list(image = c(1L, 3L, 224L, 224L)))
+```
+
+Supported ONNX ops include Conv, MatMul, Gemm, Add, Relu, Sigmoid, Softmax, MaxPool, AveragePool, GlobalAveragePool, BatchNormalization, LayerNormalization, Reshape, Transpose, Concat, Flatten, Gather, Pad, Clip, Cast, Constant, Shape, Expand, Slice, Split, Where, Equal, ReduceMean, and more. `auto_pad` (SAME_UPPER, SAME_LOWER) is supported for Conv and pooling ops.
+
 ## Save / Load
 
 ```r
