@@ -4,7 +4,7 @@
 \alias{onnx_load}
 \title{Load an ONNX model}
 \usage{
-onnx_load(path, device = NULL, input_shapes = NULL)
+onnx_load(path, device = NULL, input_shapes = NULL, n_threads = NULL)
 }
 \arguments{
 \item{path}{Path to .onnx file.}
@@ -17,6 +17,10 @@ fixed shapes for inputs with dynamic dimensions. Names must match
 input tensor names. Each shape must include all dimensions including
 batch, e.g. \code{list(image = c(1L, 3L, 224L, 224L))}.
 Required when the model has dynamic dimensions and no default shape.}
+
+\item{n_threads}{Number of CPU threads. \code{NULL} (default) reads
+\code{getOption("ggmlR.n_threads")}; if that is also unset, uses
+\code{parallel::detectCores() - 1} (minimum 1).}
 }
 \value{
 An opaque model object (external pointer) for use with

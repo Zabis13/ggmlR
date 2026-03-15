@@ -174,7 +174,7 @@ static void onnx_munmap(uint8_t *data, size_t size, int fd) {
 #define TP_STRING_DATA 6   /* repeated bytes */
 #define TP_INT64_DATA  7   /* repeated int64, packed */
 #define TP_NAME        8   /* string */
-#define TP_RAW_DATA   13   /* bytes */
+#define TP_RAW_DATA    9   /* bytes (field 9 in onnx.proto) */
 #define TP_DOUBLE_DATA 10  /* repeated double, packed */
 #define TP_UINT64_DATA 11  /* repeated uint64, packed */
 #define TP_EXTERNAL    14  /* repeated ExternalData */

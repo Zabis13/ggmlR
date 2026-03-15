@@ -20,10 +20,13 @@
 #'   input tensor names. Each shape must include all dimensions including
 #'   batch, e.g. \code{list(image = c(1L, 3L, 224L, 224L))}.
 #'   Required when the model has dynamic dimensions and no default shape.
+#' @param n_threads Number of CPU threads. \code{NULL} (default) reads
+#'   \code{getOption("ggmlR.n_threads")}; if that is also unset, uses
+#'   \code{parallel::detectCores() - 1} (minimum 1).
 #' @return An opaque model object (external pointer) for use with
 #'   \code{onnx_run()}, \code{onnx_summary()}, and \code{onnx_inputs()}.
 #' @export
-onnx_load <- function(path, device = NULL, input_shapes = NULL) {
+onnx_load <- function(path, device = NULL, input_shapes = NULL, n_threads = NULL) {
   path <- normalizePath(path, mustWork = TRUE)
 
   # Parse the ONNX protobuf
@@ -40,8 +43,16 @@ onnx_load <- function(path, device = NULL, input_shapes = NULL) {
     .Call("R_onnx_override_input_shapes", onnx_ptr, shape_names, shape_vals)
   }
 
+  # Resolve n_threads: argument > auto (all cores minus 1)
+  if (is.null(n_threads)) {
+    nc <- parallel::detectCores(logical = FALSE)
+    if (is.na(nc)) nc <- 1L
+    n_threads <- max(nc - 1L, 1L)
+  }
+  n_threads <- as.integer(n_threads)
+
   # Build ggml graph + allocate on device
-  ctx_ptr <- .Call("R_onnx_build", onnx_ptr, device)
+  ctx_ptr <- .Call("R_onnx_build", onnx_ptr, device, n_threads)
 
   # Check for remaining dynamic dimensions
   inp <- .Call("R_onnx_inputs", ctx_ptr)
@@ -141,4 +152,27 @@ onnx_run <- function(model, inputs) {
 onnx_inputs <- function(model) {
   stopifnot(inherits(model, "onnx_model"))
   .Call("R_onnx_inputs", model$ptr)
+}
+
+#' ONNX model device/scheduler diagnostics
+#'
+#' Returns information about backend placement: which backends are
+#' available, how the scheduler splits the graph, and how many ops
+#' are supported by GPU vs CPU-only.
+#'
+#' @param model An \code{onnx_model} object from \code{onnx_load()}.
+#' @return A list with:
+#'   \describe{
+#'     \item{backends}{Character vector of backend names (e.g. \code{"Vulkan0"}, \code{"CPU"})}
+#'     \item{n_backends}{Number of backends}
+#'     \item{n_splits}{Number of scheduler splits (1 = all on one backend)}
+#'     \item{n_nodes}{Total graph nodes}
+#'     \item{gpu_ops}{Ops supported by GPU backend}
+#'     \item{cpu_ops}{Ops that can only run on CPU}
+#'     \item{cpu_only_ops}{Named integer vector: op type => count (empty if all on GPU)}
+#'   }
+#' @export
+onnx_device_info <- function(model) {
+  stopifnot(inherits(model, "onnx_model"))
+  .Call("R_onnx_device_info", model$ptr)
 }

@@ -41,12 +41,20 @@ typedef struct {
     struct ggml_tensor *const_fill_ptrs[64];
     float               const_fill_vals[64];
     int                 n_const_fills;
+
+    /* Compile-time known values for shape tensors (Shape, Constant, Slice, Concat outputs).
+     * Used by Reshape/Expand/etc. to determine target shape at graph build time. */
+    char              (*cval_keys)[ONNX_MAX_NAME];
+    int64_t           (*cval_data)[ONNX_MAX_DIMS]; /* values (not dims!) */
+    int                *cval_lens;                  /* number of values */
+    int                 cval_size;
+    int                 cval_cap;
 } onnx_ggml_ctx_t;
 
 /* Build ggml graph from parsed ONNX model.
  * device: "vulkan" or "cpu" (NULL defaults to vulkan if available, else cpu).
  * Returns NULL on failure. */
-onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device);
+onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_threads);
 
 /* Run inference. input_data/input_names: arrays of length n_inputs.
  * Each input_data[i] is a flat float array matching the model input shape.

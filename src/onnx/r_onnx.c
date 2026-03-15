@@ -111,15 +111,16 @@ SEXP R_onnx_summary(SEXP model_ptr_) {
     return result;
 }
 
-/* ── R_onnx_build(model_ptr, device) ────────────────────────────── */
+/* ── R_onnx_build(model_ptr, device, n_threads) ────────────────── */
 
-SEXP R_onnx_build(SEXP model_ptr_, SEXP device_) {
+SEXP R_onnx_build(SEXP model_ptr_, SEXP device_, SEXP n_threads_) {
     onnx_model_t *m = (onnx_model_t *)R_ExternalPtrAddr(model_ptr_);
     if (!m) Rf_error("onnx_build: NULL model pointer");
 
     const char *device = Rf_isNull(device_) ? NULL : CHAR(STRING_ELT(device_, 0));
+    int n_threads = Rf_asInteger(n_threads_);
 
-    onnx_ggml_ctx_t *ctx = onnx_ggml_build(m, device);
+    onnx_ggml_ctx_t *ctx = onnx_ggml_build(m, device, n_threads);
     if (!ctx) {
         Rf_error("onnx_build: failed to build ggml graph");
         return R_NilValue;
@@ -270,5 +271,109 @@ SEXP R_onnx_inputs(SEXP ctx_ptr_) {
 
     Rf_setAttrib(result, R_NamesSymbol, names);
     UNPROTECT(2);
+    return result;
+}
+
+/* ── R_onnx_device_info(ctx_ptr) — scheduler/backend diagnostics ─── */
+
+SEXP R_onnx_device_info(SEXP ctx_ptr_) {
+    onnx_ggml_ctx_t *ctx = (onnx_ggml_ctx_t *)R_ExternalPtrAddr(ctx_ptr_);
+    if (!ctx) Rf_error("onnx_device_info: NULL context pointer");
+
+    /* 8 fields: backends, n_backends, n_splits, n_nodes, gpu_ops, cpu_ops, cpu_only_ops, actual_backend */
+    SEXP result = PROTECT(Rf_allocVector(VECSXP, 8));
+    SEXP names  = PROTECT(Rf_allocVector(STRSXP, 8));
+
+    /* backends — character vector of backend names */
+    int n_be = ctx->backend_gpu ? 2 : 1;
+    SEXP be_vec = PROTECT(Rf_allocVector(STRSXP, n_be));
+    int be_idx = 0;
+    if (ctx->backend_gpu)
+        SET_STRING_ELT(be_vec, be_idx++, Rf_mkChar(ggml_backend_name(ctx->backend_gpu)));
+    SET_STRING_ELT(be_vec, be_idx, Rf_mkChar(ggml_backend_name(ctx->backend_cpu)));
+    SET_STRING_ELT(names, 0, Rf_mkChar("backends"));
+    SET_VECTOR_ELT(result, 0, be_vec);
+    UNPROTECT(1); /* be_vec */
+
+    /* n_backends */
+    SET_STRING_ELT(names, 1, Rf_mkChar("n_backends"));
+    SET_VECTOR_ELT(result, 1, Rf_ScalarInteger(n_be));
+
+    /* n_splits */
+    SET_STRING_ELT(names, 2, Rf_mkChar("n_splits"));
+    SET_VECTOR_ELT(result, 2, Rf_ScalarInteger(
+        ggml_backend_sched_get_n_splits(ctx->sched)));
+
+    /* n_nodes */
+    int n_nodes = ggml_graph_n_nodes(ctx->graph);
+    SET_STRING_ELT(names, 3, Rf_mkChar("n_nodes"));
+    SET_VECTOR_ELT(result, 3, Rf_ScalarInteger(n_nodes));
+
+    /* gpu_ops, cpu_ops, cpu_only_ops */
+    int n_gpu = 0, n_cpu = 0;
+
+    /* Collect unique CPU-only op names */
+    char cpu_op_names[128][64];
+    int cpu_op_counts[128];
+    int n_unique_cpu_ops = 0;
+
+    for (int i = 0; i < n_nodes; i++) {
+        struct ggml_tensor *node = ggml_graph_node(ctx->graph, i);
+        if (ctx->backend_gpu && ggml_backend_supports_op(ctx->backend_gpu, node)) {
+            n_gpu++;
+        } else {
+            n_cpu++;
+            const char *opname = ggml_op_name(node->op);
+            int found = 0;
+            for (int j = 0; j < n_unique_cpu_ops; j++) {
+                if (strcmp(cpu_op_names[j], opname) == 0) {
+                    cpu_op_counts[j]++;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found && n_unique_cpu_ops < 128) {
+                snprintf(cpu_op_names[n_unique_cpu_ops], 64, "%s", opname);
+                cpu_op_counts[n_unique_cpu_ops] = 1;
+                n_unique_cpu_ops++;
+            }
+        }
+    }
+
+    SET_STRING_ELT(names, 4, Rf_mkChar("gpu_ops"));
+    SET_VECTOR_ELT(result, 4, Rf_ScalarInteger(n_gpu));
+
+    SET_STRING_ELT(names, 5, Rf_mkChar("cpu_ops"));
+    SET_VECTOR_ELT(result, 5, Rf_ScalarInteger(n_cpu));
+
+    /* cpu_only_ops — named integer vector: op_name => count */
+    SEXP cpu_vec = PROTECT(Rf_allocVector(INTSXP, n_unique_cpu_ops));
+    SEXP cpu_names = PROTECT(Rf_allocVector(STRSXP, n_unique_cpu_ops));
+    for (int i = 0; i < n_unique_cpu_ops; i++) {
+        INTEGER(cpu_vec)[i] = cpu_op_counts[i];
+        SET_STRING_ELT(cpu_names, i, Rf_mkChar(cpu_op_names[i]));
+    }
+    Rf_setAttrib(cpu_vec, R_NamesSymbol, cpu_names);
+    SET_STRING_ELT(names, 6, Rf_mkChar("cpu_only_ops"));
+    SET_VECTOR_ELT(result, 6, cpu_vec);
+    UNPROTECT(2); /* cpu_vec, cpu_names */
+
+    /* actual_backend — check where the last graph node's buffer actually lives */
+    {
+        const char *actual = "unknown";
+        struct ggml_tensor *last = ggml_graph_node(ctx->graph, n_nodes - 1);
+        if (last && last->buffer) {
+            ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(last->buffer);
+            const char *buft_name = ggml_backend_buft_name(buft);
+            actual = buft_name ? buft_name : "unknown";
+        } else if (last && !last->buffer) {
+            actual = "no_buffer";
+        }
+        SET_STRING_ELT(names, 7, Rf_mkChar("actual_backend"));
+        SET_VECTOR_ELT(result, 7, Rf_mkString(actual));
+    }
+
+    Rf_setAttrib(result, R_NamesSymbol, names);
+    UNPROTECT(2); /* result, names */
     return result;
 }

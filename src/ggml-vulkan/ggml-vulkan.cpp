@@ -14584,12 +14584,9 @@ static bool ggml_backend_vk_device_supports_buft(ggml_backend_dev_t dev, ggml_ba
 }
 
 static bool ggml_backend_vk_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    const int min_batch_size = 32;
-
-    return (op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS) ||
-           (op->ne[2] >= min_batch_size && op->op == GGML_OP_MUL_MAT_ID);
-
     UNUSED(dev);
+    UNUSED(op);
+    return true;
 }
 
 static ggml_backend_event_t ggml_backend_vk_device_event_new(ggml_backend_dev_t dev) {

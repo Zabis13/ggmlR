@@ -147,12 +147,13 @@ pred <- predict(onnx, x)
 
 #### 4. Convolution / UNet (для SD)
 - [x] Conv (1D/2D, с padding/stride/dilation + bias)
+- [x] Conv grouped (group>1: split+conv+concat, depthwise: ggml_conv_2d_dw)
 - [x] BatchNormalization
 - [x] GroupNormalization
 - [x] ConvTranspose (1D: stride/pad/dilation, 2D: stride + pad cropping)
 
 #### 5. Pooling / Upsampling
-- [x] MaxPool, AveragePool, GlobalAveragePool
+- [x] MaxPool, AveragePool, GlobalAveragePool (+ ceil_mode, asymmetric padding)
 - [x] Upsample / Resize (nearest/bilinear через ggml_interpolate, scales + sizes)
 
 #### 6. Прочие реализованные ops
@@ -176,7 +177,7 @@ pred <- predict(onnx, x)
 - [x] CPU: все ops проходят
 - [x] Vulkan: 24/24 ops проходят
 
-#### Реальные модели (ONNX Model Zoo) — 9/15 OK
+#### Реальные модели (ONNX Model Zoo) — 11/15 OK
 - [x] mnist-8 — OK (12 nodes)
 - [x] squeezenet1.0-8 — OK (66 nodes: Conv, Relu, MaxPool, Concat, Dropout, GlobalAveragePool, Softmax)
 - [x] adv_inception_v3 (Opset 17, 18) — OK (215 nodes)
@@ -185,12 +186,13 @@ pred <- predict(onnx, x)
 - [x] emotion-ferplus-8 — OK (52 nodes: Conv, Relu, MaxPool, Gemm, Constant)
 - [x] sageconv (Opset 16) — OK (24 nodes: MatMul, Add, Mul, Sigmoid, ReduceSum)
 - [x] roberta-9 — OK с input_shapes (1180 nodes)
-- [ ] bat_resnext26ts — MatMul 3D broadcast (ne[2] mismatch)
-- [ ] botnet26t_256 — MatMul dims (ggml_can_mul_mat)
-- [ ] cait_xs24_384 — Concat dim mismatch
-- [ ] gptneox — shape propagation через Reshape
-- [ ] MaskRCNN-12-int8 — quantized ops (QuantizeLinear, QLinearConv и т.д.)
-- [ ] xcit_tiny — Concat dim mismatch
+- [x] bat_resnext26ts — OK (grouped conv, AdaptiveMaxPool baked as fixed kernel, input 256x256)
+- [x] xcit_tiny — OK (Concat axis fix, cval shape propagation)
+- [x] MaskRCNN-12-int8 — OK (quantized ops pass-through как f32)
+- [ ] botnet26t_256 — MatMul broadcasting в self-attention (batched matmul 3D+)
+- [ ] cait_xs24_384 — MatMul broadcasting (batched matmul 3D+)
+- [ ] gptneox — Add broadcasting (3D+ tensor broadcast)
+- [ ] roberta dynamic — динамические shapes без input_shapes (требует shape inference)
 
 #### Баги / ограничения
 - [x] **ELU на Vulkan** — добавлен шейдер `elu.comp` + регистрация в ggml-vulkan.cpp (6 точек). Тесты CPU и Vulkan проходят.
@@ -202,10 +204,18 @@ pred <- predict(onnx, x)
 - [x] **Broadcast** — numpy-style broadcast для Add/Sub/Mul/Div: left-align, right-align, greedy dim-matching
 
 #### MVP + трансформеры — готов ✓
-Все базовые + трансформерные ops реализованы. 9/15 моделей из ONNX Zoo работают.
+Все базовые + трансформерные ops реализованы. 11/15 моделей из ONNX Zoo работают.
+
+#### Исправлено в 0.6.x
+- [x] Conv grouped (group>1: split+conv+concat, depthwise: ggml_conv_2d_dw)
+- [x] MaxPool ceil_mode + asymmetric padding
+- [x] Concat axis mapping (GGML_MAX_DIMS для multi-dim, 1 для 1D shape tensors)
+- [x] Compile-time value propagation (cval) для Shape→Slice→Concat→Reshape chains
+- [x] TP_RAW_DATA protobuf field fix (field 9, не 13)
+- [x] detectCores() NA handling (Kaggle/cloud)
 
 #### Следующий этап — расширенная совместимость
-- [ ] MatMul broadcast для 3D+ тензоров (batched matmul)
-- [ ] Concat dim mismatch — проверка axis mapping для 3D+
+- [ ] MatMul broadcast для 3D+ тензоров (batched matmul) — блокирует botnet26t, cait_xs24
+- [ ] Add/Mul broadcast для 3D+ тензоров — блокирует gptneox
 - [ ] Quantized ops (QuantizeLinear, DequantizeLinear, QLinearConv)
 - [ ] NonZero, Equal, Less, Greater — логические ops
