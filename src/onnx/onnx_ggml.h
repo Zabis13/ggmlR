@@ -37,10 +37,17 @@ typedef struct {
     int64_t             shape_tensors_ne[64][ONNX_MAX_DIMS + 1]; /* [0]=ndims, [1..]=dims */
     int                 n_shape_tensors;
 
-    /* Deferred data for ConstantOfShape (filled after sched alloc) */
-    struct ggml_tensor *const_fill_ptrs[64];
-    float               const_fill_vals[64];
+    /* Deferred data for ConstantOfShape + scalar constants (filled after sched alloc) */
+    struct ggml_tensor *const_fill_ptrs[256];
+    float               const_fill_vals[256];
     int                 n_const_fills;
+
+    /* Deferred data for EyeLike (identity matrix, filled after sched alloc) */
+    struct ggml_tensor *eye_fill_ptrs[64];
+    int                 eye_fill_rows[64]; /* ggml ne[1] */
+    int                 eye_fill_cols[64]; /* ggml ne[0] */
+    int                 eye_fill_k[64];    /* diagonal offset */
+    int                 n_eye_fills;
 
     /* Compile-time known values for shape tensors (Shape, Constant, Slice, Concat outputs).
      * Used by Reshape/Expand/etc. to determine target shape at graph build time. */
@@ -49,6 +56,8 @@ typedef struct {
     int                *cval_lens;                  /* number of values */
     int                 cval_size;
     int                 cval_cap;
+
+    int                 is_allocated;   /* 1 after first sched_alloc_and_load */
 } onnx_ggml_ctx_t;
 
 /* Build ggml graph from parsed ONNX model.

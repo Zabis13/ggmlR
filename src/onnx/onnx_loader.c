@@ -94,7 +94,7 @@ static void pb_skip(pb_reader_t *r, int wire_type) {
     switch (wire_type) {
         case PB_WIRE_VARINT: pb_read_varint(r); break;
         case PB_WIRE_64BIT:  r->cur += 8; break;
-        case PB_WIRE_32BIT:  r->cur += 5; break; /* group end (deprecated) */
+        case PB_WIRE_32BIT:  r->cur += 4; break; /* fixed32 (4 bytes) */
         case PB_WIRE_LEN: {
             uint64_t len = pb_read_varint(r);
             r->cur += len;
@@ -174,7 +174,7 @@ static void onnx_munmap(uint8_t *data, size_t size, int fd) {
 #define TP_STRING_DATA 6   /* repeated bytes */
 #define TP_INT64_DATA  7   /* repeated int64, packed */
 #define TP_NAME        8   /* string */
-#define TP_RAW_DATA    9   /* bytes (field 9 in onnx.proto) */
+#define TP_RAW_DATA    9   /* bytes (field 9 in onnx.proto3) */
 #define TP_DOUBLE_DATA 10  /* repeated double, packed */
 #define TP_UINT64_DATA 11  /* repeated uint64, packed */
 #define TP_EXTERNAL    14  /* repeated ExternalData */

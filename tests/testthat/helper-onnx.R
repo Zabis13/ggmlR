@@ -93,7 +93,7 @@
 }
 
 # TensorProto (field 1 = dims repeated, field 2 = data_type,
-#              field 8 = name, field 13 = raw_data)
+#              field 8 = name, field 9 = raw_data)
 .onnx_tensor <- function(name, dims, data_type = 1L, raw_data = raw(0)) {
   out <- raw(0)
   # dims (field 1, varint, packed would be better but repeated varint works)
@@ -103,7 +103,7 @@
   out <- c(out, .pb_varint_field(2L, data_type))
   out <- c(out, .pb_string(8L, name))
   if (length(raw_data) > 0) {
-    out <- c(out, .pb_bytes(13L, raw_data))
+    out <- c(out, .pb_bytes(9L, raw_data))
   }
   out
 }
