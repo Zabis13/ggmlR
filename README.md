@@ -341,53 +341,187 @@ result$model          # trained replica 0
 
 Load pre-trained ONNX models from PyTorch, TensorFlow, or other frameworks and run inference on Vulkan GPU or CPU. No Python or external libraries required — ggmlR includes a built-in zero-dependency protobuf parser.
 
+### Quick start
+
 ```r
 library(ggmlR)
 
-model <- onnx_load("resnet18.onnx")
+# 1. Load the model
+model <- onnx_load("squeezenet.onnx")
 model
+#> ONNX Model: torch_jit
+#>   Producer: pytorch 2.0.1
+#>   IR version: 8 / Opset: 18
+#>   Nodes: 66 / Weights: 26
 
-onnx_inputs(model)   # expected input names and shapes
-onnx_summary(model)  # IR version, opset, producer, ops
+# 2. Check expected inputs
+onnx_inputs(model)
+#> $x.1
+#> [1]   1   3 224 224
 
-# Run inference
-result <- onnx_run(model, list(input = x_data))
+# 3. Prepare input data (flat numeric vector, row-major NCHW order)
+img <- runif(1 * 3 * 224 * 224)
+
+# 4. Run inference — pass a named list matching input names
+result <- onnx_run(model, list(x.1 = img))
+
+# 5. Get predictions
+scores <- result[[1]]
+cat("Predicted class:", which.max(scores) - 1L, "\n")
 ```
 
-For models with dynamic dimensions, specify fixed shapes at load time:
+### Loading models
+
+`onnx_load()` parses the .onnx file, builds a ggml computation graph, and allocates tensors on the specified device. Weights are loaded from the file via memory-mapping (zero-copy).
+
+```r
+# Auto-detect device (Vulkan GPU if available, else CPU)
+model <- onnx_load("model.onnx")
+
+# Force CPU
+model <- onnx_load("model.onnx", device = "cpu")
+
+# Force Vulkan GPU
+model <- onnx_load("model.onnx", device = "vulkan")
+```
+
+### Dynamic shapes
+
+Some models (BERT, RoBERTa, etc.) have dynamic dimensions for batch size or sequence length. Specify fixed shapes at load time:
 
 ```r
 model <- onnx_load("bert.onnx",
-                    input_shapes = list(input = c(1L, 128L)))
+                    input_shapes = list(
+                      input_ids      = c(1L, 128L),
+                      attention_mask = c(1L, 128L)
+                    ))
+```
+
+If you forget, `onnx_load()` will tell you which inputs need shapes:
+
+```
+Error: Input 'input_ids' has dynamic shape [?x?].
+  Specify fixed shape via input_shapes parameter.
+```
+
+### Inspecting the model
+
+```r
+# Print overview
+model
+#> ONNX Model: torch_jit
+#>   Nodes: 533 / Weights: 199
+#>   Ops: MatMul, Add, LayerNormalization, Softmax, ...
+
+# Detailed metadata
+onnx_summary(model)
+
+# Input names and shapes (what to pass to onnx_run)
+onnx_inputs(model)
+
+# Backend placement: GPU vs CPU split, scheduler info
+onnx_device_info(model)
+```
+
+### Running inference
+
+```r
+# Single input model
+result <- onnx_run(model, list(x = my_data))
+
+# Multiple inputs
+result <- onnx_run(model, list(
+  input_ids      = as.numeric(token_ids),
+  attention_mask = rep(1, 128)
+))
+
+# Result is a named list of output tensors
+str(result)
+#> List of 1
+#>  $ output: num [1:1000] 0.00123 0.00045 ...
+```
+
+### Preparing input data
+
+ONNX models expect inputs in **row-major** order (batch, channels, height, width for images). R matrices are column-major, so you may need to transpose:
+
+```r
+# Image classification: model expects [1, 3, 224, 224]
+# If you have a 224x224x3 R array:
+img_array <- array(runif(224 * 224 * 3), dim = c(224, 224, 3))
+
+# Rearrange to NCHW: [1, 3, 224, 224] — channel first
+img_chw <- aperm(img_array, c(3, 1, 2))  # [3, 224, 224]
+input <- as.numeric(img_chw)              # flat vector, row-major
+
+result <- onnx_run(model, list(x = input))
+```
+
+For NLP models, inputs are typically 1D integer sequences:
+
+```r
+# BERT-style: token IDs as numeric vector
+tokens <- c(101, 2023, 2003, 1037, 3231, 102, rep(0, 122))  # pad to 128
+result <- onnx_run(model, list(input_ids = as.numeric(tokens)))
+```
+
+### Interpreting outputs
+
+```r
+# Classification: get top-5 predictions
+scores <- result[[1]]
+top5 <- order(scores, decreasing = TRUE)[1:5]
+cat("Top-5 classes:", top5 - 1L, "\n")  # 0-based class indices
+cat("Top-5 scores:", scores[top5], "\n")
+
+# Apply softmax if model outputs logits (not probabilities)
+probs <- exp(scores) / sum(exp(scores))
+```
+
+### Repeated inference
+
+Models can be run multiple times — weights are automatically reloaded between runs:
+
+```r
+model <- onnx_load("classifier.onnx")
+
+for (batch in data_batches) {
+  result <- onnx_run(model, list(x = batch))
+  # process result...
+}
 ```
 
 ### Tested models
 
-9 out of 15 ONNX Model Zoo models load and run successfully, including:
+12 out of 15 ONNX Model Zoo models load successfully:
 
 | Model | Nodes | Key ops |
 |---|---|---|
 | mnist-8 | 12 | Conv, Relu, MaxPool, Reshape, MatMul |
 | squeezenet1.0-8 | 66 | Conv, Relu, MaxPool, Concat, GlobalAveragePool, Softmax |
 | adv_inception_v3 (Opset 17/18) | 215 | Conv, BatchNorm, Relu, Concat, AveragePool |
-| bert (Opset 17) | 533 | MatMul, LayerNorm, GELU/Erf, Softmax, Shape, Gather, Where |
 | emotion-ferplus-8 | 52 | Conv, Relu, MaxPool, Gemm, Constant |
+| bat_resnext26ts (Opset 18) | 570 | Conv, BatchNorm, SiLU, Concat, Expand, Split |
+| bert (Opset 17) | 533 | MatMul, LayerNorm, GELU/Erf, Softmax, Shape, Gather, Where |
+| botnet26t_256 (Opset 16) | 377 | Conv, MatMul, Softmax, Reshape, Transpose |
+| MaskRCNN-12-int8 | 937 | QLinearConv, DequantizeLinear, Resize, Concat, Reshape |
 | roberta-9 | 1180 | MatMul, LayerNorm, Erf, Softmax, Shape, Gather, Cast |
 | sageconv (Opset 16) | 24 | MatMul, Add, Mul, Sigmoid, ReduceSum |
 | super-resolution-10 | 12 | Conv, Reshape, Transpose |
 
-### Supported ops (40+)
+### Supported ops (50+)
 
-Arithmetic: Add, Sub, Mul, Div, Pow, Sqrt, Exp, Log, Abs, Neg, Floor, Ceil, Clip, Erf.
-Linear: MatMul, Gemm.
-Convolution: Conv (1D/2D), ConvTranspose (1D/2D), with `auto_pad` (SAME_UPPER, SAME_LOWER).
+Arithmetic: Add, Sub, Mul, Div, Pow, Sqrt, Exp, Log, Abs, Neg, Floor, Ceil, Clip, Erf, Equal.
+Linear: MatMul (batched), Gemm.
+Convolution: Conv (1D/2D, grouped, depthwise), ConvTranspose (1D/2D), with `auto_pad` (SAME_UPPER, SAME_LOWER).
 Pooling: MaxPool, AveragePool, GlobalAveragePool, Resize/Upsample (nearest, bilinear).
 Normalization: BatchNorm, LayerNorm, GroupNorm, RMSNorm.
 Activations: Relu, Sigmoid, Tanh, GELU, SiLU, Softmax, LeakyRelu, Elu.
-Shape: Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Expand, Slice, Split, Gather, Pad, Shape, Cast, Identity.
+Shape: Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Expand, Slice, Split, Gather, Pad, Shape, Cast, Identity, EyeLike.
 Constants: Constant (TensorProto + scalar), ConstantOfShape.
-Logic: Where.
+Logic: Where, Equal.
 Reduction: ReduceMean, ReduceSum.
+Quantization: DequantizeLinear, QuantizeLinear, QLinearConv, QLinearAdd, QLinearMatMul, QLinearSigmoid, QLinearConcat.
 Pass-through: Dropout.
 
 ## Save / Load

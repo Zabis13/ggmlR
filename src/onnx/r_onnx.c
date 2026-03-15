@@ -259,10 +259,22 @@ SEXP R_onnx_inputs(SEXP ctx_ptr_) {
 
         SET_STRING_ELT(names, idx, Rf_mkChar(vi->name));
 
-        /* Shape vector — return in ONNX order (not reversed) */
-        SEXP shape = PROTECT(Rf_allocVector(INTSXP, vi->n_dims));
-        for (int d = 0; d < vi->n_dims; d++) {
-            INTEGER(shape)[d] = (int)vi->dims[d];
+        /* Shape vector from ggml tensor (has resolved dynamic dims → 1).
+         * Return in ONNX order (reversed from ggml ne[]). */
+        struct ggml_tensor *t = NULL;
+        for (int k = ctx->tensor_map_size - 1; k >= 0; k--) {
+            if (strcmp(ctx->tensor_map_keys[k], vi->name) == 0) {
+                t = ctx->tensor_map_vals[k]; break;
+            }
+        }
+        int nd = vi->n_dims;
+        SEXP shape = PROTECT(Rf_allocVector(INTSXP, nd));
+        if (t) {
+            for (int d = 0; d < nd; d++)
+                INTEGER(shape)[d] = (int)t->ne[nd - 1 - d];
+        } else {
+            for (int d = 0; d < nd; d++)
+                INTEGER(shape)[d] = (int)vi->dims[d];
         }
         SET_VECTOR_ELT(result, idx, shape);
         UNPROTECT(1);

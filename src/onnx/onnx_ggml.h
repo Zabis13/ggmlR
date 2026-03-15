@@ -29,6 +29,7 @@ typedef struct {
     /* Name → ggml_tensor lookup for wiring nodes */
     struct ggml_tensor **tensor_map_vals;
     char              (*tensor_map_keys)[ONNX_MAX_NAME];
+    int                *tensor_map_ndims;  /* original ONNX ndims (for >4D axis mapping) */
     int                 tensor_map_size;
     int                 tensor_map_cap;
 
