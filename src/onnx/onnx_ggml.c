@@ -184,7 +184,7 @@ static int create_initializer_tensors(onnx_ggml_ctx_t *c) {
         if (!t) return -1;
         ggml_set_name(t, init->name);
         ggml_set_input(t);
-        tmap_put(c, init->name, t);
+        tmap_put_nd(c, init->name, t, init->n_dims > 0 ? init->n_dims : 1);
     }
     return 0;
 }
@@ -310,7 +310,7 @@ static int create_input_tensors(onnx_ggml_ctx_t *c) {
         if (!t) return -1;
         ggml_set_name(t, vi->name);
         ggml_set_input(t);
-        tmap_put(c, vi->name, t);
+        tmap_put_nd(c, vi->name, t, vi->n_dims > 0 ? vi->n_dims : 1);
     }
     return 0;
 }
@@ -863,7 +863,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             default: out = ggml_reshape_4d(c->ctx, a, ne[0], ne[1], ne[2], ne[3]); break;
         }
         /* Register with original ONNX ndims for correct axis mapping downstream */
-        if (out && orig_ndims > 4) {
+        if (out) {
             for (int i = 0; i < n->n_outputs; i++) {
                 if (n->outputs[i][0] != '\0') {
                     ggml_set_name(out, n->outputs[i]);
@@ -877,8 +877,19 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         if (!a) return -1;
         int64_t perm[ONNX_MAX_DIMS];
         int n_perm = onnx_attr_ints(n, "perm", perm, ONNX_MAX_DIMS);
-        int nd = ggml_n_dims(a);
-        if (n_perm == 0 || nd == 2) {
+        int nd = tmap_get_ndims(c, n->inputs[0]);
+        if (nd <= 0) nd = ggml_n_dims(a);
+        /* Check for identity perm first */
+        int is_identity = 0;
+        if (n_perm > 0) {
+            is_identity = 1;
+            for (int i = 0; i < n_perm; i++) {
+                if (perm[i] != i) { is_identity = 0; break; }
+            }
+        }
+        if (is_identity) {
+            out = a;
+        } else if (n_perm == 0 || nd == 2) {
             /* Default: reverse all dims → standard transpose */
             out = ggml_cont(c->ctx, ggml_transpose(c->ctx, a));
         } else {
@@ -932,10 +943,12 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             }
         }
 
-        /* Recover full ONNX ndims from ne[] (ggml_n_dims drops trailing 1s).
-         * Count all dims up to last ne[i] > 1, but at least 1. */
-        int nd_in = 4;
-        while (nd_in > 1 && a->ne[nd_in - 1] == 1) nd_in--;
+        /* Use stored ONNX ndims (ggml_n_dims drops trailing 1s) */
+        int nd_in = tmap_get_ndims(c, n->inputs[0]);
+        if (nd_in <= 0) {
+            nd_in = 4;
+            while (nd_in > 1 && a->ne[nd_in - 1] == 1) nd_in--;
+        }
         /* Check if ONNX input had more dims (trailing 1s) by looking at
          * total expected output ndims vs axes. If max axis >= nd_in + n_axes,
          * we need more input dims. */
@@ -1034,26 +1047,22 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
     else if (strcmp(op, "Concat") == 0) {
         if (!a) return -1;
         int64_t axis = onnx_attr_int(n, "axis", 0);
-        /* For ONNX axis mapping: use GGML_MAX_DIMS (4) for multi-dim tensors.
-         * Only use actual ndims for 1D shape tensors (all inputs 1D). */
-        int max_nd = ggml_n_dims(a);
-        for (int i = 1; i < n->n_inputs; i++) {
+        /* Determine effective ONNX ndims for axis mapping.
+         * Use tmap stored ndims (from value_info or previous ops),
+         * falling back to ggml_n_dims. */
+        int eff_nd = ggml_n_dims(a);
+        for (int i = 0; i < n->n_inputs; i++) {
+            int stored = tmap_get_ndims(c, n->inputs[i]);
+            if (stored > eff_nd) eff_nd = stored;
             struct ggml_tensor *ti = get_input(c, n, i);
             if (ti) {
                 int ndi = ggml_n_dims(ti);
-                if (ndi > max_nd) max_nd = ndi;
+                if (ndi > eff_nd) eff_nd = ndi;
             }
         }
-        int nd = (max_nd <= 1) ? 1 : GGML_MAX_DIMS;
+        if (eff_nd < 1) eff_nd = 1;
+        int nd = eff_nd;
         int onnx_axis = (int)axis;
-        /* Check if first input was >4D collapsed — use its original ONNX ndims
-         * for correct axis mapping. E.g. 5D [A,B,C,D,E] collapsed to 4D [A*B,C,D,E]:
-         *   axis=4 → dim=0, axis=3 → dim=1, axis=2 → dim=2, axis 0-1 → dim=3 */
-        int eff_nd = nd;
-        if (n->n_inputs > 0) {
-            int input_nd = tmap_get_ndims(c, n->inputs[0]);
-            if (input_nd > eff_nd) eff_nd = input_nd;
-        }
         if (onnx_axis < 0) onnx_axis = eff_nd + onnx_axis;
         int dim = eff_nd - 1 - onnx_axis;
         if (dim < 0) dim = 0;
@@ -1140,8 +1149,10 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         }
         #undef READ_SLICE_INPUT
 
-        /* Determine ONNX ndims from ggml tensor */
-        int nd_onnx = ggml_n_dims(a);
+        /* Determine ONNX ndims — prefer stored ndims over ggml_n_dims
+         * (ggml_n_dims ignores trailing 1-dims, e.g. [24,128,4,1] → 3 not 4) */
+        int nd_onnx = tmap_get_ndims(c, n->inputs[0]);
+        if (nd_onnx <= 0) nd_onnx = ggml_n_dims(a);
         if (nd_onnx < 1) nd_onnx = 1;
 
         /* Convert ONNX axes to ggml dims and compute view params.
@@ -1186,8 +1197,9 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         if (all_step1) {
             size_t offset_bytes = offsets[0] * a->nb[0] + offsets[1] * a->nb[1]
                                 + offsets[2] * a->nb[2] + offsets[3] * a->nb[3];
-            int nd = 4;
-            while (nd > 1 && out_ne[nd-1] == 1) nd--;
+            /* Use ONNX ndims for view dimension (not ggml_n_dims which drops trailing 1s) */
+            int nd = nd_onnx;
+            if (nd > 4) nd = 4;
 
             switch (nd) {
                 case 1:
@@ -1575,11 +1587,26 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         }
 
         int64_t groups = onnx_attr_int(n, "group", 1);
-        int ndims_kernel = ggml_n_dims(b);
+        /* Determine spatial dims from kernel_shape attr or ONNX ndims.
+         * ggml_n_dims is unreliable when C_in=1 and C_out=1. */
+        int64_t kshape[2] = {0, 0};
+        int n_kshape = onnx_attr_ints(n, "kernel_shape", kshape, 2);
+        int ndims_kernel;
+        if (n_kshape > 0) {
+            ndims_kernel = n_kshape + 2; /* spatial + C_in + C_out */
+        } else {
+            /* Fallback: use stored ONNX ndims, or ggml_n_dims */
+            int onnx_nd = tmap_get_ndims(c, n->inputs[1]);
+            ndims_kernel = (onnx_nd > 0) ? onnx_nd : ggml_n_dims(b);
+        }
 
-        if (ndims_kernel <= 2) {
-            /* 1D conv — group not handled yet */
-            out = ggml_conv_1d(c->ctx, b, a,
+        if (ndims_kernel <= 3) {
+            /* 1D conv — group not handled yet.
+             * ggml_conv_1d requires F16 kernel (im2col hardcodes F16). */
+            struct ggml_tensor *bk = b;
+            if (bk->type != GGML_TYPE_F16)
+                bk = ggml_cast(c->ctx, bk, GGML_TYPE_F16);
+            out = ggml_conv_1d(c->ctx, bk, a,
                                (int)strides[0], (int)pads[0], (int)dilations[0]);
         } else if (groups == 1) {
             /* Standard 2D conv */
@@ -1661,14 +1688,18 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         onnx_attr_ints(n, "output_padding", output_padding, 2);
 
         int ndims_kernel = ggml_n_dims(b);
+        /* ggml conv ops require F16 kernel */
+        struct ggml_tensor *bk = b;
+        if (bk->type != GGML_TYPE_F16)
+            bk = ggml_cast(c->ctx, bk, GGML_TYPE_F16);
         if (ndims_kernel <= 2) {
             /* 1D ConvTranspose */
-            out = ggml_conv_transpose_1d(c->ctx, b, a,
+            out = ggml_conv_transpose_1d(c->ctx, bk, a,
                                           (int)strides[0], (int)pads[0],
                                           (int)dilations[0]);
         } else {
             /* 2D ConvTranspose — ggml only supports p0, stride (no dilation/pad) */
-            out = ggml_conv_transpose_2d_p0(c->ctx, b, a, (int)strides[0]);
+            out = ggml_conv_transpose_2d_p0(c->ctx, bk, a, (int)strides[0]);
 
             /* If pads specified, crop output: pads = [top, left, bottom, right]
              * With reversed dims, output is [W_out, H_out, C, N].
@@ -1742,7 +1773,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                 ggml_set_input(out);
                 /* Data will be loaded after sched alloc — store as pseudo-initializer */
                 ggml_set_name(out, n->outputs[0]);
-                tmap_put(c, n->outputs[0], out);
+                tmap_put_nd(c, n->outputs[0], out, t_init->n_dims > 0 ? t_init->n_dims : 1);
                 /* Stash init pointer for load_weights to find later */
                 strncpy(t_init->name, n->outputs[0], ONNX_MAX_NAME - 1);
                 t_init->name[ONNX_MAX_NAME - 1] = '\0';
@@ -2144,7 +2175,11 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         int ndims_kernel = ggml_n_dims(dw);
 
         if (ndims_kernel <= 2) {
-            out = ggml_conv_1d(c->ctx, dw, dx,
+            /* ggml_conv_1d requires F16 kernel */
+            struct ggml_tensor *dwk = dw;
+            if (dwk->type != GGML_TYPE_F16)
+                dwk = ggml_cast(c->ctx, dwk, GGML_TYPE_F16);
+            out = ggml_conv_1d(c->ctx, dwk, dx,
                                (int)strides[0], (int)pads[0], (int)dilations[0]);
         } else if (groups == 1) {
             out = ggml_conv_2d(c->ctx, dw, dx,

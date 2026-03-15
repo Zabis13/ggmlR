@@ -49,6 +49,36 @@ models <- list(
     input_name  = "Input3",
     input_shape = c(1L, 1L, 64L, 64L),
     description = "CNTK CNN, 64x64 grayscale, 8 emotions"
+  ),
+  list(
+    name        = "Inception V3 Op18",
+    file        = "adv_inception_v3_Opset18.onnx",
+    input_name  = "x",
+    input_shape = c(1L, 3L, 299L, 299L),
+    description = "GoogLeNet v3 Opset18, 299x299 RGB, 1000 classes"
+  ),
+  list(
+    name        = "BAT-ResNeXt26ts",
+    file        = "bat_resnext26ts_Opset18.onnx",
+    input_name  = "x",
+    input_shape = c(1L, 3L, 256L, 256L),
+    description = "BAT-ResNeXt26ts, 256x256 RGB, 1000 classes"
+  ),
+  list(
+    name        = "BERT (Opset17)",
+    file        = "bert_Opset17.onnx",
+    input_name  = "input_ids",
+    input_shape = c(1L, 128L),
+    extra_inputs = list(attention_mask = c(1L, 128L)),
+    description = "BERT base, seq_len=128, token classification"
+  ),
+  list(
+    name        = "GPT-NeoX",
+    file        = "gptneox_Opset18.onnx",
+    input_name  = "input_ids",
+    input_shape = c(1L, 128L),
+    extra_inputs = list(attention_mask = c(1L, 128L)),
+    description = "GPT-NeoX, seq_len=128, causal LM"
   )
 )
 
@@ -74,16 +104,25 @@ cat(sprintf("Warmup: %d, Runs: %d\n\n", N_WARMUP, N_RUNS))
 
 # --- Функция бенчмарка одной модели на одном устройстве ---
 bench_one <- function(onnx_path, input_name, input_shape, device,
-                      input_data, n_warmup, n_runs) {
+                      input_data, n_warmup, n_runs,
+                      extra_inputs = NULL, extra_data = NULL) {
   # Загрузка
   t0 <- proc.time()
   shapes <- list()
   shapes[[input_name]] <- input_shape
+  if (!is.null(extra_inputs)) {
+    for (nm in names(extra_inputs))
+      shapes[[nm]] <- extra_inputs[[nm]]
+  }
   model <- onnx_load(onnx_path, device = device, input_shapes = shapes)
   load_time <- (proc.time() - t0)[3]
 
   inputs <- list()
   inputs[[input_name]] <- input_data
+  if (!is.null(extra_data)) {
+    for (nm in names(extra_data))
+      inputs[[nm]] <- extra_data[[nm]]
+  }
 
   # Прогрев
   for (i in seq_len(n_warmup)) {
@@ -135,6 +174,12 @@ for (m in models) {
   # Генерируем входные данные
   set.seed(42)
   input_data <- runif(prod(m$input_shape))
+  extra_data <- NULL
+  if (!is.null(m$extra_inputs)) {
+    extra_data <- list()
+    for (nm in names(m$extra_inputs))
+      extra_data[[nm]] <- rep(1, prod(m$extra_inputs[[nm]]))
+  }
 
   res <- list(name = m$name)
 
@@ -142,6 +187,10 @@ for (m in models) {
   if (vulkan_ok) {
     shapes_di <- list()
     shapes_di[[m$input_name]] <- m$input_shape
+    if (!is.null(m$extra_inputs)) {
+      for (nm in names(m$extra_inputs))
+        shapes_di[[nm]] <- m$extra_inputs[[nm]]
+    }
     di_model <- tryCatch(
       onnx_load(onnx_path, device = "vulkan", input_shapes = shapes_di),
       error = function(e) NULL)
@@ -165,7 +214,8 @@ for (m in models) {
   cat("  CPU ... ")
   res$cpu <- tryCatch(
     bench_one(onnx_path, m$input_name, m$input_shape, "cpu",
-              input_data, N_WARMUP, N_RUNS),
+              input_data, N_WARMUP, N_RUNS,
+              extra_inputs = m$extra_inputs, extra_data = extra_data),
     error = function(e) { cat("ERROR:", e$message, "\n"); NULL }
   )
   if (!is.null(res$cpu)) {
@@ -177,7 +227,8 @@ for (m in models) {
     cat("  GPU ... ")
     res$gpu <- tryCatch(
       bench_one(onnx_path, m$input_name, m$input_shape, "vulkan",
-                input_data, N_WARMUP, N_RUNS),
+                input_data, N_WARMUP, N_RUNS,
+                extra_inputs = m$extra_inputs, extra_data = extra_data),
       error = function(e) { cat("ERROR:", e$message, "\n"); NULL }
     )
     if (!is.null(res$gpu)) {

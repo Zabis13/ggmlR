@@ -326,8 +326,19 @@
   shape_tensor <- .onnx_tensor("shape", length(output_dims), 7L, shape_raw)
   shape_vi <- .onnx_value_info("shape", 7L, length(output_dims))
 
-  total <- prod(output_dims)
-  outp <- .onnx_value_info("Y", 1L, output_dims)
+  # Resolve -1 and 0 for output value_info (protobuf can't encode negative varints)
+  resolved <- output_dims
+  total_in <- prod(input_dims)
+  neg_idx <- which(resolved == -1L)
+  zero_idx <- which(resolved == 0L)
+  if (length(zero_idx) > 0) {
+    for (i in zero_idx) resolved[i] <- input_dims[i]
+  }
+  if (length(neg_idx) == 1) {
+    known <- prod(resolved[-neg_idx])
+    resolved[neg_idx] <- total_in / known
+  }
+  outp <- .onnx_value_info("Y", 1L, resolved)
   node <- .onnx_node("Reshape", c("X", "shape"), "Y")
 
   graph <- .onnx_graph("test", list(node),
