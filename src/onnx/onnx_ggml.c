@@ -2639,7 +2639,19 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
             fprintf(stderr, "onnx_ggml: input '%s' not found\n", input_names[i]);
             return -1;
         }
-        ggml_backend_tensor_set(t, input_data[i], 0, ggml_nbytes(t));
+        if (t->type == GGML_TYPE_I32) {
+            /* Input is integer (e.g. token IDs for Gather/embedding).
+             * Caller passes float — convert to int32. */
+            int64_t nel = ggml_nelements(t);
+            int32_t *ibuf = (int32_t *)malloc(nel * sizeof(int32_t));
+            if (!ibuf) return -1;
+            for (int64_t j = 0; j < nel; j++)
+                ibuf[j] = (int32_t)input_data[i][j];
+            ggml_backend_tensor_set(t, ibuf, 0, nel * sizeof(int32_t));
+            free(ibuf);
+        } else {
+            ggml_backend_tensor_set(t, input_data[i], 0, ggml_nbytes(t));
+        }
     }
 
     /* Compute */
