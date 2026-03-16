@@ -57,6 +57,10 @@ GGML_OBJECTS = \
   ggml-cpu/quants.o ggml-cpu/hbm.o \
   ggml-cpu/arch/x86/cpu-feats.o ggml-cpu/arch/x86/quants.o ggml-cpu/arch/x86/repack.o
 
+# ONNX loader objects
+ONNX_OBJECTS = \
+  onnx/onnx_loader.o onnx/onnx_ggml.o onnx/r_onnx.o
+
 # R interface objects
 R_INTERFACE_OBJECTS = \
   r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o \
@@ -67,7 +71,7 @@ VULKAN_OBJECTS = @VULKAN_OBJECTS@
 GGML_OBJECTS += $(VULKAN_OBJECTS)
 
 # All objects for shared library
-OBJECTS = $(R_INTERFACE_OBJECTS) $(GGML_OBJECTS)
+OBJECTS = $(R_INTERFACE_OBJECTS) $(GGML_OBJECTS) $(ONNX_OBJECTS)
 
 # Static library for linking by other packages
 STATICLIB = libggml.a
@@ -96,3 +100,5 @@ r_interface_scheduler.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_opt.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_backend.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_quants.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+# ONNX files: r_onnx.c includes R headers
+onnx/r_onnx.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL

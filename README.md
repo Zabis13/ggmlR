@@ -531,6 +531,24 @@ ggml_save_model(model, "my_model.rds")
 model <- ggml_load_model("my_model.rds")
 ```
 
+## ONNX Benchmark: GPU (Vulkan) vs CPU
+
+Measured on AMD Ryzen 5 5600 + AMD RX 9070, single-image inference:
+
+| Model | CPU (ms) | GPU (ms) | Speedup | CPU FPS | GPU FPS |
+|---|---:|---:|---:|---:|---:|
+| Inception V3 | 1747.7 | 24.3 | 71.8x | 0.6 | 41.1 |
+| MNIST | 0.7 | 0.3 | 2.0x | 1500.0 | 3000.0 |
+| SqueezeNet 1.0 | 128.7 | 3.0 | 42.9x | 7.8 | 333.3 |
+| SuperResolution | 904.3 | 354.3 | 2.6x | 1.1 | 2.8 |
+| EmotionFerPlus | 259.0 | 4.7 | 55.5x | 3.9 | 214.3 |
+| Inception V3 Op18 | 1778.3 | 105.7 | 16.8x | 0.6 | 9.5 |
+| BAT-ResNeXt26ts | 847.7 | 14.3 | 59.1x | 1.2 | 69.8 |
+| BERT (Opset17) | 3250.3 | 99.7 | 32.6x | 0.3 | 10.0 |
+| GPT-NeoX | 10.0 | 3.3 | 3.0x | 100.0 | 300.0 |
+
+Benchmark script: `inst/examples/benchmark_onnx.R`
+
 ## GPU Acceleration
 
 ggmlR is designed GPU-first: Vulkan is auto-detected at build time and, when available, 90%+ of operations run on GPU with 5×–20× speedup over CPU. On machines without a Vulkan-capable GPU the package falls back to CPU transparently — no code changes required.

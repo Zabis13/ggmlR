@@ -31,12 +31,46 @@ static void tmap_put_nd(onnx_ggml_ctx_t *c, const char *name,
                                       c->tensor_map_cap * sizeof(*c->tensor_map_vals));
         c->tensor_map_ndims = realloc(c->tensor_map_ndims,
                                        c->tensor_map_cap * sizeof(*c->tensor_map_ndims));
+        c->tensor_map_onnx_ne = realloc(c->tensor_map_onnx_ne,
+                                         c->tensor_map_cap * sizeof(*c->tensor_map_onnx_ne));
     }
-    strncpy(c->tensor_map_keys[c->tensor_map_size], name, ONNX_MAX_NAME - 1);
-    c->tensor_map_keys[c->tensor_map_size][ONNX_MAX_NAME - 1] = '\0';
-    c->tensor_map_vals[c->tensor_map_size] = t;
-    c->tensor_map_ndims[c->tensor_map_size] = onnx_ndims;
+    int idx = c->tensor_map_size;
+    strncpy(c->tensor_map_keys[idx], name, ONNX_MAX_NAME - 1);
+    c->tensor_map_keys[idx][ONNX_MAX_NAME - 1] = '\0';
+    c->tensor_map_vals[idx] = t;
+    c->tensor_map_ndims[idx] = onnx_ndims;
+    /* Default: reconstruct ONNX shape from ggml ne (reversed, ≤4D) */
+    memset(c->tensor_map_onnx_ne[idx], 0, sizeof(c->tensor_map_onnx_ne[idx]));
+    int nd = onnx_ndims < 4 ? onnx_ndims : 4;
+    for (int d = 0; d < nd; d++)
+        c->tensor_map_onnx_ne[idx][d] = t->ne[nd - 1 - d];
     c->tensor_map_size++;
+}
+
+/* Store explicit ONNX shape (for Reshape, Expand etc. where >4D is collapsed) */
+static void tmap_put_shape(onnx_ggml_ctx_t *c, const char *name,
+                           struct ggml_tensor *t, const int64_t *onnx_shape, int onnx_ndims) {
+    tmap_put_nd(c, name, t, onnx_ndims);
+    /* Overwrite the auto-generated shape with the explicit one */
+    int idx = c->tensor_map_size - 1;
+    memset(c->tensor_map_onnx_ne[idx], 0, sizeof(c->tensor_map_onnx_ne[idx]));
+    int nd = onnx_ndims < ONNX_MAX_DIMS ? onnx_ndims : ONNX_MAX_DIMS;
+    for (int d = 0; d < nd; d++)
+        c->tensor_map_onnx_ne[idx][d] = onnx_shape[d];
+}
+
+/* Get full ONNX shape. Returns ndims, fills shape[]. */
+static int tmap_get_shape(onnx_ggml_ctx_t *c, const char *name,
+                          int64_t *shape, int max_dims) {
+    for (int i = c->tensor_map_size - 1; i >= 0; i--) {
+        if (strcmp(c->tensor_map_keys[i], name) == 0) {
+            int nd = c->tensor_map_ndims[i];
+            if (nd > max_dims) nd = max_dims;
+            memcpy(shape, c->tensor_map_onnx_ne[i], nd * sizeof(int64_t));
+            return nd;
+        }
+    }
+    return 0;
 }
 
 static void tmap_put(onnx_ggml_ctx_t *c, const char *name, struct ggml_tensor *t) {
@@ -842,6 +876,8 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
          * E.g. ONNX [1,2,8,8,8] (5D) → [1*2, 8, 8, 8] (4D)
          * Leading = ONNX dims 0..ndims-4, keep last 3 dims intact. */
         int orig_ndims = ndims; /* save for tmap_put_nd */
+        int64_t orig_shape[ONNX_MAX_DIMS];
+        memcpy(orig_shape, shape, orig_ndims * sizeof(int64_t));
         if (ndims > 4) {
             int64_t merged = 1;
             for (int d = 0; d < ndims - 3; d++)
@@ -856,19 +892,36 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         for (int d = 0; d < ndims; d++)
             ne[d] = shape[ndims - 1 - d];
 
+        /* Verify element count match */
+        {
+            int64_t total_out = ne[0] * ne[1] * ne[2] * ne[3];
+            if (total_out != total) {
+                fprintf(stderr, "onnx_ggml: Reshape element count mismatch: %s "
+                        "input=%lld output=%lld\n",
+                        n->outputs[0], (long long)total, (long long)total_out);
+                return -1;
+            }
+        }
         switch (ndims) {
             case 1: out = ggml_reshape_1d(c->ctx, a, ne[0]); break;
             case 2: out = ggml_reshape_2d(c->ctx, a, ne[0], ne[1]); break;
             case 3: out = ggml_reshape_3d(c->ctx, a, ne[0], ne[1], ne[2]); break;
             default: out = ggml_reshape_4d(c->ctx, a, ne[0], ne[1], ne[2], ne[3]); break;
         }
-        /* Register with original ONNX ndims for correct axis mapping downstream */
+        /* Register with full original ONNX shape for correct axis mapping downstream */
         if (out) {
             for (int i = 0; i < n->n_outputs; i++) {
                 if (n->outputs[i][0] != '\0') {
                     ggml_set_name(out, n->outputs[i]);
-                    tmap_put_nd(c, n->outputs[i], out, orig_ndims);
+                    tmap_put_shape(c, n->outputs[i], out, orig_shape, orig_ndims);
                 }
+            }
+            /* Propagate cval through Reshape (flat order unchanged) */
+            {
+                int64_t cv[ONNX_MAX_DIMS];
+                int ncv = cval_get(c, n->inputs[0], cv, ONNX_MAX_DIMS);
+                if (ncv > 0)
+                    cval_put(c, n->outputs[0], cv, ncv);
             }
             return 0;
         }
@@ -923,11 +976,113 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                 out = ggml_cont(c->ctx, ggml_permute(c->ctx, a, ax[0], ax[1], ax[2], ax[3]));
             }
         }
+        /* Propagate cval through Transpose (permute flat elements).
+         * cval stores values in ggml flat order (col-major: dim0 fastest).
+         * Transpose swaps dims, so we need to remap element indices. */
+        {
+            int64_t cv[ONNX_MAX_DIMS];
+            int ncv = cval_get(c, n->inputs[0], cv, ONNX_MAX_DIMS);
+            if (ncv > 0 && nd <= 4) {
+                /* Build effective perm — default (n_perm==0) reverses all dims */
+                int64_t eff_perm[4];
+                int eff_n = nd;
+                if (n_perm > 0) {
+                    for (int d = 0; d < nd; d++)
+                        eff_perm[d] = (d < n_perm) ? perm[d] : d;
+                } else {
+                    for (int d = 0; d < nd; d++)
+                        eff_perm[d] = nd - 1 - d;
+                }
+
+                /* Input/output shapes in ONNX order */
+                int64_t shape_in[4] = {1,1,1,1};
+                for (int d = 0; d < nd; d++) shape_in[d] = a->ne[nd-1-d];
+                int64_t shape_out[4] = {1,1,1,1};
+                for (int d = 0; d < eff_n; d++)
+                    shape_out[d] = shape_in[eff_perm[d]];
+
+                /* Output ggml ne (reversed from ONNX) */
+                int64_t out_ne0[4] = {1,1,1,1};
+                for (int d = 0; d < nd; d++)
+                    out_ne0[d] = shape_out[nd-1-d];
+
+                int64_t result[ONNX_MAX_DIMS];
+                int ncv_out = 1;
+                for (int d = 0; d < nd; d++) ncv_out *= (int)shape_out[d];
+                if (ncv_out == ncv && ncv_out <= ONNX_MAX_DIMS) {
+                    /* Iterate output in ggml flat order (dim0 fastest) */
+                    for (int oi = 0; oi < ncv_out; oi++) {
+                        /* Decompose oi into ggml output indices [g0,g1,g2,g3] */
+                        int gi[4] = {0};
+                        int tmp = oi;
+                        for (int d = 0; d < nd; d++) {
+                            gi[d] = tmp % (int)out_ne0[d];
+                            tmp /= (int)out_ne0[d];
+                        }
+                        /* Convert ggml output → ONNX output indices */
+                        int onnx_out[4] = {0};
+                        for (int d = 0; d < nd; d++)
+                            onnx_out[d] = gi[nd-1-d];
+                        /* Map ONNX output → ONNX input via inverse perm */
+                        int onnx_in[4] = {0};
+                        for (int d = 0; d < eff_n; d++)
+                            onnx_in[(int)eff_perm[d]] = onnx_out[d];
+                        /* Convert ONNX input → ggml input indices */
+                        int gi_in[4] = {0};
+                        for (int d = 0; d < nd; d++)
+                            gi_in[d] = onnx_in[nd-1-d];
+                        /* Compute flat ggml input index */
+                        int ii = 0;
+                        for (int d = nd-1; d >= 0; d--)
+                            ii = ii * (int)a->ne[d] + gi_in[d];
+                        result[oi] = cv[ii];
+                    }
+                    cval_put(c, n->outputs[0], result, ncv_out);
+                }
+            }
+        }
     }
     else if (strcmp(op, "Flatten") == 0) {
         if (!a) return -1;
-        int64_t total = ggml_nelements(a);
-        out = ggml_reshape_1d(c->ctx, a, total);
+        int64_t axis = onnx_attr_int(n, "axis", 1);
+        int nd_a = tmap_get_ndims(c, n->inputs[0]);
+        if (nd_a <= 0) nd_a = ggml_n_dims(a);
+        if (axis < 0) axis += nd_a;
+
+        /* ONNX Flatten: output shape = [product(dims[:axis]), product(dims[axis:])] */
+        if (axis == 0) {
+            /* Special case: [1, total] */
+            int64_t total = ggml_nelements(a);
+            out = ggml_reshape_2d(c->ctx, a, total, 1);
+        } else if (axis >= nd_a) {
+            /* All dims go to first part: [total, 1] */
+            int64_t total = ggml_nelements(a);
+            out = ggml_reshape_2d(c->ctx, a, 1, total);
+        } else {
+            /* Compute product of ONNX dims [axis:] → ggml dims [0..nd_a-1-axis]
+             * and ONNX dims [:axis] → ggml dims [nd_a-axis..nd_a-1] */
+            int64_t inner = 1, outer = 1;
+            for (int d = 0; d < nd_a; d++) {
+                int onnx_d = nd_a - 1 - d;
+                if (onnx_d >= axis) inner *= a->ne[d];
+                else outer *= a->ne[d];
+            }
+            /* ggml [inner, outer] = ONNX [outer, inner] */
+            out = ggml_reshape_2d(c->ctx, a, inner, outer);
+        }
+        /* Propagate cval through Flatten (flat order unchanged in ggml) */
+        {
+            int64_t cv[ONNX_MAX_DIMS];
+            int ncv = cval_get(c, n->inputs[0], cv, ONNX_MAX_DIMS);
+            if (ncv > 0)
+                cval_put(c, n->outputs[0], cv, ncv);
+        }
+        /* Register with ONNX ndims=2 */
+        if (out) {
+            ggml_set_name(out, n->outputs[0]);
+            tmap_put_nd(c, n->outputs[0], out, 2);
+            return 0;
+        }
     }
     else if (strcmp(op, "Unsqueeze") == 0) {
         if (!a) return -1;
@@ -1157,8 +1312,9 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
 
         /* Convert ONNX axes to ggml dims and compute view params.
          * ONNX dim d → ggml dim (nd_onnx-1-d).
-         * We build offset and output ne[] in ggml order. */
+         * We build offset, output ne[], and normalized starts/steps in ggml order. */
         int64_t out_ne[4], offsets[4] = {0};
+        int64_t norm_starts[4] = {0}, norm_steps[4] = {1, 1, 1, 1};
         for (int d = 0; d < 4; d++)
             out_ne[d] = a->ne[d];
 
@@ -1170,22 +1326,38 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
 
             int64_t dim_size = a->ne[ggml_d];
             int64_t s = starts[i], e = ends[i], st = steps[i];
+            if (st == 0) st = 1; /* safety */
 
             /* Normalize negative indices */
             if (s < 0) s += dim_size;
             if (e < 0) e += dim_size;
-            /* Clamp */
-            if (s < 0) s = 0;
-            if (s > dim_size) s = dim_size;
-            if (e < 0) e = 0;
-            if (e > dim_size) e = dim_size;
-            /* Handle INT64_MAX (common for "to the end") */
-            if (e > dim_size) e = dim_size;
 
-            int64_t len = (e - s + st - 1) / st; /* ceil((e-s)/st) */
+            /* Clamp per ONNX spec (different for positive vs negative step) */
+            if (st > 0) {
+                if (s < 0) s = 0;
+                if (s > dim_size) s = dim_size;
+                if (e < 0) e = 0;
+                if (e > dim_size) e = dim_size;
+            } else {
+                /* step < 0: clamp to [-1, dim_size-1] */
+                if (s < -1) s = -1;
+                if (s > dim_size - 1) s = dim_size - 1;
+                if (e < -1) e = -1;
+                if (e > dim_size - 1) e = dim_size - 1;
+            }
+
+            int64_t len;
+            if (st > 0) {
+                len = (e - s + st - 1) / st; /* ceil((e-s)/st) */
+            } else {
+                /* step < 0: len = ceil((s - e) / |st|) — e.g. s=2,e=-1,st=-1 → len=3 */
+                len = (s - e + (-st) - 1) / (-st);
+            }
             if (len < 0) len = 0;
 
-            offsets[ggml_d] = s;
+            offsets[ggml_d] = (st > 0) ? s : 0; /* for step>0 view; step<0 uses deferred */
+            norm_starts[ggml_d] = s;
+            norm_steps[ggml_d] = st;
             out_ne[ggml_d] = len;
         }
 
@@ -1223,25 +1395,62 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             /* Make contiguous so downstream ops work correctly */
             out = ggml_cont(c->ctx, out);
         } else {
-            /* step != 1 not supported yet — pass through */
-            fprintf(stderr, "onnx_ggml: Slice with step != 1 not supported\n");
-            out = a;
+            /* step != 1: deferred strided copy after alloc */
+            if (c->n_slice_fills >= 64) {
+                fprintf(stderr, "onnx_ggml: too many strided Slice ops (max 64)\n");
+                return -1;
+            }
+            /* Create output tensor with correct shape */
+            out = ggml_new_tensor_4d(c->ctx, a->type,
+                                     out_ne[0], out_ne[1], out_ne[2], out_ne[3]);
+            ggml_set_input(out);
+
+            int sf = c->n_slice_fills;
+            c->slice_fill_src[sf] = a;
+            c->slice_fill_dst[sf] = out;
+            for (int d = 0; d < 4; d++) {
+                c->slice_fill_starts[sf][d] = norm_starts[d];
+                c->slice_fill_steps[sf][d]  = norm_steps[d];
+                c->slice_fill_out_ne[sf][d] = out_ne[d];
+            }
+            c->slice_fill_ndims[sf] = nd_onnx;
+            c->n_slice_fills++;
         }
 
-        /* Propagate compile-time values through Slice (for shape tensors) */
+        /* Propagate compile-time values through Slice (for shape tensors).
+         * Supports strided/reverse slicing and multi-dim tensors. */
         {
             int64_t src_vals[ONNX_MAX_DIMS];
             int nv = cval_get(c, n->inputs[0], src_vals, ONNX_MAX_DIMS);
             if (nv > 0 && n_slices > 0) {
-                /* For 1D shape tensors: Slice along axis 0, starts[0]..ends[0] */
-                int64_t s = starts[0], e = ends[0];
-                if (s < 0) s += nv;
-                if (e < 0) e += nv;
-                if (s < 0) s = 0;
-                if (e > nv) e = nv;
-                int out_n = (int)(e - s);
-                if (out_n > 0 && out_n <= ONNX_MAX_DIMS) {
-                    cval_put(c, n->outputs[0], src_vals + s, out_n);
+                /* Total output elements */
+                int64_t total_out = 1;
+                for (int d = 0; d < 4; d++) total_out *= out_ne[d];
+
+                if (total_out > 0 && total_out <= ONNX_MAX_DIMS) {
+                    int64_t result[ONNX_MAX_DIMS];
+                    /* Iterate output in ggml order (d0 fastest) and map to source */
+                    for (int64_t d3 = 0; d3 < out_ne[3]; d3++) {
+                        int64_t s3 = norm_starts[3] + d3 * norm_steps[3];
+                        for (int64_t d2 = 0; d2 < out_ne[2]; d2++) {
+                            int64_t s2 = norm_starts[2] + d2 * norm_steps[2];
+                            for (int64_t d1 = 0; d1 < out_ne[1]; d1++) {
+                                int64_t s1 = norm_starts[1] + d1 * norm_steps[1];
+                                for (int64_t d0 = 0; d0 < out_ne[0]; d0++) {
+                                    int64_t s0 = norm_starts[0] + d0 * norm_steps[0];
+                                    size_t si = (size_t)(s0 + s1 * a->ne[0]
+                                                + s2 * a->ne[0] * a->ne[1]
+                                                + s3 * a->ne[0] * a->ne[1] * a->ne[2]);
+                                    size_t di = (size_t)(d0 + d1 * out_ne[0]
+                                                + d2 * out_ne[0] * out_ne[1]
+                                                + d3 * out_ne[0] * out_ne[1] * out_ne[2]);
+                                    if (si < (size_t)nv && di < (size_t)total_out)
+                                        result[di] = src_vals[si];
+                                }
+                            }
+                        }
+                    }
+                    cval_put(c, n->outputs[0], result, (int)total_out);
                 }
             }
         }
@@ -1416,6 +1625,26 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         }
         if (ndims == 0) return -1;
 
+        /* Resolve -1 (keep dim) using full ONNX shape of input tensor. */
+        {
+            int64_t a_onnx[ONNX_MAX_DIMS];
+            int a_nd = tmap_get_shape(c, n->inputs[0], a_onnx, ONNX_MAX_DIMS);
+            /* Align from the right: shape[ndims-1-k] ← a_onnx[a_nd-1-k] */
+            for (int d = 0; d < ndims; d++) {
+                if (shape[d] == -1) {
+                    int a_d = d - (ndims - a_nd); /* right-aligned index into a_onnx */
+                    if (a_d >= 0 && a_d < a_nd)
+                        shape[d] = a_onnx[a_d];
+                    else
+                        shape[d] = 1;
+                }
+            }
+        }
+        /* Save resolved full ONNX shape before collapse */
+        int orig_expand_ndims = ndims;
+        int64_t orig_expand_shape[ONNX_MAX_DIMS];
+        memcpy(orig_expand_shape, shape, ndims * sizeof(int64_t));
+
         /* Collapse >4D ONNX shape into 4D by merging leading ONNX dims. */
         if (ndims > 4) {
             int64_t merged = 1;
@@ -1432,8 +1661,8 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             ne[d] = shape[ndims - 1 - d];
 
         /* Expand semantics: broadcast a into target shape.
-         * For each dim: if shape[d]==1 use a->ne[d], if a->ne[d]==1 use shape[d],
-         * otherwise they must match. */
+         * For each dim: if shape[d]==1 → use a->ne[d],
+         * if a->ne[d]==1 → use shape[d], otherwise must match. */
         for (int d = 0; d < 4; d++) {
             if (ne[d] == 1) ne[d] = a->ne[d];
         }
@@ -1446,6 +1675,12 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             default: target = ggml_new_tensor_4d(c->ctx, a->type, ne[0], ne[1], ne[2], ne[3]); break;
         }
         out = ggml_repeat(c->ctx, a, target);
+        /* Register with full resolved ONNX shape (before collapse) */
+        if (out) {
+            ggml_set_name(out, n->outputs[0]);
+            tmap_put_shape(c, n->outputs[0], out, orig_expand_shape, orig_expand_ndims);
+            return 0;
+        }
     }
 
     /* ── Normalization ──────────────────────────────────────────── */
@@ -1808,6 +2043,13 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         /* ggml computation is always f32; Cast is a pass-through.
          * TODO: handle f16/bf16 when needed. */
         out = a;
+        /* Propagate cval through Cast (values preserved as int64) */
+        {
+            int64_t cv[ONNX_MAX_DIMS];
+            int ncv = cval_get(c, n->inputs[0], cv, ONNX_MAX_DIMS);
+            if (ncv > 0)
+                cval_put(c, n->outputs[0], cv, ncv);
+        }
     }
 
     /* ── Shape ──────────────────────────────────────────────────── */
@@ -1864,6 +2106,47 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         out = ggml_tanh(c->ctx, ggml_scale(c->ctx, inner, 0.7978845608f)); /* sqrt(2/pi) */
     }
 
+    /* ── Sin / Cos ──────────────────────────────────────────────── */
+    else if (strcmp(op, "Sin") == 0) {
+        if (!a) return -1;
+        out = ggml_sin(c->ctx, a);
+    }
+    else if (strcmp(op, "Cos") == 0) {
+        if (!a) return -1;
+        out = ggml_cos(c->ctx, a);
+    }
+
+    /* ── Tile (repeat tensor along axes) ──────────────────────── */
+    else if (strcmp(op, "Tile") == 0) {
+        if (!a || !b) return -1;
+        /* b = repeats tensor (int64). Read from initializer, Constant, or cval. */
+        int64_t repeats[ONNX_MAX_DIMS];
+        int nreps = 0;
+
+        const onnx_initializer_t *rep_init = onnx_find_initializer(c->onnx, n->inputs[1]);
+        if (!rep_init)
+            rep_init = find_constant_tensor(c->onnx, n->inputs[1]);
+
+        if (rep_init && rep_init->raw_data && rep_init->data_type == ONNX_DTYPE_INT64) {
+            nreps = (int)(rep_init->raw_size / sizeof(int64_t));
+            if (nreps > ONNX_MAX_DIMS) nreps = ONNX_MAX_DIMS;
+            memcpy(repeats, rep_init->raw_data, nreps * sizeof(int64_t));
+        }
+
+        if (nreps == 0)
+            nreps = cval_get(c, n->inputs[1], repeats, ONNX_MAX_DIMS);
+        if (nreps == 0) return -1;
+
+        /* Target shape = a->ne[d] * repeats[d] (reversed ONNX→ggml) */
+        int64_t ne[4] = {a->ne[0], a->ne[1], a->ne[2], a->ne[3]};
+        for (int d = 0; d < nreps && d < 4; d++) {
+            int ggml_d = nreps - 1 - d; /* reverse ONNX dim → ggml dim */
+            if (ggml_d < 4)
+                ne[ggml_d] *= repeats[d];
+        }
+        out = ggml_repeat_4d(c->ctx, a, ne[0], ne[1], ne[2], ne[3]);
+    }
+
     /* ── Where (conditional select) ────────────────────────────── */
     else if (strcmp(op, "Where") == 0) {
         if (!a || !b) return -1;
@@ -1871,21 +2154,24 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         if (!cond_t) return -1;
         /* Where(condition, X, Y): output = condition ? X : Y
          * a=condition, b=X, cond_t=Y.
-         * Implement as: out = condition * X + (1 - condition) * Y
-         * inv_cond = 1 - cond via neg + add_scalar(1) */
+         * Implement as: out = condition * X_clamped + (1 - condition) * Y_clamped
+         * Clamp X,Y to [-1e9, 1e9] to avoid NaN from 0 * inf (IEEE 754).
+         * -1e9 is sufficient for softmax (exp(-1e9) ≈ 0). */
+        struct ggml_tensor *x_clamped = ggml_clamp(c->ctx, b, -1e9f, 1e9f);
+        struct ggml_tensor *y_clamped = ggml_clamp(c->ctx, cond_t, -1e9f, 1e9f);
         struct ggml_tensor *neg_cond = ggml_neg(c->ctx, a);
         struct ggml_tensor *ones = make_scalar(c, 1.0f);
         struct ggml_tensor *inv_cond = ggml_add(c->ctx, neg_cond, ones);
-        struct ggml_tensor *ta_cond = a, *tb_x = b;
+        struct ggml_tensor *ta_cond = a;
         struct ggml_tensor *yes_part, *no_part;
-        if (ggml_nelements(ta_cond) >= ggml_nelements(tb_x))
-            yes_part = ggml_mul(c->ctx, ta_cond, tb_x);
+        if (ggml_nelements(ta_cond) >= ggml_nelements(x_clamped))
+            yes_part = ggml_mul(c->ctx, ta_cond, x_clamped);
         else
-            yes_part = ggml_mul(c->ctx, tb_x, ta_cond);
-        if (ggml_nelements(inv_cond) >= ggml_nelements(cond_t))
-            no_part = ggml_mul(c->ctx, inv_cond, cond_t);
+            yes_part = ggml_mul(c->ctx, x_clamped, ta_cond);
+        if (ggml_nelements(inv_cond) >= ggml_nelements(y_clamped))
+            no_part = ggml_mul(c->ctx, inv_cond, y_clamped);
         else
-            no_part = ggml_mul(c->ctx, cond_t, inv_cond);
+            no_part = ggml_mul(c->ctx, y_clamped, inv_cond);
         out = ggml_add(c->ctx, yes_part, no_part);
 
         /* cval propagation for Where(cond, X, Y):
@@ -2025,6 +2311,10 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                 n_pads = (int)(pi->raw_size / sizeof(int64_t));
                 if (n_pads > 8) n_pads = 8;
                 memcpy(pads_arr, pi->raw_data, n_pads * sizeof(int64_t));
+            }
+            /* Fallback: try cval (for dynamic Slice→Transpose→Cast chains) */
+            if (n_pads == 0) {
+                n_pads = cval_get(c, n->inputs[1], pads_arr, 8);
             }
         }
         /* pads format: [begin_0, begin_1, ..., end_0, end_1, ...]
@@ -2390,6 +2680,52 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
 /* Reload weights, constants, shapes into already-allocated buffers.
  * Used on repeated runs where compute may have overwritten weight data
  * via intermediate buffer aliasing. */
+/* Fill strided Slice outputs (step != 1) by reading src and copying with stride */
+static void fill_strided_slices(onnx_ggml_ctx_t *c) {
+    for (int i = 0; i < c->n_slice_fills; i++) {
+        struct ggml_tensor *src = c->slice_fill_src[i];
+        struct ggml_tensor *dst = c->slice_fill_dst[i];
+        if (!src || !src->buffer || !dst || !dst->buffer) continue;
+
+        size_t src_bytes = ggml_nbytes(src);
+        float *src_buf = (float *)malloc(src_bytes);
+        if (!src_buf) continue;
+        ggml_backend_tensor_get(src, src_buf, 0, src_bytes);
+
+        size_t dst_n = ggml_nelements(dst);
+        float *dst_buf = (float *)malloc(dst_n * sizeof(float));
+        if (!dst_buf) { free(src_buf); continue; }
+
+        int64_t *st = c->slice_fill_starts[i];
+        int64_t *sp = c->slice_fill_steps[i];
+        int64_t *one = c->slice_fill_out_ne[i];
+
+        for (int64_t d3 = 0; d3 < one[3]; d3++) {
+            int64_t s3 = st[3] + d3 * sp[3];
+            for (int64_t d2 = 0; d2 < one[2]; d2++) {
+                int64_t s2 = st[2] + d2 * sp[2];
+                for (int64_t d1 = 0; d1 < one[1]; d1++) {
+                    int64_t s1 = st[1] + d1 * sp[1];
+                    for (int64_t d0 = 0; d0 < one[0]; d0++) {
+                        int64_t s0 = st[0] + d0 * sp[0];
+                        size_t si = (size_t)(s0 + s1 * src->ne[0]
+                                    + s2 * src->ne[0] * src->ne[1]
+                                    + s3 * src->ne[0] * src->ne[1] * src->ne[2]);
+                        size_t di = (size_t)(d0 + d1 * one[0]
+                                    + d2 * one[0] * one[1]
+                                    + d3 * one[0] * one[1] * one[2]);
+                        dst_buf[di] = src_buf[si];
+                    }
+                }
+            }
+        }
+
+        ggml_backend_tensor_set(dst, dst_buf, 0, dst_n * sizeof(float));
+        free(src_buf);
+        free(dst_buf);
+    }
+}
+
 static int reload_static_data(onnx_ggml_ctx_t *c) {
     if (load_weights(c) != 0) return -1;
 
@@ -2455,6 +2791,9 @@ static int reload_static_data(onnx_ggml_ctx_t *c) {
             free(buf);
         }
     }
+
+    /* Fill strided Slice outputs (step != 1) */
+    fill_strided_slices(c);
 
     return 0;
 }
@@ -2556,6 +2895,9 @@ static int sched_alloc_and_load(onnx_ggml_ctx_t *c) {
             free(buf);
         }
     }
+
+    /* Fill strided Slice outputs (step != 1) */
+    fill_strided_slices(c);
 
     return 0;
 }
@@ -2709,6 +3051,7 @@ void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     free(ctx->tensor_map_keys);
     free(ctx->tensor_map_vals);
     free(ctx->tensor_map_ndims);
+    free(ctx->tensor_map_onnx_ne);
     free(ctx->cval_keys);
     free(ctx->cval_data);
     free(ctx->cval_lens);
