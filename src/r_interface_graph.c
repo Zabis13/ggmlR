@@ -2952,6 +2952,7 @@ SEXP R_ggml_backend_cpu_init(void) {
     if (backend == NULL) {
         error("Failed to initialize CPU backend");
     }
+    ggml_backend_cpu_set_n_threads(backend, ggmlR_get_n_threads());
     return R_MakeExternalPtr(backend, R_NilValue, R_NilValue);
 }
 

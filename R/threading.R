@@ -30,3 +30,15 @@ ggml_set_n_threads <- function(n_threads) {
 ggml_get_n_threads <- function() {
   .Call("R_ggml_get_n_threads")
 }
+
+#' Set OpenMP Thread Count
+#'
+#' Directly calls omp_set_num_threads() to limit OpenMP parallelism.
+#' Useful in tests to comply with CRAN policy on core usage.
+#'
+#' @param n Number of threads
+#' @return NULL invisibly
+#' @export
+ggml_set_omp_threads <- function(n) {
+  invisible(.Call("R_ggml_set_omp_threads", as.integer(n)))
+}

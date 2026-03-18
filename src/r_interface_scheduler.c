@@ -7,6 +7,8 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 
+extern int ggmlR_get_n_threads(void);
+
 // ============================================================================
 // Backend Scheduler Functions
 // ============================================================================
@@ -54,6 +56,7 @@ SEXP R_ggml_backend_sched_new(SEXP backends_list, SEXP parallel, SEXP graph_size
         free(backends);
         error("Failed to initialize CPU backend");
     }
+    ggml_backend_cpu_set_n_threads(backends[n_backends - 1], ggmlR_get_n_threads());
 
     // Create scheduler
     // bufts = NULL means use default buffer types for each backend
@@ -241,6 +244,18 @@ SEXP R_ggml_backend_sched_alloc_graph(SEXP sched_ptr, SEXP graph_ptr) {
     return ScalarLogical(success);
 }
 
+// Update all CPU backends in scheduler with current ggmlR thread setting
+static void sched_sync_cpu_threads(ggml_backend_sched_t sched) {
+    int n_threads = ggmlR_get_n_threads();
+    int n = ggml_backend_sched_get_n_backends(sched);
+    for (int i = 0; i < n; i++) {
+        ggml_backend_t b = ggml_backend_sched_get_backend(sched, i);
+        if (ggml_backend_is_cpu(b)) {
+            ggml_backend_cpu_set_n_threads(b, n_threads);
+        }
+    }
+}
+
 // Compute graph using scheduler (distributes work across backends)
 SEXP R_ggml_backend_sched_graph_compute(SEXP sched_ptr, SEXP graph_ptr) {
     ggml_backend_sched_t sched = (ggml_backend_sched_t)R_ExternalPtrAddr(sched_ptr);
@@ -253,6 +268,7 @@ SEXP R_ggml_backend_sched_graph_compute(SEXP sched_ptr, SEXP graph_ptr) {
         error("Invalid graph pointer");
     }
 
+    sched_sync_cpu_threads(sched);
     enum ggml_status status = ggml_backend_sched_graph_compute(sched, graph);
 
     return ScalarInteger((int)status);
@@ -270,6 +286,7 @@ SEXP R_ggml_backend_sched_graph_compute_async(SEXP sched_ptr, SEXP graph_ptr) {
         error("Invalid graph pointer");
     }
 
+    sched_sync_cpu_threads(sched);
     enum ggml_status status = ggml_backend_sched_graph_compute_async(sched, graph);
 
     return ScalarInteger((int)status);

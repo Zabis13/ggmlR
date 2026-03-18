@@ -1171,8 +1171,19 @@ SEXP R_ggml_get_n_threads(void) {
     #else
     int threads = 1;
     #endif
-    
+
     return ScalarInteger(threads);
+}
+
+SEXP R_ggml_set_omp_threads(SEXP n_threads) {
+    int threads = asInteger(n_threads);
+    if (threads < 1) {
+        error("Number of threads must be at least 1");
+    }
+    #ifdef _OPENMP
+    omp_set_num_threads(threads);
+    #endif
+    return R_NilValue;
 }
 
 static const R_CallMethodDef CallEntries[] = {
@@ -1802,6 +1813,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_onnx_run",                              (DL_FUNC) &R_onnx_run,                               3},
     {"R_onnx_inputs",                           (DL_FUNC) &R_onnx_inputs,                            1},
     {"R_onnx_device_info",                      (DL_FUNC) &R_onnx_device_info,                       1},
+
+    {"R_ggml_set_omp_threads",                  (DL_FUNC) &R_ggml_set_omp_threads,                   1},
 
     {NULL, NULL, 0}
 };

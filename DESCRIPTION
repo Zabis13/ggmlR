@@ -33,7 +33,7 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     data-parallel training via 'dp_train()', broadcast arithmetic, 'f16'
     (half-precision) support on 'Vulkan' GPU, and a multi-head attention layer
     for building Transformer architectures. Supports 'ONNX' model import via
-    built-in zero-dependency protobuf parser: load pre-trained 'ONNX' models
+    built-in zero-dependency 'protobuf' parser: load 'pretrained' 'ONNX' models
     from 'PyTorch', 'TensorFlow', or other frameworks and run inference on
     'Vulkan' GPU or CPU. Covers 40+ 'ONNX' ops including convolutions,
     attention primitives, normalization, and shape operations — sufficient to

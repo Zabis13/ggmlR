@@ -1,5 +1,6 @@
 # Tests for Sequential Neural Network API (v0.5.3)
 
+
 # Helper: free all backends associated with a compiled model
 cleanup_model <- function(model) {
   ggml_backend_sched_free(model$compilation$sched)
