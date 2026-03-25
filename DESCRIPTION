@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.6.3
+Version: 0.6.5
 Authors@R: c(
     person("Yuri", "Baramykov",
         email = "lbsbmsu@mail.ru",
@@ -35,10 +35,13 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     for building Transformer architectures. Supports 'ONNX' model import via
     built-in zero-dependency 'protobuf' parser: load 'pretrained' 'ONNX' models
     from 'PyTorch', 'TensorFlow', or other frameworks and run inference on
-    'Vulkan' GPU or CPU. Covers 40+ 'ONNX' ops including convolutions,
-    attention primitives, normalization, and shape operations — sufficient to
-    run real-world models such as 'BERT', 'SqueezeNet', 'Inception v3', and
-    'MNIST' out of the box. Serves as backend for 'LLM' (Large Language Model)
+    'Vulkan' GPU or CPU. Covers 50+ 'ONNX' ops including convolutions,
+    attention primitives, normalization, quantized ops, and shape operations —
+    sufficient to run real-world models such as 'BERT', 'GPT-NeoX',
+    'SqueezeNet', 'Inception v3', 'BAT-ResNeXt', and 'MNIST' out of the box.
+    Uses a dedicated weight buffer architecture for zero-overhead repeated
+    inference — weights are loaded to GPU once and never re-transferred.
+    Serves as backend for 'LLM' (Large Language Model)
     inference via 'llamaR' and Stable Diffusion image generation via 'sd2R'.
     See <https://github.com/ggml-org/ggml> for more information about the
     underlying library.

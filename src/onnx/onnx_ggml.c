@@ -141,9 +141,10 @@ static const onnx_initializer_t *find_constant_tensor(const onnx_model_t *m,
 }
 
 /* ── Create a scalar constant tensor (no_alloc safe) ────────────── */
-/* Returns a 1-element f32 tensor, value filled after sched alloc via const_fill. */
+/* Returns a 1-element f32 tensor in ctx_weight, value filled during build. */
 static struct ggml_tensor *make_scalar(onnx_ggml_ctx_t *c, float val) {
-    struct ggml_tensor *t = ggml_new_tensor_1d(c->ctx, GGML_TYPE_F32, 1);
+    struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
+    struct ggml_tensor *t = ggml_new_tensor_1d(wctx, GGML_TYPE_F32, 1);
     ggml_set_input(t);
     if (c->n_const_fills < 256) {
         c->const_fill_ptrs[c->n_const_fills] = t;
@@ -208,12 +209,15 @@ static int create_initializer_tensors(onnx_ggml_ctx_t *c) {
                 ne[d] = init->dims[ndims - 1 - d];
         }
 
+        /* Allocate weight tensors in ctx_weight so they get a dedicated
+         * buffer that the scheduler never touches or aliases. */
+        struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
         struct ggml_tensor *t;
         switch (ndims) {
-            case 1: t = ggml_new_tensor_1d(c->ctx, type, ne[0]); break;
-            case 2: t = ggml_new_tensor_2d(c->ctx, type, ne[0], ne[1]); break;
-            case 3: t = ggml_new_tensor_3d(c->ctx, type, ne[0], ne[1], ne[2]); break;
-            default: t = ggml_new_tensor_4d(c->ctx, type, ne[0], ne[1], ne[2], ne[3]); break;
+            case 1: t = ggml_new_tensor_1d(wctx, type, ne[0]); break;
+            case 2: t = ggml_new_tensor_2d(wctx, type, ne[0], ne[1]); break;
+            case 3: t = ggml_new_tensor_3d(wctx, type, ne[0], ne[1], ne[2]); break;
+            default: t = ggml_new_tensor_4d(wctx, type, ne[0], ne[1], ne[2], ne[3]); break;
         }
         if (!t) return -1;
         ggml_set_name(t, init->name);
@@ -1998,15 +2002,19 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                     ne[d] = t_init->dims[ndims - 1 - d];
             }
 
-            switch (ndims) {
-                case 1: out = ggml_new_tensor_1d(c->ctx, type, ne[0]); break;
-                case 2: out = ggml_new_tensor_2d(c->ctx, type, ne[0], ne[1]); break;
-                case 3: out = ggml_new_tensor_3d(c->ctx, type, ne[0], ne[1], ne[2]); break;
-                default: out = ggml_new_tensor_4d(c->ctx, type, ne[0], ne[1], ne[2], ne[3]); break;
+            /* Constant tensors go into ctx_weight for dedicated buffer */
+            {
+                struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
+                switch (ndims) {
+                    case 1: out = ggml_new_tensor_1d(wctx, type, ne[0]); break;
+                    case 2: out = ggml_new_tensor_2d(wctx, type, ne[0], ne[1]); break;
+                    case 3: out = ggml_new_tensor_3d(wctx, type, ne[0], ne[1], ne[2]); break;
+                    default: out = ggml_new_tensor_4d(wctx, type, ne[0], ne[1], ne[2], ne[3]); break;
+                }
             }
             if (out) {
                 ggml_set_input(out);
-                /* Data will be loaded after sched alloc — store as pseudo-initializer */
+                /* Data will be loaded into weight_buf during build */
                 ggml_set_name(out, n->outputs[0]);
                 tmap_put_nd(c, n->outputs[0], out, t_init->n_dims > 0 ? t_init->n_dims : 1);
                 /* Stash init pointer for load_weights to find later */
@@ -2059,7 +2067,10 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
          * ggml ne is reversed from ONNX, so un-reverse. */
         int nd = 4;
         while (nd > 1 && a->ne[nd-1] == 1) nd--;
-        out = ggml_new_tensor_1d(c->ctx, GGML_TYPE_I32, nd);
+        {
+            struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
+            out = ggml_new_tensor_1d(wctx, GGML_TYPE_I32, nd);
+        }
         if (out) {
             ggml_set_input(out);
             /* Store ONNX dims — will fill data after sched alloc */
@@ -2225,7 +2236,10 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
          * input is 2D [ne0, ne1] in ggml = ONNX [rows, cols].
          * Create as deferred fill (like ConstantOfShape). */
         int64_t k = onnx_attr_int(n, "k", 0);
-        out = ggml_new_tensor_2d(c->ctx, GGML_TYPE_F32, a->ne[0], a->ne[1]);
+        {
+            struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
+            out = ggml_new_tensor_2d(wctx, GGML_TYPE_F32, a->ne[0], a->ne[1]);
+        }
         ggml_set_name(out, n->outputs[0]);
         ggml_set_input(out);
 
@@ -2268,12 +2282,15 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         for (int d = 0; d < ndims; d++)
             ne[d] = shape[ndims - 1 - d];
 
-        /* Create constant tensor — use ggml_new_f32 scaled to fill shape */
-        switch (ndims) {
-            case 1: out = ggml_new_tensor_1d(c->ctx, GGML_TYPE_F32, ne[0]); break;
-            case 2: out = ggml_new_tensor_2d(c->ctx, GGML_TYPE_F32, ne[0], ne[1]); break;
-            case 3: out = ggml_new_tensor_3d(c->ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2]); break;
-            default: out = ggml_new_tensor_4d(c->ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]); break;
+        /* Create constant tensor in ctx_weight for dedicated buffer */
+        {
+            struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
+            switch (ndims) {
+                case 1: out = ggml_new_tensor_1d(wctx, GGML_TYPE_F32, ne[0]); break;
+                case 2: out = ggml_new_tensor_2d(wctx, GGML_TYPE_F32, ne[0], ne[1]); break;
+                case 3: out = ggml_new_tensor_3d(wctx, GGML_TYPE_F32, ne[0], ne[1], ne[2]); break;
+                default: out = ggml_new_tensor_4d(wctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]); break;
+            }
         }
         if (out) {
             ggml_set_input(out);
@@ -2726,83 +2743,10 @@ static void fill_strided_slices(onnx_ggml_ctx_t *c) {
     }
 }
 
-static int reload_static_data(onnx_ggml_ctx_t *c) {
-    if (load_weights(c) != 0) return -1;
-
-    for (int i = 0; i < c->onnx->n_nodes; i++) {
-        onnx_node_t *nd = &c->onnx->nodes[i];
-        if (strcmp(nd->op_type, "Constant") != 0) continue;
-        const onnx_attr_t *va = onnx_node_find_attr(nd, "value");
-        if (!va || !va->tensor) continue;
-        onnx_initializer_t *ti = va->tensor;
-        struct ggml_tensor *t = tmap_get(c, nd->outputs[0]);
-        if (!t || !t->buffer) continue;
-        const void *data = NULL;
-        size_t data_size = 0;
-        if (ti->raw_data && ti->raw_size > 0) {
-            data = ti->raw_data; data_size = ti->raw_size;
-        } else if (ti->decoded_data && ti->decoded_size > 0) {
-            data = ti->decoded_data; data_size = ti->decoded_size;
-        }
-        if (data && data_size > 0) {
-            size_t copy_size = data_size < ggml_nbytes(t) ? data_size : ggml_nbytes(t);
-            ggml_backend_tensor_set(t, data, 0, copy_size);
-        }
-    }
-
-    for (int i = 0; i < c->n_shape_tensors; i++) {
-        struct ggml_tensor *t = c->shape_tensor_ptrs[i];
-        if (!t || !t->buffer) continue;
-        int nd = (int)c->shape_tensors_ne[i][0];
-        int32_t dims[ONNX_MAX_DIMS];
-        for (int d = 0; d < nd; d++)
-            dims[d] = (int32_t)c->shape_tensors_ne[i][d + 1];
-        ggml_backend_tensor_set(t, dims, 0, nd * sizeof(int32_t));
-    }
-
-    for (int i = 0; i < c->n_const_fills; i++) {
-        struct ggml_tensor *t = c->const_fill_ptrs[i];
-        if (!t || !t->buffer) continue;
-        float val = c->const_fill_vals[i];
-        size_t n = ggml_nelements(t);
-        float *buf = (float *)malloc(n * sizeof(float));
-        if (buf) {
-            for (size_t j = 0; j < n; j++) buf[j] = val;
-            ggml_backend_tensor_set(t, buf, 0, n * sizeof(float));
-            free(buf);
-        }
-    }
-
-    for (int i = 0; i < c->n_eye_fills; i++) {
-        struct ggml_tensor *t = c->eye_fill_ptrs[i];
-        if (!t || !t->buffer) continue;
-        int cols = c->eye_fill_cols[i];
-        int rows = c->eye_fill_rows[i];
-        int k = c->eye_fill_k[i];
-        size_t n = (size_t)cols * rows;
-        float *buf = (float *)calloc(n, sizeof(float));
-        if (buf) {
-            for (int r = 0; r < rows; r++) {
-                int c_idx = r + k;
-                if (c_idx >= 0 && c_idx < cols)
-                    buf[r * cols + c_idx] = 1.0f;
-            }
-            ggml_backend_tensor_set(t, buf, 0, n * sizeof(float));
-            free(buf);
-        }
-    }
-
-    /* Fill strided Slice outputs (step != 1) */
-    fill_strided_slices(c);
-
-    return 0;
-}
-
-static int sched_alloc_and_load(onnx_ggml_ctx_t *c) {
+static int sched_alloc_and_fill(onnx_ggml_ctx_t *c) {
     /* GPU-first: pre-assign all graph nodes and their leaf sources to GPU.
-     * Without this, the scheduler forces INPUT-flagged tensors to CPU
-     * (ggml-backend.cpp pass 1), preventing GPU offload entirely.
-     * User-assignments via set_tensor_backend override pass 1. */
+     * Weight tensors already have ->buffer set (from weight_buf), so sched
+     * will skip them.  Only non-weight inputs and intermediates get assigned. */
     if (c->backend_gpu) {
         int n_nodes = ggml_graph_n_nodes(c->graph);
         for (int i = 0; i < n_nodes; i++) {
@@ -2811,6 +2755,10 @@ static int sched_alloc_and_load(onnx_ggml_ctx_t *c) {
                 ggml_backend_sched_set_tensor_backend(c->sched, node, c->backend_gpu);
                 for (int j = 0; j < GGML_MAX_SRC; j++) {
                     if (node->src[j]) {
+                        /* Tell sched about ALL sources — including weight tensors
+                         * that already have ->buffer on GPU.  Without this, sched
+                         * doesn't know their backend and may insert spurious copies
+                         * or fall back to CPU. */
                         ggml_backend_sched_set_tensor_backend(
                             c->sched, node->src[j], c->backend_gpu);
                     }
@@ -2819,84 +2767,13 @@ static int sched_alloc_and_load(onnx_ggml_ctx_t *c) {
         }
     }
 
-    /* Allocate graph buffers via scheduler */
+    /* Allocate graph buffers via scheduler.
+     * Tensors with ->buffer already set (weights in weight_buf) are skipped.
+     * Only input placeholders and intermediate compute tensors get allocated. */
     if (!ggml_backend_sched_alloc_graph(c->sched, c->graph)) return -1;
 
-    /* Load weights into allocated tensors */
-    if (load_weights(c) != 0) return -1;
-
-    /* Load Constant op tensor data */
-    for (int i = 0; i < c->onnx->n_nodes; i++) {
-        onnx_node_t *nd = &c->onnx->nodes[i];
-        if (strcmp(nd->op_type, "Constant") != 0) continue;
-        const onnx_attr_t *va = onnx_node_find_attr(nd, "value");
-        if (!va || !va->tensor) continue;
-        onnx_initializer_t *ti = va->tensor;
-        struct ggml_tensor *t = tmap_get(c, nd->outputs[0]);
-        if (!t || !t->buffer) continue;
-
-        const void *data = NULL;
-        size_t data_size = 0;
-        if (ti->raw_data && ti->raw_size > 0) {
-            data = ti->raw_data;
-            data_size = ti->raw_size;
-        } else if (ti->decoded_data && ti->decoded_size > 0) {
-            data = ti->decoded_data;
-            data_size = ti->decoded_size;
-        }
-        if (data && data_size > 0) {
-            size_t tsize = ggml_nbytes(t);
-            size_t copy_size = data_size < tsize ? data_size : tsize;
-            ggml_backend_tensor_set(t, data, 0, copy_size);
-        }
-    }
-
-    /* Fill Shape op output tensors with ONNX dims */
-    for (int i = 0; i < c->n_shape_tensors; i++) {
-        struct ggml_tensor *t = c->shape_tensor_ptrs[i];
-        if (!t || !t->buffer) continue;
-        int nd = (int)c->shape_tensors_ne[i][0];
-        int32_t dims[ONNX_MAX_DIMS];
-        for (int d = 0; d < nd; d++)
-            dims[d] = (int32_t)c->shape_tensors_ne[i][d + 1];
-        ggml_backend_tensor_set(t, dims, 0, nd * sizeof(int32_t));
-    }
-
-    /* Fill ConstantOfShape tensors with constant value */
-    for (int i = 0; i < c->n_const_fills; i++) {
-        struct ggml_tensor *t = c->const_fill_ptrs[i];
-        if (!t || !t->buffer) continue;
-        float val = c->const_fill_vals[i];
-        size_t n = ggml_nelements(t);
-        float *buf = (float *)malloc(n * sizeof(float));
-        if (buf) {
-            for (size_t j = 0; j < n; j++) buf[j] = val;
-            ggml_backend_tensor_set(t, buf, 0, n * sizeof(float));
-            free(buf);
-        }
-    }
-
-    /* Fill EyeLike tensors with identity matrix */
-    for (int i = 0; i < c->n_eye_fills; i++) {
-        struct ggml_tensor *t = c->eye_fill_ptrs[i];
-        if (!t || !t->buffer) continue;
-        int cols = c->eye_fill_cols[i];
-        int rows = c->eye_fill_rows[i];
-        int k = c->eye_fill_k[i];
-        size_t n = (size_t)cols * rows;
-        float *buf = (float *)calloc(n, sizeof(float));
-        if (buf) {
-            for (int r = 0; r < rows; r++) {
-                int c_idx = r + k;
-                if (c_idx >= 0 && c_idx < cols)
-                    buf[r * cols + c_idx] = 1.0f;
-            }
-            ggml_backend_tensor_set(t, buf, 0, n * sizeof(float));
-            free(buf);
-        }
-    }
-
-    /* Fill strided Slice outputs (step != 1) */
+    /* Fill strided Slice outputs — their src may live in sched buffer,
+     * so this must happen after sched alloc. */
     fill_strided_slices(c);
 
     return 0;
@@ -2911,15 +2788,35 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
 
     /* Estimate memory: rough heuristic based on file size */
     size_t mem_size = onnx->mmap_size * 2 + 256 * 1024 * 1024;
+
+    /* ctx_weight: separate context for weight tensors (initializers).
+     * These get a dedicated GPU buffer that the scheduler never aliases. */
+    {
+        /* Weight context needs space for tensor metadata only (no_alloc=true).
+         * Includes initializers + Constant/Shape/ConstantOfShape/EyeLike/scalar
+         * tensors that are also placed here during map_node.
+         * Estimate ~512 bytes per ggml_tensor struct. */
+        size_t n_weight_tensors = (size_t)onnx->n_initializers + (size_t)onnx->n_nodes;
+        size_t weight_meta = n_weight_tensors * 512 + 64 * 1024;
+        struct ggml_init_params wp = {
+            .mem_size   = weight_meta,
+            .mem_buffer = NULL,
+            .no_alloc   = true,
+        };
+        c->ctx_weight = ggml_init(wp);
+        if (!c->ctx_weight) { free(c); return NULL; }
+    }
+
+    /* ctx: context for inputs, graph ops, and intermediate tensors */
     struct ggml_init_params params = {
         .mem_size   = mem_size,
         .mem_buffer = NULL,
         .no_alloc   = true,
     };
     c->ctx = ggml_init(params);
-    if (!c->ctx) { free(c); return NULL; }
+    if (!c->ctx) { ggml_free(c->ctx_weight); free(c); return NULL; }
 
-    /* Create tensors for initializers and inputs */
+    /* Create tensors for initializers (in ctx_weight) and inputs (in ctx) */
     if (create_initializer_tensors(c) != 0) goto fail;
     if (create_input_tensors(c) != 0) goto fail;
 
@@ -2969,6 +2866,94 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
 #endif
     }
 
+    /* Allocate weight buffer on preferred backend and load weights once.
+     * After this, all tensors in ctx_weight have ->buffer set, so the
+     * scheduler will skip them and never alias intermediate results
+     * over weight data. */
+    {
+        ggml_backend_t weight_backend = c->backend_gpu ? c->backend_gpu : c->backend_cpu;
+        c->weight_buf = ggml_backend_alloc_ctx_tensors(c->ctx_weight, weight_backend);
+        /* weight_buf may be NULL if there are no initializers — that's OK */
+        if (c->weight_buf) {
+            /* Load initializer weights */
+            if (load_weights(c) != 0) goto fail;
+
+            /* Load Constant op tensor data */
+            for (int i = 0; i < c->onnx->n_nodes; i++) {
+                onnx_node_t *nd = &c->onnx->nodes[i];
+                if (strcmp(nd->op_type, "Constant") != 0) continue;
+                const onnx_attr_t *va = onnx_node_find_attr(nd, "value");
+                if (!va || !va->tensor) continue;
+                onnx_initializer_t *ti = va->tensor;
+                struct ggml_tensor *t = tmap_get(c, nd->outputs[0]);
+                if (!t || !t->buffer) continue;
+
+                const void *data = NULL;
+                size_t data_size = 0;
+                if (ti->raw_data && ti->raw_size > 0) {
+                    data = ti->raw_data;
+                    data_size = ti->raw_size;
+                } else if (ti->decoded_data && ti->decoded_size > 0) {
+                    data = ti->decoded_data;
+                    data_size = ti->decoded_size;
+                }
+                if (data && data_size > 0) {
+                    size_t tsize = ggml_nbytes(t);
+                    size_t copy_size = data_size < tsize ? data_size : tsize;
+                    ggml_backend_tensor_set(t, data, 0, copy_size);
+                }
+            }
+
+            /* Fill Shape op output tensors with ONNX dims */
+            for (int i = 0; i < c->n_shape_tensors; i++) {
+                struct ggml_tensor *t = c->shape_tensor_ptrs[i];
+                if (!t || !t->buffer) continue;
+                int nd = (int)c->shape_tensors_ne[i][0];
+                int32_t dims[ONNX_MAX_DIMS];
+                for (int d = 0; d < nd; d++)
+                    dims[d] = (int32_t)c->shape_tensors_ne[i][d + 1];
+                ggml_backend_tensor_set(t, dims, 0, nd * sizeof(int32_t));
+            }
+
+            /* Fill ConstantOfShape tensors with constant value */
+            for (int i = 0; i < c->n_const_fills; i++) {
+                struct ggml_tensor *t = c->const_fill_ptrs[i];
+                if (!t || !t->buffer) continue;
+                float val = c->const_fill_vals[i];
+                size_t n = ggml_nelements(t);
+                float *buf = (float *)malloc(n * sizeof(float));
+                if (buf) {
+                    for (size_t j = 0; j < n; j++) buf[j] = val;
+                    ggml_backend_tensor_set(t, buf, 0, n * sizeof(float));
+                    free(buf);
+                }
+            }
+
+            /* Fill EyeLike tensors with identity matrix */
+            for (int i = 0; i < c->n_eye_fills; i++) {
+                struct ggml_tensor *t = c->eye_fill_ptrs[i];
+                if (!t || !t->buffer) continue;
+                int cols = c->eye_fill_cols[i];
+                int rows = c->eye_fill_rows[i];
+                int k    = c->eye_fill_k[i];
+                size_t n = (size_t)cols * rows;
+                float *buf = (float *)calloc(n, sizeof(float));
+                if (buf) {
+                    for (int r = 0; r < rows; r++) {
+                        int c_idx = r + k;
+                        if (c_idx >= 0 && c_idx < cols)
+                            buf[r * cols + c_idx] = 1.0f;
+                    }
+                    ggml_backend_tensor_set(t, buf, 0, n * sizeof(float));
+                    free(buf);
+                }
+            }
+
+            /* Note: strided Slice fills are deferred to first run
+             * (sched_alloc_and_fill) because their src may be in sched buffer */
+        }
+    }
+
     /* Create scheduler with CPU fallback */
     {
         ggml_backend_t backends[2];
@@ -2999,14 +2984,12 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
                   int n_inputs) {
     if (!ctx->graph || !ctx->sched) return -1;
 
-    /* First run: allocate and load all static data.
-     * Subsequent runs: reload weights that may have been overwritten by
-     * intermediate results sharing the same buffer allocation. */
+    /* First run: allocate compute buffers and fill small deferred tensors.
+     * Weights live in a separate weight_buf that sched never touches,
+     * so subsequent runs need NO reload — just set inputs and compute. */
     if (!ctx->is_allocated) {
-        if (sched_alloc_and_load(ctx) != 0) return -1;
+        if (sched_alloc_and_fill(ctx) != 0) return -1;
         ctx->is_allocated = 1;
-    } else {
-        if (reload_static_data(ctx) != 0) return -1;
     }
 
     /* Set input data */
@@ -3045,9 +3028,11 @@ struct ggml_tensor *onnx_ggml_output(onnx_ggml_ctx_t *ctx, int index) {
 void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     if (!ctx) return;
     if (ctx->sched)       ggml_backend_sched_free(ctx->sched);
+    if (ctx->weight_buf)  ggml_backend_buffer_free(ctx->weight_buf);
     if (ctx->backend_gpu) ggml_backend_free(ctx->backend_gpu);
     if (ctx->backend_cpu) ggml_backend_free(ctx->backend_cpu);
-    if (ctx->ctx)     ggml_free(ctx->ctx);
+    if (ctx->ctx_weight)  ggml_free(ctx->ctx_weight);
+    if (ctx->ctx)         ggml_free(ctx->ctx);
     free(ctx->tensor_map_keys);
     free(ctx->tensor_map_vals);
     free(ctx->tensor_map_ndims);

@@ -1,3 +1,20 @@
+# ggmlR 0.6.5
+
+## ONNX inference: dedicated weight buffer architecture
+
+* **Zero-overhead repeated inference**: weights are loaded to GPU (or CPU) once via a dedicated `weight_buf` and never re-transferred between runs. Previous architecture reloaded all weights before every `onnx_run()` call — eliminated entirely.
+* Separate `ctx_weight` / `ctx` contexts: weight tensors live in a permanent GPU buffer that the scheduler never aliases; compute tensors are managed by `ggml_backend_sched` independently.
+* GPU speedups from eliminated weight reload (vs 0.6.3):
+  - SuperResolution: 354 ms → 7 ms (48x)
+  - BERT: 100 ms → 15 ms (7x)
+  - Inception V3 Op18: 106 ms → 14 ms (7x)
+  - Inception V3: 24 ms → 14 ms (1.7x)
+  - EmotionFerPlus: 4.7 ms → 1.7 ms (2.8x)
+  - BAT-ResNeXt: 14 ms → 9 ms (1.6x)
+* `onnx_device_info()` — scheduler diagnostic: number of splits, GPU/CPU op counts, CPU-only op list.
+* GPT-NeoX model now loads and runs successfully (was failing on shape propagation).
+* Benchmark script (`inst/examples/benchmark_onnx.R`): proper VRAM cleanup between models via `rm()` + `gc()`.
+
 # ggmlR 0.6.3
 
 ## ONNX model import
@@ -14,7 +31,7 @@
 * Numpy-style broadcast for binary ops (Add/Sub/Mul/Div): handles mismatched ranks and dimensions, with left-align, right-align, and greedy dim-matching strategies.
 * Scalar Constant tensors (0-dimensional TensorProto) correctly handled.
 
-## Tested real-world ONNX models (9/15 from ONNX Model Zoo)
+## Tested real-world ONNX models (12/15 from ONNX Model Zoo)
 
 * mnist-8 — OK (12 nodes)
 * squeezenet1.0-8 — OK (66 nodes: Conv, Relu, MaxPool, Concat, Dropout, GlobalAveragePool, Softmax)
@@ -24,7 +41,11 @@
 * emotion-ferplus-8 — OK (52 nodes: Conv, Relu, MaxPool, Reshape, Gemm, Constant)
 * sageconv Opset 16 — OK (24 nodes: MatMul, Add, Mul, Sigmoid, ReduceSum)
 * roberta-sequence-classification-9 — OK with `input_shapes` (1180 nodes)
-* Remaining failures: bat_resnext26ts (MatMul 3D broadcast), botnet26t_256 (MatMul dims), cait_xs24 (Concat mismatch), gptneox (shape propagation), MaskRCNN (quantized ops), xcit_tiny (Concat mismatch).
+* bat_resnext26ts Opset 18 — OK (570 nodes: Conv, BatchNorm, SiLU, Concat, Expand, Split)
+* gptneox Opset 18 — OK with `input_shapes` (482 nodes: MatMul, LayerNorm, GELU, Softmax)
+* xcit_tiny — OK (436 nodes: MatMul, LayerNorm, Softmax, Concat, Transpose)
+* MaskRCNN-12-int8 — OK (937 nodes: QLinearConv, DequantizeLinear, Resize, Concat, Reshape)
+* Remaining failures: botnet26t_256 (batched matmul 3D+), cait_xs24_384 (batched matmul 3D+).
 
 # ggmlR 0.6.2
 * Fixed Windows cleanup script that removed `inst/lib/libggml.a`, breaking static linking from dependent packages (e.g. llamaR).

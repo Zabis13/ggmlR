@@ -18,11 +18,15 @@ extern "C" {
 
 typedef struct {
     onnx_model_t       *onnx;        /* parsed ONNX model (owns mmap) */
-    struct ggml_context *ctx;         /* ggml context for tensors */
+    struct ggml_context *ctx;         /* ggml context for graph + compute tensors */
+    struct ggml_context *ctx_weight;  /* ggml context for weight tensors (separate lifetime) */
     struct ggml_cgraph  *graph;       /* computation graph */
 
+    /* Weight buffer — allocated once, never touched by sched */
+    ggml_backend_buffer_t weight_buf; /* GPU (or CPU) buffer holding all weights */
+
     /* Scheduler with CPU fallback for unsupported Vulkan ops */
-    ggml_backend_sched_t sched;       /* scheduler (owns buffer allocation) */
+    ggml_backend_sched_t sched;       /* scheduler (owns compute buffer allocation) */
     ggml_backend_t       backend_gpu; /* Vulkan backend (NULL if CPU-only) */
     ggml_backend_t       backend_cpu; /* CPU backend (always present) */
 
@@ -68,7 +72,7 @@ typedef struct {
     int                 cval_size;
     int                 cval_cap;
 
-    int                 is_allocated;   /* 1 after first sched_alloc_and_load */
+    int                 is_allocated;   /* 1 after first sched alloc + deferred fill */
 } onnx_ggml_ctx_t;
 
 /* Build ggml graph from parsed ONNX model.

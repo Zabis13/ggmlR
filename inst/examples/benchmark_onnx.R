@@ -141,6 +141,9 @@ bench_one <- function(onnx_path, input_name, input_shape, device,
   probs <- out[[1]]
   top5_idx <- order(probs, decreasing = TRUE)[1:5]
 
+  # Free model to release VRAM before next benchmark
+  rm(model, out); gc(verbose = FALSE)
+
   list(
     load_time = load_time,
     times     = times,
@@ -206,6 +209,7 @@ for (m in models) {
       }
       cat(sprintf("  Actual buffer: %s\n", di$actual_backend))
     }
+    rm(di_model); gc(verbose = FALSE)
     mem_before <- ggml_vulkan_device_memory(0)
     cat(sprintf("  GPU memory before: %.1f MB free\n", mem_before$free / 1e6))
   }

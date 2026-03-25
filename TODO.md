@@ -96,6 +96,8 @@ pred <- predict(onnx, x)
 ---
 
 ### Оптимизация
+- [x] Dedicated weight buffer (`ctx_weight` + `weight_buf`) — веса на GPU один раз, sched не трогает
+- [x] Убран `reload_static_data()` — zero-overhead repeated inference
 - [ ] Профилирование scheduler overhead
 - [ ] Минимизация копий между GPU
 - [ ] **Vulkan profiling API на R уровне** — экспортировать `vk_perf_logger` из `ggml-vulkan.cpp` в R через `.Call()`, чтобы видеть breakdown по операциям (мс на каждый op/fusion). Нужно для диагностики bottleneck'ов в sd2R sampling loop (552s на Flux). В ggml уже есть `vk_perf_logger_enabled` и timestamp queries — нужен R-интерфейс для включения/чтения результатов.
@@ -177,7 +179,7 @@ pred <- predict(onnx, x)
 - [x] CPU: все ops проходят
 - [x] Vulkan: 24/24 ops проходят
 
-#### Реальные модели (ONNX Model Zoo) — 11/15 OK
+#### Реальные модели (ONNX Model Zoo) — 12/15 OK
 - [x] mnist-8 — OK (12 nodes)
 - [x] squeezenet1.0-8 — OK (66 nodes: Conv, Relu, MaxPool, Concat, Dropout, GlobalAveragePool, Softmax)
 - [x] adv_inception_v3 (Opset 17, 18) — OK (215 nodes)
@@ -189,9 +191,9 @@ pred <- predict(onnx, x)
 - [x] bat_resnext26ts — OK (grouped conv, AdaptiveMaxPool baked as fixed kernel, input 256x256)
 - [x] xcit_tiny — OK (Concat axis fix, cval shape propagation)
 - [x] MaskRCNN-12-int8 — OK (quantized ops pass-through как f32)
+- [x] gptneox (Opset 18) — OK с input_shapes (482 nodes: MatMul, LayerNorm, GELU, Softmax)
 - [ ] botnet26t_256 — MatMul broadcasting в self-attention (batched matmul 3D+)
 - [ ] cait_xs24_384 — MatMul broadcasting (batched matmul 3D+)
-- [ ] gptneox — Add broadcasting (3D+ tensor broadcast)
 - [ ] roberta dynamic — динамические shapes без input_shapes (требует shape inference)
 
 #### Баги / ограничения
@@ -204,7 +206,7 @@ pred <- predict(onnx, x)
 - [x] **Broadcast** — numpy-style broadcast для Add/Sub/Mul/Div: left-align, right-align, greedy dim-matching
 
 #### MVP + трансформеры — готов ✓
-Все базовые + трансформерные ops реализованы. 11/15 моделей из ONNX Zoo работают.
+Все базовые + трансформерные ops реализованы. 12/15 моделей из ONNX Zoo работают.
 
 #### Исправлено в 0.6.x
 - [x] Conv grouped (group>1: split+conv+concat, depthwise: ggml_conv_2d_dw)
@@ -216,6 +218,5 @@ pred <- predict(onnx, x)
 
 #### Следующий этап — расширенная совместимость
 - [ ] MatMul broadcast для 3D+ тензоров (batched matmul) — блокирует botnet26t, cait_xs24
-- [ ] Add/Mul broadcast для 3D+ тензоров — блокирует gptneox
-- [ ] Quantized ops (QuantizeLinear, DequantizeLinear, QLinearConv)
 - [ ] NonZero, Equal, Less, Greater — логические ops
+- [ ] botnet26t_256 — RelPosBias2D custom op (CPU kernel done, graph wiring pending)
