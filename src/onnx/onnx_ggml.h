@@ -73,12 +73,21 @@ typedef struct {
     int                 cval_cap;
 
     int                 is_allocated;   /* 1 after first sched alloc + deferred fill */
+
+    /* FP16 inference mode: 0 = F32 (default), 1 = F16 for large weights */
+    int                 model_dtype;    /* GGML_TYPE_F32 or GGML_TYPE_F16 */
 } onnx_ggml_ctx_t;
+
+/* Minimum number of elements for a weight tensor to be stored in FP16.
+ * Smaller tensors (bias, scalars, BN params) stay F32 for numerical stability. */
+#define ONNX_FP16_MIN_ELEMENTS 256
 
 /* Build ggml graph from parsed ONNX model.
  * device: "vulkan" or "cpu" (NULL defaults to vulkan if available, else cpu).
  * Returns NULL on failure. */
-onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_threads);
+/* model_dtype: GGML_TYPE_F32 (default) or GGML_TYPE_F16 for half-precision weights. */
+onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_threads,
+                                  enum ggml_type model_dtype);
 
 /* Run inference. input_data/input_names: arrays of length n_inputs.
  * Each input_data[i] is a flat float array matching the model input shape.

@@ -23,10 +23,16 @@
 #' @param n_threads Number of CPU threads. \code{NULL} (default) reads
 #'   \code{getOption("ggmlR.n_threads")}; if that is also unset, uses
 #'   \code{parallel::detectCores() - 1} (minimum 1).
+#' @param dtype Weight precision: \code{"f32"} (default) or \code{"f16"}.
+#'   When \code{"f16"}, large weight tensors (>= 256 elements) are stored
+#'   in half-precision for faster Vulkan compute and lower VRAM usage.
+#'   Small tensors (bias, scalars, batch-norm params) remain in F32
+#'   for numerical stability. Inputs and outputs are always F32.
 #' @return An opaque model object (external pointer) for use with
 #'   \code{onnx_run()}, \code{onnx_summary()}, and \code{onnx_inputs()}.
 #' @export
-onnx_load <- function(path, device = NULL, input_shapes = NULL, n_threads = NULL) {
+onnx_load <- function(path, device = NULL, input_shapes = NULL, n_threads = NULL,
+                      dtype = "f32") {
   path <- normalizePath(path, mustWork = TRUE)
 
   # Parse the ONNX protobuf
@@ -51,8 +57,12 @@ onnx_load <- function(path, device = NULL, input_shapes = NULL, n_threads = NULL
   }
   n_threads <- as.integer(n_threads)
 
+  # Validate dtype
+  dtype <- match.arg(dtype, c("f32", "f16", "fp16", "float16"))
+  if (dtype %in% c("fp16", "float16")) dtype <- "f16"
+
   # Build ggml graph + allocate on device
-  ctx_ptr <- .Call("R_onnx_build", onnx_ptr, device, n_threads)
+  ctx_ptr <- .Call("R_onnx_build", onnx_ptr, device, n_threads, dtype)
 
   # Check for remaining dynamic dimensions
   inp <- .Call("R_onnx_inputs", ctx_ptr)
@@ -78,7 +88,8 @@ onnx_load <- function(path, device = NULL, input_shapes = NULL, n_threads = NULL
       graph_name   = info$graph_name,
       n_nodes      = info$n_nodes,
       n_weights    = info$n_initializers,
-      ops          = info$ops
+      ops          = info$ops,
+      dtype        = dtype
     ),
     class = "onnx_model"
   )
@@ -95,6 +106,8 @@ print.onnx_model <- function(x, ...) {
   cat("  Producer:", x$producer, "\n")
   cat("  IR version:", x$ir_version, "/ Opset:", x$opset, "\n")
   cat("  Nodes:", x$n_nodes, "/ Weights:", x$n_weights, "\n")
+  if (!is.null(x$dtype) && x$dtype != "f32")
+    cat("  Weight dtype:", toupper(x$dtype), "\n")
   cat("  Ops:", paste(x$ops, collapse = ", "), "\n")
   invisible(x)
 }

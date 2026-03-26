@@ -6,6 +6,7 @@
 #include <R.h>
 #include <Rinternals.h>
 #include <R_ext/Rdynload.h>
+#include <string.h>
 
 #include "onnx_loader.h"
 #include "onnx_ggml.h"
@@ -111,16 +112,26 @@ SEXP R_onnx_summary(SEXP model_ptr_) {
     return result;
 }
 
-/* ── R_onnx_build(model_ptr, device, n_threads) ────────────────── */
+/* ── R_onnx_build(model_ptr, device, n_threads, dtype) ──────────── */
 
-SEXP R_onnx_build(SEXP model_ptr_, SEXP device_, SEXP n_threads_) {
+SEXP R_onnx_build(SEXP model_ptr_, SEXP device_, SEXP n_threads_, SEXP dtype_) {
     onnx_model_t *m = (onnx_model_t *)R_ExternalPtrAddr(model_ptr_);
     if (!m) Rf_error("onnx_build: NULL model pointer");
 
     const char *device = Rf_isNull(device_) ? NULL : CHAR(STRING_ELT(device_, 0));
     int n_threads = Rf_asInteger(n_threads_);
 
-    onnx_ggml_ctx_t *ctx = onnx_ggml_build(m, device, n_threads);
+    /* Parse dtype: "f16" → GGML_TYPE_F16, anything else → GGML_TYPE_F32 */
+    enum ggml_type model_dtype = GGML_TYPE_F32;
+    if (!Rf_isNull(dtype_)) {
+        const char *dtype_str = CHAR(STRING_ELT(dtype_, 0));
+        if (strcmp(dtype_str, "f16") == 0 || strcmp(dtype_str, "fp16") == 0 ||
+            strcmp(dtype_str, "float16") == 0) {
+            model_dtype = GGML_TYPE_F16;
+        }
+    }
+
+    onnx_ggml_ctx_t *ctx = onnx_ggml_build(m, device, n_threads, model_dtype);
     if (!ctx) {
         Rf_error("onnx_build: failed to build ggml graph");
         return R_NilValue;

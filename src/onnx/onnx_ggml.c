@@ -5,6 +5,7 @@
 
 #include "onnx_ggml.h"
 #include "../ggml.h"
+#include "../ggml-alloc.h"
 #include "../ggml-backend.h"
 #include "../ggml-cpu.h"
 
@@ -209,6 +210,20 @@ static int create_initializer_tensors(onnx_ggml_ctx_t *c) {
                 ne[d] = init->dims[ndims - 1 - d];
         }
 
+        /* FP16 promotion: convert large F32 weight tensors to F16 for
+         * faster Vulkan compute. Only for ndims >= 3 (Conv/pooling weights).
+         * 2D weights (MatMul/embedding) stay F32 because Vulkan's MMQ
+         * (integer dot product) path for F32→Q8_1 is faster than F16 matmul.
+         * Small tensors (bias, BN params) and INT types are never converted. */
+        int64_t n_elem = 1;
+        for (int d = 0; d < ndims; d++) n_elem *= ne[d];
+        if (c->model_dtype == GGML_TYPE_F16 &&
+            type == GGML_TYPE_F32 &&
+            init->n_dims >= 3 &&
+            n_elem >= ONNX_FP16_MIN_ELEMENTS) {
+            type = GGML_TYPE_F16;
+        }
+
         /* Allocate weight tensors in ctx_weight so they get a dedicated
          * buffer that the scheduler never touches or aliases. */
         struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
@@ -310,6 +325,21 @@ static int load_weights(onnx_ggml_ctx_t *c) {
                 ggml_backend_tensor_set(t, buf, 0, n_elem * sizeof(float));
                 free(buf);
             }
+            /* F32 source data → F16 tensor (FP16 inference mode) */
+            else if (init->data_type == ONNX_DTYPE_FLOAT &&
+                     t->type == GGML_TYPE_F16) {
+                int64_t n_elem = ggml_nelements(t);
+                size_t src_elems = data_size / sizeof(float);
+                if ((int64_t)src_elems > n_elem) src_elems = (size_t)n_elem;
+                ggml_fp16_t *buf = (ggml_fp16_t *)malloc(n_elem * sizeof(ggml_fp16_t));
+                if (!buf) return -1;
+                ggml_fp32_to_fp16_row((const float *)data, buf, (int64_t)src_elems);
+                /* Zero-fill any remaining elements */
+                for (size_t j = src_elems; j < (size_t)n_elem; j++)
+                    buf[j] = ggml_fp32_to_fp16(0.0f);
+                ggml_backend_tensor_set(t, buf, 0, n_elem * sizeof(ggml_fp16_t));
+                free(buf);
+            }
             else {
                 size_t copy_size = data_size < tsize ? data_size : tsize;
                 ggml_backend_tensor_set(t, data, 0, copy_size);
@@ -322,6 +352,8 @@ static int load_weights(onnx_ggml_ctx_t *c) {
 /* ── Create input placeholder tensors ───────────────────────────── */
 
 static int create_input_tensors(onnx_ggml_ctx_t *c) {
+    struct ggml_context *ictx = c->ctx;
+
     for (int i = 0; i < c->onnx->n_inputs; i++) {
         onnx_value_info_t *vi = &c->onnx->inputs[i];
         /* Skip if already created as initializer */
@@ -340,10 +372,10 @@ static int create_input_tensors(onnx_ggml_ctx_t *c) {
 
         struct ggml_tensor *t;
         switch (ndims) {
-            case 1: t = ggml_new_tensor_1d(c->ctx, type, ne[0]); break;
-            case 2: t = ggml_new_tensor_2d(c->ctx, type, ne[0], ne[1]); break;
-            case 3: t = ggml_new_tensor_3d(c->ctx, type, ne[0], ne[1], ne[2]); break;
-            default: t = ggml_new_tensor_4d(c->ctx, type, ne[0], ne[1], ne[2], ne[3]); break;
+            case 1: t = ggml_new_tensor_1d(ictx, type, ne[0]); break;
+            case 2: t = ggml_new_tensor_2d(ictx, type, ne[0], ne[1]); break;
+            case 3: t = ggml_new_tensor_3d(ictx, type, ne[0], ne[1], ne[2]); break;
+            default: t = ggml_new_tensor_4d(ictx, type, ne[0], ne[1], ne[2], ne[3]); break;
         }
         if (!t) return -1;
         ggml_set_name(t, vi->name);
@@ -2002,6 +2034,19 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                     ne[d] = t_init->dims[ndims - 1 - d];
             }
 
+            /* FP16 promotion for large Constant tensors (ndims >= 3 only) */
+            {
+                int onnx_nd = t_init->n_dims > 0 ? t_init->n_dims : 1;
+                int64_t n_elem = 1;
+                for (int d = 0; d < ndims; d++) n_elem *= ne[d];
+                if (c->model_dtype == GGML_TYPE_F16 &&
+                    type == GGML_TYPE_F32 &&
+                    onnx_nd >= 3 &&
+                    n_elem >= ONNX_FP16_MIN_ELEMENTS) {
+                    type = GGML_TYPE_F16;
+                }
+            }
+
             /* Constant tensors go into ctx_weight for dedicated buffer */
             {
                 struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
@@ -2781,10 +2826,12 @@ static int sched_alloc_and_fill(onnx_ggml_ctx_t *c) {
 
 /* ── Build full graph ───────────────────────────────────────────── */
 
-onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_threads) {
+onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_threads,
+                                  enum ggml_type model_dtype) {
     onnx_ggml_ctx_t *c = calloc(1, sizeof(onnx_ggml_ctx_t));
     if (!c) return NULL;
     c->onnx = onnx;
+    c->model_dtype = (model_dtype == GGML_TYPE_F16) ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
     /* Estimate memory: rough heuristic based on file size */
     size_t mem_size = onnx->mmap_size * 2 + 256 * 1024 * 1024;
@@ -2898,9 +2945,25 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
                     data_size = ti->decoded_size;
                 }
                 if (data && data_size > 0) {
-                    size_t tsize = ggml_nbytes(t);
-                    size_t copy_size = data_size < tsize ? data_size : tsize;
-                    ggml_backend_tensor_set(t, data, 0, copy_size);
+                    /* F32 source → F16 tensor (FP16 mode for large constants) */
+                    if (ti->data_type == ONNX_DTYPE_FLOAT &&
+                        t->type == GGML_TYPE_F16) {
+                        int64_t n_elem = ggml_nelements(t);
+                        size_t src_elems = data_size / sizeof(float);
+                        if ((int64_t)src_elems > n_elem) src_elems = (size_t)n_elem;
+                        ggml_fp16_t *buf = (ggml_fp16_t *)malloc(n_elem * sizeof(ggml_fp16_t));
+                        if (buf) {
+                            ggml_fp32_to_fp16_row((const float *)data, buf, (int64_t)src_elems);
+                            for (size_t j = src_elems; j < (size_t)n_elem; j++)
+                                buf[j] = ggml_fp32_to_fp16(0.0f);
+                            ggml_backend_tensor_set(t, buf, 0, n_elem * sizeof(ggml_fp16_t));
+                            free(buf);
+                        }
+                    } else {
+                        size_t tsize = ggml_nbytes(t);
+                        size_t copy_size = data_size < tsize ? data_size : tsize;
+                        ggml_backend_tensor_set(t, data, 0, copy_size);
+                    }
                 }
             }
 
