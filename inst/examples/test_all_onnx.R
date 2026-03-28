@@ -31,8 +31,8 @@ models <- list(
        int_inputs = c("input_ids", "attention_mask")),
 
   list(file = "sageconv_Opset16.onnx",
-       inputs = list(x = c(4L, 3L),
-                     edge_index = c(2L, 5L)),
+       inputs = list(x = c(2708L, 1433L),
+                     edge_index = c(2L, 10556L)),
        int_inputs = c("edge_index")),
 
   list(file = "roberta-sequence-classification-9.onnx",

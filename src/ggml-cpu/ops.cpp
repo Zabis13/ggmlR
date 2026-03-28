@@ -4909,38 +4909,74 @@ void ggml_compute_forward_scatter_elements(
 
     const ggml_tensor * data    = dst->src[0];  // base tensor to copy
     const ggml_tensor * updates = dst->src[1];  // values to scatter
-    const ggml_tensor * indices = dst->src[2];  // row indices (I32)
+    const ggml_tensor * indices = dst->src[2];  // indices (I32, same shape as updates)
 
     GGML_ASSERT(data->type    == GGML_TYPE_F32);
     GGML_ASSERT(updates->type == GGML_TYPE_F32);
     GGML_ASSERT(indices->type == GGML_TYPE_I32);
     GGML_ASSERT(ggml_is_contiguous(dst));
 
-    int32_t reduction;
-    memcpy(&reduction, dst->op_params, sizeof(int32_t));
+    int32_t op_params[2];
+    memcpy(op_params, dst->op_params, sizeof(op_params));
+    const int reduction = op_params[0];
+    const int axis      = op_params[1];
 
     /* Copy data → dst */
     memcpy(dst->data, data->data, ggml_nbytes(data));
 
-    const int64_t row_size = data->ne[0];          /* elements per row */
-    const int64_t n_idx    = ggml_nelements(indices);
-    const int32_t * idx    = (const int32_t *)indices->data;
-    const float   * upd    = (const float *)updates->data;
-    float         * out    = (float *)dst->data;
+    const int32_t * idx = (const int32_t *)indices->data;
+    const float   * upd = (const float *)updates->data;
+    float         * out = (float *)dst->data;
 
-    if (reduction == 1) {
-        /* reduction = add */
-        for (int64_t i = 0; i < n_idx; i++) {
-            int32_t row = idx[i];
-            for (int64_t j = 0; j < row_size; j++) {
-                out[row * row_size + j] += upd[i * row_size + j];
-            }
-        }
-    } else {
-        /* reduction = none (overwrite) */
-        for (int64_t i = 0; i < n_idx; i++) {
-            int32_t row = idx[i];
-            memcpy(&out[row * row_size], &upd[i * row_size], row_size * sizeof(float));
+    /* ONNX ScatterElements: for each element in updates/indices:
+     * dst_index = same as updates_index, except along 'axis' dim
+     * where it is replaced by indices[updates_index].
+     *
+     * updates and indices have the same shape. data/dst may differ
+     * from updates along the scatter axis but must match elsewhere.
+     *
+     * We iterate over all elements of updates linearly. For each,
+     * decompose into multi-index (i0,i1,i2,i3), look up the index
+     * value, compute the output flat offset. */
+    const int64_t n_upd = ggml_nelements(updates);
+    const int64_t dst_ne[4]  = { dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3] };
+    const int64_t upd_ne[4]  = { updates->ne[0], updates->ne[1], updates->ne[2], updates->ne[3] };
+
+    /* dst strides in elements (contiguous) */
+    const int64_t dst_stride[4] = {
+        1,
+        dst_ne[0],
+        dst_ne[0] * dst_ne[1],
+        dst_ne[0] * dst_ne[1] * dst_ne[2]
+    };
+    /* updates strides in elements (contiguous) */
+    const int64_t upd_stride[4] = {
+        1,
+        upd_ne[0],
+        upd_ne[0] * upd_ne[1],
+        upd_ne[0] * upd_ne[1] * upd_ne[2]
+    };
+
+    for (int64_t flat = 0; flat < n_upd; flat++) {
+        /* Decompose flat index into multi-index for updates */
+        int64_t rem = flat;
+        int64_t mi[4];
+        mi[3] = rem / upd_stride[3]; rem %= upd_stride[3];
+        mi[2] = rem / upd_stride[2]; rem %= upd_stride[2];
+        mi[1] = rem / upd_stride[1]; rem %= upd_stride[1];
+        mi[0] = rem;
+
+        /* Build dst multi-index: same as updates, except axis dim = indices[flat] */
+        int64_t di[4] = { mi[0], mi[1], mi[2], mi[3] };
+        di[axis] = (int64_t)idx[flat];
+
+        int64_t dst_flat = di[0] * dst_stride[0] + di[1] * dst_stride[1]
+                         + di[2] * dst_stride[2] + di[3] * dst_stride[3];
+
+        if (reduction == 1) {
+            out[dst_flat] += upd[flat];
+        } else {
+            out[dst_flat] = upd[flat];
         }
     }
 }

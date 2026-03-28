@@ -1104,11 +1104,11 @@ SEXP R_ggml_new_tensor(SEXP ctx_ptr, SEXP type, SEXP n_dims_sexp, SEXP ne_sexp) 
     enum ggml_type dtype = (enum ggml_type) asInteger(type);
     int n_dims = asInteger(n_dims_sexp);
 
-    if (n_dims < 1 || n_dims > 4) {
-        error("n_dims must be between 1 and 4");
+    if (n_dims < 1 || n_dims > GGML_MAX_DIMS) {
+        error("n_dims must be between 1 and %d", GGML_MAX_DIMS);
     }
 
-    int64_t ne[4] = {1, 1, 1, 1};
+    int64_t ne[GGML_MAX_DIMS] = {1, 1, 1, 1, 1};
     double *ne_r = REAL(ne_sexp);
     for (int i = 0; i < n_dims; i++) {
         ne[i] = (int64_t) ne_r[i];

@@ -10121,7 +10121,7 @@ static void ggml_vk_scatter_elements(ggml_backend_vk_context * ctx, vk_context& 
         (uint32_t)dst->ne[0], (uint32_t)dst->ne[1], (uint32_t)dst->ne[2], (uint32_t)dst->ne[3],
         (uint32_t)dst->nb[0] / dst_type_size, (uint32_t)dst->nb[1] / dst_type_size, (uint32_t)dst->nb[2] / dst_type_size, (uint32_t)dst->nb[3] / dst_type_size,
         0,
-        0.0f, 0.0f, 0,
+        0.0f, 0.0f, ((int32_t *)dst->op_params)[1],  /* param3 = axis */
     });
 }
 

@@ -1226,15 +1226,15 @@ void ggml_print_objects(const struct ggml_context * ctx) {
 }
 
 int64_t ggml_nelements(const struct ggml_tensor * tensor) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
-    return tensor->ne[0]*tensor->ne[1]*tensor->ne[2]*tensor->ne[3];
+    return tensor->ne[0]*tensor->ne[1]*tensor->ne[2]*tensor->ne[3]*tensor->ne[4];
 }
 
 int64_t ggml_nrows(const struct ggml_tensor * tensor) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
-    return tensor->ne[1]*tensor->ne[2]*tensor->ne[3];
+    return tensor->ne[1]*tensor->ne[2]*tensor->ne[3]*tensor->ne[4];
 }
 
 size_t ggml_nbytes(const struct ggml_tensor * tensor) {
@@ -1324,25 +1324,25 @@ size_t ggml_element_size(const struct ggml_tensor * tensor) {
 }
 
 bool ggml_is_scalar(const struct ggml_tensor * tensor) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
-    return tensor->ne[0] == 1 && tensor->ne[1] == 1 && tensor->ne[2] == 1 && tensor->ne[3] == 1;
+    return tensor->ne[0] == 1 && tensor->ne[1] == 1 && tensor->ne[2] == 1 && tensor->ne[3] == 1 && tensor->ne[4] == 1;
 }
 
 bool ggml_is_vector(const struct ggml_tensor * tensor) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
-    return tensor->ne[1] == 1 && tensor->ne[2] == 1 && tensor->ne[3] == 1;
+    return tensor->ne[1] == 1 && tensor->ne[2] == 1 && tensor->ne[3] == 1 && tensor->ne[4] == 1;
 }
 
 bool ggml_is_matrix(const struct ggml_tensor * tensor) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
-    return tensor->ne[2] == 1 && tensor->ne[3] == 1;
+    return tensor->ne[2] == 1 && tensor->ne[3] == 1 && tensor->ne[4] == 1;
 }
 
 bool ggml_is_3d(const struct ggml_tensor * tensor) {
-    return tensor->ne[3] == 1;
+    return tensor->ne[3] == 1 && tensor->ne[4] == 1;
 }
 
 int ggml_n_dims(const struct ggml_tensor * tensor) {
@@ -1441,9 +1441,9 @@ bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor) {
 }
 
 bool ggml_is_permuted(const struct ggml_tensor * tensor) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
-    return tensor->nb[0] > tensor->nb[1] || tensor->nb[1] > tensor->nb[2] || tensor->nb[2] > tensor->nb[3];
+    return tensor->nb[0] > tensor->nb[1] || tensor->nb[1] > tensor->nb[2] || tensor->nb[2] > tensor->nb[3] || tensor->nb[3] > tensor->nb[4];
 }
 
 bool ggml_is_contiguous_channels(const struct ggml_tensor * tensor) {
@@ -1460,12 +1460,13 @@ bool ggml_is_contiguous_rows(const struct ggml_tensor * tensor) {
 }
 
 static inline bool ggml_is_padded_1d(const struct ggml_tensor * tensor) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
     return
         tensor->nb[0] == ggml_type_size(tensor->type) &&
         tensor->nb[2] == tensor->nb[1]*tensor->ne[1] &&
-        tensor->nb[3] == tensor->nb[2]*tensor->ne[2];
+        tensor->nb[3] == tensor->nb[2]*tensor->ne[2] &&
+        tensor->nb[4] == tensor->nb[3]*tensor->ne[3];
 }
 
 bool ggml_is_empty(const struct ggml_tensor * tensor) {
@@ -1479,38 +1480,41 @@ bool ggml_is_empty(const struct ggml_tensor * tensor) {
 }
 
 bool ggml_are_same_shape(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
     return
         (t0->ne[0] == t1->ne[0]) &&
         (t0->ne[1] == t1->ne[1]) &&
         (t0->ne[2] == t1->ne[2]) &&
-        (t0->ne[3] == t1->ne[3]);
+        (t0->ne[3] == t1->ne[3]) &&
+        (t0->ne[4] == t1->ne[4]);
 }
 
 bool ggml_are_same_stride(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
     return
         (t0->nb[0] == t1->nb[0]) &&
         (t0->nb[1] == t1->nb[1]) &&
         (t0->nb[2] == t1->nb[2]) &&
-        (t0->nb[3] == t1->nb[3]);
+        (t0->nb[3] == t1->nb[3]) &&
+        (t0->nb[4] == t1->nb[4]);
 }
 
 // check if t1 can be represented as a repetition of t0
 bool ggml_can_repeat(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
     return ggml_is_empty(t0) ? ggml_is_empty(t1) :
         (t1->ne[0]%t0->ne[0] == 0) &&
         (t1->ne[1]%t0->ne[1] == 0) &&
         (t1->ne[2]%t0->ne[2] == 0) &&
-        (t1->ne[3]%t0->ne[3] == 0);
+        (t1->ne[3]%t0->ne[3] == 0) &&
+        (t1->ne[4]%t0->ne[4] == 0);
 }
 
 static inline bool ggml_can_repeat_rows(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
     return (t0->ne[0] == t1->ne[0]) && ggml_can_repeat(t0, t1);
 }
@@ -1708,8 +1712,8 @@ static struct ggml_tensor * ggml_new_tensor_impl(
     *result = (struct ggml_tensor) {
         /*.type         =*/ type,
         /*.buffer       =*/ NULL,
-        /*.ne           =*/ { 1, 1, 1, 1 },
-        /*.nb           =*/ { 0, 0, 0, 0 },
+        /*.ne           =*/ { 1, 1, 1, 1, 1 },
+        /*.nb           =*/ { 0, 0, 0, 0, 0 },
         /*.op           =*/ GGML_OP_NONE,
         /*.op_params    =*/ { 0 },
         /*.flags        =*/ 0,
@@ -1783,6 +1787,18 @@ struct ggml_tensor * ggml_new_tensor_4d(
         int64_t ne3) {
     const int64_t ne[4] = { ne0, ne1, ne2, ne3 };
     return ggml_new_tensor(ctx, type, 4, ne);
+}
+
+struct ggml_tensor * ggml_new_tensor_5d(
+        struct ggml_context * ctx,
+        enum   ggml_type type,
+        int64_t ne0,
+        int64_t ne1,
+        int64_t ne2,
+        int64_t ne3,
+        int64_t ne4) {
+    const int64_t ne[5] = { ne0, ne1, ne2, ne3, ne4 };
+    return ggml_new_tensor(ctx, type, 5, ne);
 }
 
 void * ggml_new_buffer(struct ggml_context * ctx, size_t nbytes) {
@@ -3168,11 +3184,12 @@ struct ggml_tensor * ggml_l2_norm_inplace(
 // ggml_mul_mat
 
 static inline bool ggml_can_mul_mat(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
     return (t0->ne[0]           == t1->ne[0])  &&
            (t1->ne[2]%t0->ne[2] == 0)          && // verify t0 is broadcastable
-           (t1->ne[3]%t0->ne[3] == 0);
+           (t1->ne[3]%t0->ne[3] == 0)          &&
+           (t1->ne[4]%t0->ne[4] == 0);
 }
 
 struct ggml_tensor * ggml_mul_mat(
@@ -3182,8 +3199,8 @@ struct ggml_tensor * ggml_mul_mat(
     GGML_ASSERT(ggml_can_mul_mat(a, b));
     GGML_ASSERT(!ggml_is_transposed(a));
 
-    const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    const int64_t ne[5] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3], b->ne[4] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, ne);
 
     result->op     = GGML_OP_MUL_MAT;
     result->src[0] = a;
@@ -3245,11 +3262,12 @@ struct ggml_tensor * ggml_mul_mat_id(
 // ggml_out_prod
 
 static inline bool ggml_can_out_prod(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
-    static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
+    static_assert(GGML_MAX_DIMS == 5, "GGML_MAX_DIMS is not 5 - update this function");
 
     return (t0->ne[1] == t1->ne[1])   &&
            (t1->ne[2]%t0->ne[2] == 0) && // verify t0 is broadcastable
-           (t1->ne[3]%t0->ne[3] == 0);
+           (t1->ne[3]%t0->ne[3] == 0) &&
+           (t1->ne[4]%t0->ne[4] == 0);
 }
 
 struct ggml_tensor * ggml_out_prod(
@@ -3604,6 +3622,27 @@ struct ggml_tensor * ggml_reshape_4d(
     return result;
 }
 
+struct ggml_tensor * ggml_reshape_5d(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int64_t               ne0,
+        int64_t               ne1,
+        int64_t               ne2,
+        int64_t               ne3,
+        int64_t               ne4) {
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(ggml_nelements(a) == ne0*ne1*ne2*ne3*ne4);
+
+    const int64_t ne[5] = { ne0, ne1, ne2, ne3, ne4 };
+    struct ggml_tensor * result = ggml_new_tensor_impl(ctx, a->type, 5, ne, a, 0);
+    ggml_format_name(result, "%s (reshaped)", a->name);
+
+    result->op     = GGML_OP_RESHAPE;
+    result->src[0] = a;
+
+    return result;
+}
+
 static struct ggml_tensor * ggml_view_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -3858,16 +3897,20 @@ struct ggml_tensor * ggml_scatter_elements(
         struct ggml_tensor  * data,
         struct ggml_tensor  * updates,
         struct ggml_tensor  * indices,
-        int                   reduction) {
-    /* data: [ne0, ne1, ...], updates: [ne0, n_idx, ...], indices: [n_idx] i32 */
+        int                   reduction,
+        int                   axis) {
+    /* ONNX ScatterElements: indices and updates have the same shape.
+     * For each multi-index (i0,i1,...) in indices/updates:
+     *   output[...axis_idx=indices[i0,i1,...], ...] = updates[i0,i1,...]
+     * axis is in ggml dim order (0 = ne[0]).
+     * data: [ne0, ne1, ...], output shape = data shape. */
     GGML_ASSERT(data->type    == GGML_TYPE_F32);
     GGML_ASSERT(updates->type == GGML_TYPE_F32);
     GGML_ASSERT(indices->type == GGML_TYPE_I32);
-    GGML_ASSERT(updates->ne[0] == data->ne[0]);
 
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, data->ne);
 
-    int32_t params[] = { reduction };
+    int32_t params[] = { reduction, axis };
     memcpy(result->op_params, params, sizeof(params));
 
     result->op     = GGML_OP_SCATTER_ELEMENTS;

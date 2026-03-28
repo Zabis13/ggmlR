@@ -29,21 +29,34 @@ uint get_doffset() { return p.misalign_offsets & 0xFF; }
 void main() {
     const uint gid = gl_GlobalInvocationID.x;
 
-    // p.ne00 = row_size (from updates ne[0])
-    // p.ne01 = n_idx    (from updates ne[1])
-    const uint row_size = p.ne00;
-    const uint n_idx    = p.ne01;
-    const uint total    = row_size * n_idx;
+    /* Total elements in updates = ne00 * ne01 * ne02 * ne03 */
+    const uint total = p.ne00 * p.ne01 * p.ne02 * p.ne03;
+    if (gid >= total) return;
 
-    if (gid >= total) {
-        return;
-    }
+    /* axis is stored in param3 (ggml dim order) */
+    const int axis = p.param3;
 
-    const uint idx_i = gid / row_size;
-    const uint col_j = gid % row_size;
+    /* Decompose flat index into 4D multi-index for updates */
+    uint rem = gid;
+    uint mi3 = rem / (p.ne00 * p.ne01 * p.ne02);
+    rem -= mi3 * (p.ne00 * p.ne01 * p.ne02);
+    uint mi2 = rem / (p.ne00 * p.ne01);
+    rem -= mi2 * (p.ne00 * p.ne01);
+    uint mi1 = rem / p.ne00;
+    uint mi0 = rem - mi1 * p.ne00;
 
-    const int row = data_b[get_boffset() + idx_i];
-    const uint dst_off = get_doffset() + uint(row) * row_size + col_j;
+    /* Read scatter index */
+    const int scatter_idx = data_b[get_boffset() + gid];
+
+    /* Build dst multi-index: same as updates, except along axis */
+    uint di0 = mi0, di1 = mi1, di2 = mi2, di3 = mi3;
+    if      (axis == 0) di0 = uint(scatter_idx);
+    else if (axis == 1) di1 = uint(scatter_idx);
+    else if (axis == 2) di2 = uint(scatter_idx);
+    else                di3 = uint(scatter_idx);
+
+    /* dst strides (contiguous): ne20=dst.ne[0], ne21=dst.ne[1], etc. */
+    const uint dst_off = get_doffset() + di0 + di1 * p.ne20 + di2 * p.ne20 * p.ne21 + di3 * p.ne20 * p.ne21 * p.ne22;
     const float val = data_a[get_aoffset() + gid];
 
 #ifdef SCATTER_ADD
