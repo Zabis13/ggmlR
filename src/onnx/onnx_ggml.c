@@ -239,14 +239,27 @@ static int create_initializer_tensors(onnx_ggml_ctx_t *c) {
         ggml_set_input(t);
         tmap_put_nd(c, init->name, t, init->n_dims > 0 ? init->n_dims : 1);
 
-        /* Register cval for small int64 initializers (shape constants, indices) */
-        if (init->data_type == ONNX_DTYPE_INT64 && n_elem <= ONNX_MAX_DIMS) {
+        /* Register cval for small initializers (shape constants, indices, scalars).
+         * Supports INT64, INT32, and F32 (cast to int64 for cval map). */
+        if (n_elem <= ONNX_MAX_DIMS) {
             const void *src = init->raw_data ? init->raw_data
                             : init->decoded_data ? init->decoded_data : NULL;
             if (src) {
                 int64_t vals[ONNX_MAX_DIMS];
-                memcpy(vals, src, (size_t)n_elem * sizeof(int64_t));
-                cval_put(c, init->name, vals, (int)n_elem);
+                if (init->data_type == ONNX_DTYPE_INT64) {
+                    memcpy(vals, src, (size_t)n_elem * sizeof(int64_t));
+                    cval_put(c, init->name, vals, (int)n_elem);
+                } else if (init->data_type == ONNX_DTYPE_INT32) {
+                    const int32_t *i32 = (const int32_t *)src;
+                    for (int64_t j = 0; j < n_elem; j++)
+                        vals[j] = (int64_t)i32[j];
+                    cval_put(c, init->name, vals, (int)n_elem);
+                } else if (init->data_type == ONNX_DTYPE_FLOAT) {
+                    const float *f32 = (const float *)src;
+                    for (int64_t j = 0; j < n_elem; j++)
+                        vals[j] = (int64_t)f32[j];
+                    cval_put(c, init->name, vals, (int)n_elem);
+                }
             }
         }
     }
@@ -861,11 +874,14 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         /* Default axis=1 for opset < 13, axis=-1 for opset >= 13.
          * Most models specify it explicitly; use 1 as safe default. */
         int64_t axis = onnx_attr_int(n, "axis", 1);
-        /* Use full 4D to handle trailing 1s (ggml_n_dims drops them) */
-        int nd = 4;
+        /* Use actual ONNX ndims for correct axis mapping */
+        int nd = tmap_get_ndims(c, n->inputs[0]);
+        if (nd <= 0) nd = (int)ggml_n_dims(a);
+        if (nd < 1) nd = 1;
         if (axis < 0) axis += nd;
         /* ONNX axis → ggml dim (reversed) */
         int ggml_d = nd - 1 - (int)axis;
+        if (ggml_d < 0) ggml_d = 0;
 
         if (ggml_d == 0) {
             /* Softmax over ne[0] — ggml_soft_max does this natively */
@@ -874,8 +890,10 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             /* ggml_soft_max normalizes over ne[0]. We need to normalize over ggml_d.
              * Strategy: flatten dims [0..ggml_d] into ne[0], keeping the rest.
              * Then softmax, then reshape back.
-             * E.g. [1,1,1000,1] with ggml_d=2: softmax_dim has 1000 elements.
-             * Flatten to [1000, 1] (ne[0] = product of ne[0..ggml_d]), softmax, reshape back. */
+             * E.g. ONNX [N,C] with axis=1: nd=2, ggml_d=0 → fast path above.
+             * E.g. ONNX [N,H,W,C] with axis=3: nd=4, ggml_d=0 → fast path.
+             * E.g. ONNX [N,C,H,W] with axis=1: nd=4, ggml_d=2 →
+             *      softmax_dim = ne[0]*ne[1]*ne[2] = W*H*C, batch = ne[3] = N */
             int64_t softmax_dim = 1;
             for (int d = 0; d <= ggml_d; d++)
                 softmax_dim *= a->ne[d];
@@ -938,9 +956,27 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         float max_val =  3.402823e+38f;
         struct ggml_tensor *min_t = get_input(c, n, 1);
         struct ggml_tensor *max_t = get_input(c, n, 2);
-        if (!min_t) min_val = onnx_attr_float(n, "min", min_val);
-        if (!max_t) max_val = onnx_attr_float(n, "max", max_val);
-        /* TODO: handle tensor min/max inputs */
+        /* Read scalar value from tensor inputs (initializer or Constant) */
+        if (min_t && n->n_inputs > 1 && n->inputs[1][0] != '\0') {
+            const onnx_initializer_t *mi = onnx_find_initializer(c->onnx, n->inputs[1]);
+            if (!mi) mi = find_constant_tensor(c->onnx, n->inputs[1]);
+            if (mi && mi->raw_data && mi->raw_size >= 4 &&
+                mi->data_type == ONNX_DTYPE_FLOAT) {
+                memcpy(&min_val, mi->raw_data, sizeof(float));
+            }
+        } else if (!min_t) {
+            min_val = onnx_attr_float(n, "min", min_val);
+        }
+        if (max_t && n->n_inputs > 2 && n->inputs[2][0] != '\0') {
+            const onnx_initializer_t *mi = onnx_find_initializer(c->onnx, n->inputs[2]);
+            if (!mi) mi = find_constant_tensor(c->onnx, n->inputs[2]);
+            if (mi && mi->raw_data && mi->raw_size >= 4 &&
+                mi->data_type == ONNX_DTYPE_FLOAT) {
+                memcpy(&max_val, mi->raw_data, sizeof(float));
+            }
+        } else if (!max_t) {
+            max_val = onnx_attr_float(n, "max", max_val);
+        }
         out = ggml_clamp(c->ctx, a, min_val, max_val);
     }
 
@@ -3308,6 +3344,32 @@ static int sched_alloc_and_fill(onnx_ggml_ctx_t *c) {
      * Tensors with ->buffer already set (weights in weight_buf) are skipped.
      * Only input placeholders and intermediate compute tensors get allocated. */
     if (!ggml_backend_sched_alloc_graph(c->sched, c->graph)) return -1;
+
+    /* Ensure all ONNX input tensors have buffers.
+     * When the graph has no compute ops (all outputs are standalone/weight tensors,
+     * e.g. Shape→ConstantOfShape→NonZero chain), the scheduler may not allocate
+     * buffers for input tensors.  Allocate them on the CPU backend. */
+    for (int i = 0; i < c->onnx->n_inputs; i++) {
+        struct ggml_tensor *t = tmap_get(c, c->onnx->inputs[i].name);
+        if (t && !t->buffer) {
+            /* Check this is a real input (not an initializer) */
+            int is_init = 0;
+            for (int j = 0; j < c->onnx->n_initializers; j++) {
+                if (strcmp(c->onnx->inputs[i].name, c->onnx->initializers[j].name) == 0) {
+                    is_init = 1;
+                    break;
+                }
+            }
+            if (!is_init) {
+                /* Allocate a small buffer on CPU for this orphan input */
+                ggml_backend_buffer_t buf = ggml_backend_alloc_buffer(c->backend_cpu,
+                                                                       ggml_nbytes(t) + 64);
+                if (buf) {
+                    ggml_backend_tensor_alloc(buf, t, (char *)ggml_backend_buffer_get_base(buf));
+                }
+            }
+        }
+    }
 
     /* Fill strided Slice outputs — their src may live in sched buffer,
      * so this must happen after sched alloc. */
