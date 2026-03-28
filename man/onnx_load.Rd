@@ -4,7 +4,13 @@
 \alias{onnx_load}
 \title{Load an ONNX model}
 \usage{
-onnx_load(path, device = NULL, input_shapes = NULL, n_threads = NULL)
+onnx_load(
+  path,
+  device = NULL,
+  input_shapes = NULL,
+  n_threads = NULL,
+  dtype = "f32"
+)
 }
 \arguments{
 \item{path}{Path to .onnx file.}
@@ -21,6 +27,12 @@ Required when the model has dynamic dimensions and no default shape.}
 \item{n_threads}{Number of CPU threads. \code{NULL} (default) reads
 \code{getOption("ggmlR.n_threads")}; if that is also unset, uses
 \code{parallel::detectCores() - 1} (minimum 1).}
+
+\item{dtype}{Weight precision: \code{"f32"} (default) or \code{"f16"}.
+When \code{"f16"}, large weight tensors (>= 256 elements) are stored
+in half-precision for faster Vulkan compute and lower VRAM usage.
+Small tensors (bias, scalars, batch-norm params) remain in F32
+for numerical stability. Inputs and outputs are always F32.}
 }
 \value{
 An opaque model object (external pointer) for use with

@@ -302,6 +302,7 @@ SEXP R_onnx_inputs(SEXP ctx_ptr_) {
 SEXP R_onnx_device_info(SEXP ctx_ptr_) {
     onnx_ggml_ctx_t *ctx = (onnx_ggml_ctx_t *)R_ExternalPtrAddr(ctx_ptr_);
     if (!ctx) Rf_error("onnx_device_info: NULL context pointer");
+    if (!ctx->graph) Rf_error("onnx_device_info: NULL graph");
 
     /* 8 fields: backends, n_backends, n_splits, n_nodes, gpu_ops, cpu_ops, cpu_only_ops, actual_backend */
     SEXP result = PROTECT(Rf_allocVector(VECSXP, 8));
@@ -325,7 +326,7 @@ SEXP R_onnx_device_info(SEXP ctx_ptr_) {
     /* n_splits */
     SET_STRING_ELT(names, 2, Rf_mkChar("n_splits"));
     SET_VECTOR_ELT(result, 2, Rf_ScalarInteger(
-        ggml_backend_sched_get_n_splits(ctx->sched)));
+        ctx->sched ? ggml_backend_sched_get_n_splits(ctx->sched) : 0));
 
     /* n_nodes */
     int n_nodes = ggml_graph_n_nodes(ctx->graph);
@@ -384,7 +385,7 @@ SEXP R_onnx_device_info(SEXP ctx_ptr_) {
     /* actual_backend — check where the last graph node's buffer actually lives */
     {
         const char *actual = "unknown";
-        struct ggml_tensor *last = ggml_graph_node(ctx->graph, n_nodes - 1);
+        struct ggml_tensor *last = n_nodes > 0 ? ggml_graph_node(ctx->graph, n_nodes - 1) : NULL;
         if (last && last->buffer) {
             ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(last->buffer);
             const char *buft_name = ggml_backend_buft_name(buft);

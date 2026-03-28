@@ -1747,123 +1747,44 @@ ggml_evaluate.ggml_functional_model <- function(model, x, y,
                                                   batch_size = 32L, ...) {
   if (!model$compiled) stop("Model must be compiled before evaluation.")
 
-  xp           <- nn_prepare_x(model, x)
-  is_multi     <- xp$is_multi
-  x_ggml       <- xp$x_ggml
-  ne_per_input <- xp$ne_per_input
-  ne_datapoint <- sum(ne_per_input)
-  ne_label     <- ncol(y)
+  n_samples <- nrow(y)
+  ne_label  <- ncol(y)
 
-  n_samples <- length(x_ggml) %/% ne_datapoint
+  # Get predictions for ALL samples (no truncation)
+  preds <- ggml_predict(model, x, batch_size = batch_size)
+  preds_mat <- if (is.matrix(preds)) preds else preds[[1L]]
 
-  usable <- (n_samples %/% batch_size) * batch_size
-  if (usable < n_samples) {
-    x_ggml    <- x_ggml[seq_len(usable * ne_datapoint)]
-    y         <- y[seq_len(usable), , drop = FALSE]
-    n_samples <- usable
-  }
-
-  y_ggml <- as.vector(t(y))
-
-  loss_type <- switch(model$compilation$loss,
-    "categorical_crossentropy" = , "crossentropy" = ggml_opt_loss_type_cross_entropy(),
-    "mse" = , "mean_squared_error" = ggml_opt_loss_type_mse(),
-    ggml_opt_loss_type_cross_entropy()
-  )
-
-  graph_info  <- nn_build_functional_graph(model, batch_size, training = FALSE)
-  eval_output <- graph_info$outputs[[length(graph_info$outputs)]]
-
-  result_eval <- ggml_opt_result_init()
-
-  if (!is_multi) {
-    # ------------------------------------------------------------------
-    # Single-input: use dataset + ggml_opt_epoch
-    # ------------------------------------------------------------------
-    input_dtype <- if (!is.null(model$inputs[[1L]]$config$dtype))
-      model$inputs[[1L]]$config$dtype else "float32"
-    data_type <- if (input_dtype == "int32") GGML_TYPE_I32 else GGML_TYPE_F32
-
-    dataset <- ggml_opt_dataset_init(
-      type_data    = data_type,
-      type_label   = GGML_TYPE_F32,
-      ne_datapoint = ne_datapoint,
-      ne_label     = ne_label,
-      ndata        = n_samples,
-      ndata_shard  = 1L
-    )
-    ggml_backend_tensor_set_data(ggml_opt_dataset_data(dataset),   x_ggml)
-    ggml_backend_tensor_set_data(ggml_opt_dataset_labels(dataset), y_ggml)
-
-    opt_ctx <- ggml_opt_init(
-      sched       = model$compilation$sched,
-      loss_type   = loss_type,
-      optimizer   = ggml_opt_optimizer_type_adamw(),
-      ctx_compute = graph_info$ctx_compute,
-      inputs      = graph_info$inputs[[1L]],
-      outputs     = eval_output
-    )
-
-    ggml_opt_epoch(opt_ctx, dataset, NULL, result_eval,
-                   idata_split = 0L, callback_train = FALSE, callback_eval = FALSE)
-
-    ggml_opt_free(opt_ctx)
-    ggml_opt_dataset_free(dataset)
-
+  # Compute loss
+  loss_name <- model$compilation$loss
+  if (loss_name %in% c("categorical_crossentropy", "crossentropy")) {
+    eps <- 1e-7
+    preds_clipped <- pmax(pmin(preds_mat, 1 - eps), eps)
+    loss_val <- -mean(rowSums(y * log(preds_clipped)))
+  } else if (loss_name %in% c("mse", "mean_squared_error")) {
+    loss_val <- mean(rowSums((y - preds_mat)^2) / ne_label)
   } else {
-    # ------------------------------------------------------------------
-    # Multi-input: manual batch loop
-    # ------------------------------------------------------------------
-    init_info <- ggml_opt_init_for_fit(
-      sched       = model$compilation$sched,
-      loss_type   = loss_type,
-      optimizer   = ggml_opt_optimizer_type_adamw(),
-      opt_period  = 1L,
-      ctx_compute = graph_info$ctx_compute,
-      inputs      = graph_info$inputs[[1L]],
-      outputs     = eval_output
-    )
-    opt_ctx       <- init_info$opt_ctx
-    labels_tensor <- ggml_opt_labels(opt_ctx)
-    n_batches     <- n_samples %/% batch_size
-
-    for (ib in seq_len(n_batches)) {
-      samp_start <- (ib - 1L) * batch_size
-      nn_fill_inputs(x_ggml, ne_per_input, graph_info$inputs, batch_size, samp_start)
-
-      lab_start <- samp_start * ne_label + 1L
-      lab_end   <- lab_start + batch_size * ne_label - 1L
-      ggml_backend_tensor_set_data(labels_tensor, y_ggml[lab_start:lab_end])
-
-      ggml_opt_alloc(opt_ctx, backward = FALSE)
-      ggml_opt_eval(opt_ctx, result_eval)
-    }
-
-    ggml_opt_free(opt_ctx)
+    loss_val <- NA_real_
   }
 
-  loss_val <- ggml_opt_result_loss(result_eval)
-  acc_val  <- ggml_opt_result_accuracy(result_eval)
-  ggml_opt_result_free(result_eval)
-  ggml_free(graph_info$ctx_compute)
-  ggml_backend_buffer_free(graph_info$buffer)
-  ggml_free(graph_info$ctx_weights)
+  # Compute accuracy (classification: argmax match)
+  if (ne_label > 1L) {
+    pred_classes <- max.col(preds_mat)
+    true_classes <- max.col(y)
+    acc_val <- mean(pred_classes == true_classes)
+  } else {
+    acc_val <- NA_real_
+  }
 
-  out <- list(loss = loss_val[["loss"]], accuracy = acc_val[["accuracy"]])
+  out <- list(loss = loss_val, accuracy = acc_val, n_samples = n_samples)
 
-  # Дополнительные метрики через predict
+  # Additional metrics
   extra_metrics <- setdiff(model$compilation$metrics, c("accuracy", "acc"))
   if (length(extra_metrics) > 0L) {
-    preds <- ggml_predict(model, x, batch_size = batch_size)
-    preds_mat <- if (is.matrix(preds)) preds else preds[[1L]]
-    n_cmp <- min(nrow(preds_mat), nrow(y))
-    y_cmp <- y[seq_len(n_cmp), , drop = FALSE]
-    p_cmp <- preds_mat[seq_len(n_cmp), , drop = FALSE]
     for (m in extra_metrics) {
       out[[m]] <- switch(m,
-        "mae"  = , "mean_absolute_error" = mean(abs(y_cmp - p_cmp)),
-        "mse"  = , "mean_squared_error"  = mean((y_cmp - p_cmp)^2),
-        "rmse" = sqrt(mean((y_cmp - p_cmp)^2)),
+        "mae"  = , "mean_absolute_error" = mean(abs(y - preds_mat)),
+        "mse"  = , "mean_squared_error"  = mean((y - preds_mat)^2),
+        "rmse" = sqrt(mean((y - preds_mat)^2)),
         NULL
       )
     }

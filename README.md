@@ -70,6 +70,8 @@ model <- ggml_fit(model, x_train, y_train,
                   batch_size       = 32L,
                   validation_split = 0.1,
                   verbose          = 1L)
+# Important: always assign the return value back to model —
+# ggml_fit() returns the model with updated weights.
 
 plot(model$history)
 
@@ -493,7 +495,7 @@ for (batch in data_batches) {
 
 ### Tested models
 
-12 out of 15 ONNX Model Zoo models load and run successfully:
+13 out of 15 ONNX Model Zoo models load and run successfully:
 
 | Model | Nodes | Key ops |
 |---|---|---|
@@ -508,6 +510,7 @@ for (batch in data_batches) {
 | roberta-9 | 1180 | MatMul, LayerNorm, Erf, Softmax, Shape, Gather, Cast |
 | sageconv (Opset 16) | 24 | MatMul, Add, Mul, Sigmoid, ReduceSum |
 | super-resolution-10 | 12 | Conv, Reshape, Transpose |
+| botnet26t_256 (Opset 16) | 530 | Conv, BatchNorm, RelPosBias2D (fused custom op), Softmax |
 | xcit_tiny | 436 | MatMul, LayerNorm, Softmax, Concat, Transpose |
 
 ### Supported ONNX ops (50+)
@@ -523,7 +526,22 @@ Constants: Constant (TensorProto + scalar), ConstantOfShape.
 Logic: Where, Equal.
 Reduction: ReduceMean, ReduceSum.
 Quantization: DequantizeLinear, QuantizeLinear, QLinearConv, QLinearAdd, QLinearMatMul, QLinearSigmoid, QLinearConcat.
+Fused custom ops: RelPosBias2D (BoTNet-style 2D relative position bias).
 Pass-through: Dropout.
+
+## Examples
+
+Ready-to-run example scripts in `inst/examples/`:
+
+| Script | Description |
+|---|---|
+| `titanic_classification.R` | Binary classification with feature engineering, dropout, stratified split, manual metrics (~82% val accuracy) |
+| `mnist_cnn.R` | CNN image classifier on MNIST |
+| `functional_resnet_cifar.R` | ResNet-style model with skip connections (Functional API) |
+| `functional_text_gru.R` | Text classification with GRU + embedding (Functional API) |
+| `transformer_encoder_demo.R` | Transformer encoder with multi-head attention (autograd) |
+| `dp_train_demo.R` | Data-parallel training across multiple replicas |
+| `benchmark_onnx.R` | GPU vs CPU inference benchmark for ONNX models |
 
 ## Save / Load
 
@@ -538,15 +556,15 @@ Measured on AMD Ryzen 5 5600 + AMD RX 9070, single-image inference:
 
 | Model | CPU (ms) | GPU (ms) | Speedup | CPU FPS | GPU FPS |
 |---|---:|---:|---:|---:|---:|
-| Inception V3 | 641.0 | 14.3 | 44.7x | 1.6 | 69.8 |
+| Inception V3 | 457.0 | 15.0 | 30.5x | 2.2 | 66.7 |
 | MNIST | 0.0 | 0.3 | — | Inf | 3000.0 |
-| SqueezeNet 1.0 | 48.7 | 3.0 | 16.2x | 20.5 | 333.3 |
-| SuperResolution | 329.0 | 7.3 | 44.9x | 3.0 | 136.4 |
-| EmotionFerPlus | 95.7 | 1.7 | 57.4x | 10.5 | 600.0 |
-| Inception V3 Op18 | 643.7 | 14.3 | 44.9x | 1.6 | 69.8 |
-| BAT-ResNeXt26ts | 284.7 | 9.0 | 31.6x | 3.5 | 111.1 |
-| BERT (Opset17) | 1145.0 | 14.7 | 78.1x | 0.9 | 68.2 |
-| GPT-NeoX | 2.3 | 3.3 | 0.7x | 428.6 | 300.0 |
+| SqueezeNet 1.0 | 38.3 | 2.7 | 14.4x | 26.1 | 375.0 |
+| SuperResolution | 233.0 | 7.3 | 31.8x | 4.3 | 136.4 |
+| EmotionFerPlus | 66.7 | 1.7 | 40.0x | 15.0 | 600.0 |
+| Inception V3 Op18 | 456.7 | 15.3 | 29.8x | 2.2 | 65.2 |
+| BAT-ResNeXt26ts | 200.3 | 10.3 | 19.4x | 5.0 | 96.8 |
+| BERT (Opset17) | 788.0 | 11.3 | 69.5x | 1.3 | 88.2 |
+| GPT-NeoX | 2.0 | 3.7 | 0.6x | 500.0 | 272.7 |
 
 Benchmark script: `inst/examples/benchmark_onnx.R`
 

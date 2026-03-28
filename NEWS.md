@@ -1,4 +1,31 @@
+# ggmlR 0.6.6
+
+## ONNX: BoTNet RelPosBias2D fused custom op
+
+* **botnet26t_256 model now loads and runs** (was failing on 5D Transpose in pos_embed subgraph). Three pos_embed subgraphs (~60-80 ONNX nodes each) are detected via pre-pass scanner and replaced with a single fused `ggml_map_custom3` op. The CPU kernel computes 2D relative position bias directly: `bias[b,hq,wq,hk,wk] = dot(x, W_h) + dot(x_transposed, W_w)`.
+* Pre-pass scanner: `detect_pos_embed_blocks()` identifies contiguous node ranges with `/pos_embed/` in output names, extracts W_h/W_w initializer shapes to determine H, W, C, validates F32 data type.
+* Model count: **13/15** ONNX Model Zoo models now pass (was 12/15).
+
+## ONNX: pinned staging buffer for GPU input transfer
+
+* When Vulkan GPU is available, a host-visible pinned memory buffer is allocated at model load time for ONNX input data. In `onnx_ggml_run()`, input data is copied into pinned memory before `ggml_backend_tensor_set()` — the Vulkan driver detects the pinned source pointer and performs direct DMA transfer to VRAM, bypassing the internal staging copy.
+* Fallback: if `ggml_backend_vk_host_buffer_type()` returns NULL or buffer is too small, the standard staging path is used transparently.
+
+## Bug fixes
+
+* `onnx_device_info()`: added NULL guards for `ctx->graph` and `n_nodes == 0` edge cases that caused segfault when called on models before first inference run.
+
 # ggmlR 0.6.5
+
+## Bug fixes
+
+* **`ggml_predict()` with stochastic dropout**: `nn_build_graph()` now receives `training = FALSE` during inference, so stochastic Bernoulli dropout is disabled at predict time. Previously, `stochastic = TRUE` dropout layers applied random masks during inference, degrading accuracy.
+* **`ggml_fit()` return value**: the return value of `ggml_fit()` must be assigned back to `model` to obtain trained weights (`model <- ggml_fit(...)`). This is now clarified in all examples and documentation. Using `history <- ggml_fit(...)` without reassigning `model` leaves the model with untrained weights.
+* **`ggml_evaluate()` return value**: now includes `n_samples` in addition to `loss` and `accuracy`. Metrics are computed on all samples without truncation (via `ggml_predict()` internally).
+
+## Examples
+
+* `inst/examples/titanic_classification.R` — new end-to-end binary classification example on the Titanic dataset. Demonstrates feature engineering (Title, FamilySize, IsAlone), stratified train/val split, one-hot encoding, dropout regularization, and manual validation metrics (accuracy, precision, recall, F1, confusion matrix). Achieves ~82% val accuracy.
 
 ## ONNX inference: dedicated weight buffer architecture
 
@@ -31,7 +58,7 @@
 * Numpy-style broadcast for binary ops (Add/Sub/Mul/Div): handles mismatched ranks and dimensions, with left-align, right-align, and greedy dim-matching strategies.
 * Scalar Constant tensors (0-dimensional TensorProto) correctly handled.
 
-## Tested real-world ONNX models (12/15 from ONNX Model Zoo)
+## Tested real-world ONNX models (13/15 from ONNX Model Zoo)
 
 * mnist-8 — OK (12 nodes)
 * squeezenet1.0-8 — OK (66 nodes: Conv, Relu, MaxPool, Concat, Dropout, GlobalAveragePool, Softmax)
@@ -45,7 +72,8 @@
 * gptneox Opset 18 — OK with `input_shapes` (482 nodes: MatMul, LayerNorm, GELU, Softmax)
 * xcit_tiny — OK (436 nodes: MatMul, LayerNorm, Softmax, Concat, Transpose)
 * MaskRCNN-12-int8 — OK (937 nodes: QLinearConv, DequantizeLinear, Resize, Concat, Reshape)
-* Remaining failures: botnet26t_256 (batched matmul 3D+), cait_xs24_384 (batched matmul 3D+).
+* botnet26t_256 (Opset 16) — OK (RelPosBias2D fused custom op, 3 pos_embed blocks replaced)
+* Remaining failures: cait_xs24_384 (batched matmul 3D+).
 
 # ggmlR 0.6.2
 * Fixed Windows cleanup script that removed `inst/lib/libggml.a`, breaking static linking from dependent packages (e.g. llamaR).

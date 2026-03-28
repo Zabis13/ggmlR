@@ -41,6 +41,7 @@ model <- ggml_model(inputs = x, outputs = y, name = "resnet_tiny")
 - [x] Сохранение/загрузка архитектуры + весов
 - [ ] Загрузка pre-trained весов из .gguf
 - [ ] `ggml_layer_concatenate()` с backward pass (требует патча ggml C)
+- [x] Dropout `stochastic=TRUE` отключается при predict (`training=FALSE` в `nn_build_graph`)
 - [ ] Dropout маска per-batch (требует C-расширения)
 - [ ] Custom layer API за 5 строк R-кода:
   ```r
@@ -179,21 +180,21 @@ pred <- predict(onnx, x)
 - [x] CPU: все ops проходят
 - [x] Vulkan: 24/24 ops проходят
 
-#### Реальные модели (ONNX Model Zoo) — 12/15 OK
+#### Реальные модели (ONNX Model Zoo) — 10/15 OK
 - [x] mnist-8 — OK (12 nodes)
 - [x] squeezenet1.0-8 — OK (66 nodes: Conv, Relu, MaxPool, Concat, Dropout, GlobalAveragePool, Softmax)
 - [x] adv_inception_v3 (Opset 17, 18) — OK (215 nodes)
 - [x] super-resolution-10 — OK с input_shapes (Conv, Reshape+Constant, Transpose)
 - [x] bert (Opset 17) — OK (533 nodes: MatMul, LayerNorm, GELU/Erf, Softmax, Shape, Gather, Cast, Where, ConstantOfShape)
 - [x] emotion-ferplus-8 — OK (52 nodes: Conv, Relu, MaxPool, Gemm, Constant)
-- [x] sageconv (Opset 16) — OK (24 nodes: MatMul, Add, Mul, Sigmoid, ReduceSum)
-- [x] roberta-9 — OK с input_shapes (1180 nodes)
 - [x] bat_resnext26ts — OK (grouped conv, AdaptiveMaxPool baked as fixed kernel, input 256x256)
-- [x] xcit_tiny — OK (Concat axis fix, cval shape propagation)
-- [x] MaskRCNN-12-int8 — OK (quantized ops pass-through как f32)
 - [x] gptneox (Opset 18) — OK с input_shapes (482 nodes: MatMul, LayerNorm, GELU, Softmax)
-- [ ] botnet26t_256 — MatMul broadcasting в self-attention (batched matmul 3D+)
-- [ ] cait_xs24_384 — MatMul broadcasting (batched matmul 3D+)
+- [x] botnet26t_256 — RelPosBias2D fused custom op (pre-pass scanner + ggml_map_custom3)
+- [x] MaskRCNN-12-int8 — OK (quantized ops pass-through как f32) **РЕГРЕССИЯ после Transpose fix**
+- [ ] roberta-9 — граф строится OK, NaN в softmax при compute (attention mask/position IDs fill)
+- [ ] sageconv (Opset 16) — unsupported op ScatterElements + MatMul K mismatch
+- [ ] xcit_tiny — broadcast dim 0: a=1, b=0 (нулевая размерность) **РЕГРЕССИЯ после Transpose fix**
+- [ ] cait_xs24_384 — MatMul broadcasting (batched matmul 3D+, ne[2] != ne[1])
 - [ ] roberta dynamic — динамические shapes без input_shapes (требует shape inference)
 
 #### Баги / ограничения
@@ -206,7 +207,34 @@ pred <- predict(onnx, x)
 - [x] **Broadcast** — numpy-style broadcast для Add/Sub/Mul/Div: left-align, right-align, greedy dim-matching
 
 #### MVP + трансформеры — готов ✓
-Все базовые + трансформерные ops реализованы. 12/15 моделей из ONNX Zoo работают.
+Все базовые + трансформерные ops реализованы. 10/15 моделей из ONNX Zoo работают.
+
+#### Исправлено в 0.6.7
+- [x] Buffer overflow в deferred arrays — shape_tensors_ne[64] переполнялся, введён ONNX_MAX_DEFERRED=512
+- [x] Transpose: инвертированная перестановка осей — ggml_permute ожидает src→dst, код строил dst→src
+- [x] Generic path ndims — введена out_nd переменная, handler выставляет ndims авторитетно (Transpose, MatMul)
+- [x] ConstantOfShape ndims — tmap_put_nd с правильным рангом
+- [x] Auto-cast I32→F32 в бинарных операторах (Add, Sub, Mul, Div)
+- [x] cval propagation для Add, Sub, Div, Unsqueeze, Gather(scalar), Constant(scalar), initializers(int64)
+- [x] Cast F32↔I32 через ggml_cast (был pass-through)
+- [x] Gather auto-cast indices F32→I32
+- [x] Shape op: сохранение batch dim=1 через max(tmap_ndims, ggml_n_dims)
+- [x] NonZero deferred fill после sched alloc
+- [x] ConstantOfShape cval fallback (Shape→Gather→Add→Div цепочки)
+- [x] Expand rank promotion (left-pad с 1s)
+- [x] Squeeze: использует tmap_get_ndims вместо hardcoded 4
+- [x] Gather на shape-тензорах: scalar element access вместо ggml_get_rows
+- **РЕГРЕССИЯ**: Transpose fix сломал MaskRCNN и xcit_tiny (нужна проверка)
+
+#### Исправлено в 0.6.6
+- [x] botnet26t_256 — RelPosBias2D fused custom op (pre-pass scanner + emit ggml_map_custom3)
+- [x] Pinned staging buffer для GPU input transfer (ggml_backend_vk_host_buffer_type)
+- [x] onnx_device_info() NULL guards (segfault fix)
+
+#### Исправлено в 0.6.5
+- [x] `ggml_predict()` с `stochastic=TRUE` dropout — `training=FALSE` теперь передаётся в `nn_build_graph`, маска не применяется при инференсе
+- [x] `ggml_evaluate()` возвращает `n_samples` + считает метрики на всех сэмплах без truncation
+- [x] Новый пример `titanic_classification.R` — бинарная классификация, ~82% val accuracy
 
 #### Исправлено в 0.6.x
 - [x] Conv grouped (group>1: split+conv+concat, depthwise: ggml_conv_2d_dw)
@@ -217,6 +245,10 @@ pred <- predict(onnx, x)
 - [x] detectCores() NA handling (Kaggle/cloud)
 
 #### Следующий этап — расширенная совместимость
-- [ ] MatMul broadcast для 3D+ тензоров (batched matmul) — блокирует botnet26t, cait_xs24
+- [ ] **Transpose fix регрессия** — проверить MaskRCNN и xcit_tiny, возможно нужен fallback для моделей без explicit perm
+- [ ] **roberta-9 NaN** — attention mask/position IDs deferred fill выдаёт неправильные значения → NaN в softmax
+- [ ] MatMul broadcast для 3D+ тензоров (batched matmul) — блокирует cait_xs24
+- [ ] ScatterElements op — блокирует sageconv
 - [ ] NonZero, Equal, Less, Greater — логические ops
-- [ ] botnet26t_256 — RelPosBias2D custom op (CPU kernel done, graph wiring pending)
+- [x] botnet26t_256 — RelPosBias2D fused custom op (pre-pass + ggml_map_custom3, CPU kernel)
+- [ ] botnet26t_256 — Vulkan шейдер для RelPosBias2D (будущая оптимизация)

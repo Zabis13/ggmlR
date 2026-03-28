@@ -443,7 +443,7 @@ test_that("ggml_evaluate.ggml_functional_model returns loss and accuracy", {
   m <- ggml_fit(m, x, y, epochs = 2L, batch_size = 32L, verbose = 0L)
 
   res <- ggml_evaluate(m, x, y, batch_size = 32L)
-  expect_named(res, c("loss", "accuracy"))
+  expect_named(res, c("loss", "accuracy", "n_samples"))
   expect_true(is.finite(res$loss))
   expect_true(is.finite(res$accuracy))
 

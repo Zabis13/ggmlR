@@ -59,3 +59,26 @@ test_that("ONNX Constant tensor + Add works", {
   result <- run_onnx(path, list(X = x))
   expect_equal(as.numeric(result), c(11, 22, 33, 44), tolerance = 1e-5)
 })
+
+# ── onnx_device_info ─────────────────────────────────────────────
+
+test_that("onnx_device_info returns valid diagnostics", {
+  path <- .onnx_make_unary("Relu", c(4L))
+  m <- onnx_load(path, device = "cpu")
+  # Run once so scheduler is allocated
+  onnx_run(m, list(X = c(1, -1, 2, -2)))
+  di <- onnx_device_info(m)
+  expect_true(is.list(di))
+  expect_true("n_nodes" %in% names(di))
+  expect_true("n_splits" %in% names(di))
+  expect_true(di$n_nodes >= 1)
+})
+
+test_that("onnx_device_info works before first inference", {
+  path <- .onnx_make_unary("Relu", c(4L))
+  m <- onnx_load(path, device = "cpu")
+  # No onnx_run — sched not yet allocated
+  di <- onnx_device_info(m)
+  expect_true(is.list(di))
+  expect_true(di$n_nodes >= 1)
+})

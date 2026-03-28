@@ -366,7 +366,7 @@ ggml_compile.ggml_sequential_model <- function(model, optimizer = "adam",
 #' @param batch_size Batch size
 #' @return List with ctx_weights, ctx_compute, inputs, outputs, buffer
 #' @keywords internal
-nn_build_graph <- function(model, batch_size) {
+nn_build_graph <- function(model, batch_size, training = TRUE) {
   input_shape <- model$input_shape
   ne_datapoint <- prod(input_shape)
   backend <- model$compilation$backend
@@ -682,7 +682,8 @@ nn_build_graph <- function(model, batch_size) {
   # Build forward graph
   current <- inputs
   for (i in seq_along(layers_built)) {
-    current <- nn_build_layer(ctx_compute, current, layers_built[[i]])
+    current <- nn_build_layer(ctx_compute, current, layers_built[[i]],
+                              training = training)
   }
   outputs <- current
   ggml_set_output(outputs)
@@ -854,8 +855,11 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
   # Ensure batch_size divides data evenly
   usable_samples <- (n_samples %/% batch_size) * batch_size
   if (usable_samples < n_samples) {
-    message("Truncating data from ", n_samples, " to ", usable_samples,
-            " samples (batch_size=", batch_size, " must divide evenly)")
+    dropped <- n_samples - usable_samples
+    message("Note: dropping last ", dropped, " sample(s) (", n_samples,
+            " -> ", usable_samples, ") because batch_size=", batch_size,
+            " must divide evenly. Training metrics are computed on ",
+            usable_samples, " samples only.")
     if (is.matrix(x)) {
       x <- x[seq_len(usable_samples), , drop = FALSE]
     } else {
@@ -1023,85 +1027,35 @@ ggml_evaluate.ggml_sequential_model <- function(model, x, y, batch_size = 32,
     y <- y * sample_weight
   }
 
-  input_shape <- model$input_shape
-  n_samples <- if (is.matrix(x)) nrow(x) else dim(x)[1]
-  ne_datapoint <- prod(input_shape)
+  n_samples <- nrow(y)
   ne_label <- ncol(y)
 
-  # Truncate to fit batch_size
-  usable_samples <- (n_samples %/% batch_size) * batch_size
-  if (usable_samples < n_samples) {
-    if (is.matrix(x)) {
-      x <- x[seq_len(usable_samples), , drop = FALSE]
-    } else {
-      x <- x[seq_len(usable_samples), , , , drop = FALSE]
-    }
-    y <- y[seq_len(usable_samples), , drop = FALSE]
-    n_samples <- usable_samples
-  }
+  # Get predictions for ALL samples (no truncation)
+  preds <- ggml_predict(model, x, batch_size = batch_size)
 
-  # Prepare dataset
-  dataset <- ggml_opt_dataset_init(
-    type_data = GGML_TYPE_F32,
-    type_label = GGML_TYPE_F32,
-    ne_datapoint = ne_datapoint,
-    ne_label = ne_label,
-    ndata = n_samples,
-    ndata_shard = 1
-  )
-
-  # Convert data
-  if (length(input_shape) == 3) {
-    x_ggml <- as.vector(aperm(x, c(3, 2, 4, 1)))
-  } else if (length(input_shape) == 2) {
-    # Sequence: R [N, seq_len, input_size] -> ggml [input_size, seq_len, N]
-    x_ggml <- as.vector(aperm(x, c(3, 2, 1)))
+  # Compute loss
+  loss_name <- model$compilation$loss
+  if (loss_name %in% c("categorical_crossentropy", "crossentropy")) {
+    # Cross-entropy: -sum(y * log(p)) / n
+    eps <- 1e-7
+    preds_clipped <- pmax(pmin(preds, 1 - eps), eps)
+    loss_val <- -mean(rowSums(y * log(preds_clipped)))
+  } else if (loss_name %in% c("mse", "mean_squared_error")) {
+    loss_val <- mean(rowSums((y - preds)^2) / ne_label)
   } else {
-    x_ggml <- as.vector(t(x))
+    loss_val <- NA_real_
   }
-  y_ggml <- as.vector(t(y))
 
-  data_tensor <- ggml_opt_dataset_data(dataset)
-  labels_tensor <- ggml_opt_dataset_labels(dataset)
-  ggml_backend_tensor_set_data(data_tensor, x_ggml)
-  ggml_backend_tensor_set_data(labels_tensor, y_ggml)
+  # Compute accuracy (classification: argmax match)
+  if (ne_label > 1L) {
+    pred_classes <- max.col(preds)
+    true_classes <- max.col(y)
+    acc_val <- mean(pred_classes == true_classes)
+  } else {
+    acc_val <- NA_real_
+  }
 
-  # Build eval graph (reuses trained weights via rebuild)
-  graph_info <- nn_build_graph(model, batch_size)
-
-  # Map loss
-  loss_type <- switch(model$compilation$loss,
-    "categorical_crossentropy" = , "crossentropy" = ggml_opt_loss_type_cross_entropy(),
-    "mse" = , "mean_squared_error" = ggml_opt_loss_type_mse(),
-    ggml_opt_loss_type_cross_entropy()
-  )
-
-  # Use ggml_opt_init with static graph mode for eval
-  opt_ctx <- ggml_opt_init(
-    sched = model$compilation$sched,
-    loss_type = loss_type,
-    optimizer = ggml_opt_optimizer_type_adamw(),
-    ctx_compute = graph_info$ctx_compute,
-    inputs = graph_info$inputs,
-    outputs = graph_info$outputs
-  )
-
-  result_eval <- ggml_opt_result_init()
-  ggml_opt_epoch(opt_ctx, dataset, NULL, result_eval,
-                  idata_split = 0, callback_train = FALSE, callback_eval = FALSE)
-
-  loss_val <- ggml_opt_result_loss(result_eval)
-  acc_val <- ggml_opt_result_accuracy(result_eval)
-
-  # Cleanup
-  ggml_opt_result_free(result_eval)
-  ggml_opt_free(opt_ctx)
-  ggml_free(graph_info$ctx_compute)
-  ggml_backend_buffer_free(graph_info$buffer)
-  ggml_free(graph_info$ctx_weights)
-  ggml_opt_dataset_free(dataset)
-
-  list(loss = loss_val[["loss"]], accuracy = acc_val[["accuracy"]])
+  list(loss = loss_val, accuracy = acc_val, n_samples = n_samples)
 }
 
 # ============================================================================
@@ -1142,67 +1096,87 @@ ggml_predict.ggml_sequential_model <- function(model, x, batch_size = 32L, ...) 
     prod(last_layer$output_shape)
   }
 
-  # Truncate to fit batch_size
-  usable_samples <- (n_samples %/% batch_size) * batch_size
-  if (usable_samples == 0) {
-    stop("Not enough samples (", n_samples, ") for batch_size=", batch_size)
+  if (n_samples == 0L) {
+    stop("No samples provided.")
   }
-  if (usable_samples < n_samples) {
-    message("Truncating data from ", n_samples, " to ", usable_samples,
-            " samples (batch_size=", batch_size, " must divide evenly)")
-    if (is.matrix(x)) {
-      x <- x[seq_len(usable_samples), , drop = FALSE]
+
+  # Convert all data to ggml format upfront (before any slicing)
+  nn_convert_to_ggml <- function(x, input_shape) {
+    if (length(input_shape) == 3) {
+      as.vector(aperm(x, c(3, 2, 4, 1)))
+    } else if (length(input_shape) == 2) {
+      as.vector(aperm(x, c(3, 2, 1)))
     } else {
-      x <- x[seq_len(usable_samples), , , , drop = FALSE]
+      as.vector(t(x))
     }
-    n_samples <- usable_samples
   }
 
-  # Convert all data to ggml format upfront
-  if (length(input_shape) == 3) {
-    x_ggml <- as.vector(aperm(x, c(3, 2, 4, 1)))
-  } else if (length(input_shape) == 2) {
-    # Sequence: R [N, seq_len, input_size] -> ggml [input_size, seq_len, N]
-    x_ggml <- as.vector(aperm(x, c(3, 2, 1)))
-  } else {
-    x_ggml <- as.vector(t(x))
+  # Helper: run forward pass for a batch of given size, return prediction matrix
+  nn_predict_batch_run <- function(model, x_ggml, bs, ne_datapoint, ne_output,
+                                   n_batches, input_shape) {
+    graph_info <- nn_build_graph(model, bs, training = FALSE)
+    graph <- ggml_build_forward_expand(graph_info$ctx_compute, graph_info$outputs)
+    sched <- model$compilation$sched
+    preds <- matrix(0, nrow = n_batches * bs, ncol = ne_output)
+
+    for (ib in seq_len(n_batches)) {
+      data_start <- (ib - 1L) * bs * ne_datapoint + 1L
+      data_end <- ib * bs * ne_datapoint
+      batch_data <- x_ggml[data_start:data_end]
+      ggml_backend_tensor_set_data(graph_info$inputs, batch_data)
+
+      ggml_backend_sched_reset(sched)
+      ggml_backend_sched_alloc_graph(sched, graph)
+      ggml_backend_sched_graph_compute(sched, graph)
+
+      batch_output <- ggml_backend_tensor_get_data(graph_info$outputs)
+      batch_matrix <- matrix(batch_output, nrow = ne_output, ncol = bs)
+      row_start <- (ib - 1L) * bs + 1L
+      row_end <- ib * bs
+      preds[row_start:row_end, ] <- t(batch_matrix)
+    }
+
+    ggml_free(graph_info$ctx_compute)
+    ggml_backend_buffer_free(graph_info$buffer)
+    ggml_free(graph_info$ctx_weights)
+
+    preds
   }
 
-  # Build graph with trained weights
-  graph_info <- nn_build_graph(model, batch_size)
+  n_full <- (n_samples %/% batch_size) * batch_size
+  remainder <- n_samples - n_full
 
-  # Build forward computation graph
-  graph <- ggml_build_forward_expand(graph_info$ctx_compute, graph_info$outputs)
-
-  # Batch-by-batch forward pass using scheduler directly (no ggml_opt needed)
-  sched <- model$compilation$sched
-  n_batches <- n_samples %/% batch_size
   all_preds <- matrix(0, nrow = n_samples, ncol = ne_output)
 
-  for (ib in seq_len(n_batches)) {
-    # Extract batch data and write to input tensor
-    data_start <- (ib - 1L) * batch_size * ne_datapoint + 1L
-    data_end <- ib * batch_size * ne_datapoint
-    batch_data <- x_ggml[data_start:data_end]
-    ggml_backend_tensor_set_data(graph_info$inputs, batch_data)
-
-    # Reset scheduler, allocate graph, compute forward pass
-    ggml_backend_sched_reset(sched)
-    ggml_backend_sched_alloc_graph(sched, graph)
-    ggml_backend_sched_graph_compute(sched, graph)
-
-    # Read output tensor [ne_output, batch_size]
-    batch_output <- ggml_backend_tensor_get_data(graph_info$outputs)
-    batch_matrix <- matrix(batch_output, nrow = ne_output, ncol = batch_size)
-    row_start <- (ib - 1L) * batch_size + 1L
-    row_end <- ib * batch_size
-    all_preds[row_start:row_end, ] <- t(batch_matrix)
+  # Main batches
+  if (n_full > 0L) {
+    if (is.matrix(x)) {
+      x_main <- x[seq_len(n_full), , drop = FALSE]
+    } else {
+      x_main <- x[seq_len(n_full), , , , drop = FALSE]
+    }
+    x_ggml_main <- nn_convert_to_ggml(x_main, input_shape)
+    n_batches <- n_full %/% batch_size
+    all_preds[seq_len(n_full), ] <- nn_predict_batch_run(
+      model, x_ggml_main, batch_size, ne_datapoint, ne_output,
+      n_batches, input_shape
+    )
   }
 
-  # Cleanup
-  ggml_free(graph_info$ctx_compute)
-  ggml_backend_buffer_free(graph_info$buffer)
-  ggml_free(graph_info$ctx_weights)
+  # Remainder batch with rebuilt graph
+  if (remainder > 0L) {
+    idx_rem <- (n_full + 1L):n_samples
+    if (is.matrix(x)) {
+      x_rem <- x[idx_rem, , drop = FALSE]
+    } else {
+      x_rem <- x[idx_rem, , , , drop = FALSE]
+    }
+    x_ggml_rem <- nn_convert_to_ggml(x_rem, input_shape)
+    all_preds[idx_rem, ] <- nn_predict_batch_run(
+      model, x_ggml_rem, remainder, ne_datapoint, ne_output,
+      1L, input_shape
+    )
+  }
 
   all_preds
 }

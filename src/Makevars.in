@@ -64,7 +64,7 @@ GGML_OBJECTS = \
 
 # ONNX loader objects
 ONNX_OBJECTS = \
-  onnx/onnx_loader.o onnx/onnx_ggml.o onnx/r_onnx.o
+  onnx/onnx_loader.o onnx/onnx_ggml.o onnx/r_onnx.o onnx/rel_pos_bias.o
 
 # R interface objects
 R_INTERFACE_OBJECTS = \

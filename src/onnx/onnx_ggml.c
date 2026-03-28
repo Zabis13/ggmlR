@@ -147,7 +147,7 @@ static struct ggml_tensor *make_scalar(onnx_ggml_ctx_t *c, float val) {
     struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
     struct ggml_tensor *t = ggml_new_tensor_1d(wctx, GGML_TYPE_F32, 1);
     ggml_set_input(t);
-    if (c->n_const_fills < 256) {
+    if (c->n_const_fills < ONNX_MAX_DEFERRED) {
         c->const_fill_ptrs[c->n_const_fills] = t;
         c->const_fill_vals[c->n_const_fills] = val;
         c->n_const_fills++;
@@ -238,6 +238,17 @@ static int create_initializer_tensors(onnx_ggml_ctx_t *c) {
         ggml_set_name(t, init->name);
         ggml_set_input(t);
         tmap_put_nd(c, init->name, t, init->n_dims > 0 ? init->n_dims : 1);
+
+        /* Register cval for small int64 initializers (shape constants, indices) */
+        if (init->data_type == ONNX_DTYPE_INT64 && n_elem <= ONNX_MAX_DIMS) {
+            const void *src = init->raw_data ? init->raw_data
+                            : init->decoded_data ? init->decoded_data : NULL;
+            if (src) {
+                int64_t vals[ONNX_MAX_DIMS];
+                memcpy(vals, src, (size_t)n_elem * sizeof(int64_t));
+                cval_put(c, init->name, vals, (int)n_elem);
+            }
+        }
     }
     return 0;
 }
@@ -534,9 +545,10 @@ static void onnx_broadcast_prepare(struct ggml_context *ctx,
 
 static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
     struct ggml_tensor *out = NULL;
+    int out_nd = -1;  /* output ONNX ndims; -1 = inherit from input (generic path) */
 
     /* Debug: uncomment to trace node processing
-    fprintf(stderr, "[onnx] node %s op=%s inputs=[", n->outputs[0], n->op_type);
+    fprintf(stderr, "[node] %s op=%s inputs=[", n->outputs[0], n->op_type);
     for (int i = 0; i < n->n_inputs; i++) {
         struct ggml_tensor *ti = tmap_get(c, n->inputs[i]);
         if (ti)
@@ -556,12 +568,38 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
 /* ── Elementwise binary ─────────────────────────────────────── */
     if (strcmp(op, "Add") == 0) {
         if (!a || !b) return -1;
+        /* Ensure matching types for binary op */
+        if (a->type == GGML_TYPE_I32 && b->type == GGML_TYPE_F32)
+            a = ggml_cast(c->ctx, a, GGML_TYPE_F32);
+        else if (b->type == GGML_TYPE_I32 && a->type == GGML_TYPE_F32)
+            b = ggml_cast(c->ctx, b, GGML_TYPE_F32);
         struct ggml_tensor *ta = a, *tb = b;
         onnx_broadcast_prepare(c->ctx, &ta, &tb);
         out = ggml_add(c->ctx, ta, tb);
+
+        /* cval propagation for Add */
+        {
+            int64_t cv_a[ONNX_MAX_DIMS], cv_b[ONNX_MAX_DIMS];
+            int na2 = cval_get(c, n->inputs[0], cv_a, ONNX_MAX_DIMS);
+            int nb2 = cval_get(c, n->inputs[1], cv_b, ONNX_MAX_DIMS);
+            if (na2 > 0 && nb2 > 0) {
+                int64_t result[ONNX_MAX_DIMS];
+                int nr = na2 > nb2 ? na2 : nb2;
+                for (int j = 0; j < nr; j++) {
+                    int64_t va = cv_a[j < na2 ? j : 0];
+                    int64_t vb = cv_b[j < nb2 ? j : 0];
+                    result[j] = va + vb;
+                }
+                cval_put(c, n->outputs[0], result, nr);
+            }
+        }
     }
     else if (strcmp(op, "Sub") == 0) {
         if (!a || !b) return -1;
+        if (a->type == GGML_TYPE_I32 && b->type == GGML_TYPE_F32)
+            a = ggml_cast(c->ctx, a, GGML_TYPE_F32);
+        else if (b->type == GGML_TYPE_I32 && a->type == GGML_TYPE_F32)
+            b = ggml_cast(c->ctx, b, GGML_TYPE_F32);
         /* Sub is not commutative — only reshape b for broadcast */
         struct ggml_tensor *ta = a, *tb = b;
         if (ggml_nelements(a) >= ggml_nelements(b)) {
@@ -572,9 +610,30 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             onnx_broadcast_prepare(c->ctx, &tb, &ta);
             out = ggml_neg(c->ctx, ggml_sub(c->ctx, tb, ta));
         }
+
+        /* cval propagation for Sub */
+        {
+            int64_t cv_a[ONNX_MAX_DIMS], cv_b[ONNX_MAX_DIMS];
+            int na2 = cval_get(c, n->inputs[0], cv_a, ONNX_MAX_DIMS);
+            int nb2 = cval_get(c, n->inputs[1], cv_b, ONNX_MAX_DIMS);
+            if (na2 > 0 && nb2 > 0) {
+                int64_t result[ONNX_MAX_DIMS];
+                int nr = na2 > nb2 ? na2 : nb2;
+                for (int j = 0; j < nr; j++) {
+                    int64_t va = cv_a[j < na2 ? j : 0];
+                    int64_t vb = cv_b[j < nb2 ? j : 0];
+                    result[j] = va - vb;
+                }
+                cval_put(c, n->outputs[0], result, nr);
+            }
+        }
     }
     else if (strcmp(op, "Mul") == 0) {
         if (!a || !b) return -1;
+        if (a->type == GGML_TYPE_I32 && b->type == GGML_TYPE_F32)
+            a = ggml_cast(c->ctx, a, GGML_TYPE_F32);
+        else if (b->type == GGML_TYPE_I32 && a->type == GGML_TYPE_F32)
+            b = ggml_cast(c->ctx, b, GGML_TYPE_F32);
         struct ggml_tensor *ta = a, *tb = b;
         onnx_broadcast_prepare(c->ctx, &ta, &tb);
         out = ggml_mul(c->ctx, ta, tb);
@@ -598,22 +657,48 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
     }
     else if (strcmp(op, "Div") == 0) {
         if (!a || !b) return -1;
+        if (a->type == GGML_TYPE_I32 && b->type == GGML_TYPE_F32)
+            a = ggml_cast(c->ctx, a, GGML_TYPE_F32);
+        else if (b->type == GGML_TYPE_I32 && a->type == GGML_TYPE_F32)
+            b = ggml_cast(c->ctx, b, GGML_TYPE_F32);
         struct ggml_tensor *ta = a, *tb = b;
         if (ggml_nelements(a) >= ggml_nelements(b)) {
             onnx_broadcast_prepare(c->ctx, &ta, &tb);
             out = ggml_div(c->ctx, ta, tb);
         } else {
-            /* a smaller than b: div not commutative, need reciprocal.
-             * div(a,b) = a * (1/b) — but for broadcast: reshape a.
-             * Actually just try broadcast prepare and hope ggml handles it. */
             onnx_broadcast_prepare(c->ctx, &ta, &tb);
             out = ggml_div(c->ctx, ta, tb);
+        }
+
+        /* cval propagation for Div (integer division) */
+        {
+            int64_t cv_a[ONNX_MAX_DIMS], cv_b[ONNX_MAX_DIMS];
+            int na2 = cval_get(c, n->inputs[0], cv_a, ONNX_MAX_DIMS);
+            int nb2 = cval_get(c, n->inputs[1], cv_b, ONNX_MAX_DIMS);
+            if (na2 > 0 && nb2 > 0) {
+                int64_t result[ONNX_MAX_DIMS];
+                int nr = na2 > nb2 ? na2 : nb2;
+                for (int j = 0; j < nr; j++) {
+                    int64_t va = cv_a[j < na2 ? j : 0];
+                    int64_t vb = cv_b[j < nb2 ? j : 0];
+                    result[j] = (vb != 0) ? va / vb : 0;
+                }
+                cval_put(c, n->outputs[0], result, nr);
+            }
         }
     }
 
     /* ── MatMul / Gemm ──────────────────────────────────────────── */
     else if (strcmp(op, "MatMul") == 0) {
         if (!a || !b) return -1;
+        /* Debug: uncomment to trace MatMul shapes
+        fprintf(stderr, "[MatMul] '%s': A.ne=[%lld,%lld,%lld,%lld] nd_a=%d  B.ne=[%lld,%lld,%lld,%lld] nd_b=%d\n",
+                n->outputs[0],
+                (long long)a->ne[0], (long long)a->ne[1], (long long)a->ne[2], (long long)a->ne[3],
+                tmap_get_ndims(c, n->inputs[0]),
+                (long long)b->ne[0], (long long)b->ne[1], (long long)b->ne[2], (long long)b->ne[3],
+                tmap_get_ndims(c, n->inputs[1]));
+        */
         /* ONNX MatMul: A[...,M,K] @ B[...,K,N] → [...,M,N]
          *
          * Source of truth: reconstruct ONNX shapes from ggml ne[] + tmap_get_ndims.
@@ -725,6 +810,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                 }
             }
         }
+        out_nd = nd_a > nd_b ? nd_a : nd_b;
     }
     else if (strcmp(op, "Gemm") == 0) {
         if (!a || !b) return -1;
@@ -994,16 +1080,22 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                 if (in_nd > onnx_nd) onnx_nd = in_nd;
             }
 
+            /* ggml_permute(a, ax0, ax1, ax2, ax3) semantics:
+             *   dst.ne[ax[k]] = src.ne[k]  (src dim k → dst dim ax[k])
+             * ONNX perm[i]=j means dst_onnx[i] = src_onnx[j]
+             *   → dst_ggml[onnx_nd-1-i] = src_ggml[onnx_nd-1-j]
+             *   i.e. src_ggml_dim (onnx_nd-1-j) → dst_ggml_dim (onnx_nd-1-i)
+             *   → ax[src_ggml_dim] = dst_ggml_dim */
             int ax[4] = {0, 1, 2, 3};
             for (int i = 0; i < n_perm; i++) {
-                int ggml_out = onnx_nd - 1 - i;
-                int ggml_in  = onnx_nd - 1 - (int)perm[i];
+                int ggml_dst = onnx_nd - 1 - i;           /* dst ggml dim */
+                int ggml_src = onnx_nd - 1 - (int)perm[i]; /* src ggml dim */
                 /* Clamp to [0, 3] for >4D collapse */
-                if (ggml_out < 0) ggml_out = 0;
-                if (ggml_out > 3) ggml_out = 3;
-                if (ggml_in < 0) ggml_in = 0;
-                if (ggml_in > 3) ggml_in = 3;
-                ax[ggml_out] = ggml_in;
+                if (ggml_dst < 0) ggml_dst = 0;
+                if (ggml_dst > 3) ggml_dst = 3;
+                if (ggml_src < 0) ggml_src = 0;
+                if (ggml_src > 3) ggml_src = 3;
+                ax[ggml_src] = ggml_dst;
             }
             /* Identity permutation → skip as no-op (redirect name) */
             if (ax[0] == 0 && ax[1] == 1 && ax[2] == 2 && ax[3] == 3) {
@@ -1077,6 +1169,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                 }
             }
         }
+        out_nd = nd;  /* Transpose preserves ndims */
     }
     else if (strcmp(op, "Flatten") == 0) {
         if (!a) return -1;
@@ -1179,6 +1272,14 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             case 3: out = ggml_reshape_3d(c->ctx, a, ne[0], ne[1], ne[2]); break;
             default: out = ggml_reshape_4d(c->ctx, a, ne[0], ne[1], ne[2], ne[3]); break;
         }
+
+        /* cval propagation: Unsqueeze preserves values */
+        {
+            int64_t cv[ONNX_MAX_DIMS];
+            int ncv = cval_get(c, n->inputs[0], cv, ONNX_MAX_DIMS);
+            if (ncv > 0)
+                cval_put(c, n->outputs[0], cv, ncv);
+        }
     }
     else if (strcmp(op, "Squeeze") == 0) {
         if (!a) return -1;
@@ -1194,17 +1295,22 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             }
         }
 
-        /* Use full 4 dims to handle trailing 1s that ggml_n_dims drops */
-        int nd_in = 4;
+        /* Use stored ONNX ndims when available, fallback to 4 */
+        int nd_in = tmap_get_ndims(c, n->inputs[0]);
+        if (nd_in <= 0) {
+            nd_in = 4;
+            while (nd_in > 1 && a->ne[nd_in - 1] == 1) nd_in--;
+        }
+        if (nd_in > 4) nd_in = 4;
 
         /* Normalize negative axes */
         for (int i = 0; i < n_axes; i++)
             if (axes[i] < 0) axes[i] += nd_in;
 
-        /* Build ONNX dims from ggml ne (reversed) */
-        int64_t onnx_in[4];
-        for (int i = 0; i < 4; i++)
-            onnx_in[i] = a->ne[3 - i];
+        /* Build ONNX dims from ggml ne (reversed, using nd_in) */
+        int64_t onnx_in[4] = {1, 1, 1, 1};
+        for (int i = 0; i < nd_in; i++)
+            onnx_in[i] = a->ne[nd_in - 1 - i];
 
         int64_t onnx_out[4];
         int nd_out = 0;
@@ -1294,7 +1400,68 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
     /* ── Gather ─────────────────────────────────────────────────── */
     else if (strcmp(op, "Gather") == 0) {
         if (!a || !b) return -1;
+        int64_t axis = onnx_attr_int(n, "axis", 0);
+        int a_nd = tmap_get_ndims(c, n->inputs[0]);
+        int b_nd = tmap_get_ndims(c, n->inputs[1]);
+        if (a_nd <= 0) a_nd = (int)ggml_n_dims(a);
+        if (b_nd <= 0) b_nd = (int)ggml_n_dims(b);
+
+        /* Case 1: scalar/shape indexing — data is small 1D (shape tensor,
+         * constants) and both have cval → create scalar constant.
+         * This avoids ggml_get_rows which is designed for embedding lookup. */
+        int64_t cv_data[ONNX_MAX_DIMS], cv_idx[ONNX_MAX_DIMS];
+        int ncv_data = cval_get(c, n->inputs[0], cv_data, ONNX_MAX_DIMS);
+        int ncv_idx  = cval_get(c, n->inputs[1], cv_idx, ONNX_MAX_DIMS);
+        if (ncv_data > 0 && ncv_idx > 0) {
+            /* Both compile-time known: resolve at graph-build time */
+            int64_t result[ONNX_MAX_DIMS];
+            int nr = 0;
+            for (int j = 0; j < ncv_idx; j++) {
+                int64_t idx = cv_idx[j];
+                if (idx < 0) idx += ncv_data;
+                if (idx >= 0 && idx < ncv_data && nr < ONNX_MAX_DIMS)
+                    result[nr++] = cv_data[idx];
+            }
+            /* Create scalar/small constant tensor in ctx_weight */
+            struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
+            if (nr == 0) nr = 1;
+            out = ggml_new_tensor_1d(wctx, a->type, nr);
+            if (out) {
+                ggml_set_input(out);
+                ggml_set_name(out, n->outputs[0]);
+                tmap_put_nd(c, n->outputs[0], out, nr > 1 ? 1 : 1);
+                cval_put(c, n->outputs[0], result, nr);
+                /* Register for deferred fill (const_fill can't handle multi-value,
+                 * so stash as shape tensor) */
+                if (c->n_shape_tensors < ONNX_MAX_DEFERRED) {
+                    c->shape_tensors_ne[c->n_shape_tensors][0] = nr;
+                    for (int j = 0; j < nr; j++)
+                        c->shape_tensors_ne[c->n_shape_tensors][j + 1] = result[j];
+                    c->shape_tensor_ptrs[c->n_shape_tensors] = out;
+                    c->n_shape_tensors++;
+                }
+            }
+            return 0;
+        }
+
+        /* Case 2: embedding lookup — ggml_get_rows */
+        if (b->type != GGML_TYPE_I32) {
+            b = ggml_cast(c->ctx, b, GGML_TYPE_I32);
+        }
         out = ggml_get_rows(c->ctx, a, b);
+
+        /* Register output with correct ONNX ndims.
+         * ONNX Gather(data, indices, axis=0):
+         * output_shape = indices_shape + data_shape[1:]
+         * E.g. data [V,D] (2D) + indices [B,S] (2D) → [B,S,D] (3D). */
+        if (out) {
+            int out_nd = b_nd + (a_nd > 1 ? a_nd - 1 : 0);
+            if (out_nd < 1) out_nd = 1;
+            if (out_nd > 4) out_nd = 4;
+            ggml_set_name(out, n->outputs[0]);
+            tmap_put_nd(c, n->outputs[0], out, out_nd);
+        }
+        return 0; /* already registered */
     }
 
     /* ── Slice ──────────────────────────────────────────────────── */
@@ -1432,7 +1599,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             out = ggml_cont(c->ctx, out);
         } else {
             /* step != 1: deferred strided copy after alloc */
-            if (c->n_slice_fills >= 64) {
+            if (c->n_slice_fills >= ONNX_MAX_DEFERRED) {
                 fprintf(stderr, "onnx_ggml: too many strided Slice ops (max 64)\n");
                 return -1;
             }
@@ -1689,6 +1856,29 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             int64_t tmp[4] = { merged, shape[ndims-3], shape[ndims-2], shape[ndims-1] };
             memcpy(shape, tmp, sizeof(tmp));
             ndims = 4;
+        }
+
+        /* Numpy-style broadcast: if rank(a) < rank(target), left-pad a
+         * with 1s so ranks match, then apply broadcast rules. */
+        int a_nd = tmap_get_ndims(c, n->inputs[0]);
+        if (a_nd <= 0) {
+            a_nd = (int)ggml_n_dims(a);
+        }
+        if (a_nd < ndims && ndims <= 4) {
+            /* Reshape a to match target rank by adding leading 1-dims.
+             * E.g. a=[128] (1D) + target=[1,128] (2D) → reshape a to [128, 1]
+             * in ggml (= ONNX [1, 128]). */
+            int64_t a_ne[4] = {1, 1, 1, 1};
+            /* Copy existing ggml dims at the bottom, pad top with 1s */
+            for (int d = 0; d < a_nd; d++)
+                a_ne[d] = a->ne[d];
+            /* remaining a_ne[a_nd..ndims-1] are already 1 */
+            switch (ndims) {
+                case 2: a = ggml_reshape_2d(c->ctx, a, a_ne[0], a_ne[1]); break;
+                case 3: a = ggml_reshape_3d(c->ctx, a, a_ne[0], a_ne[1], a_ne[2]); break;
+                case 4: a = ggml_reshape_4d(c->ctx, a, a_ne[0], a_ne[1], a_ne[2], a_ne[3]); break;
+                default: break;
+            }
         }
 
         /* Reverse ONNX shape → ggml ne order */
@@ -2085,17 +2275,31 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         const onnx_attr_t *vf_attr = onnx_node_find_attr(n, "value_float");
         if (vf_attr) {
             out = make_scalar(c, vf);
+            /* cval for scalar float (cast to int64) */
+            int64_t cv = (int64_t)vf;
+            cval_put(c, n->outputs[0], &cv, 1);
         } else {
             out = make_scalar(c, (float)vi);
+            /* cval for scalar int */
+            cval_put(c, n->outputs[0], &vi, 1);
         }
     }
 
-    /* ── Cast (type conversion — keep as f32 for now) ───────────── */
+    /* ── Cast (type conversion) ──────────────────────────────────── */
     else if (strcmp(op, "Cast") == 0) {
         if (!a) return -1;
-        /* ggml computation is always f32; Cast is a pass-through.
-         * TODO: handle f16/bf16 when needed. */
-        out = a;
+        /* ONNX "to" attribute: 1=F32, 6=I32, 7=I64, 10=F16, 16=BF16 */
+        int64_t to = onnx_attr_int(n, "to", 1);
+        if ((to == 6 || to == 7) && a->type == GGML_TYPE_F32) {
+            /* F32 → I32: needed for index tensors (Gather, etc.) */
+            out = ggml_cast(c->ctx, a, GGML_TYPE_I32);
+        } else if (to == 1 && a->type == GGML_TYPE_I32) {
+            /* I32 → F32 */
+            out = ggml_cast(c->ctx, a, GGML_TYPE_F32);
+        } else {
+            /* Same type or unsupported — pass-through */
+            out = a;
+        }
         /* Propagate cval through Cast (values preserved as int64) */
         {
             int64_t cv[ONNX_MAX_DIMS];
@@ -2109,9 +2313,17 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
     else if (strcmp(op, "Shape") == 0) {
         if (!a) return -1;
         /* Output is a 1D int64 tensor with the ONNX shape of the input.
-         * ggml ne is reversed from ONNX, so un-reverse. */
-        int nd = 4;
-        while (nd > 1 && a->ne[nd-1] == 1) nd--;
+         * ggml ne is reversed from ONNX, so un-reverse.
+         * Use max(tmap_ndims, ggml_n_dims) — tmap_ndims preserves leading-1
+         * dims for graph inputs (e.g. [1,128] → 2D, not 1D), while
+         * ggml_n_dims is authoritative for intermediates that grew dims. */
+        int nd = tmap_get_ndims(c, n->inputs[0]);
+        int gnd = (int)ggml_n_dims(a);
+        if (nd < gnd) nd = gnd;
+        if (nd <= 0) {
+            nd = 4;
+            while (nd > 1 && a->ne[nd-1] == 1) nd--;
+        }
         {
             struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
             out = ggml_new_tensor_1d(wctx, GGML_TYPE_I32, nd);
@@ -2122,11 +2334,13 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             ggml_set_name(out, n->outputs[0]);
             tmap_put(c, n->outputs[0], out);
             /* Stash dims for later loading */
-            c->shape_tensors_ne[c->n_shape_tensors][0] = nd;
-            for (int d = 0; d < nd; d++)
-                c->shape_tensors_ne[c->n_shape_tensors][d+1] = a->ne[nd - 1 - d];
-            c->shape_tensor_ptrs[c->n_shape_tensors] = out;
-            c->n_shape_tensors++;
+            if (c->n_shape_tensors < ONNX_MAX_DEFERRED) {
+                c->shape_tensors_ne[c->n_shape_tensors][0] = nd;
+                for (int d = 0; d < nd; d++)
+                    c->shape_tensors_ne[c->n_shape_tensors][d+1] = a->ne[nd - 1 - d];
+                c->shape_tensor_ptrs[c->n_shape_tensors] = out;
+                c->n_shape_tensors++;
+            }
             /* Register compile-time values: ONNX dims of input tensor */
             int64_t shape_vals[ONNX_MAX_DIMS];
             for (int d = 0; d < nd; d++)
@@ -2289,7 +2503,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         ggml_set_input(out);
 
         /* Store for deferred fill after alloc */
-        if (c->n_eye_fills < 64) {
+        if (c->n_eye_fills < ONNX_MAX_DEFERRED) {
             c->eye_fill_ptrs[c->n_eye_fills] = out;
             c->eye_fill_rows[c->n_eye_fills] = (int)a->ne[1]; /* rows in ggml = ONNX cols */
             c->eye_fill_cols[c->n_eye_fills] = (int)a->ne[0]; /* cols in ggml = ONNX rows */
@@ -2301,17 +2515,26 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
     /* ── ConstantOfShape ───────────────────────────────────────── */
     else if (strcmp(op, "ConstantOfShape") == 0) {
         if (!a) return -1;
-        /* Input a is a shape tensor (int64). Read shape from initializer or Constant. */
-        const onnx_initializer_t *si = onnx_find_initializer(c->onnx, n->inputs[0]);
-        if (!si) si = find_constant_tensor(c->onnx, n->inputs[0]);
-        if (!si) return -1;
-
+        /* Input a is a shape tensor (int64). Read shape from initializer,
+         * Constant, or compile-time cval (e.g. from Shape op). */
         int64_t shape[ONNX_MAX_DIMS];
         int ndims = 0;
-        if (si->raw_data && si->data_type == ONNX_DTYPE_INT64) {
-            ndims = (int)(si->raw_size / sizeof(int64_t));
-            if (ndims > ONNX_MAX_DIMS) ndims = ONNX_MAX_DIMS;
-            memcpy(shape, si->raw_data, ndims * sizeof(int64_t));
+        const onnx_initializer_t *si = onnx_find_initializer(c->onnx, n->inputs[0]);
+        if (!si) si = find_constant_tensor(c->onnx, n->inputs[0]);
+        if (si) {
+            if (si->raw_data && si->data_type == ONNX_DTYPE_INT64) {
+                ndims = (int)(si->raw_size / sizeof(int64_t));
+                if (ndims > ONNX_MAX_DIMS) ndims = ONNX_MAX_DIMS;
+                memcpy(shape, si->raw_data, ndims * sizeof(int64_t));
+            }
+        } else {
+            /* Fallback: try compile-time values (e.g. Shape op output) */
+            ndims = cval_get(c, n->inputs[0], shape, ONNX_MAX_DIMS);
+        }
+        if (ndims == 0) {
+            fprintf(stderr, "[onnx] ConstantOfShape: cannot resolve shape from '%s'\n",
+                    n->inputs[0]);
+            return -1;
         }
 
         /* Get fill value from attribute "value" (TensorProto, usually scalar) */
@@ -2340,9 +2563,9 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         if (out) {
             ggml_set_input(out);
             ggml_set_name(out, n->outputs[0]);
-            tmap_put(c, n->outputs[0], out);
+            tmap_put_nd(c, n->outputs[0], out, ndims);
             /* Store fill value for loading after sched alloc */
-            if (c->n_const_fills < 256) {
+            if (c->n_const_fills < ONNX_MAX_DEFERRED) {
                 c->const_fill_vals[c->n_const_fills] = fill_val;
                 c->const_fill_ptrs[c->n_const_fills] = out;
                 c->n_const_fills++;
@@ -2710,18 +2933,74 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         if (y_zp) { struct ggml_tensor *t1=out, *t2=y_zp; onnx_broadcast_prepare(c->ctx,&t1,&t2); out=ggml_add(c->ctx,t1,t2); }
     }
 
+    /* ── NonZero ────────────────────────────────────────────────── */
+    else if (strcmp(op, "NonZero") == 0) {
+        if (!a) return -1;
+        /* NonZero returns indices of non-zero elements.
+         * Output shape: ONNX [n_dims_input, nnz], ggml [nnz, n_dims_input].
+         * For transformer position embeddings: input is ConstantOfShape(value=1),
+         * so nnz = total_elements and result = arange(0, N).
+         *
+         * At graph-build time we need to know nnz to allocate output tensor.
+         * If input is from ConstantOfShape with non-zero fill, nnz = total_elements.
+         * Otherwise, defer to runtime fill. */
+        int input_ndims = tmap_get_ndims(c, n->inputs[0]);
+        if (input_ndims < 1) input_ndims = (int)ggml_n_dims(a);
+
+        int64_t total_elems = (int64_t)ggml_nelements(a);
+
+        /* Assume all elements are non-zero (common case: ConstantOfShape with value=1).
+         * For truly sparse inputs this would need runtime sizing. */
+        int64_t nnz = total_elems;
+
+        /* Output: ONNX [input_ndims, nnz] → ggml [nnz, input_ndims] */
+        {
+            struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
+            out = ggml_new_tensor_2d(wctx, GGML_TYPE_F32, nnz, (int64_t)input_ndims);
+        }
+        if (out) {
+            ggml_set_input(out);
+            ggml_set_name(out, n->outputs[0]);
+            tmap_put_nd(c, n->outputs[0], out, 2); /* ONNX 2D output */
+
+            /* Register for deferred fill after sched alloc */
+            if (c->n_nonzero_fills < ONNX_MAX_DEFERRED) {
+                c->nonzero_fill_src[c->n_nonzero_fills] = a;
+                c->nonzero_fill_dst[c->n_nonzero_fills] = out;
+                c->nonzero_fill_ndims[c->n_nonzero_fills] = input_ndims;
+                c->n_nonzero_fills++;
+            }
+
+            /* cval propagation for 1D all-nonzero case: [0, 1, 2, ..., N-1] */
+            if (input_ndims == 1 && nnz <= ONNX_MAX_DIMS) {
+                int64_t cvals[ONNX_MAX_DIMS];
+                for (int j = 0; j < (int)nnz; j++)
+                    cvals[j] = (int64_t)j;
+                cval_put(c, n->outputs[0], cvals, (int)nnz);
+            }
+        }
+        return 0; /* already registered */
+    }
+
     /* ── Unknown op ─────────────────────────────────────────────── */
     else {
         fprintf(stderr, "onnx_ggml: unsupported op '%s'\n", op);
         return -1;
     }
 
-    /* Register outputs — inherit ONNX ndims from first input for >4D propagation */
+    /* Register outputs.
+     * If the handler set out_nd, use it (authoritative).
+     * Otherwise fall back to inheriting from first input. */
     if (out) {
-        int out_ndims = ggml_n_dims(out);
-        if (n->n_inputs > 0 && n->inputs[0][0] != '\0') {
-            int in_nd = tmap_get_ndims(c, n->inputs[0]);
-            if (in_nd > out_ndims) out_ndims = in_nd;
+        int out_ndims;
+        if (out_nd > 0) {
+            out_ndims = out_nd;
+        } else {
+            out_ndims = ggml_n_dims(out);
+            if (n->n_inputs > 0 && n->inputs[0][0] != '\0') {
+                int in_nd = tmap_get_ndims(c, n->inputs[0]);
+                if (in_nd > out_ndims) out_ndims = in_nd;
+            }
         }
         for (int i = 0; i < n->n_outputs; i++) {
             if (n->outputs[i][0] != '\0') {
@@ -2786,6 +3065,219 @@ static void fill_strided_slices(onnx_ggml_ctx_t *c) {
         free(src_buf);
         free(dst_buf);
     }
+}
+
+/* ── Pre-pass: detect RelPosBias2D (pos_embed) subgraphs ────────── */
+
+/* Each pos_embed block in BoTNet consists of ~60-80 nodes with output names
+ * containing "/pos_embed/".  Structure:
+ *   MatMul_0: input0 = first_Reshape_output, input1 = W_h (initializer)
+ *   MatMul_1: input1 = W_w (initializer)
+ *   ...many Reshape/Pad/Flatten/Slice/Expand/Transpose nodes...
+ *   Final Reshape: output = block output consumed by attention Add
+ *
+ * The pre-pass finds block boundaries and extracts:
+ *   - x input: input0 of the first Reshape (before MatMul_0)
+ *   - W_h, W_w: initializer inputs of the two MatMul ops
+ *   - H, W, C from W_h shape [C, 2*H-1], W_w shape [C, 2*W-1]
+ *   - B from x shape  [B, H*W, C]
+ *   - output name of final Reshape
+ */
+static int detect_pos_embed_blocks(onnx_ggml_ctx_t *c) {
+    onnx_model_t *onnx = c->onnx;
+    c->n_pos_embed_blocks = 0;
+
+    /* Pass 1: find contiguous ranges of nodes with /pos_embed/ in outputs */
+    int block_start = -1;
+    int matmul_count = 0;
+    char wh_name[ONNX_MAX_NAME] = {0};
+    char ww_name[ONNX_MAX_NAME] = {0};
+    char first_reshape_input[ONNX_MAX_NAME] = {0};
+
+    for (int i = 0; i < onnx->n_nodes; i++) {
+        onnx_node_t *nd = &onnx->nodes[i];
+        int is_pos_embed = 0;
+
+        /* Check if any output name contains /pos_embed/ */
+        for (int o = 0; o < nd->n_outputs; o++) {
+            if (strstr(nd->outputs[o], "/pos_embed/")) {
+                is_pos_embed = 1;
+                break;
+            }
+        }
+
+        if (is_pos_embed) {
+            if (block_start < 0) {
+                /* Start of a new block */
+                block_start = i;
+                matmul_count = 0;
+                wh_name[0] = ww_name[0] = first_reshape_input[0] = '\0';
+            }
+
+            /* Track MatMul ops to extract W_h, W_w */
+            if (strcmp(nd->op_type, "MatMul") == 0) {
+                matmul_count++;
+                if (matmul_count == 1) {
+                    /* First MatMul: input1 = W_h */
+                    snprintf(wh_name, ONNX_MAX_NAME, "%s", nd->inputs[1]);
+                    /* input0 is the Reshape output; find what feeds it */
+                } else if (matmul_count == 2) {
+                    /* Second MatMul: input1 = W_w */
+                    snprintf(ww_name, ONNX_MAX_NAME, "%s", nd->inputs[1]);
+                }
+            }
+
+            /* First Reshape in block: its input0 is the real x */
+            if (strcmp(nd->op_type, "Reshape") == 0 && first_reshape_input[0] == '\0') {
+                snprintf(first_reshape_input, ONNX_MAX_NAME, "%s", nd->inputs[0]);
+            }
+        } else if (block_start >= 0) {
+            /* End of block (current node is outside pos_embed) */
+            int block_end = i - 1;
+
+            if (matmul_count >= 2 && wh_name[0] && ww_name[0] &&
+                first_reshape_input[0] && c->n_pos_embed_blocks < ONNX_MAX_POS_EMBED) {
+
+                int bi = c->n_pos_embed_blocks;
+
+                snprintf(c->pos_embed_blocks[bi].x_input_name, ONNX_MAX_NAME,
+                         "%s", first_reshape_input);
+                snprintf(c->pos_embed_blocks[bi].wh_name, ONNX_MAX_NAME,
+                         "%s", wh_name);
+                snprintf(c->pos_embed_blocks[bi].ww_name, ONNX_MAX_NAME,
+                         "%s", ww_name);
+                /* Output: last node's first output */
+                snprintf(c->pos_embed_blocks[bi].output_name, ONNX_MAX_NAME,
+                         "%s", onnx->nodes[block_end].outputs[0]);
+                c->pos_embed_blocks[bi].first_node_idx = block_start;
+                c->pos_embed_blocks[bi].last_node_idx  = block_end;
+
+                /* Extract H, W, C from W_h and W_w initializer shapes */
+                const onnx_initializer_t *wh_init = onnx_find_initializer(onnx, wh_name);
+                const onnx_initializer_t *ww_init = onnx_find_initializer(onnx, ww_name);
+
+                if (wh_init && ww_init && wh_init->n_dims == 2 && ww_init->n_dims == 2) {
+                    /* ONNX shape: W_h [C, 2*H-1], W_w [C, 2*W-1] */
+                    int C     = (int)wh_init->dims[0];
+                    int rel_h = (int)wh_init->dims[1]; /* 2*H-1 */
+                    int rel_w = (int)ww_init->dims[1]; /* 2*W-1 */
+                    int H = (rel_h + 1) / 2;
+                    int W = (rel_w + 1) / 2;
+
+                    /* B: from x tensor shape. x is [B, H*W, C] in ONNX.
+                     * Try to get from tmap (input tensor already created) */
+                    int B = 1;
+                    struct ggml_tensor *xt = tmap_get(c, first_reshape_input);
+                    if (xt) {
+                        /* ggml: ne[0]=C, ne[1]=H*W, ne[2]=B */
+                        B = (int)xt->ne[2];
+                    }
+
+                    c->pos_embed_blocks[bi].params.H     = H;
+                    c->pos_embed_blocks[bi].params.W     = W;
+                    c->pos_embed_blocks[bi].params.B     = B;
+                    c->pos_embed_blocks[bi].params.C     = C;
+                    c->pos_embed_blocks[bi].params.rel_h = rel_h;
+                    c->pos_embed_blocks[bi].params.rel_w = rel_w;
+
+                    /* Verify W_h, W_w are F32 */
+                    if (wh_init->data_type != 1 /* ONNX_DTYPE_FLOAT */ ||
+                        ww_init->data_type != 1) {
+                        fprintf(stderr, "[onnx] pos_embed block %d: W_h/W_w not F32 "
+                                "(types: %d, %d) — skipping\n",
+                                bi, wh_init->data_type, ww_init->data_type);
+                        block_start = -1;
+                        continue;
+                    }
+
+                    fprintf(stderr, "[onnx] pos_embed block %d: "
+                            "nodes [%d..%d], H=%d W=%d B=%d C=%d, "
+                            "x='%s' W_h='%s' W_w='%s' out='%s'\n",
+                            bi, block_start, block_end, H, W, B, C,
+                            first_reshape_input, wh_name, ww_name,
+                            c->pos_embed_blocks[bi].output_name);
+
+                    c->n_pos_embed_blocks++;
+                } else {
+                    fprintf(stderr, "[onnx] pos_embed block at nodes [%d..%d]: "
+                            "W_h/W_w initializer not found or wrong dims — skipping\n",
+                            block_start, block_end);
+                }
+            }
+            block_start = -1;
+        }
+    }
+
+    /* Handle case where last node is inside a pos_embed block */
+    if (block_start >= 0 && matmul_count >= 2 && wh_name[0] && ww_name[0] &&
+        first_reshape_input[0] && c->n_pos_embed_blocks < ONNX_MAX_POS_EMBED) {
+        int block_end = onnx->n_nodes - 1;
+        int bi = c->n_pos_embed_blocks;
+
+        snprintf(c->pos_embed_blocks[bi].x_input_name, ONNX_MAX_NAME,
+                 "%s", first_reshape_input);
+        snprintf(c->pos_embed_blocks[bi].wh_name, ONNX_MAX_NAME, "%s", wh_name);
+        snprintf(c->pos_embed_blocks[bi].ww_name, ONNX_MAX_NAME, "%s", ww_name);
+        snprintf(c->pos_embed_blocks[bi].output_name, ONNX_MAX_NAME,
+                 "%s", onnx->nodes[block_end].outputs[0]);
+        c->pos_embed_blocks[bi].first_node_idx = block_start;
+        c->pos_embed_blocks[bi].last_node_idx  = block_end;
+
+        const onnx_initializer_t *wh_init = onnx_find_initializer(onnx, wh_name);
+        const onnx_initializer_t *ww_init = onnx_find_initializer(onnx, ww_name);
+        if (wh_init && ww_init && wh_init->n_dims == 2 && ww_init->n_dims == 2) {
+            int C     = (int)wh_init->dims[0];
+            int rel_h = (int)wh_init->dims[1];
+            int rel_w = (int)ww_init->dims[1];
+            int H = (rel_h + 1) / 2;
+            int W = (rel_w + 1) / 2;
+            int B = 1;
+            struct ggml_tensor *xt = tmap_get(c, first_reshape_input);
+            if (xt) B = (int)xt->ne[2];
+
+            c->pos_embed_blocks[bi].params = (rel_pos_bias_params_t){H, W, B, C, rel_h, rel_w};
+
+            if (wh_init->data_type != 1 || ww_init->data_type != 1) {
+                fprintf(stderr, "[onnx] pos_embed block %d: W_h/W_w not F32 — skipping\n", bi);
+            } else {
+                fprintf(stderr, "[onnx] pos_embed block %d: "
+                        "nodes [%d..%d], H=%d W=%d B=%d C=%d, "
+                        "x='%s' W_h='%s' W_w='%s' out='%s'\n",
+                        bi, block_start, block_end, H, W, B, C,
+                        first_reshape_input, wh_name, ww_name,
+                        c->pos_embed_blocks[bi].output_name);
+                c->n_pos_embed_blocks++;
+            }
+        }
+    }
+
+    if (c->n_pos_embed_blocks > 0) {
+        fprintf(stderr, "[onnx] detected %d pos_embed blocks for RelPosBias2D fusion\n",
+                c->n_pos_embed_blocks);
+    }
+
+    return 0;
+}
+
+/* Check if node index falls inside a pos_embed block (should be skipped) */
+static int is_pos_embed_node(onnx_ggml_ctx_t *c, int node_idx) {
+    for (int b = 0; b < c->n_pos_embed_blocks; b++) {
+        if (node_idx >= c->pos_embed_blocks[b].first_node_idx &&
+            node_idx <= c->pos_embed_blocks[b].last_node_idx) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Check if node_idx is the last node of a pos_embed block, return block index or -1 */
+static int pos_embed_block_end(onnx_ggml_ctx_t *c, int node_idx) {
+    for (int b = 0; b < c->n_pos_embed_blocks; b++) {
+        if (node_idx == c->pos_embed_blocks[b].last_node_idx) {
+            return b;
+        }
+    }
+    return -1;
 }
 
 static int sched_alloc_and_fill(onnx_ggml_ctx_t *c) {
@@ -2867,10 +3359,69 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
     if (create_initializer_tensors(c) != 0) goto fail;
     if (create_input_tensors(c) != 0) goto fail;
 
+    /* Pre-pass: detect pos_embed subgraphs for RelPosBias2D fusion */
+    detect_pos_embed_blocks(c);
+
+    /* Allocate params array for pos_embed custom ops (must outlive graph compute) */
+    if (c->n_pos_embed_blocks > 0) {
+        c->pos_embed_params = (rel_pos_bias_params_t *)calloc(
+            c->n_pos_embed_blocks, sizeof(rel_pos_bias_params_t));
+        if (!c->pos_embed_params) goto fail;
+        for (int b = 0; b < c->n_pos_embed_blocks; b++)
+            c->pos_embed_params[b] = c->pos_embed_blocks[b].params;
+    }
+
     /* Map ONNX nodes to ggml ops */
     for (int i = 0; i < onnx->n_nodes; i++) {
+        /* Skip nodes inside pos_embed blocks (handled by fused custom op) */
+        if (c->n_pos_embed_blocks > 0 && is_pos_embed_node(c, i)) {
+            int bi = pos_embed_block_end(c, i);
+            if (bi >= 0) {
+                /* Last node of block — emit fused RelPosBias2D op */
+                rel_pos_bias_params_t *p = &c->pos_embed_params[bi];
+                int HW = p->H * p->W;
+
+                /* Get input tensors */
+                struct ggml_tensor *x_t  = tmap_get(c, c->pos_embed_blocks[bi].x_input_name);
+                struct ggml_tensor *wh_t = tmap_get(c, c->pos_embed_blocks[bi].wh_name);
+                struct ggml_tensor *ww_t = tmap_get(c, c->pos_embed_blocks[bi].ww_name);
+
+                if (!x_t || !wh_t || !ww_t) {
+                    fprintf(stderr, "[onnx] pos_embed block %d: missing input tensor "
+                            "(x=%p W_h=%p W_w=%p) — skipping\n",
+                            bi, (void*)x_t, (void*)wh_t, (void*)ww_t);
+                    continue;
+                }
+
+                /* Concat W_h [rel_h, C] and W_w [rel_w, C] → [rel_h+rel_w, C] in ggml
+                 * (ggml dim 0 concatenation) */
+                struct ggml_tensor *wcat = ggml_concat(c->ctx, wh_t, ww_t, 0);
+
+                /* Dummy tensor with output shape: ggml [HW, HW, B]
+                 * = ONNX [B, HW, HW] — the attention bias matrix */
+                struct ggml_tensor *dummy = ggml_new_tensor_3d(c->ctx, GGML_TYPE_F32,
+                                                                HW, HW, p->B);
+
+                /* Emit fused custom op */
+                struct ggml_tensor *out = ggml_map_custom3(c->ctx,
+                    dummy, x_t, wcat,
+                    rel_pos_bias_2d_cpu,
+                    1,  /* n_tasks = 1 (single-threaded for now) */
+                    p);
+
+                ggml_set_name(out, c->pos_embed_blocks[bi].output_name);
+                tmap_put_nd(c, c->pos_embed_blocks[bi].output_name, out, 3);
+
+                fprintf(stderr, "[onnx] pos_embed block %d: emitted RelPosBias2D "
+                        "custom op → [%d, %d, %d]\n", bi, HW, HW, p->B);
+            }
+            continue;
+        }
         if (map_node(c, &onnx->nodes[i]) != 0) {
             /* Non-fatal: skip unsupported ops with warning */
+            fprintf(stderr, "[onnx] SKIP node %d: %s (outputs: %s)\n",
+                    i, onnx->nodes[i].op_type,
+                    onnx->nodes[i].n_outputs > 0 ? onnx->nodes[i].outputs[0] : "?");
         }
     }
 
@@ -2882,6 +3433,9 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
             if (t) {
                 ggml_set_output(t);
                 ggml_build_forward_expand(c->graph, t);
+            } else {
+                fprintf(stderr, "[onnx] WARNING: output '%s' not found in tmap\n",
+                        onnx->outputs[i].name);
             }
         }
     }
@@ -2972,10 +3526,13 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
                 struct ggml_tensor *t = c->shape_tensor_ptrs[i];
                 if (!t || !t->buffer) continue;
                 int nd = (int)c->shape_tensors_ne[i][0];
+                size_t fill_sz = (size_t)nd * sizeof(int32_t);
+                size_t t_sz = ggml_nbytes(t);
+                if (fill_sz > t_sz) continue;
                 int32_t dims[ONNX_MAX_DIMS];
                 for (int d = 0; d < nd; d++)
                     dims[d] = (int32_t)c->shape_tensors_ne[i][d + 1];
-                ggml_backend_tensor_set(t, dims, 0, nd * sizeof(int32_t));
+                ggml_backend_tensor_set(t, dims, 0, fill_sz);
             }
 
             /* Fill ConstantOfShape tensors with constant value */
@@ -2988,6 +3545,46 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
                 if (buf) {
                     for (size_t j = 0; j < n; j++) buf[j] = val;
                     ggml_backend_tensor_set(t, buf, 0, n * sizeof(float));
+                    free(buf);
+                }
+            }
+
+            /* Fill NonZero output tensors.
+             * At build time we assumed all elements are non-zero (ConstantOfShape
+             * with value != 0), so nnz == total_elements of src.
+             * Output layout (ggml): [nnz, input_ndims] of F32.
+             * Row d contains the d-th coordinate of each non-zero element
+             * (ONNX dim order, i.e. row-major unravel). */
+            for (int i = 0; i < c->n_nonzero_fills; i++) {
+                struct ggml_tensor *dst = c->nonzero_fill_dst[i];
+                struct ggml_tensor *src = c->nonzero_fill_src[i];
+                int nd = c->nonzero_fill_ndims[i];
+                if (!dst || !dst->buffer) continue;
+                if (!src) continue;
+
+                int64_t nnz = (int64_t)ggml_nelements(src);
+                /* Compute src shape in ONNX order (reversed from ggml ne) */
+                int src_ggml_dims = (int)ggml_n_dims(src);
+                int64_t onnx_shape[ONNX_MAX_DIMS];
+                for (int d = 0; d < nd; d++) {
+                    int gd = nd - 1 - d;  /* ggml dim for ONNX dim d */
+                    onnx_shape[d] = (gd < src_ggml_dims) ? src->ne[gd] : 1;
+                }
+
+                /* Build index matrix: for flat index k, unravel to nd coordinates */
+                size_t fill_bytes = (size_t)nnz * nd * sizeof(float);
+                size_t dst_bytes = ggml_nbytes(dst);
+                if (fill_bytes > dst_bytes) continue;
+                float *buf = (float *)malloc(fill_bytes);
+                if (buf) {
+                    for (int64_t k = 0; k < nnz; k++) {
+                        int64_t rem = k;
+                        for (int d = nd - 1; d >= 0; d--) {
+                            buf[d * nnz + k] = (float)(rem % onnx_shape[d]);
+                            rem /= onnx_shape[d];
+                        }
+                    }
+                    ggml_backend_tensor_set(dst, buf, 0, fill_bytes);
                     free(buf);
                 }
             }
@@ -3016,6 +3613,35 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
              * (sched_alloc_and_fill) because their src may be in sched buffer */
         }
     }
+
+    /* Allocate host-visible pinned staging buffer for fast input transfer.
+     * When ggml_backend_tensor_set is called with a pointer inside this buffer,
+     * Vulkan detects pinned memory and does direct DMA (no staging copy). */
+#ifdef GGML_USE_VULKAN
+    if (c->backend_gpu) {
+        ggml_backend_buffer_type_t hbuft = ggml_backend_vk_host_buffer_type();
+        if (hbuft) {
+            /* Estimate max input size: sum of all non-initializer inputs */
+            size_t total_input_bytes = 0;
+            for (int i = 0; i < c->onnx->n_inputs; i++) {
+                onnx_value_info_t *vi = &c->onnx->inputs[i];
+                if (tmap_get(c, vi->name) == NULL) continue; /* skip if not created */
+                struct ggml_tensor *t = tmap_get(c, vi->name);
+                if (t->buffer) continue; /* skip weights (already have buffer) */
+                total_input_bytes += ggml_nbytes(t);
+            }
+            if (total_input_bytes > 0) {
+                /* Add alignment padding */
+                total_input_bytes += 4096;
+                c->pinned_buf = ggml_backend_buft_alloc_buffer(hbuft, total_input_bytes);
+                if (c->pinned_buf) {
+                    c->pinned_ptr  = ggml_backend_buffer_get_base(c->pinned_buf);
+                    c->pinned_size = total_input_bytes;
+                }
+            }
+        }
+    }
+#endif
 
     /* Create scheduler with CPU fallback */
     {
@@ -3055,7 +3681,11 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
         ctx->is_allocated = 1;
     }
 
-    /* Set input data */
+    /* Set input data.
+     * When a pinned staging buffer is available, copy data there first so that
+     * ggml_backend_tensor_set detects pinned source and does direct DMA
+     * (skipping the internal staging copy). */
+    size_t pinned_offset = 0;
     for (int i = 0; i < n_inputs; i++) {
         struct ggml_tensor *t = tmap_get(ctx, input_names[i]);
         if (!t) {
@@ -3066,14 +3696,31 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
             /* Input is integer (e.g. token IDs for Gather/embedding).
              * Caller passes float — convert to int32. */
             int64_t nel = ggml_nelements(t);
-            int32_t *ibuf = (int32_t *)malloc(nel * sizeof(int32_t));
-            if (!ibuf) return -1;
-            for (int64_t j = 0; j < nel; j++)
-                ibuf[j] = (int32_t)input_data[i][j];
-            ggml_backend_tensor_set(t, ibuf, 0, nel * sizeof(int32_t));
-            free(ibuf);
+            size_t  nbytes = nel * sizeof(int32_t);
+            if (ctx->pinned_ptr && pinned_offset + nbytes <= ctx->pinned_size) {
+                int32_t *dst = (int32_t *)((char *)ctx->pinned_ptr + pinned_offset);
+                for (int64_t j = 0; j < nel; j++)
+                    dst[j] = (int32_t)input_data[i][j];
+                ggml_backend_tensor_set(t, dst, 0, nbytes);
+                pinned_offset += nbytes;
+            } else {
+                int32_t *ibuf = (int32_t *)malloc(nbytes);
+                if (!ibuf) return -1;
+                for (int64_t j = 0; j < nel; j++)
+                    ibuf[j] = (int32_t)input_data[i][j];
+                ggml_backend_tensor_set(t, ibuf, 0, nbytes);
+                free(ibuf);
+            }
         } else {
-            ggml_backend_tensor_set(t, input_data[i], 0, ggml_nbytes(t));
+            size_t nbytes = ggml_nbytes(t);
+            if (ctx->pinned_ptr && pinned_offset + nbytes <= ctx->pinned_size) {
+                void *dst = (char *)ctx->pinned_ptr + pinned_offset;
+                memcpy(dst, input_data[i], nbytes);
+                ggml_backend_tensor_set(t, dst, 0, nbytes);
+                pinned_offset += nbytes;
+            } else {
+                ggml_backend_tensor_set(t, input_data[i], 0, nbytes);
+            }
         }
     }
 
@@ -3091,6 +3738,7 @@ struct ggml_tensor *onnx_ggml_output(onnx_ggml_ctx_t *ctx, int index) {
 void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     if (!ctx) return;
     if (ctx->sched)       ggml_backend_sched_free(ctx->sched);
+    if (ctx->pinned_buf)  ggml_backend_buffer_free(ctx->pinned_buf);
     if (ctx->weight_buf)  ggml_backend_buffer_free(ctx->weight_buf);
     if (ctx->backend_gpu) ggml_backend_free(ctx->backend_gpu);
     if (ctx->backend_cpu) ggml_backend_free(ctx->backend_cpu);
@@ -3103,6 +3751,7 @@ void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     free(ctx->cval_keys);
     free(ctx->cval_data);
     free(ctx->cval_lens);
+    free(ctx->pos_embed_params);
     /* Note: onnx model is NOT freed here — caller manages it */
     free(ctx);
 }
