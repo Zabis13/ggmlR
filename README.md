@@ -495,7 +495,7 @@ for (batch in data_batches) {
 
 ### Tested models
 
-13 out of 15 ONNX Model Zoo models load and run successfully:
+12 out of 15 ONNX Model Zoo models load and run successfully:
 
 | Model | Nodes | Key ops |
 |---|---|---|
@@ -508,7 +508,7 @@ for (batch in data_batches) {
 | gptneox (Opset 18) | 482 | MatMul, LayerNorm, GELU, Softmax, Shape, Gather |
 | MaskRCNN-12-int8 | 937 | QLinearConv, DequantizeLinear, Resize, Concat, Reshape |
 | roberta-9 | 1180 | MatMul, LayerNorm, Erf, Softmax, Shape, Gather, Cast |
-| sageconv (Opset 16) | 24 | MatMul, Add, Mul, Sigmoid, ReduceSum |
+| sageconv (Opset 16) | 24 | MatMul, Add, Mul, Sigmoid, ScatterElements |
 | super-resolution-10 | 12 | Conv, Reshape, Transpose |
 | botnet26t_256 (Opset 16) | 530 | Conv, BatchNorm, RelPosBias2D (fused custom op), Softmax |
 | xcit_tiny | 436 | MatMul, LayerNorm, Softmax, Concat, Transpose |
@@ -522,7 +522,8 @@ Pooling: MaxPool, AveragePool, GlobalAveragePool, Resize/Upsample (nearest, bili
 Normalization: BatchNorm, LayerNorm, GroupNorm, RMSNorm.
 Activations: Relu, Sigmoid, Tanh, GELU, SiLU, Softmax, LeakyRelu, Elu.
 Shape: Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Expand, Slice, Split, Gather, Pad, Shape, Cast, Identity, EyeLike.
-Constants: Constant (TensorProto + scalar), ConstantOfShape.
+Constants: Constant (TensorProto + scalar), ConstantOfShape (INT64/INT32/DOUBLE/FLOAT value).
+Scatter/Gather: ScatterElements (axis=0, reduction=none/add, Vulkan atomicAdd), Gather (axis=0 on rank>2 via reshape).
 Logic: Where, Equal.
 Reduction: ReduceMean, ReduceSum.
 Quantization: DequantizeLinear, QuantizeLinear, QLinearConv, QLinearAdd, QLinearMatMul, QLinearSigmoid, QLinearConcat.

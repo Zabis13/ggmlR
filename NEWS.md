@@ -1,3 +1,27 @@
+# ggmlR 0.6.7
+
+## ONNX: ConstantOfShape INT64/INT32/DOUBLE value fix
+
+* **roberta-9 model now loads and runs** (was producing NaN in softmax). Root cause: `ConstantOfShape` read the `value` TensorProto attribute as float regardless of `data_type`. When `data_type=7` (INT64), the 8-byte int64 was reinterpreted as a 4-byte float, producing garbage values (~1.4e-45 instead of 1). This broke attention mask generation (fill=0 instead of 1) and position ID generation (NonZero on zeros = empty).
+* Fix: `ConstantOfShape` now checks `data_type` and correctly handles INT64, INT32, DOUBLE, and FLOAT value attributes.
+
+## ONNX: Gather axis=0 on rank>2 tensors
+
+* **Gather on 4D tensors** no longer asserts. Previous code always used `ggml_get_rows` which only supports 2D data. For axis=0 on rank>2 (e.g. CaiT QKV split on `[48,576,6,3]`), the tensor is now reshaped to 2D, gathered, and reshaped back.
+
+## ONNX: ScatterElements op (GPU + CPU)
+
+* New `GGML_OP_SCATTER_ELEMENTS` added to the ggml engine with both CPU kernel and Vulkan compute shader.
+* **Vulkan shader** (`scatter_elements.comp`): two variants compiled at install time — `scatter_elements_none` (overwrite) and `scatter_elements_add` (atomicAdd via `GL_EXT_shader_atomic_float`). Data is copied to output via `vkCmdCopyBuffer` with a pipeline barrier before the scatter dispatch.
+* **CPU kernel**: single-threaded scatter with memcpy (overwrite) or element-wise addition (reduce=add).
+* ONNX mapper: `ScatterElements` op with `axis=0` and `reduction="none"/"add"` attributes. Indices cast to I32, updates/data cast to F32 automatically.
+* This unblocks sageconv (GNN message passing with scatter-add).
+
+## Model count
+
+* **12/15** ONNX Model Zoo models now pass (was 11/15). New: roberta-9.
+* Remaining failures: sageconv (ScatterElements shape mismatch needs further work), cait_xs24_384 (reshape size mismatch), MaskRCNN-12-int8 (spatial broadcast mismatch), xcit_tiny (broadcast dim mismatch).
+
 # ggmlR 0.6.6
 
 ## ONNX: BoTNet RelPosBias2D fused custom op

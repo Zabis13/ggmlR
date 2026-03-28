@@ -106,3 +106,4 @@ r_interface_backend.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_quants.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 # ONNX files: r_onnx.c includes R headers, onnx_ggml.c uses fprintf for warnings
 onnx/r_onnx.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+# onnx/onnx_ggml.o: PKG_CFLAGS += -DONNX_NAN_DEBUG -DR_GGML_IO_IMPL

@@ -180,7 +180,7 @@ pred <- predict(onnx, x)
 - [x] CPU: все ops проходят
 - [x] Vulkan: 24/24 ops проходят
 
-#### Реальные модели (ONNX Model Zoo) — 10/15 OK
+#### Реальные модели (ONNX Model Zoo) — 12/15 OK
 - [x] mnist-8 — OK (12 nodes)
 - [x] squeezenet1.0-8 — OK (66 nodes: Conv, Relu, MaxPool, Concat, Dropout, GlobalAveragePool, Softmax)
 - [x] adv_inception_v3 (Opset 17, 18) — OK (215 nodes)
@@ -190,11 +190,11 @@ pred <- predict(onnx, x)
 - [x] bat_resnext26ts — OK (grouped conv, AdaptiveMaxPool baked as fixed kernel, input 256x256)
 - [x] gptneox (Opset 18) — OK с input_shapes (482 nodes: MatMul, LayerNorm, GELU, Softmax)
 - [x] botnet26t_256 — RelPosBias2D fused custom op (pre-pass scanner + ggml_map_custom3)
-- [x] MaskRCNN-12-int8 — OK (quantized ops pass-through как f32) **РЕГРЕССИЯ после Transpose fix**
-- [ ] roberta-9 — граф строится OK, NaN в softmax при compute (attention mask/position IDs fill)
-- [ ] sageconv (Opset 16) — unsupported op ScatterElements + MatMul K mismatch
-- [ ] xcit_tiny — broadcast dim 0: a=1, b=0 (нулевая размерность) **РЕГРЕССИЯ после Transpose fix**
-- [ ] cait_xs24_384 — MatMul broadcasting (batched matmul 3D+, ne[2] != ne[1])
+- [x] roberta-9 — OK (ConstantOfShape INT64 fix: attention mask + position IDs теперь корректны)
+- [ ] sageconv (Opset 16) — ScatterElements shape mismatch (op реализован, маппинг indices нуждается в доработке)
+- [ ] xcit_tiny — broadcast dim mismatch a=28, b=32
+- [ ] cait_xs24_384 — reshape_2d element count mismatch (Gather 4D op добавлен, но upstream shape проблема)
+- [ ] MaskRCNN-12-int8 — spatial broadcast mismatch 14×14 + 7×7
 - [ ] roberta dynamic — динамические shapes без input_shapes (требует shape inference)
 
 #### Баги / ограничения
@@ -207,7 +207,7 @@ pred <- predict(onnx, x)
 - [x] **Broadcast** — numpy-style broadcast для Add/Sub/Mul/Div: left-align, right-align, greedy dim-matching
 
 #### MVP + трансформеры — готов ✓
-Все базовые + трансформерные ops реализованы. 10/15 моделей из ONNX Zoo работают.
+Все базовые + трансформерные ops реализованы. 12/15 моделей из ONNX Zoo работают.
 
 #### Исправлено в 0.6.7
 - [x] Buffer overflow в deferred arrays — shape_tensors_ne[64] переполнялся, введён ONNX_MAX_DEFERRED=512
@@ -224,6 +224,9 @@ pred <- predict(onnx, x)
 - [x] Expand rank promotion (left-pad с 1s)
 - [x] Squeeze: использует tmap_get_ndims вместо hardcoded 4
 - [x] Gather на shape-тензорах: scalar element access вместо ggml_get_rows
+- [x] **ConstantOfShape INT64/INT32/DOUBLE** — value attribute теперь читается с учётом data_type (было: всегда float → мусор для INT64). Закрыло roberta-9 NaN.
+- [x] **Gather axis=0 на rank>2** — reshape 2D → get_rows → reshape back (было: assert fail на 4D)
+- [x] **ScatterElements** — новый GGML_OP_SCATTER_ELEMENTS: CPU kernel + Vulkan шейдер (atomicAdd для reduction=add)
 - **РЕГРЕССИЯ**: Transpose fix сломал MaskRCNN и xcit_tiny (нужна проверка)
 
 #### Исправлено в 0.6.6
@@ -245,10 +248,11 @@ pred <- predict(onnx, x)
 - [x] detectCores() NA handling (Kaggle/cloud)
 
 #### Следующий этап — расширенная совместимость
-- [ ] **Transpose fix регрессия** — проверить MaskRCNN и xcit_tiny, возможно нужен fallback для моделей без explicit perm
-- [ ] **roberta-9 NaN** — attention mask/position IDs deferred fill выдаёт неправильные значения → NaN в softmax
-- [ ] MatMul broadcast для 3D+ тензоров (batched matmul) — блокирует cait_xs24
-- [ ] ScatterElements op — блокирует sageconv
+- [ ] **sageconv ScatterElements** — op реализован, но indices shape mismatch (2D indices нужен 1D extract)
+- [ ] **cait_xs24_384** — reshape_2d element count mismatch (upstream shape propagation)
+- [ ] **MaskRCNN-12-int8** — spatial broadcast mismatch 14×14 + 7×7 (Resize upstream?)
+- [ ] **xcit_tiny** — broadcast dim mismatch a=28, b=32
+- [ ] MatMul broadcast для 3D+ тензоров (batched matmul)
 - [ ] NonZero, Equal, Less, Greater — логические ops
 - [x] botnet26t_256 — RelPosBias2D fused custom op (pre-pass + ggml_map_custom3, CPU kernel)
 - [ ] botnet26t_256 — Vulkan шейдер для RelPosBias2D (будущая оптимизация)

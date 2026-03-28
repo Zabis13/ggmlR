@@ -1043,9 +1043,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+
+    "SCATTER_ELEMENTS",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1152,9 +1154,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+
+    "scatter_elements(x)",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3843,6 +3847,33 @@ struct ggml_tensor * ggml_set_rows(
     result->src[0] = b;
     result->src[1] = c;
     result->src[2] = a; // note: order is weird due to legacy reasons (https://github.com/ggml-org/llama.cpp/pull/16063#discussion_r2385795931)
+
+    return result;
+}
+
+// ggml_scatter_elements
+
+struct ggml_tensor * ggml_scatter_elements(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * data,
+        struct ggml_tensor  * updates,
+        struct ggml_tensor  * indices,
+        int                   reduction) {
+    /* data: [ne0, ne1, ...], updates: [ne0, n_idx, ...], indices: [n_idx] i32 */
+    GGML_ASSERT(data->type    == GGML_TYPE_F32);
+    GGML_ASSERT(updates->type == GGML_TYPE_F32);
+    GGML_ASSERT(indices->type == GGML_TYPE_I32);
+    GGML_ASSERT(updates->ne[0] == data->ne[0]);
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, data->ne);
+
+    int32_t params[] = { reduction };
+    memcpy(result->op_params, params, sizeof(params));
+
+    result->op     = GGML_OP_SCATTER_ELEMENTS;
+    result->src[0] = data;
+    result->src[1] = updates;
+    result->src[2] = indices;
 
     return result;
 }

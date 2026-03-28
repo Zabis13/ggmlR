@@ -4900,6 +4900,51 @@ void ggml_compute_forward_set_rows(
     }
 }
 
+// ggml_compute_forward_scatter_elements
+
+void ggml_compute_forward_scatter_elements(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    if (params->ith != 0) return;
+
+    const ggml_tensor * data    = dst->src[0];  // base tensor to copy
+    const ggml_tensor * updates = dst->src[1];  // values to scatter
+    const ggml_tensor * indices = dst->src[2];  // row indices (I32)
+
+    GGML_ASSERT(data->type    == GGML_TYPE_F32);
+    GGML_ASSERT(updates->type == GGML_TYPE_F32);
+    GGML_ASSERT(indices->type == GGML_TYPE_I32);
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    int32_t reduction;
+    memcpy(&reduction, dst->op_params, sizeof(int32_t));
+
+    /* Copy data → dst */
+    memcpy(dst->data, data->data, ggml_nbytes(data));
+
+    const int64_t row_size = data->ne[0];          /* elements per row */
+    const int64_t n_idx    = ggml_nelements(indices);
+    const int32_t * idx    = (const int32_t *)indices->data;
+    const float   * upd    = (const float *)updates->data;
+    float         * out    = (float *)dst->data;
+
+    if (reduction == 1) {
+        /* reduction = add */
+        for (int64_t i = 0; i < n_idx; i++) {
+            int32_t row = idx[i];
+            for (int64_t j = 0; j < row_size; j++) {
+                out[row * row_size + j] += upd[i * row_size + j];
+            }
+        }
+    } else {
+        /* reduction = none (overwrite) */
+        for (int64_t i = 0; i < n_idx; i++) {
+            int32_t row = idx[i];
+            memcpy(&out[row * row_size], &upd[i * row_size], row_size * sizeof(float));
+        }
+    }
+}
+
 // ggml_compute_forward_get_rows_back
 
 static void ggml_compute_forward_get_rows_back_f32_f16(

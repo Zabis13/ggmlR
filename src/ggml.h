@@ -569,6 +569,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_SCATTER_ELEMENTS,
+
         GGML_OP_COUNT,
     };
 
@@ -1661,6 +1663,18 @@ extern "C" {
             struct ggml_tensor  * a,  // destination
             struct ggml_tensor  * b,  // source
             struct ggml_tensor  * c); // row indices
+
+    // scatter_elements: output = copy(data), then output[indices] += updates (axis=0, reduction=add)
+    //   data:    [ne0, ne1, ...]  — base tensor (copied to output first)
+    //   updates: [ne0, n_idx, ...] — values to scatter
+    //   indices: [n_idx] i32      — row indices into data
+    //   reduction: 0=none(overwrite), 1=add
+    GGML_API struct ggml_tensor * ggml_scatter_elements(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * data,
+            struct ggml_tensor  * updates,
+            struct ggml_tensor  * indices,
+            int                   reduction);
 
     GGML_API struct ggml_tensor * ggml_diag(
         struct ggml_context     * ctx,

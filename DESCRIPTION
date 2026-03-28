@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.6.6
+Version: 0.6.7
 Authors@R: c(
     person("Yuri", "Baramykov",
         email = "lbsbmsu@mail.ru",
@@ -37,8 +37,9 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     from 'PyTorch', 'TensorFlow', or other frameworks and run inference on
     'Vulkan' GPU or CPU. Covers 50+ 'ONNX' ops including convolutions,
     attention primitives, normalization, quantized ops, shape operations,
+    'ScatterElements' (with 'Vulkan' 'atomicAdd' for GNN scatter-add),
     and fused custom ops (RelPosBias2D for 'BoTNet') — sufficient to run
-    real-world models such as 'BERT', 'GPT-NeoX', 'SqueezeNet',
+    real-world models such as 'RoBERTa', 'BERT', 'GPT-NeoX', 'SqueezeNet',
     'Inception v3', 'BAT-ResNeXt', 'BoTNet', and 'MNIST' out of the box.
     Uses a dedicated weight buffer architecture for zero-overhead repeated
     inference — weights are loaded to GPU once and never re-transferred.

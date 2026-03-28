@@ -5,9 +5,21 @@
 
 # ── Protobuf wire format primitives ──────────────────────────────
 
-# Encode unsigned varint
+# Encode unsigned varint (handles negative via two's complement uint64)
 .pb_varint <- function(value) {
   value <- as.numeric(value)
+  if (value < 0) {
+    # Protobuf encodes negative int as 10-byte two's complement uint64
+    # For small negatives: -1 → 0xFFFFFFFFFFFFFFFF, -2 → 0xFFFFFFFFFFFFFFFE
+    bytes <- raw(10)
+    v <- value + 2^64  # two's complement
+    for (i in 1:9) {
+      bytes[i] <- as.raw(bitwOr(as.integer(v %% 128), 0x80L))
+      v <- floor(v / 128)
+    }
+    bytes[10] <- as.raw(as.integer(v %% 128))  # last byte, no continuation
+    return(bytes)
+  }
   bytes <- raw(0)
   repeat {
     b <- as.integer(value %% 128)
@@ -120,6 +132,13 @@
   out <- .pb_string(1L, name)    # name
   out <- c(out, .pb_fixed32(2L, value))  # f (field 2 in AttributeProto)
   out <- c(out, .pb_varint_field(20L, 1L))      # type = FLOAT
+  out
+}
+
+.onnx_attr_string <- function(name, value) {
+  out <- .pb_string(1L, name)   # name
+  out <- c(out, .pb_string(4L, value))  # s (field 4 in AttributeProto)
+  out <- c(out, .pb_varint_field(20L, 3L))  # type = STRING
   out
 }
 
