@@ -94,11 +94,19 @@ static struct ggml_tensor *tmap_get(onnx_ggml_ctx_t *c, const char *name) {
     return NULL;
 }
 
+/* Helper: squeeze trailing unit dims (5D→4D when ne[4]==1, etc.)
+ * Keeps Vulkan on fast 4D paths for standard models. */
+static int onnx_squeeze_ndims(const int64_t *ne, int ndims) {
+    while (ndims > 1 && ne[ndims - 1] == 1) ndims--;
+    return ndims;
+}
+
 /* Helper: reshape tensor to given ne[] with appropriate ndims.
  * Avoids repeating switch(ndims) everywhere. */
 static struct ggml_tensor *onnx_reshape_nd(struct ggml_context *ctx,
                                            struct ggml_tensor *a,
                                            const int64_t *ne, int ndims) {
+    ndims = onnx_squeeze_ndims(ne, ndims);
     switch (ndims) {
         case 1: return ggml_reshape_1d(ctx, a, ne[0]);
         case 2: return ggml_reshape_2d(ctx, a, ne[0], ne[1]);
@@ -112,6 +120,7 @@ static struct ggml_tensor *onnx_reshape_nd(struct ggml_context *ctx,
 static struct ggml_tensor *onnx_new_tensor_nd(struct ggml_context *ctx,
                                               enum ggml_type type,
                                               const int64_t *ne, int ndims) {
+    ndims = onnx_squeeze_ndims(ne, ndims);
     switch (ndims) {
         case 1: return ggml_new_tensor_1d(ctx, type, ne[0]);
         case 2: return ggml_new_tensor_2d(ctx, type, ne[0], ne[1]);
@@ -260,14 +269,7 @@ static int create_initializer_tensors(onnx_ggml_ctx_t *c) {
         /* Allocate weight tensors in ctx_weight so they get a dedicated
          * buffer that the scheduler never touches or aliases. */
         struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
-        struct ggml_tensor *t;
-        switch (ndims) {
-            case 1: t = ggml_new_tensor_1d(wctx, type, ne[0]); break;
-            case 2: t = ggml_new_tensor_2d(wctx, type, ne[0], ne[1]); break;
-            case 3: t = ggml_new_tensor_3d(wctx, type, ne[0], ne[1], ne[2]); break;
-            case 4: t = ggml_new_tensor_4d(wctx, type, ne[0], ne[1], ne[2], ne[3]); break;
-            default: t = ggml_new_tensor_5d(wctx, type, ne[0], ne[1], ne[2], ne[3], ne[4]); break;
-        }
+        struct ggml_tensor *t = onnx_new_tensor_nd(wctx, type, ne, ndims);
         if (!t) return -1;
         ggml_set_name(t, init->name);
         ggml_set_input(t);
@@ -324,6 +326,17 @@ static int load_weights(onnx_ggml_ctx_t *c) {
 
         if (data && data_size > 0) {
             size_t tsize = ggml_nbytes(t);
+
+            /* Sanity check: raw_data size vs expected from ONNX dtype */
+            size_t expected = (size_t)ggml_nelements(t) * onnx_dtype_size(init->data_type);
+            if (data_size < expected && init->data_type != ONNX_DTYPE_INT8 &&
+                init->data_type != ONNX_DTYPE_UINT8) {
+                fprintf(stderr, "ONNX WARNING: initializer '%s' raw_data %zu bytes "
+                        "< expected %zu (dtype %d, nel %"PRId64")\n",
+                        init->name ? init->name : "?",
+                        data_size, expected, init->data_type,
+                        ggml_nelements(t));
+            }
 
             /* With reversed dims, ONNX row-major data maps directly to ggml
              * column-major layout — no transposition needed. */
@@ -428,14 +441,7 @@ static int create_input_tensors(onnx_ggml_ctx_t *c) {
             ne[d] = dim;
         }
 
-        struct ggml_tensor *t;
-        switch (ndims) {
-            case 1: t = ggml_new_tensor_1d(ictx, type, ne[0]); break;
-            case 2: t = ggml_new_tensor_2d(ictx, type, ne[0], ne[1]); break;
-            case 3: t = ggml_new_tensor_3d(ictx, type, ne[0], ne[1], ne[2]); break;
-            case 4: t = ggml_new_tensor_4d(ictx, type, ne[0], ne[1], ne[2], ne[3]); break;
-            default: t = ggml_new_tensor_5d(ictx, type, ne[0], ne[1], ne[2], ne[3], ne[4]); break;
-        }
+        struct ggml_tensor *t = onnx_new_tensor_nd(ictx, type, ne, ndims);
         if (!t) return -1;
         ggml_set_name(t, vi->name);
         ggml_set_input(t);
@@ -1344,13 +1350,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         for (int d = 0; d < nd_out && d < GGML_MAX_DIMS; d++)
             ne[d] = onnx_out[nd_out - 1 - d];
 
-        switch (nd_out) {
-            case 1: out = ggml_reshape_1d(c->ctx, a, ne[0]); break;
-            case 2: out = ggml_reshape_2d(c->ctx, a, ne[0], ne[1]); break;
-            case 3: out = ggml_reshape_3d(c->ctx, a, ne[0], ne[1], ne[2]); break;
-            case 4: out = ggml_reshape_4d(c->ctx, a, ne[0], ne[1], ne[2], ne[3]); break;
-            default: out = ggml_reshape_5d(c->ctx, a, ne[0], ne[1], ne[2], ne[3], ne[4]); break;
-        }
+        out = onnx_reshape_nd(c->ctx, a, ne, nd_out);
 
         /* cval propagation: Unsqueeze preserves values */
         {
@@ -1416,13 +1416,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         for (int d = 0; d < nd_out && d < GGML_MAX_DIMS; d++)
             ne[d] = onnx_out[nd_out - 1 - d];
 
-        switch (nd_out) {
-            case 1: out = ggml_reshape_1d(c->ctx, a, ne[0]); break;
-            case 2: out = ggml_reshape_2d(c->ctx, a, ne[0], ne[1]); break;
-            case 3: out = ggml_reshape_3d(c->ctx, a, ne[0], ne[1], ne[2]); break;
-            case 4: out = ggml_reshape_4d(c->ctx, a, ne[0], ne[1], ne[2], ne[3]); break;
-            default: out = ggml_reshape_5d(c->ctx, a, ne[0], ne[1], ne[2], ne[3], ne[4]); break;
-        }
+        out = onnx_reshape_nd(c->ctx, a, ne, nd_out);
     }
 
     /* ── Concat ─────────────────────────────────────────────────── */

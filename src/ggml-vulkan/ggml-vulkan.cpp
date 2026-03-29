@@ -1078,7 +1078,7 @@ static vk_op_unary_push_constants vk_op_unary_push_constants_init(const ggml_ten
     p.ne00 = (uint32_t)src0->ne[0];
     p.ne01 = (uint32_t)src0->ne[1];
     p.ne02 = (uint32_t)src0->ne[2];
-    p.ne03 = (uint32_t)src0->ne[3];
+    p.ne03 = (uint32_t)(src0->ne[3] * src0->ne[4]); // collapse 5D → 4D
     p.nb00 = (uint32_t)(src0->nb[0] / src0_tsize);
     p.nb01 = (uint32_t)(src0->nb[1] / src0_tsize);
     p.nb02 = (uint32_t)(src0->nb[2] / src0_tsize);
@@ -1088,7 +1088,7 @@ static vk_op_unary_push_constants vk_op_unary_push_constants_init(const ggml_ten
     p.ne10 = (uint32_t)dst->ne[0];
     p.ne11 = (uint32_t)dst->ne[1];
     p.ne12 = (uint32_t)dst->ne[2];
-    p.ne13 = (uint32_t)dst->ne[3];
+    p.ne13 = (uint32_t)(dst->ne[3] * dst->ne[4]); // collapse 5D → 4D
     p.nb10 = (uint32_t)(dst->nb[0] / dst_tsize);
     p.nb11 = (uint32_t)(dst->nb[1] / dst_tsize);
     p.nb12 = (uint32_t)(dst->nb[2] / dst_tsize);
@@ -1121,7 +1121,7 @@ static vk_op_pad_push_constants vk_op_pad_push_constants_init(const ggml_tensor 
     p.ne00 = (uint32_t)src0->ne[0];
     p.ne01 = (uint32_t)src0->ne[1];
     p.ne02 = (uint32_t)src0->ne[2];
-    p.ne03 = (uint32_t)src0->ne[3];
+    p.ne03 = (uint32_t)(src0->ne[3] * src0->ne[4]); // collapse 5D → 4D
     p.nb00 = (uint32_t)(src0->nb[0] / src0_tsize);
     p.nb01 = (uint32_t)(src0->nb[1] / src0_tsize);
     p.nb02 = (uint32_t)(src0->nb[2] / src0_tsize);
@@ -1131,7 +1131,7 @@ static vk_op_pad_push_constants vk_op_pad_push_constants_init(const ggml_tensor 
     p.ne10 = (uint32_t)dst->ne[0];
     p.ne11 = (uint32_t)dst->ne[1];
     p.ne12 = (uint32_t)dst->ne[2];
-    p.ne13 = (uint32_t)dst->ne[3];
+    p.ne13 = (uint32_t)(dst->ne[3] * dst->ne[4]); // collapse 5D → 4D
     p.nb10 = (uint32_t)(dst->nb[0] / dst_tsize);
     p.nb11 = (uint32_t)(dst->nb[1] / dst_tsize);
     p.nb12 = (uint32_t)(dst->nb[2] / dst_tsize);
@@ -6740,8 +6740,8 @@ static void ggml_vk_cpy_to_contiguous(ggml_backend_vk_context * ctx, vk_context&
 
     vk_op_unary_push_constants pc = {
         (uint32_t)ne,
-        (uint32_t)tensor->ne[0], (uint32_t)tensor->ne[1], (uint32_t)tensor->ne[2], (uint32_t)tensor->ne[3], (uint32_t)tensor->nb[0] / tensor_type_size, (uint32_t)tensor->nb[1] / tensor_type_size, (uint32_t)tensor->nb[2] / tensor_type_size, (uint32_t)tensor->nb[3] / tensor_type_size,
-        (uint32_t)tensor->ne[0], (uint32_t)tensor->ne[1], (uint32_t)tensor->ne[2], (uint32_t)tensor->ne[3],                       1                   , (uint32_t)tensor->ne[0]                   , (uint32_t)(tensor->ne[0] * tensor->ne[1]) , (uint32_t)(tensor->ne[0] * tensor->ne[1] * tensor->ne[2]),
+        (uint32_t)tensor->ne[0], (uint32_t)tensor->ne[1], (uint32_t)tensor->ne[2], (uint32_t)(tensor->ne[3] * tensor->ne[4]), (uint32_t)tensor->nb[0] / tensor_type_size, (uint32_t)tensor->nb[1] / tensor_type_size, (uint32_t)tensor->nb[2] / tensor_type_size, (uint32_t)tensor->nb[3] / tensor_type_size,
+        (uint32_t)tensor->ne[0], (uint32_t)tensor->ne[1], (uint32_t)tensor->ne[2], (uint32_t)(tensor->ne[3] * tensor->ne[4]),                       1                   , (uint32_t)tensor->ne[0]                   , (uint32_t)(tensor->ne[0] * tensor->ne[1]) , (uint32_t)(tensor->ne[0] * tensor->ne[1] * tensor->ne[2]),
         0,
         0.0f, 0.0f,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -9506,7 +9506,7 @@ static void ggml_vk_multi_add(ggml_backend_vk_context * ctx, vk_context& subctx,
     pc.ne20 = (uint32_t)dst->ne[0];
     pc.ne21 = (uint32_t)dst->ne[1];
     pc.ne22 = (uint32_t)dst->ne[2];
-    pc.ne23 = (uint32_t)dst->ne[3];
+    pc.ne23 = (uint32_t)(dst->ne[3] * dst->ne[4]); // collapse 5D → 4D
 
     for (uint32_t i = 0; i < num_tensors; ++i) {
         const ggml_tensor *t = tensors[i];
@@ -10039,15 +10039,6 @@ static void ggml_vk_roll(ggml_backend_vk_context * ctx, vk_context& subctx, cons
 
 static void ggml_vk_repeat(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     vk_op_unary_push_constants p = vk_op_unary_push_constants_init(src0, dst, ggml_nelements(dst));
-    // Collapse 5D → 4D for Vulkan: merge dim3 and dim4 into dim3
-    if (src0->ne[4] > 1 || dst->ne[4] > 1) {
-        size_t src0_tsize = ggml_type_size(src0->type);
-        size_t dst_tsize  = ggml_type_size(dst->type);
-        p.ne03 = (uint32_t)(src0->ne[3] * src0->ne[4]);
-        p.nb03 = (uint32_t)(src0->nb[3] / src0_tsize);
-        p.ne13 = (uint32_t)(dst->ne[3] * dst->ne[4]);
-        p.nb13 = (uint32_t)(dst->nb[3] / dst_tsize);
-    }
     ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_REPEAT, std::move(p));
 }
 
