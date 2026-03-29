@@ -1975,6 +1975,11 @@ static struct ggml_tensor * ggml_add_impl(
         struct ggml_tensor  * a,
         struct ggml_tensor  * b,
         bool                  inplace) {
+    if (!ggml_can_repeat(b, a)) {
+        fprintf(stderr, "[ggml_add] FAIL: a='%s' ne=[%lld,%lld,%lld,%lld] b='%s' ne=[%lld,%lld,%lld,%lld]\n",
+                a->name, (long long)a->ne[0],(long long)a->ne[1],(long long)a->ne[2],(long long)a->ne[3],
+                b->name, (long long)b->ne[0],(long long)b->ne[1],(long long)b->ne[2],(long long)b->ne[3]);
+    }
     GGML_ASSERT(ggml_can_repeat(b, a));
 
     struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
@@ -2486,6 +2491,11 @@ struct ggml_tensor * ggml_repeat(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b) {
+    if (!ggml_can_repeat(a, b)) {
+        fprintf(stderr, "[ggml_repeat] FAIL: a='%s' ne=[%lld,%lld,%lld,%lld] b='%s' ne=[%lld,%lld,%lld,%lld]\n",
+                a->name, (long long)a->ne[0],(long long)a->ne[1],(long long)a->ne[2],(long long)a->ne[3],
+                b->name, (long long)b->ne[0],(long long)b->ne[1],(long long)b->ne[2],(long long)b->ne[3]);
+    }
     GGML_ASSERT(ggml_can_repeat(a, b));
 
     struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, GGML_MAX_DIMS, b->ne);

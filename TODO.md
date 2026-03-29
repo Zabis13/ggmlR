@@ -258,3 +258,34 @@ pred <- predict(onnx, x)
 - [ ] NonZero, Equal, Less, Greater — логические ops
 - [x] botnet26t_256 — RelPosBias2D fused custom op (pre-pass + ggml_map_custom3, CPU kernel)
 - [ ] botnet26t_256 — Vulkan шейдер для RelPosBias2D (будущая оптимизация)
+
+#### ONNX ops — следующая волна
+
+##### 1. Indexing / логика выбора
+- [ ] ScatterND — изменение значений по многомерным индексам
+- [ ] GatherND — выборка по многомерным индексам (детекторы объектов)
+- [ ] NonMaxSuppression (NMS) — убирает дублирующиеся рамки (YOLO, SSD)
+- [ ] TopK — выбор крупнейших элементов (классификация, генерация текста)
+
+##### 2. Активации
+- [ ] HardSigmoid / HardSwish — мобильные сети (MobileNetV3)
+- [ ] PRelu — ReLU с обучаемым коэффициентом
+- [ ] GridSample — трансформация изображений, GAN, ворпинг
+
+##### 3. Последовательности (Recurrent/Time)
+- [ ] LSTM / GRU — обработка последовательностей (аудио)
+- [ ] NonZero — индексы ненулевых элементов (маскирование)
+- [ ] Range — генерация последовательности (позиционное кодирование)
+
+##### 4. Математика и редукция
+- [ ] Einsum — универсальные тензорные вычисления (замена MatMul/Transpose комбинаций)
+- [ ] ReduceMax / ReduceMin — экстремумы по осям
+- [ ] Mod — остаток от деления
+- [ ] BitShift / BitwiseAnd/Or/Xor — оптимизированные модели
+
+##### 5. Случайные числа (Stochastic)
+- [ ] RandomNormal / RandomUniform — генерация шума в графе (Stable Diffusion)
+
+##### 6. Контроль потока (Control Flow)
+- [ ] If — ветвление графа
+- [ ] Loop — циклы (авторегрессионная генерация токенов)

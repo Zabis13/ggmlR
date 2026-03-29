@@ -1146,6 +1146,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         for (int b = 0; b < sched->n_backends && *cur_backend_id == -1; b++) {
             ggml_backend_sched_set_if_supported(sched, node, b, cur_backend_id);
         }
+        /* Debug: uncomment to diagnose unsupported ops
         if (*cur_backend_id == -1) {
             fprintf(stderr, "[sched] no backend for node: op=%s name=%s ne=[%lld,%lld,%lld,%lld,%lld]\n",
                     ggml_op_name(node->op), node->name,
@@ -1153,6 +1154,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     (long long)node->ne[2],(long long)node->ne[3],
                     (long long)node->ne[4]);
         }
+        */
         GGML_ASSERT(*cur_backend_id != -1);
     }
 

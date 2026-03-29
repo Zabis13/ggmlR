@@ -141,6 +141,7 @@ static int64_t ne_product(const int64_t *ne, int ndims) {
 
 /* ── Compile-time value map (for shape propagation) ─────────────── */
 
+
 static void cval_put(onnx_ggml_ctx_t *c, const char *name,
                      const int64_t *vals, int n) {
     if (n > ONNX_MAX_DIMS) n = ONNX_MAX_DIMS;
@@ -336,7 +337,7 @@ static int load_weights(onnx_ggml_ctx_t *c) {
                 init->data_type != ONNX_DTYPE_UINT8) {
                 fprintf(stderr, "ONNX WARNING: initializer '%s' raw_data %llu bytes "
                         "< expected %llu (dtype %d, nel %lld)\n",
-                        init->name ? init->name : "?",
+                        init->name[0] ? init->name : "?",
                         (unsigned long long)data_size, (unsigned long long)expected,
                         init->data_type, (long long)ggml_nelements(t));
             }
@@ -617,8 +618,22 @@ static void onnx_broadcast_prepare(struct ggml_context *ctx,
         int tgt_nd = GGML_MAX_DIMS;
         while (tgt_nd > 1 && target[tgt_nd-1] == 1) tgt_nd--;
         struct ggml_tensor *tgt = onnx_new_tensor_nd(ctx, a->type, target, tgt_nd);
-        if (need_a) *pa = ggml_repeat(ctx, a, tgt);
-        if (need_b) *pb = ggml_repeat(ctx, b, tgt);
+        if (need_a) {
+            if (!ggml_can_repeat(a, tgt))
+                fprintf(stderr, "[broadcast] repeat_a FAIL: a='%s' ne=[%lld,%lld,%lld,%lld] tgt=[%lld,%lld,%lld,%lld] node=%s\n",
+                        a->name, (long long)a->ne[0],(long long)a->ne[1],(long long)a->ne[2],(long long)a->ne[3],
+                        (long long)tgt->ne[0],(long long)tgt->ne[1],(long long)tgt->ne[2],(long long)tgt->ne[3],
+                        g_current_node ? g_current_node->op_type : "?");
+            *pa = ggml_repeat(ctx, a, tgt);
+        }
+        if (need_b) {
+            if (!ggml_can_repeat(b, tgt))
+                fprintf(stderr, "[broadcast] repeat_b FAIL: b='%s' ne=[%lld,%lld,%lld,%lld] tgt=[%lld,%lld,%lld,%lld] node=%s\n",
+                        b->name, (long long)b->ne[0],(long long)b->ne[1],(long long)b->ne[2],(long long)b->ne[3],
+                        (long long)tgt->ne[0],(long long)tgt->ne[1],(long long)tgt->ne[2],(long long)tgt->ne[3],
+                        g_current_node ? g_current_node->op_type : "?");
+            *pb = ggml_repeat(ctx, b, tgt);
+        }
     }
 }
 
@@ -773,12 +788,13 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
     else if (strcmp(op, "MatMul") == 0) {
         if (!a || !b) return -1;
         /* Debug: uncomment to trace MatMul shapes
-        fprintf(stderr, "[MatMul] '%s': A.ne=[%lld,%lld,%lld,%lld] nd_a=%d  B.ne=[%lld,%lld,%lld,%lld] nd_b=%d\n",
+        fprintf(stderr, "[MatMul] '%s': A.ne=[%lld,%lld,%lld,%lld,%lld] nd_a=%d type=%d cont=%d  "
+                "B.ne=[%lld,%lld,%lld,%lld,%lld] nd_b=%d type=%d cont=%d\n",
                 n->outputs[0],
-                (long long)a->ne[0], (long long)a->ne[1], (long long)a->ne[2], (long long)a->ne[3],
-                tmap_get_ndims(c, n->inputs[0]),
-                (long long)b->ne[0], (long long)b->ne[1], (long long)b->ne[2], (long long)b->ne[3],
-                tmap_get_ndims(c, n->inputs[1]));
+                (long long)a->ne[0], (long long)a->ne[1], (long long)a->ne[2], (long long)a->ne[3], (long long)a->ne[4],
+                tmap_get_ndims(c, n->inputs[0]), (int)a->type, ggml_is_contiguous(a),
+                (long long)b->ne[0], (long long)b->ne[1], (long long)b->ne[2], (long long)b->ne[3], (long long)b->ne[4],
+                tmap_get_ndims(c, n->inputs[1]), (int)b->type, ggml_is_contiguous(b));
         */
         /* ONNX MatMul: A[...,M,K] @ B[...,K,N] → [...,M,N]
          *
@@ -808,9 +824,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
          * ONNX A: [..., M, K]  → A.ne[0]=K, A.ne[1]=M
          * ONNX B: [..., K, N]  → B.ne[0]=N, B.ne[1]=K */
         int64_t K_a = a->ne[0];  /* K from A's last ONNX dim */
-        int64_t M   = a->ne[1];  /* M from A's second-to-last */
         int64_t K_b = b->ne[1];  /* K from B's second-to-last ONNX dim */
-        int64_t N   = b->ne[0];  /* N from B's last ONNX dim */
 
         /* Fast path: A.ne[0]==K and B.ne[1]==K (normal ONNX→ggml mapping) */
         if (K_a == K_b) {
@@ -841,7 +855,6 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             if (K_b0 == K_a) {
                 /* B already has ne[0]=K — use as-is for mul_mat first arg */
                 struct ggml_tensor *tb = b;
-                N = b->ne[1];
                 if (tb->ne[2] <= a->ne[2] && tb->ne[3] <= a->ne[3]) {
                     out = ggml_mul_mat(c->ctx, tb, a);
                 } else if (a->ne[2] <= tb->ne[2] && a->ne[3] <= tb->ne[3]) {
@@ -1268,7 +1281,8 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             /* Reverse to ggml ne order */
             int64_t ne5[5];
             for (int d = 0; d < 5; d++) ne5[d] = onnx_out5[4 - d];
-            out = ggml_reshape_5d(c->ctx, permuted, ne5[0], ne5[1], ne5[2], ne5[3], ne5[4]);
+            /* Use onnx_reshape_nd to squeeze trailing 1s (ggml max 4D ops) */
+            out = onnx_reshape_nd(c->ctx, permuted, ne5, 5);
             out_nd = 5;
         } else if (n_perm == 0 || nd == 2) {
             /* Default: reverse all dims → standard transpose */
@@ -2106,6 +2120,38 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             }
         }
 
+        if (!got_target) {
+            /* Try cval (compile-time value from Shape→Concat chain) for sizes */
+            if (n->n_inputs > 3 && n->inputs[3][0] != '\0') {
+                int64_t cv[ONNX_MAX_DIMS];
+                int ncv = cval_get(c, n->inputs[3], cv, ONNX_MAX_DIMS);
+                if (ncv > 0) {
+                    /* cv is in ONNX order → reverse to ggml */
+                    for (int d = 0; d < ncv && d < 4; d++)
+                        target_ne[d] = cv[ncv - 1 - d];
+                    got_target = 1;
+                }
+            }
+        }
+        if (!got_target) {
+            /* Try cval for scales */
+            int scales_idx = (strcmp(op, "Upsample") == 0) ? 1 : 2;
+            if (n->n_inputs > scales_idx && n->inputs[scales_idx][0] != '\0') {
+                int64_t cv[ONNX_MAX_DIMS];
+                int ncv = cval_get(c, n->inputs[scales_idx], cv, ONNX_MAX_DIMS);
+                if (ncv > 0) {
+                    for (int d = 0; d < ncv && d < 4; d++) {
+                        float s;
+                        int32_t bits = (int32_t)cv[d];
+                        memcpy(&s, &bits, sizeof(float));
+                        int ggml_d = ncv - 1 - d;
+                        target_ne[ggml_d] = (int64_t)(a->ne[ggml_d] * s);
+                        if (target_ne[ggml_d] < 1) target_ne[ggml_d] = 1;
+                    }
+                    got_target = 1;
+                }
+            }
+        }
         out = ggml_interpolate(c->ctx, a,
                                target_ne[0], target_ne[1],
                                target_ne[2], target_ne[3],
@@ -2197,6 +2243,16 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         if (ggml_are_same_shape(a, target)) {
             out = ggml_dup(c->ctx, a);  /* same shape: copy, not alias */
         } else {
+            if (!ggml_can_repeat(a, target)) {
+                fprintf(stderr, "[Expand] repeat FAIL: '%s' a.ne=[%lld,%lld,%lld,%lld] target=[%lld,%lld,%lld,%lld] shape_input='%s' ndims=%d\n",
+                        n->outputs[0],
+                        (long long)a->ne[0],(long long)a->ne[1],(long long)a->ne[2],(long long)a->ne[3],
+                        (long long)ne[0],(long long)ne[1],(long long)ne[2],(long long)ne[3],
+                        n->inputs[1], ndims);
+                fprintf(stderr, "  ONNX shape=[");
+                for (int d = 0; d < ndims; d++) fprintf(stderr, "%lld%s", (long long)shape[d], d<ndims-1?",":"");
+                fprintf(stderr, "] a_input='%s' a_ndims=%d\n", n->inputs[0], tmap_get_ndims(c, n->inputs[0]));
+            }
             out = ggml_repeat(c->ctx, a, target);
         }
         /* Register with full resolved ONNX shape (before collapse) */
@@ -2386,8 +2442,9 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             int64_t C_out_g = C_out / groups;
 
             if (groups == C_in && C_in_g == 1) {
-                /* Depthwise conv: use ggml_conv_2d_dw */
-                out = ggml_conv_2d_dw(c->ctx, b, a,
+                /* Depthwise conv: use direct kernel (avoids F16 im2col in ggml_conv_2d_dw
+                 * which creates MUL_MAT with F16 src1 unsupported by CPU backend) */
+                out = ggml_conv_2d_dw_direct(c->ctx, b, a,
                                       (int)strides[1], (int)strides[0],
                                       (int)pads[1], (int)pads[0],
                                       (int)dilations[1], (int)dilations[0]);
@@ -3159,7 +3216,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             int64_t C_in_g  = C_in / groups;
             int64_t C_out_g = C_out / groups;
             if (groups == C_in && C_in_g == 1) {
-                out = ggml_conv_2d_dw(c->ctx, dw, dx,
+                out = ggml_conv_2d_dw_direct(c->ctx, dw, dx,
                                       (int)strides[1], (int)strides[0],
                                       (int)pads[1], (int)pads[0],
                                       (int)dilations[1], (int)dilations[0]);
