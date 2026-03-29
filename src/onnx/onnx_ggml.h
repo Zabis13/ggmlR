@@ -70,9 +70,9 @@ typedef struct {
     /* Deferred strided Slice (step != 1): copy src→dst with stride after alloc */
     struct ggml_tensor *slice_fill_src[ONNX_MAX_DEFERRED];
     struct ggml_tensor *slice_fill_dst[ONNX_MAX_DEFERRED];
-    int64_t             slice_fill_starts[ONNX_MAX_DEFERRED][4];  /* per-ggml-dim start offsets */
-    int64_t             slice_fill_steps[ONNX_MAX_DEFERRED][4];   /* per-ggml-dim step values */
-    int64_t             slice_fill_out_ne[ONNX_MAX_DEFERRED][4];  /* output ne per ggml dim */
+    int64_t             slice_fill_starts[ONNX_MAX_DEFERRED][GGML_MAX_DIMS];  /* per-ggml-dim start offsets */
+    int64_t             slice_fill_steps[ONNX_MAX_DEFERRED][GGML_MAX_DIMS];   /* per-ggml-dim step values */
+    int64_t             slice_fill_out_ne[ONNX_MAX_DEFERRED][GGML_MAX_DIMS];  /* output ne per ggml dim */
     int                 slice_fill_ndims[ONNX_MAX_DEFERRED];      /* onnx ndims */
     int                 n_slice_fills;
 

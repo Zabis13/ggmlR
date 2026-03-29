@@ -495,7 +495,7 @@ for (batch in data_batches) {
 
 ### Tested models
 
-12 out of 15 ONNX Model Zoo models load and run successfully:
+13 out of 15 ONNX Model Zoo models load and run successfully (native 5D tensor support):
 
 | Model | Nodes | Key ops |
 |---|---|---|

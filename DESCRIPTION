@@ -25,6 +25,7 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     'libvulkan-dev' and 'glslc' are installed) and on Windows (when 'Vulkan'
     'SDK' is installed and 'VULKAN_SDK' environment variable is set); all
     operations fall back to CPU transparently when no GPU is available.
+    Supports tensors up to 5D natively (GGML_MAX_DIMS=5).
     Implements tensor operations, neural network layers, quantization, and a
     'Keras'-like sequential model API for building and training networks.
     Includes 'AdamW' (Adam with Weight decay) and 'SGD' (Stochastic Gradient

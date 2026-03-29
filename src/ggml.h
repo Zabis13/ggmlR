@@ -1066,6 +1066,15 @@ extern "C" {
                        int64_t    ne2,
                        int64_t    ne3);
 
+    GGML_API struct ggml_tensor * ggml_repeat_5d(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+                       int64_t    ne0,
+                       int64_t    ne1,
+                       int64_t    ne2,
+                       int64_t    ne3,
+                       int64_t    ne4);
+
     // sums repetitions in a into shape of b
     GGML_API struct ggml_tensor * ggml_repeat_back(
             struct ggml_context * ctx,
@@ -1634,6 +1643,20 @@ extern "C" {
             size_t                nb1, // row   stride in bytes
             size_t                nb2, // slice stride in bytes
             size_t                nb3,
+            size_t                offset);
+
+    GGML_API struct ggml_tensor * ggml_view_5d(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int64_t               ne0,
+            int64_t               ne1,
+            int64_t               ne2,
+            int64_t               ne3,
+            int64_t               ne4,
+            size_t                nb1, // row   stride in bytes
+            size_t                nb2, // slice stride in bytes
+            size_t                nb3,
+            size_t                nb4,
             size_t                offset);
 
     GGML_API struct ggml_tensor * ggml_permute(

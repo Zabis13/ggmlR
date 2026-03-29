@@ -2516,6 +2516,27 @@ struct ggml_tensor * ggml_repeat_4d(
     return result;
 }
 
+struct ggml_tensor * ggml_repeat_5d(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, int64_t ne4) {
+    const bool can_repeat = ggml_is_empty(a) || (
+        (ne0 % a->ne[0] == 0) &&
+        (ne1 % a->ne[1] == 0) &&
+        (ne2 % a->ne[2] == 0) &&
+        (ne3 % a->ne[3] == 0) &&
+        (ne4 % a->ne[4] == 0)
+    );
+    GGML_ASSERT(can_repeat);
+
+    struct ggml_tensor * result = ggml_new_tensor_5d(ctx, a->type, ne0, ne1, ne2, ne3, ne4);
+
+    result->op     = GGML_OP_REPEAT;
+    result->src[0] = a;
+
+    return result;
+}
+
 // ggml_repeat_back
 
 struct ggml_tensor * ggml_repeat_back(
@@ -3734,6 +3755,33 @@ struct ggml_tensor * ggml_view_4d(
     result->nb[1] = nb1;
     result->nb[2] = nb2;
     result->nb[3] = nb3;
+
+    return result;
+}
+
+// ggml_view_5d
+
+struct ggml_tensor * ggml_view_5d(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int64_t               ne0,
+        int64_t               ne1,
+        int64_t               ne2,
+        int64_t               ne3,
+        int64_t               ne4,
+        size_t                nb1,
+        size_t                nb2,
+        size_t                nb3,
+        size_t                nb4,
+        size_t                offset) {
+    const int64_t ne[5] = { ne0, ne1, ne2, ne3, ne4 };
+
+    struct ggml_tensor * result = ggml_view_impl(ctx, a, 5, ne, offset);
+
+    result->nb[1] = nb1;
+    result->nb[2] = nb2;
+    result->nb[3] = nb3;
+    result->nb[4] = nb4;
 
     return result;
 }

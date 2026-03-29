@@ -1,5 +1,23 @@
 # ggmlR 0.6.7
 
+## ggml engine: native 5D tensor support
+
+* **`ggml_view_5d()`** — new API function for creating 5D views with explicit strides, extending the existing 1D–4D view family. Uses the existing `ggml_view_impl()` internally.
+* **`ggml_repeat_5d()`** — new API function for tiling tensors up to 5D. CPU kernels (`ggml_compute_forward_repeat_f32`, `ggml_compute_forward_repeat_f16`) updated with a 5th loop dimension. Vulkan dispatch collapses dim3×dim4 into push constants transparently (no shader changes needed — push constants remain at 128 bytes).
+* ONNX tensor pipeline upgraded from hardcoded 4D to 5D throughout `onnx_ggml.c` (~20 sites):
+  - Initializers, inputs, Constant, ConstantOfShape: `ne[GGML_MAX_DIMS]` arrays, switch with `case 5: new_tensor_5d`.
+  - Broadcast (`onnx_broadcast_align`): all reshape/new_tensor calls use dimension-aware helpers.
+  - Softmax: reshape-back via generic `onnx_reshape_nd()`.
+  - Reshape op: collapse threshold raised from >4D to >5D.
+  - Slice: 5D view/offset support, generic stride-based cval propagation and deferred fill.
+  - Split: 5D view support.
+  - Expand: 5D broadcast with rank promotion.
+  - Tile: uses `ggml_repeat_5d()`.
+  - Gather axis=0: generic reshape-back for any rank.
+  - `tmap_put_nd()` and `slice_fill` arrays updated to `GGML_MAX_DIMS`.
+* New internal helpers: `onnx_reshape_nd()`, `onnx_new_tensor_nd()`, `ne_product()` — eliminate switch/case duplication.
+* Resize/Interpolate remains 4D (spatial op, 5D not relevant). Transpose/Permute remains 4D (`ggml_permute` API limitation).
+
 ## ONNX: ConstantOfShape INT64/INT32/DOUBLE value fix
 
 * **roberta-9 model now loads and runs** (was producing NaN in softmax). Root cause: `ConstantOfShape` read the `value` TensorProto attribute as float regardless of `data_type`. When `data_type=7` (INT64), the 8-byte int64 was reinterpreted as a 4-byte float, producing garbage values (~1.4e-45 instead of 1). This broke attention mask generation (fill=0 instead of 1) and position ID generation (NonZero on zeros = empty).

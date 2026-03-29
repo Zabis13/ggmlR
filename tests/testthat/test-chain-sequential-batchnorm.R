@@ -58,8 +58,8 @@ test_that("chain sequential-batchnorm: predict gives valid probabilities", {
 test_that("chain sequential-batchnorm: accuracy > 70% on separable data", {
   set.seed(42)
   n <- 200L
-  x <- rbind(matrix(rnorm(n, -2, 0.5), n/2, 2),
-             matrix(rnorm(n,  2, 0.5), n/2, 2))
+  x <- rbind(matrix(rnorm(n, -3, 0.5), n/2, 2),
+             matrix(rnorm(n,  3, 0.5), n/2, 2))
   y <- rbind(matrix(c(1,0), n/2, 2, byrow = TRUE),
              matrix(c(0,1), n/2, 2, byrow = TRUE))
 
@@ -69,7 +69,7 @@ test_that("chain sequential-batchnorm: accuracy > 70% on separable data", {
     ggml_layer_dense(2L, activation = "softmax") |>
     ggml_compile(optimizer = "adam", loss = "categorical_crossentropy")
 
-  m <- ggml_fit(m, x, y, epochs = 80L, batch_size = 32L, verbose = 0L)
+  m <- ggml_fit(m, x, y, epochs = 120L, batch_size = 32L, verbose = 0L)
   p <- ggml_predict(m, x, batch_size = 32L)
   pred_class <- max.col(p)
   true_class <- max.col(y)

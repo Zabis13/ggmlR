@@ -180,7 +180,7 @@ pred <- predict(onnx, x)
 - [x] CPU: все ops проходят
 - [x] Vulkan: 24/24 ops проходят
 
-#### Реальные модели (ONNX Model Zoo) — 12/15 OK
+#### Реальные модели (ONNX Model Zoo) — 13/15 OK
 - [x] mnist-8 — OK (12 nodes)
 - [x] squeezenet1.0-8 — OK (66 nodes: Conv, Relu, MaxPool, Concat, Dropout, GlobalAveragePool, Softmax)
 - [x] adv_inception_v3 (Opset 17, 18) — OK (215 nodes)
@@ -210,6 +210,8 @@ pred <- predict(onnx, x)
 Все базовые + трансформерные ops реализованы. 12/15 моделей из ONNX Zoo работают.
 
 #### Исправлено в 0.6.7
+- [x] **Native 5D tensor support** — `ggml_view_5d()`, `ggml_repeat_5d()` добавлены в ggml API. CPU repeat kernels (f32/f16) обновлены на 5D. Vulkan repeat: dim3×dim4 collapse в dispatch (push constants 128 байт, шейдеры без изменений).
+- [x] **ONNX pipeline 4D→5D** — ~20 мест в onnx_ggml.c обновлены: initializers, inputs, Constant, ConstantOfShape, broadcast, Softmax, Reshape, Slice, Split, Expand, Tile, Gather. Helpers: `onnx_reshape_nd()`, `onnx_new_tensor_nd()`, `ne_product()`. slice_fill arrays в onnx_ggml.h обновлены на `[GGML_MAX_DIMS]`.
 - [x] Buffer overflow в deferred arrays — shape_tensors_ne[64] переполнялся, введён ONNX_MAX_DEFERRED=512
 - [x] Transpose: инвертированная перестановка осей — ggml_permute ожидает src→dst, код строил dst→src
 - [x] Generic path ndims — введена out_nd переменная, handler выставляет ndims авторитетно (Transpose, MatMul)
