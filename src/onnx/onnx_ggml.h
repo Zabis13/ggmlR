@@ -8,6 +8,8 @@
 
 #include "onnx_loader.h"
 #include "rel_pos_bias.h"
+#include "roi_align.h"
+#include "nms.h"
 #include "../ggml.h"
 #include "../ggml-backend.h"
 
@@ -110,6 +112,21 @@ typedef struct {
 
     /* Storage for rel_pos_bias params (must outlive graph compute) */
     rel_pos_bias_params_t *pos_embed_params;    /* malloc'd array, freed in onnx_ggml_free */
+
+    /* RoiAlign custom op params (must outlive graph compute) */
+    roi_align_params_t *roi_align_params;       /* malloc'd array */
+    int                 n_roi_aligns;
+
+    /* NMS custom op params (must outlive graph compute) */
+    nms_params_t       *nms_params;             /* malloc'd array */
+    int                 n_nms_ops;
+
+    /* Deferred NMS output sizing (filled after sched alloc) */
+    struct ggml_tensor *nms_param_tensors[ONNX_MAX_DEFERRED]; /* param tensors to fill */
+    int                 nms_max_boxes[ONNX_MAX_DEFERRED];
+    float               nms_iou_thresh[ONNX_MAX_DEFERRED];
+    float               nms_score_thresh[ONNX_MAX_DEFERRED];
+    int                 n_nms_deferred;
 } onnx_ggml_ctx_t;
 
 /* Minimum number of elements for a weight tensor to be stored in FP16.
