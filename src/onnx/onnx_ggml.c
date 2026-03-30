@@ -3780,18 +3780,8 @@ static int detect_pos_embed_blocks(onnx_ggml_ctx_t *c) {
                         continue;
                     }
 
-                    fprintf(stderr, "[onnx] pos_embed block %d: "
-                            "nodes [%d..%d], H=%d W=%d B=%d C=%d, "
-                            "x='%s' W_h='%s' W_w='%s' out='%s'\n",
-                            bi, block_start, block_end, H, W, B, C,
-                            first_reshape_input, wh_name, ww_name,
-                            c->pos_embed_blocks[bi].output_name);
-
                     c->n_pos_embed_blocks++;
                 } else {
-                    fprintf(stderr, "[onnx] pos_embed block at nodes [%d..%d]: "
-                            "W_h/W_w initializer not found or wrong dims — skipping\n",
-                            block_start, block_end);
                 }
             }
             block_start = -1;
@@ -3830,21 +3820,12 @@ static int detect_pos_embed_blocks(onnx_ggml_ctx_t *c) {
             if (wh_init->data_type != 1 || ww_init->data_type != 1) {
                 fprintf(stderr, "[onnx] pos_embed block %d: W_h/W_w not F32 — skipping\n", bi);
             } else {
-                fprintf(stderr, "[onnx] pos_embed block %d: "
-                        "nodes [%d..%d], H=%d W=%d B=%d C=%d, "
-                        "x='%s' W_h='%s' W_w='%s' out='%s'\n",
-                        bi, block_start, block_end, H, W, B, C,
-                        first_reshape_input, wh_name, ww_name,
-                        c->pos_embed_blocks[bi].output_name);
                 c->n_pos_embed_blocks++;
             }
         }
     }
 
-    if (c->n_pos_embed_blocks > 0) {
-        fprintf(stderr, "[onnx] detected %d pos_embed blocks for RelPosBias2D fusion\n",
-                c->n_pos_embed_blocks);
-    }
+    (void)0;  /* n_pos_embed_blocks set silently */
 
     return 0;
 }
@@ -4028,8 +4009,6 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
                 ggml_set_name(out, c->pos_embed_blocks[bi].output_name);
                 tmap_put_nd(c, c->pos_embed_blocks[bi].output_name, out, 3);
 
-                fprintf(stderr, "[onnx] pos_embed block %d: emitted RelPosBias2D "
-                        "custom op → [%d, %d, %d]\n", bi, HW, HW, p->B);
             }
             continue;
         }

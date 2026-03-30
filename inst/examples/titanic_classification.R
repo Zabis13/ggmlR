@@ -583,9 +583,10 @@ pred_labels <- switch(best_nm,
   stop("Unknown best model: ", best_nm)
 )
 
+submission_csv <- file.path(tempdir(), "submission.csv")
 write.csv(
   data.frame(PassengerId = test_data$PassengerId, Survived = pred_labels),
-  "submission.csv", row.names = FALSE
+  submission_csv, row.names = FALSE
 )
-cat(sprintf("Submission (%s): %d rows → submission.csv  (survival rate %.1f%%)\n",
-            best_nm, length(pred_labels), 100 * mean(pred_labels)))
+cat(sprintf("Submission (%s): %d rows → %s  (survival rate %.1f%%)\n",
+            best_nm, length(pred_labels), submission_csv, 100 * mean(pred_labels)))

@@ -302,6 +302,16 @@ sed \
   -e "s|@X86_OBJECTS@|$X86_OBJECTS|g" \
   src/Makevars.in > src/Makevars
 
+# Sync public headers from src/ to inst/include/
+echo "Syncing public headers to inst/include/..."
+for h in ggml.h ggml-alloc.h ggml-backend.h ggml-backend-impl.h ggml-common.h \
+          ggml-cpp.h ggml-cpu.h ggml-impl.h ggml-opt.h ggml-quants.h \
+          ggml-threading.h ggml-vulkan.h gguf.h r_ggml_compat.h; do
+  if [ -f "src/$h" ]; then
+    cp "src/$h" "inst/include/$h"
+  fi
+done
+
 echo "Configuration complete."
 if [ "$USE_VULKAN" = "yes" ]; then
   echo "  Vulkan: ENABLED"

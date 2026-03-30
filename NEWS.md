@@ -1,3 +1,10 @@
+# ggmlR 0.6.8
+
+## Bug fixes
+
+* Fixed ABI mismatch between `src/` and `inst/include/` headers: `configure` and `configure.win` now automatically sync all public headers from `src/` to `inst/include/` at install time. Previously, changes to `GGML_MAX_DIMS` (4→5) and other structs in `src/ggml.h` were not propagated to the exported headers, causing segfaults in downstream packages (e.g. sd2R).
+* Added `tests/testthat/test-headers-sync.R` to verify that `inst/include/` headers remain in sync with `src/` headers and that `GGML_MAX_DIMS` is consistent.
+
 # ggmlR 0.6.7
 
 ## ggml engine: native 5D tensor support

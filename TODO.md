@@ -289,3 +289,18 @@ pred <- predict(onnx, x)
 ##### 6. Контроль потока (Control Flow)
 - [ ] If — ветвление графа
 - [ ] Loop — циклы (авторегрессионная генерация токенов)
+
+#### ONNX цепочки — интеграционные тесты
+
+Тесты на типовые end-to-end цепочки ops (генерируем минимальный .onnx в R, прогоняем через `onnx_run`).
+
+- [ ] **Классификация** (ResNet/EfficientNet): Conv → BatchNorm → Relu → GlobalAveragePool → Flatten → MatMul → Softmax — все ops готовы
+- [ ] **Трансформер / BERT**: Gather(embeddings) → Add(pos_emb) → LayerNorm → MatMul(Q/K/V) → Softmax → MatMul → Add(residual) — все ops готовы
+- [ ] **Детекция объектов** (YOLO/SSD): Conv → Sigmoid → Reshape → TopK → GatherND → NonMaxSuppression → Squeeze
+- [ ] **Сегментация** (MaskRCNN): RoiAlign → Conv → Upsample → Sigmoid → NonZero → ScatterND
+- [ ] **Позиционное кодирование** (GPT/RoBERTa): Shape → Slice → Sub → Range → Unsqueeze → Expand → Gather(pos_table)
+- [ ] **SuperResolution** (ESRGAN/EDSR): Conv → LeakyRelu → Add(residual) → Conv → PixelShuffle(Reshape+Transpose) → Clip — все ops готовы
+- [ ] **Авторегрессионная генерация** (GPT-NeoX): MatMul(logits) → Div(temperature) → Softmax → TopK → Gather → Concat(kv_cache)
+- [ ] **Голосовые модели** (Whisper/TTS): LSTM/GRU → Transpose → Reshape → MatMul → LogSoftmax → ArgMax
+- [ ] **GAN / SD UNet**: RandomNormal → Conv → GroupNorm → SiLU → MatMul(attention) → Add(skip) → ConvTranspose
+- [ ] **Граф-нейросети** (SAGEConv): Gather(node_features) → ScatterElements → MatMul → Add(bias) → Relu → Concat → LayerNorm — все ops готовы

@@ -74,11 +74,15 @@ typedef sycl::half2 ggml_half2;
 #if defined(GGML_COMMON_DECL)
 
 #ifndef __cplusplus
+#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L)
+  /* C23: static_assert is a keyword, no macro needed */
+#else
 #ifndef static_assert
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201100L)
 #define static_assert(cond, msg) _Static_assert(cond, msg)
 #else
 #define static_assert(cond, msg) struct global_scope_noop_trick
+#endif
 #endif
 #endif
 #endif // __cplusplus
