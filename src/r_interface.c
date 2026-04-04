@@ -120,6 +120,15 @@ extern SEXP R_ggml_backend_event_wait(SEXP, SEXP);
 extern SEXP R_ggml_backend_graph_plan_create(SEXP, SEXP);
 extern SEXP R_ggml_backend_graph_plan_free(SEXP, SEXP);
 extern SEXP R_ggml_backend_graph_plan_compute(SEXP, SEXP);
+// GGUF reader (defined in r_interface_gguf.c)
+extern SEXP R_gguf_load(SEXP);
+extern SEXP R_gguf_free(SEXP);
+extern SEXP R_gguf_info(SEXP);
+extern SEXP R_gguf_metadata(SEXP);
+extern SEXP R_gguf_tensor_names(SEXP);
+extern SEXP R_gguf_tensor_info(SEXP, SEXP);
+extern SEXP R_gguf_tensor_data(SEXP, SEXP);
+
 // ONNX loader
 extern SEXP R_onnx_load(SEXP);
 extern SEXP R_onnx_summary(SEXP);
@@ -1815,6 +1824,15 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_onnx_device_info",                      (DL_FUNC) &R_onnx_device_info,                       1},
 
     {"R_ggml_set_omp_threads",                  (DL_FUNC) &R_ggml_set_omp_threads,                   1},
+
+    // GGUF
+    {"R_gguf_load",                             (DL_FUNC) &R_gguf_load,                              1},
+    {"R_gguf_free",                             (DL_FUNC) &R_gguf_free,                              1},
+    {"R_gguf_info",                             (DL_FUNC) &R_gguf_info,                              1},
+    {"R_gguf_metadata",                         (DL_FUNC) &R_gguf_metadata,                          1},
+    {"R_gguf_tensor_names",                     (DL_FUNC) &R_gguf_tensor_names,                      1},
+    {"R_gguf_tensor_info",                      (DL_FUNC) &R_gguf_tensor_info,                       2},
+    {"R_gguf_tensor_data",                      (DL_FUNC) &R_gguf_tensor_data,                       2},
 
     {NULL, NULL, 0}
 };

@@ -1,0 +1,169 @@
+---
+title: "Data-Parallel Training"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Data-Parallel Training}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+ggmlR provides `dp_train()` for data-parallel training across multiple GPUs
+(or CPU cores).  Each replica processes a unique sample per step; gradients
+are averaged and applied once.
+
+```{r}
+library(ggmlR)
+```
+
+---
+
+## 1. Concept
+
+`dp_train()` takes a **model factory** (`make_model`) instead of a model
+instance.  It creates `n_gpu` identical replicas, synchronises their initial
+weights, and runs a gradient-accumulation loop:
+
+```
+for each iteration:
+  each replica  →  forward(sample_i)  →  loss  →  backward
+  average gradients across replicas
+  optimizer step on replica 0
+  broadcast updated weights to all replicas
+```
+
+The effective batch size equals `n_gpu` (one sample per replica per step).
+
+---
+
+## 2. Minimal example
+
+```{r}
+data(iris)
+set.seed(42)
+
+x_cm <- t(scale(as.matrix(iris[, 1:4])))    # [4, 150]
+y_oh <- t(model.matrix(~ Species - 1, iris)) # [3, 150]
+
+# Dataset as list of (x, y) pairs — one sample each
+dp_data <- lapply(seq_len(ncol(x_cm)), function(i)
+  list(x = x_cm[, i, drop = FALSE],
+       y = y_oh[, i, drop = FALSE]))
+
+# Model factory — called once per replica
+make_model <- function() {
+  ag_sequential(
+    ag_linear(4L, 32L, activation = "relu"),
+    ag_linear(32L, 3L)
+  )
+}
+
+result <- dp_train(
+  make_model = make_model,
+  data       = dp_data,
+  loss_fn    = function(out, tgt) ag_softmax_cross_entropy_loss(out, tgt),
+  forward_fn = function(model, s)  model$forward(ag_tensor(s$x)),
+  target_fn  = function(s)         s$y,
+  n_gpu      = 1L,         # set to ggml_vulkan_device_count() for multi-GPU
+  n_iter     = 2000L,
+  lr         = 1e-3,
+  verbose    = TRUE
+)
+
+cat("Final loss:", result$loss, "\n")
+model <- result$model
+```
+
+---
+
+## 3. Multi-GPU
+
+```{r}
+n_gpu <- max(1L, ggml_vulkan_device_count())
+cat(sprintf("Training on %d GPU(s)\n", n_gpu))
+
+result_mg <- dp_train(
+  make_model = make_model,
+  data       = dp_data,
+  loss_fn    = function(out, tgt) ag_softmax_cross_entropy_loss(out, tgt),
+  forward_fn = function(model, s)  model$forward(ag_tensor(s$x)),
+  target_fn  = function(s)         s$y,
+  n_gpu      = n_gpu,
+  n_iter     = 2000L,
+  lr         = 1e-3,
+  max_norm   = 5.0,      # gradient clipping
+  verbose    = FALSE
+)
+```
+
+With `n_gpu = 2` the effective batch is 2 and training is ~2x faster (ignoring
+communication overhead).
+
+---
+
+## 4. Gradient clipping
+
+Pass `max_norm` to clip the global gradient norm before each optimizer step:
+
+```{r}
+result <- dp_train(
+  make_model = make_model,
+  data       = dp_data,
+  loss_fn    = function(out, tgt) ag_softmax_cross_entropy_loss(out, tgt),
+  forward_fn = function(model, s)  model$forward(ag_tensor(s$x)),
+  target_fn  = function(s)         s$y,
+  n_gpu      = 1L,
+  n_iter     = 2000L,
+  lr         = 1e-3,
+  max_norm   = 1.0       # clip to unit norm
+)
+```
+
+---
+
+## 5. `ag_dataloader` — batched training loop
+
+For standard single-process batched training `ag_dataloader` is simpler than
+`dp_train`:
+
+```{r}
+x_tr <- x_cm[, 1:120];  y_tr <- y_oh[, 1:120]
+
+dl <- ag_dataloader(x_tr, y_tr, batch_size = 32L, shuffle = TRUE)
+
+model2  <- make_model()
+params2 <- model2$parameters()
+opt2    <- optimizer_adam(params2, lr = 1e-3)
+
+ag_train(model2)
+for (ep in seq_len(100L)) {
+  for (batch in dl$epoch()) {
+    with_grad_tape({
+      loss <- ag_softmax_cross_entropy_loss(
+        model2$forward(batch$x), batch$y$data)
+    })
+    grads <- backward(loss)
+    opt2$step(grads);  opt2$zero_grad()
+  }
+}
+```
+
+---
+
+## 6. Full example
+
+A detailed example with synthetic regression, multiple replica counts, and
+correctness checks:
+
+```{r}
+# inst/examples/dp_train_demo.R
+```
+
+Multi-GPU scheduler usage (low level):
+
+```{r}
+# inst/examples/multi_gpu_example.R
+```

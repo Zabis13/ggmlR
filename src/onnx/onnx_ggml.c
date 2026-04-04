@@ -290,14 +290,18 @@ static int create_initializer_tensors(onnx_ggml_ctx_t *c) {
                     memcpy(vals, src, (size_t)n_elem * sizeof(int64_t));
                     cval_put(c, init->name, vals, (int)n_elem);
                 } else if (init->data_type == ONNX_DTYPE_INT32) {
-                    const int32_t *i32 = (const int32_t *)src;
-                    for (int64_t j = 0; j < n_elem; j++)
-                        vals[j] = (int64_t)i32[j];
+                    int32_t tmp_i32;
+                    for (int64_t j = 0; j < n_elem; j++) {
+                        memcpy(&tmp_i32, (const char *)src + j * sizeof(int32_t), sizeof(int32_t));
+                        vals[j] = (int64_t)tmp_i32;
+                    }
                     cval_put(c, init->name, vals, (int)n_elem);
                 } else if (init->data_type == ONNX_DTYPE_FLOAT) {
-                    const float *f32 = (const float *)src;
-                    for (int64_t j = 0; j < n_elem; j++)
-                        vals[j] = (int64_t)f32[j];
+                    float tmp_f32;
+                    for (int64_t j = 0; j < n_elem; j++) {
+                        memcpy(&tmp_f32, (const char *)src + j * sizeof(float), sizeof(float));
+                        vals[j] = (int64_t)tmp_f32;
+                    }
                     cval_put(c, init->name, vals, (int)n_elem);
                 }
             }
@@ -376,9 +380,11 @@ static int load_weights(onnx_ggml_ctx_t *c) {
                 if ((int64_t)src_elems > n_elem) src_elems = (size_t)n_elem;
                 int32_t *buf = (int32_t *)malloc(n_elem * sizeof(int32_t));
                 if (!buf) return -1;
-                const int64_t *src = (const int64_t *)data;
-                for (size_t j = 0; j < src_elems; j++)
-                    buf[j] = (int32_t)src[j];
+                int64_t tmp_i64;
+                for (size_t j = 0; j < src_elems; j++) {
+                    memcpy(&tmp_i64, (const char *)data + j * sizeof(int64_t), sizeof(int64_t));
+                    buf[j] = (int32_t)tmp_i64;
+                }
                 for (size_t j = src_elems; j < (size_t)n_elem; j++)
                     buf[j] = 0;
                 ggml_backend_tensor_set(t, buf, 0, n_elem * sizeof(int32_t));
@@ -392,9 +398,11 @@ static int load_weights(onnx_ggml_ctx_t *c) {
                 if ((int64_t)src_elems > n_elem) src_elems = (size_t)n_elem;
                 float *buf = (float *)malloc(n_elem * sizeof(float));
                 if (!buf) return -1;
-                const double *src = (const double *)data;
-                for (size_t j = 0; j < src_elems; j++)
-                    buf[j] = (float)src[j];
+                double tmp_f64;
+                for (size_t j = 0; j < src_elems; j++) {
+                    memcpy(&tmp_f64, (const char *)data + j * sizeof(double), sizeof(double));
+                    buf[j] = (float)tmp_f64;
+                }
                 for (size_t j = src_elems; j < (size_t)n_elem; j++)
                     buf[j] = 0.0f;
                 ggml_backend_tensor_set(t, buf, 0, n_elem * sizeof(float));
@@ -408,7 +416,11 @@ static int load_weights(onnx_ggml_ctx_t *c) {
                 if ((int64_t)src_elems > n_elem) src_elems = (size_t)n_elem;
                 ggml_fp16_t *buf = (ggml_fp16_t *)malloc(n_elem * sizeof(ggml_fp16_t));
                 if (!buf) return -1;
-                ggml_fp32_to_fp16_row((const float *)data, buf, (int64_t)src_elems);
+                float *aligned_f32 = (float *)malloc(src_elems * sizeof(float));
+                if (!aligned_f32) { free(buf); return -1; }
+                memcpy(aligned_f32, data, src_elems * sizeof(float));
+                ggml_fp32_to_fp16_row(aligned_f32, buf, (int64_t)src_elems);
+                free(aligned_f32);
                 /* Zero-fill any remaining elements */
                 for (size_t j = src_elems; j < (size_t)n_elem; j++)
                     buf[j] = ggml_fp32_to_fp16(0.0f);
@@ -4102,7 +4114,12 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
                         if ((int64_t)src_elems > n_elem) src_elems = (size_t)n_elem;
                         ggml_fp16_t *buf = (ggml_fp16_t *)malloc(n_elem * sizeof(ggml_fp16_t));
                         if (buf) {
-                            ggml_fp32_to_fp16_row((const float *)data, buf, (int64_t)src_elems);
+                            float *aligned_f32 = (float *)malloc(src_elems * sizeof(float));
+                            if (aligned_f32) {
+                                memcpy(aligned_f32, data, src_elems * sizeof(float));
+                                ggml_fp32_to_fp16_row(aligned_f32, buf, (int64_t)src_elems);
+                                free(aligned_f32);
+                            }
                             for (size_t j = src_elems; j < (size_t)n_elem; j++)
                                 buf[j] = ggml_fp32_to_fp16(0.0f);
                             ggml_backend_tensor_set(t, buf, 0, n_elem * sizeof(ggml_fp16_t));

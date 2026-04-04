@@ -5274,6 +5274,7 @@ static void ggml_vk_instance_init() {
         extensions.push_back("VK_EXT_debug_utils");
     }
     VkBool32 enable_best_practice = layer_settings;
+    VkBool32 enable_deprecated = layer_settings;
     std::vector<vk::LayerSettingEXT> settings = {
         {
             "VK_LAYER_KHRONOS_validation",
@@ -5281,6 +5282,13 @@ static void ggml_vk_instance_init() {
             vk::LayerSettingTypeEXT::eBool32,
             1,
             &enable_best_practice
+        },
+        {
+            "VK_LAYER_KHRONOS_validation",
+            "validate_deprecated",
+            vk::LayerSettingTypeEXT::eBool32,
+            1,
+            &enable_deprecated
         },
     };
     vk::LayerSettingsCreateInfoEXT layer_setting_info(settings);
