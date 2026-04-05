@@ -1,0 +1,5 @@
+%\VignetteIndexEntry{GPU Vulkan Backend}
+%\VignetteKeywords{ggmlR, Vulkan, GPU}
+%\VignettePackage{ggmlR}
+%\VignetteEncoding{UTF-8}
+%\VignetteEngine{Rcpp::asis}

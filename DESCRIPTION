@@ -65,8 +65,9 @@ SystemRequirements: C++17, GNU make, libvulkan-dev, glslc (optional, for
 Suggests:
     knitr,
     rmarkdown,
+    Rcpp,
     testthat (>= 3.0.0)
-VignetteBuilder: knitr
+VignetteBuilder: Rcpp
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3
 Config/build/clean-inst-doc: false

@@ -342,7 +342,7 @@ code > span.er { color: #a61717; background-color: #e3d2d2; }
 
 <p>ggmlR includes a built-in zero-dependency ONNX loader (hand-written
 protobuf parser in C). Load any compatible ONNX model and run inference
-on CPU or Vulkan GPU — no external dependencies or runtimes
+on CPU or Vulkan GPU — no Python, no TensorFlow, no ONNX Runtime
 required.</p>
 <div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="fu">library</span>(ggmlR)</span></code></pre></div>
 <hr />
@@ -438,13 +438,20 @@ inference), LSTM, GRU, Einsum</li>
 <h2>6. Debugging tips</h2>
 <p>If a model fails to load or produces wrong results:</p>
 <ol style="list-style-type: decimal">
-<li><p><strong>Check operator support</strong> — use
-<code>onnx_summary()</code> to list the ops your model uses and compare
-against the supported ops table above.</p></li>
+<li><p><strong>Check operator support</strong> — print the model’s op
+list with Python’s <code>onnx</code> package and compare against the
+table above.</p></li>
 <li><p><strong>Verify protobuf field numbers</strong> — the built-in
 parser is hand-written; an unexpected field can cause silent
-mis-parsing. See the ONNX debugging section in <code>CLAUDE.md</code>
-for field number tables.</p></li>
+mis-parsing. Dump raw field tags:</p></li>
+</ol>
+<div class="sourceCode" id="cb7"><pre class="sourceCode python"><code class="sourceCode python"><span id="cb7-1"><a href="#cb7-1" tabindex="-1"></a><span class="co"># Python: dump all field numbers seen in a TensorProto</span></span>
+<span id="cb7-2"><a href="#cb7-2" tabindex="-1"></a><span class="im">import</span> onnx, sys</span>
+<span id="cb7-3"><a href="#cb7-3" tabindex="-1"></a>m <span class="op">=</span> onnx.load(sys.argv[<span class="dv">1</span>])</span>
+<span id="cb7-4"><a href="#cb7-4" tabindex="-1"></a><span class="cf">for</span> init <span class="kw">in</span> m.graph.initializer:</span>
+<span id="cb7-5"><a href="#cb7-5" tabindex="-1"></a>    raw <span class="op">=</span> init.SerializeToString()</span>
+<span id="cb7-6"><a href="#cb7-6" tabindex="-1"></a>    <span class="co"># inspect field tags with a raw protobuf parser</span></span></code></pre></div>
+<ol start="3" style="list-style-type: decimal">
 <li><p><strong>NaN tracing</strong> — use the eval callback for per-node
 inspection rather than a post-compute scan (which aliases buffers and
 gives false readings).</p></li>
@@ -454,6 +461,8 @@ buffers. ggmlR calls <code>sched_alloc_and_load()</code> before each
 compute to reset allocation. If you see correct results on the first run
 but garbage on subsequent runs, this is the cause.</p></li>
 </ol>
+<p>See also the ONNX debugging section in <code>CLAUDE.md</code> for
+field number tables and the Python dump script.</p>
 </div>
 
 
