@@ -119,10 +119,13 @@ test_that("chain broadcast-strict: Add with non-divisible dims [1,28] + [1,32] (
   b <- rnorm(32)
   # This should either work (if we handle non-divisible broadcast)
   # or give a clear error (not a crash)
-  result <- tryCatch(
-    run_onnx(path, list(A = a, B = b)),
-    error = function(e) e
-  )
+  env <- environment()
+  capture.output({
+    env$result <- tryCatch(
+      run_onnx(path, list(A = a, B = b)),
+      error = function(e) e
+    )
+  }, type = "message")
   # For now, we expect this to fail — document the failure mode
   if (inherits(result, "error")) {
     expect_true(grepl("abort|assert|repeat", tolower(result$message)))

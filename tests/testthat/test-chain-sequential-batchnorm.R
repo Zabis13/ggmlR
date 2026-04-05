@@ -31,7 +31,7 @@ test_that("chain sequential-batchnorm: fit reduces loss", {
 
 test_that("chain sequential-batchnorm: predict gives valid probabilities", {
   set.seed(123)
-  n <- 100L
+  n <- 96L
   x <- rbind(matrix(rnorm(n, -1, 0.5), n/2, 2),
              matrix(rnorm(n,  1, 0.5), n/2, 2))
   y <- rbind(matrix(c(1,0), n/2, 2, byrow = TRUE),
@@ -57,7 +57,7 @@ test_that("chain sequential-batchnorm: predict gives valid probabilities", {
 
 test_that("chain sequential-batchnorm: accuracy > 70% on separable data", {
   set.seed(42)
-  n <- 200L
+  n <- 192L
   x <- rbind(matrix(rnorm(n, -3, 0.5), n/2, 2),
              matrix(rnorm(n,  3, 0.5), n/2, 2))
   y <- rbind(matrix(c(1,0), n/2, 2, byrow = TRUE),

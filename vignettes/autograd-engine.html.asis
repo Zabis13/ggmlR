@@ -1,0 +1,5 @@
+%\VignetteIndexEntry{Autograd Engine}
+%\VignetteKeywords{ggmlR, autograd, automatic differentiation}
+%\VignettePackage{ggmlR}
+%\VignetteEncoding{UTF-8}
+%\VignetteEngine{Rcpp::asis}

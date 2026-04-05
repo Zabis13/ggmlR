@@ -1,3 +1,14 @@
+# ggmlR 0.7.0
+
+## Vignettes: prebuilt HTML via Rcpp::asis
+
+* Seven vignettes (Autograd Engine, Data Parallel Training, Embedding ggmlR, GPU Vulkan Backend, Keras-like API, ONNX Import, Quantization) are now shipped as prebuilt HTML using the `Rcpp::asis` vignette engine. No rendering on CRAN runners.
+* Removed `rmarkdown` from Suggests (no longer needed).
+
+## Test suite
+
+* Suppressed spurious stdout/stderr output from tests: `ggml_graph_print()` output captured in `test-graph-utils.R`; C-level broadcast warnings captured in ONNX broadcast and resize-broadcast tests.
+
 # ggmlR 0.6.9
 
 ## GGUF file reader

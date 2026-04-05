@@ -37,7 +37,7 @@ test_that("ggml_graph_print runs without error", {
   ggml_set_output(r)
 
   graph <- ggml_build_forward_expand(ctx, r)
-  expect_no_error(ggml_graph_print(graph))
+  expect_no_error(capture.output(ggml_graph_print(graph)))
 })
 
 test_that("ggml_graph_reset runs without error", {

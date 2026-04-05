@@ -1,0 +1,5 @@
+%\VignetteIndexEntry{Embedding ggmlR}
+%\VignetteKeywords{ggmlR, embedding, downstream packages}
+%\VignettePackage{ggmlR}
+%\VignetteEncoding{UTF-8}
+%\VignetteEngine{Rcpp::asis}

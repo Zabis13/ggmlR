@@ -156,7 +156,10 @@ test_that("chain resize-broadcast: Add with non-divisible spatial dims 14x14 + 7
 
   a <- rnorm(196)
   b <- rnorm(49)
-  result <- run_onnx(path, list(A = a, B = b))
+  env <- environment()
+  capture.output({
+    env$result <- run_onnx(path, list(A = a, B = b))
+  }, type = "message")
   r <- as.numeric(result)
   expect_equal(length(r), 196)
   expect_true(all(is.finite(r)))

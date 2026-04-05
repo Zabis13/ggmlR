@@ -40,3 +40,5 @@
 ^inst/lib$
 ^inst/lib/\.gitkeep$
 ^CLAUDE\.md$
+^LICENSE\.md$
+
