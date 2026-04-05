@@ -610,6 +610,7 @@ struct vk_device_struct {
     bool coopmat2;
 
     bool pipeline_executable_properties_support {};
+    bool push_descriptors {};
 
     size_t idx;
 
@@ -2131,6 +2132,11 @@ static void ggml_pipeline_request_descriptor_sets(ggml_backend_vk_context *ctx, 
 }
 
 static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx) {
+
+    if (ctx->device->push_descriptors) {
+        // Push descriptors — no descriptor pool allocation needed
+        return;
+    }
 
     if (ctx->descriptor_sets.size() >= ctx->pipeline_descriptor_set_requirements) {
         // Enough descriptors are available
@@ -4395,6 +4401,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         bool pipeline_robustness = false;
         bool coopmat2_support = false;
         bool pipeline_executable_properties_support = false;
+        bool push_descriptor_ext = false;
         device->coopmat_support = false;
         device->integer_dot_product = false;
         bool bfloat16_support = false;
@@ -4442,6 +4449,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
             } else if (strcmp("VK_EXT_memory_priority", properties.extensionName) == 0 &&
                        getenv("GGML_VK_ENABLE_MEMORY_PRIORITY")) {
                 device->memory_priority = true;
+            } else if (strcmp("VK_KHR_push_descriptor", properties.extensionName) == 0) {
+                push_descriptor_ext = true;
             }
         }
 
@@ -4495,10 +4504,23 @@ static vk_device ggml_vk_get_device(size_t idx) {
             last_struct = (VkBaseOutStructure *)&shader_integer_dot_product_props;
         }
 
+        vk::PhysicalDevicePushDescriptorPropertiesKHR push_descriptor_props;
+        if (push_descriptor_ext) {
+            last_struct->pNext = (VkBaseOutStructure *)&push_descriptor_props;
+            last_struct = (VkBaseOutStructure *)&push_descriptor_props;
+        }
+
         device->physical_device.getProperties2(&props2);
         device->properties = props2.properties;
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
+
+        device->push_descriptors = push_descriptor_ext &&
+                                   push_descriptor_props.maxPushDescriptors >= MAX_PARAMETER_COUNT &&
+                                   getenv("GGML_VK_DISABLE_PUSH_DESCRIPTORS") == nullptr;
+        if (device->push_descriptors) {
+            VK_LOG_DEBUG("ggml_vulkan: Push descriptors enabled (max=" << push_descriptor_props.maxPushDescriptors << ")");
+        }
 
         // Implementing the async backend interfaces seems broken on older Intel HW,
         // see https://github.com/ggml-org/llama.cpp/issues/17302.
@@ -4710,6 +4732,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
             last_struct->pNext = (VkBaseOutStructure *)&pep_features;
             last_struct = (VkBaseOutStructure *)&pep_features;
             device_extensions.push_back("VK_KHR_pipeline_executable_properties");
+        }
+
+        if (device->push_descriptors) {
+            device_extensions.push_back("VK_KHR_push_descriptor");
         }
 
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
@@ -5016,8 +5042,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         vk::DescriptorSetLayoutBindingFlagsCreateInfo dslbfci = { dsl_binding_flags };
 
+        vk::DescriptorSetLayoutCreateFlags dsl_flags = {};
+        if (device->push_descriptors) {
+            dsl_flags |= vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR;
+        }
         vk::DescriptorSetLayoutCreateInfo descriptor_set_layout_create_info(
-            {},
+            dsl_flags,
             dsl_binding);
         descriptor_set_layout_create_info.setPNext(&dslbfci);
         device->dsl = device->device.createDescriptorSetLayout(descriptor_set_layout_create_info);
@@ -5247,6 +5277,10 @@ static void ggml_vk_instance_init() {
         std::cerr << "ggml_vulkan: Error: Vulkan 1.2 required." << std::endl;
         throw vk::SystemError(vk::Result::eErrorFeatureNotPresent, "Vulkan 1.2 required");
     }
+
+    // Cap at Vulkan 1.2 to avoid implicit Synchronization2 promotion in 1.3+
+    // which causes performance degradation on RADV (Mesa) drivers
+    api_version = VK_API_VERSION_1_2;
 
     vk::ApplicationInfo app_info{ "ggml-vulkan", 1, nullptr, 0, api_version };
 
@@ -5994,21 +6028,23 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     GGML_ASSERT(wg0 <= ctx->device->properties.limits.maxComputeWorkGroupCount[0] &&
                 wg1 <= ctx->device->properties.limits.maxComputeWorkGroupCount[1] &&
                 wg2 <= ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
-    GGML_ASSERT(ctx->descriptor_set_idx < ctx->descriptor_sets.size());
     GGML_ASSERT(descriptor_buffer_infos.size() <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(pipeline->parameter_count == descriptor_buffer_infos.size());
 
-    vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[ctx->descriptor_set_idx++];
-    vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
-    ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
-
     subctx->s->buffer.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size(push_constants), push_constant_data(push_constants));
     subctx->s->buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
-    subctx->s->buffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                                pipeline->layout,
-                                0,
-                                { descriptor_set },
-                                {});
+
+    if (ctx->device->push_descriptors) {
+        vk::WriteDescriptorSet write_descriptor_set{ {}, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
+        subctx->s->buffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, pipeline->layout, 0, { write_descriptor_set });
+    } else {
+        GGML_ASSERT(ctx->descriptor_set_idx < ctx->descriptor_sets.size());
+        vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[ctx->descriptor_set_idx++];
+        vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
+        ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
+        subctx->s->buffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline->layout, 0, { descriptor_set }, {});
+    }
+
     subctx->s->buffer.dispatch(wg0, wg1, wg2);
 }
 

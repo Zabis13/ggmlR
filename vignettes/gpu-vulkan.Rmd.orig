@@ -1,0 +1,178 @@
+---
+title: "GPU / Vulkan Backend"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{GPU / Vulkan Backend}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+ggmlR is GPU-first: Vulkan is auto-detected at install time and used by default
+when available. All APIs (sequential, functional, autograd, ONNX) fall back to
+CPU transparently when no GPU is present.
+
+```{r}
+library(ggmlR)
+```
+
+---
+
+## 1. Check availability
+
+```{r}
+if (ggml_vulkan_available()) {
+  cat("Vulkan is available\n")
+  ggml_vulkan_status()              # print device list and properties
+} else {
+  cat("No Vulkan GPU — running on CPU\n")
+}
+
+n <- ggml_vulkan_device_count()
+cat("Vulkan device count:", n, "\n")
+```
+
+---
+
+## 2. Device enumeration
+
+```{r}
+# Low-level device registry (all backends including CPU)
+ggml_backend_load_all()
+
+n_dev <- ggml_backend_dev_count()
+for (i in seq_len(n_dev)) {
+  dev  <- ggml_backend_dev_get(i - 1L)   # 0-based
+  name <- ggml_backend_dev_name(dev)
+  desc <- ggml_backend_dev_description(dev)
+  mem  <- ggml_backend_dev_memory(dev)
+  cat(sprintf("[%d] %s — %s\n", i, name, desc))
+  cat(sprintf("    %.1f GB free / %.1f GB total\n",
+              mem["free"] / 1e9, mem["total"] / 1e9))
+}
+```
+
+Full example: `inst/examples/device_discovery.R`
+
+---
+
+## 3. Autograd device selection
+
+```{r}
+# Select GPU (falls back to CPU if unavailable)
+device <- tryCatch({
+  ag_device("gpu")
+  "gpu"
+}, error = function(e) {
+  message("GPU not available, using CPU")
+  "cpu"
+})
+
+cat("Active device:", device, "\n")
+```
+
+After `ag_device("gpu")`, all subsequent `ag_param` and `ag_tensor` calls
+allocate on the GPU.  Switch back with `ag_device("cpu")`.
+
+---
+
+## 4. Mixed precision (f16 / bf16)
+
+```{r}
+if (device == "gpu") {
+  ag_dtype("f16")     # half-precision on Vulkan GPU
+  # ag_dtype("bf16") # bfloat16 — falls back to f16 on Vulkan automatically
+} else {
+  ag_dtype("f32")     # full precision on CPU
+}
+
+cat("Active dtype:", ag_dtype(), "\n")
+```
+
+`bf16 → f16` fallback is automatic on Vulkan because bf16 is not natively
+supported in GLSL shaders.
+
+---
+
+## 5. Vulkan memory info
+
+```{r}
+if (ggml_vulkan_available()) {
+  mem <- ggml_vulkan_memory(device_index = 0L)
+  cat(sprintf("GPU memory: %.1f MB free / %.1f MB total\n",
+              mem["free"] / 1e6, mem["total"] / 1e6))
+}
+```
+
+---
+
+## 6. Multi-GPU
+
+ggmlR supports multiple Vulkan devices via the backend scheduler.
+`dp_train()` distributes data across replicas automatically:
+
+```{r}
+n_gpu <- ggml_vulkan_device_count()
+cat(sprintf("Using %d GPU(s)\n", n_gpu))
+
+# dp_train handles multi-GPU internally — see vignette("data-parallel-training")
+```
+
+For low-level multi-GPU scheduler usage see `inst/examples/multi_gpu_example.R`.
+
+---
+
+## 7. Sequential / functional API on GPU
+
+The high-level `ggml_fit()` API picks up the Vulkan backend automatically —
+no extra configuration needed:
+
+```{r}
+model <- ggml_model_sequential() |>
+  ggml_layer_dense(64L, activation = "relu", input_shape = 4L) |>
+  ggml_layer_dense(3L,  activation = "softmax") |>
+  ggml_compile(optimizer = "adam", loss = "categorical_crossentropy")
+
+# Training runs on GPU if Vulkan is available
+model <- ggml_fit(model, x_train, y_train, epochs = 50L, batch_size = 32L)
+```
+
+---
+
+## 8. ONNX inference on GPU
+
+```{r}
+# Weights loaded to GPU once at load time
+model_onnx <- ggml_onnx_load("model.onnx", backend = "vulkan")
+
+# Repeated inference — no weight re-transfer
+for (i in seq_len(100L)) {
+  out <- ggml_onnx_run(model_onnx, list(input = batch[[i]]))
+}
+```
+
+---
+
+## 9. Build configuration
+
+Vulkan support is compiled in automatically when `libvulkan-dev` and `glslc`
+are detected at install time.  SIMD (AVX2/AVX512) for the CPU fallback
+requires an explicit flag:
+
+```bash
+# Default install (Vulkan auto-detected, CPU fallback without SIMD)
+R CMD INSTALL .
+
+# With CPU SIMD acceleration
+R CMD INSTALL . --configure-args="--with-simd"
+```
+
+To check what was compiled in:
+
+```{r}
+cat(ggml_version(), "\n")
+ggml_vulkan_status()   # shows "Vulkan not available" if not compiled in
+```

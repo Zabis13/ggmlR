@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.6.8
+Version: 0.6.9
 Authors@R: c(
     person("Yuri", "Baramykov",
         email = "lbsbmsu@mail.ru",
@@ -21,10 +21,14 @@ Authors@R: c(
     )
 Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     learning, designed primarily for 'Vulkan' GPU acceleration with full CPU
-    fallback. 'Vulkan' support is auto-detected at build time on Linux (when
-    'libvulkan-dev' and 'glslc' are installed) and on Windows (when 'Vulkan'
-    'SDK' is installed and 'VULKAN_SDK' environment variable is set); all
-    operations fall back to CPU transparently when no GPU is available.
+    fallback. Requires 'Vulkan' 1.2+ with legacy pipeline barriers (avoids
+    'Synchronization2' due to RADV performance issues); supports 'Push
+    Descriptors' ('VK_KHR_push_descriptor')
+    to eliminate descriptor pool overhead when available. 'Vulkan' support is
+    auto-detected at build time on Linux (when 'libvulkan-dev' and 'glslc'
+    are installed) and on Windows (when 'Vulkan' 'SDK' is installed and
+    'VULKAN_SDK' environment variable is set); all operations fall back to
+    CPU transparently when no GPU is available.
     Supports tensors up to 5D natively (GGML_MAX_DIMS=5).
     Implements tensor operations, neural network layers, quantization, and a
     'Keras'-like sequential model API for building and training networks.
@@ -42,6 +46,9 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     and fused custom ops (RelPosBias2D for 'BoTNet') — sufficient to run
     real-world models such as 'RoBERTa', 'BERT', 'GPT-NeoX', 'SqueezeNet',
     'Inception v3', 'BAT-ResNeXt', 'BoTNet', and 'MNIST' out of the box.
+    Reads 'GGUF' files natively: load pre-trained weights from any
+    'gguf'-compatible source (llama.cpp, Hugging Face) with automatic
+    dequantization and metadata access.
     Uses a dedicated weight buffer architecture for zero-overhead repeated
     inference — weights are loaded to GPU once and never re-transferred.
     Serves as backend for 'LLM' (Large Language Model)
@@ -56,6 +63,10 @@ Encoding: UTF-8
 SystemRequirements: C++17, GNU make, libvulkan-dev, glslc (optional, for
     GPU on Linux), 'Vulkan' 'SDK' (optional, for GPU on Windows)
 Suggests:
+    knitr,
+    rmarkdown,
     testthat (>= 3.0.0)
+VignetteBuilder: knitr
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3
+Config/build/clean-inst-doc: false

@@ -176,7 +176,12 @@ for (m in models) {
 
   # Генерируем входные данные
   set.seed(42)
-  input_data <- runif(prod(m$input_shape))
+  if (grepl("input_ids", m$input_name, fixed = TRUE)) {
+    # Token IDs: integer values in reasonable vocab range
+    input_data <- as.numeric(sample.int(1000L, prod(m$input_shape), replace = TRUE))
+  } else {
+    input_data <- runif(prod(m$input_shape))
+  }
   extra_data <- NULL
   if (!is.null(m$extra_inputs)) {
     extra_data <- list()

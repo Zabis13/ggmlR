@@ -803,7 +803,7 @@ ggml_fit.default <- function(model, ...) {
 ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
                                 validation_split = 0.0, validation_data = NULL,
                                 class_weight = NULL, sample_weight = NULL,
-                                verbose = 1) {
+                                verbose = 1, callbacks = list()) {
   if (!model$compiled) {
     stop("Model must be compiled before training. Call ggml_compile() first.")
   }

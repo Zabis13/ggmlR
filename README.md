@@ -530,6 +530,43 @@ Quantization: DequantizeLinear, QuantizeLinear, QLinearConv, QLinearAdd, QLinear
 Fused custom ops: RelPosBias2D (BoTNet-style 2D relative position bias).
 Pass-through: Dropout.
 
+## GGUF Pre-trained Weights
+
+Load pre-trained weights from GGUF files (llama.cpp, Hugging Face, etc.) with automatic dequantization. Supports all ggml quantization types (F32, F16, Q4_0, Q8_0, K-quants, IQ, etc.).
+
+```r
+library(ggmlR)
+
+# Load a GGUF file
+g <- gguf_load("model.gguf")
+g
+#> GGUF file: model.gguf
+#>   Version:  3
+#>   Tensors:  291
+#>   Metadata: 24 key-value pairs
+
+# Inspect metadata (architecture, tokenizer, quant info)
+meta <- gguf_metadata(g)
+meta[["general.architecture"]]
+
+# List all tensor names
+gguf_tensor_names(g)
+
+# Get shape and type for a specific tensor
+gguf_tensor_info(g, "blk.0.attn_q.weight")
+#> $name:  "blk.0.attn_q.weight"
+#> $shape: 4096 4096
+#> $type:  "Q4_0"
+
+# Extract dequantized weights as R numeric array
+w <- gguf_tensor_data(g, "blk.0.attn_q.weight")
+dim(w)
+#> [1] 4096 4096
+
+# Free when done (also freed by GC)
+gguf_free(g)
+```
+
 ## Examples
 
 Ready-to-run example scripts in `inst/examples/`:
@@ -571,7 +608,7 @@ Benchmark script: `inst/examples/benchmark_onnx.R`
 
 ## GPU Acceleration
 
-ggmlR is designed GPU-first: Vulkan is auto-detected at build time and, when available, 90%+ of operations run on GPU with up to 78× speedup over CPU. On machines without a Vulkan-capable GPU the package falls back to CPU transparently — no code changes required.
+ggmlR is designed GPU-first: Vulkan is auto-detected at build time and, when available, 90%+ of operations run on GPU with up to 78x speedup over CPU. On machines without a Vulkan-capable GPU the package falls back to CPU transparently — no code changes required.
 
 ```r
 ggml_vulkan_available()   # TRUE if a Vulkan GPU was detected
@@ -584,10 +621,15 @@ ag_device("cpu")   # fall back to CPU
 
 Supported GPUs: NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno.
 
+### Vulkan optimizations
+
+- **Vulkan 1.2** — uses legacy pipeline barriers (Synchronization2 avoided due to RADV performance regression on AMD)
+- **Push Descriptors** (`VK_KHR_push_descriptor`) — when available, descriptors are pushed directly into the command buffer, eliminating descriptor pool allocation overhead. Falls back to descriptor pools on older hardware.
+
 ## System Requirements
 
 - R ≥ 4.1.0, C++17 compiler
-- **Optional GPU**: `libvulkan-dev` + `glslc` (Linux) or Vulkan SDK (Windows)
+- **Optional GPU**: Vulkan 1.2+, `libvulkan-dev` + `glslc` (Linux) or Vulkan SDK (Windows)
 - Platforms: Linux, macOS, Windows (x86-64, ARM64)
 
 ## See Also

@@ -39,7 +39,7 @@ model <- ggml_model(inputs = x, outputs = y, name = "resnet_tiny")
 - [x] Shared layers (`name=`) для Siamese/multi-branch
 - [ ] Multi-input: `ggml_model(inputs = list(x1, x2), outputs = y)`
 - [x] Сохранение/загрузка архитектуры + весов
-- [ ] Загрузка pre-trained весов из .gguf
+- [x] Загрузка pre-trained весов из .gguf (`gguf_load`, `gguf_tensor_data`, `gguf_metadata`)
 - [ ] `ggml_layer_concatenate()` с backward pass (требует патча ggml C)
 - [x] Dropout `stochastic=TRUE` отключается при predict (`training=FALSE` в `nn_build_graph`)
 - [ ] Dropout маска per-batch (требует C-расширения)
@@ -99,6 +99,8 @@ pred <- predict(onnx, x)
 ### Оптимизация
 - [x] Dedicated weight buffer (`ctx_weight` + `weight_buf`) — веса на GPU один раз, sched не трогает
 - [x] Убран `reload_static_data()` — zero-overhead repeated inference
+- [x] Vulkan 1.3 Synchronization2 — `pipelineBarrier2`/`setEvent2`/`waitEvents2` вместо legacy API
+- [x] Push Descriptors (`VK_KHR_push_descriptor`) — убран descriptor pool overhead, runtime guard + fallback
 - [ ] Профилирование scheduler overhead
 - [ ] Минимизация копий между GPU
 - [ ] **Vulkan profiling API на R уровне** — экспортировать `vk_perf_logger` из `ggml-vulkan.cpp` в R через `.Call()`, чтобы видеть breakdown по операциям (мс на каждый op/fusion). Нужно для диагностики bottleneck'ов в sd2R sampling loop (552s на Flux). В ggml уже есть `vk_perf_logger_enabled` и timestamp queries — нужен R-интерфейс для включения/чтения результатов.
