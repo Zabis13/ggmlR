@@ -46,7 +46,7 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     and fused custom ops (RelPosBias2D for 'BoTNet') — sufficient to run
     real-world models such as 'RoBERTa', 'BERT', 'GPT-NeoX', 'SqueezeNet',
     'Inception v3', 'BAT-ResNeXt', 'BoTNet', and 'MNIST' out of the box.
-    Reads 'GGUF' files natively: load pretrained weights from any
+    Reads 'GGUF' files natively: load 'pretrained' weights from any
     'gguf'-compatible source ('llama.cpp', 'Hugging Face') with automatic
     weight conversion and metadata access.
     Uses a dedicated weight buffer architecture for zero-overhead repeated
