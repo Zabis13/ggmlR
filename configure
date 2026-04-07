@@ -46,11 +46,18 @@ if [ "$USE_VULKAN" = "auto" ] || [ "$USE_VULKAN" = "yes" ]; then
   echo "Checking for Vulkan support..."
 
   # Check for glslc (shader compiler)
-  # On Kaggle, prefer /usr/bin/glslc over /usr/local/bin/glslc (wrapper with bash syntax issues)
-  if [ -x "/usr/bin/glslc" ]; then
-    GLSLC="/usr/bin/glslc"
+  # Priority: $GLSLC env var > Vulkan SDK > PATH lookup
+  if [ -n "$GLSLC" ] && [ -x "$GLSLC" ]; then
+    echo "Using GLSLC from environment: $GLSLC"
+  elif [ -n "$VULKAN_SDK" ] && [ -x "$VULKAN_SDK/bin/glslc" ]; then
+    GLSLC="$VULKAN_SDK/bin/glslc"
   else
     GLSLC=$(command -v glslc 2>/dev/null)
+  fi
+
+  if [ -n "$GLSLC" ]; then
+    echo "glslc: $GLSLC"
+    $GLSLC --version 2>&1 | head -1 | sed 's/^/  /'
   fi
 
   # Check for Vulkan headers
@@ -234,8 +241,43 @@ if [ "$USE_VULKAN" = "yes" ]; then
   echo "Building shader generator..."
   cd src/ggml-vulkan/vulkan-shaders
 
+  # Detect glslc feature support via test shaders
+  SHADERGEN_DEFINES=""
+  if [ -f "feature-tests/coopmat.comp" ]; then
+    if $GLSLC --target-env=vulkan1.2 -o /dev/null feature-tests/coopmat.comp 2>/dev/null; then
+      echo "  coopmat (GL_KHR_cooperative_matrix): supported"
+      SHADERGEN_DEFINES="$SHADERGEN_DEFINES -DGGML_VULKAN_COOPMAT_GLSLC_SUPPORT"
+    else
+      echo "  coopmat (GL_KHR_cooperative_matrix): not supported"
+    fi
+  fi
+  if [ -f "feature-tests/coopmat2.comp" ]; then
+    if $GLSLC --target-env=vulkan1.2 -o /dev/null feature-tests/coopmat2.comp 2>/dev/null; then
+      echo "  coopmat2 (GL_NV_cooperative_matrix2): supported"
+      SHADERGEN_DEFINES="$SHADERGEN_DEFINES -DGGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
+    else
+      echo "  coopmat2 (GL_NV_cooperative_matrix2): not supported"
+    fi
+  fi
+  if [ -f "feature-tests/integer_dot.comp" ]; then
+    if $GLSLC --target-env=vulkan1.2 -o /dev/null feature-tests/integer_dot.comp 2>/dev/null; then
+      echo "  integer_dot (GL_EXT_integer_dot_product): supported"
+      SHADERGEN_DEFINES="$SHADERGEN_DEFINES -DGGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT"
+    else
+      echo "  integer_dot (GL_EXT_integer_dot_product): not supported"
+    fi
+  fi
+  if [ -f "feature-tests/bfloat16.comp" ]; then
+    if $GLSLC --target-env=vulkan1.2 -o /dev/null feature-tests/bfloat16.comp 2>/dev/null; then
+      echo "  bfloat16 (GL_EXT_bfloat16): supported"
+      SHADERGEN_DEFINES="$SHADERGEN_DEFINES -DGGML_VULKAN_BFLOAT16_GLSLC_SUPPORT"
+    else
+      echo "  bfloat16 (GL_EXT_bfloat16): not supported"
+    fi
+  fi
+
   CXX="${CXX:-g++}"
-  $CXX -std=c++17 -O2 -o vulkan-shaders-gen vulkan-shaders-gen.cpp -pthread
+  $CXX -std=c++17 -O2 $SHADERGEN_DEFINES -o vulkan-shaders-gen vulkan-shaders-gen.cpp -pthread
   if [ $? -ne 0 ]; then
     echo "ERROR: Failed to build vulkan-shaders-gen"
     exit 1
