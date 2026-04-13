@@ -1,6 +1,9 @@
 library(testthat)
 library(ggmlR)
 
+if (requireNamespace("mlr3", quietly = TRUE)) library(mlr3)
+if (requireNamespace("parsnip", quietly = TRUE)) library(parsnip)
+
 heavy <- c(
   "normalization",
   "sequence-ops",

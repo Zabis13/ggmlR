@@ -14,6 +14,7 @@ extern SEXP R_ggml_vulkan_free(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_is_backend(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_backend_name(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_list_devices(void);
+extern SEXP R_ggml_vulkan_device_caps(SEXP device_idx);
 
 // Backend scheduler functions (defined in r_interface_scheduler.c)
 extern SEXP R_ggml_backend_sched_new(SEXP backends_list, SEXP parallel, SEXP graph_size);
@@ -1515,6 +1516,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_vulkan_is_backend",        (DL_FUNC) &R_ggml_vulkan_is_backend,        1},
     {"R_ggml_vulkan_backend_name",      (DL_FUNC) &R_ggml_vulkan_backend_name,      1},
     {"R_ggml_vulkan_list_devices",      (DL_FUNC) &R_ggml_vulkan_list_devices,      0},
+    {"R_ggml_vulkan_device_caps",       (DL_FUNC) &R_ggml_vulkan_device_caps,       1},
 
     // Backend scheduler functions
     {"R_ggml_backend_sched_new",                (DL_FUNC) &R_ggml_backend_sched_new,                3},

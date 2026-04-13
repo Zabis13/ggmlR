@@ -1,5 +1,0 @@
-%\VignetteIndexEntry{Data Parallel Training}
-%\VignetteKeywords{ggmlR, data parallel, training, dp_train}
-%\VignettePackage{ggmlR}
-%\VignetteEncoding{UTF-8}
-%\VignetteEngine{Rcpp::asis}

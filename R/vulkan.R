@@ -163,6 +163,17 @@ ggml_vulkan_backend_name <- function(backend) {
   .Call("R_ggml_vulkan_backend_name", backend, PACKAGE = "ggmlR")
 }
 
+#' Get Vulkan device capabilities
+#'
+#' Returns hardware capabilities for the specified Vulkan device.
+#'
+#' @param device Device index (0-based, default 0)
+#' @return Named list: coopmat_support, coopmat1_fa_support, fp16, subgroup_size, subgroup_no_shmem
+#' @export
+ggml_vulkan_device_caps <- function(device = 0L) {
+  .Call("R_ggml_vulkan_device_caps", as.integer(device), PACKAGE = "ggmlR")
+}
+
 #' Print Vulkan status
 #'
 #' Prints information about Vulkan availability and devices.

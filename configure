@@ -324,7 +324,7 @@ if [ "$USE_VULKAN" = "yes" ]; then
     VULKAN_OBJECTS="$VULKAN_OBJECTS ggml-vulkan/generated/${base}.o"
   done
 
-  VULKAN_CPPFLAGS="$VULKAN_CPPFLAGS -DGGML_USE_VULKAN -Iggml-vulkan -Iggml-vulkan/generated"
+  VULKAN_CPPFLAGS="$VULKAN_CPPFLAGS -DGGML_USE_VULKAN -Iggml-vulkan -Iggml-vulkan/generated $SHADERGEN_DEFINES"
 
   echo "Vulkan backend enabled with $SHADER_COUNT shaders"
 fi

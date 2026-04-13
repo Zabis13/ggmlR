@@ -1,5 +1,0 @@
-%\VignetteIndexEntry{Quantization}
-%\VignetteKeywords{ggmlR, quantization, Q4_0, Q8_0}
-%\VignettePackage{ggmlR}
-%\VignetteEncoding{UTF-8}
-%\VignetteEngine{Rcpp::asis}

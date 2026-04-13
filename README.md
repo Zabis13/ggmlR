@@ -339,6 +339,97 @@ result$model          # trained replica 0
 | Schedulers | `lr_scheduler_step`, `lr_scheduler_cosine` |
 | Utilities | `clip_grad_norm`, `ag_gradcheck`, `dp_train` |
 
+## mlr3 Integration
+
+ggmlR ships with [mlr3](https://mlr3.mlr-org.com/) learners for tabular classification and regression. After `library(ggmlR)` (with `mlr3` installed), sequential and functional ggmlR networks become available as first-class learners:
+
+```r
+library(mlr3)
+library(ggmlR)
+
+# Classification on iris (GPU auto-detected via backend = "auto")
+task <- tsk("iris")
+
+learner <- lrn("classif.ggml",
+               epochs     = 50L,
+               batch_size = 16L,
+               backend    = "auto")      # "auto" | "cpu" | "gpu"
+learner$predict_type <- "prob"
+
+learner$train(task)
+pred <- learner$predict(task)
+pred$score(msr("classif.logloss"))
+```
+
+### Features
+
+- **Both ggmlR APIs** — `model_fn` can return a `ggml_sequential_model` or `ggml_functional_model`. The default builder is `ggml_default_mlp()`, an exported MLP builder you can also use directly.
+- **Vulkan GPU** — set `backend = "gpu"` (or leave `"auto"`) and the learner trains and predicts on GPU.
+- **Parallel tuning** — the learners declare `properties = "marshal"` and implement in-memory marshalling (SHA-256-checksummed container), so trained models can be shipped to `future` / `callr` workers without file-system round-trips.
+- **Weighted training** — `classif.ggml` honours `task$weights_learner`, mapping them to `sample_weight` in `ggml_fit()`.
+- **Callbacks for tuning** — pass `ggml_callback_early_stopping()` etc. via the `callbacks` parameter to drive early stopping inside `mlr3` tuning runs.
+- **Custom architectures** — set `learner$model_fn <- function(task, n_features, n_out, pars) { ... }` to build any ggmlR network you like; the learner handles task → matrix conversion, compilation, training, and prediction.
+
+```r
+# Regression with a custom architecture
+library(mlr3)
+library(ggmlR)
+
+learner <- lrn("regr.ggml", epochs = 100L)
+learner$model_fn <- function(task, n_features, n_out, pars) {
+  ggml_model_sequential() |>
+    ggml_layer_dense(256L, activation = "gelu", input_shape = n_features) |>
+    ggml_layer_dropout(0.2) |>
+    ggml_layer_dense( 64L, activation = "gelu") |>
+    ggml_layer_dense(n_out, activation = "linear")
+}
+
+learner$train(tsk("mtcars"))
+```
+
+Only numeric features are supported: wrap the learner in a pipeline
+(`po("encode") %>>% po("scale") %>>% lrn("classif.ggml")`) when the task has
+factor columns. `mlr3`, `paradox`, `R6`, and `mlr3pipelines` are `Suggests`;
+ggmlR only wires up the integration when they are installed.
+
+## tidymodels / parsnip Integration
+
+ggmlR registers a `"ggml"` engine for [`parsnip::mlp()`](https://parsnip.tidymodels.org/reference/mlp.html), letting you use ggmlR networks inside the tidymodels ecosystem.
+
+```r
+library(ggmlR)
+library(parsnip)
+
+spec <- mlp(
+  hidden_units = 64,
+  epochs       = 100,
+  dropout      = 0.2,
+  learn_rate   = 0.001
+) |>
+  set_engine("ggml",
+             batch_size = 32,
+             backend    = "auto",   # "auto" | "cpu" | "gpu"
+             verbose    = 0) |>
+  set_mode("classification")
+
+fit_obj <- fit(spec, Species ~ ., data = iris)
+predict(fit_obj, new_data = iris)
+predict(fit_obj, new_data = iris, type = "prob")
+```
+
+Regression works the same way:
+
+```r
+spec_reg <- mlp(hidden_units = 32, epochs = 200) |>
+  set_engine("ggml", batch_size = 8, backend = "gpu") |>
+  set_mode("regression")
+
+fit_reg <- fit(spec_reg, mpg ~ ., data = mtcars)
+predict(fit_reg, new_data = mtcars)
+```
+
+`parsnip`, `tibble`, `rlang`, and `dials` are in `Suggests` — ggmlR only wires up the engine when they are installed.
+
 ## ONNX Model Import
 
 Load pre-trained ONNX models from PyTorch, TensorFlow, or other frameworks and run inference on Vulkan GPU or CPU. No Python or external libraries required — ggmlR includes a built-in zero-dependency protobuf parser.
@@ -580,6 +671,8 @@ Ready-to-run example scripts in `inst/examples/`:
 | `transformer_encoder_demo.R` | Transformer encoder with multi-head attention (autograd) |
 | `dp_train_demo.R` | Data-parallel training across multiple replicas |
 | `benchmark_onnx.R` | GPU vs CPU inference benchmark for ONNX models |
+| `mlr3_integration.R` | mlr3 learners: CPU vs GPU comparison, iris + mtcars, 3-fold CV |
+| `tidymodels_integration.R` | parsnip engine: CPU vs GPU comparison, iris + mtcars |
 
 ## Save / Load
 
@@ -625,6 +718,7 @@ Supported GPUs: NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno.
 
 - **Vulkan 1.2** — uses legacy pipeline barriers (Synchronization2 avoided due to RADV performance regression on AMD)
 - **Push Descriptors** (`VK_KHR_push_descriptor`) — when available, descriptors are pushed directly into the command buffer, eliminating descriptor pool allocation overhead. Falls back to descriptor pools on older hardware.
+- **Q4_K flash attention** — `GGML_OP_FLASH_ATTN_EXT` with Q4_K key/value tensors now runs fully on GPU (FA_SCALAR and FA_COOPMAT1 paths). Previously Q4_K attention fell back to CPU. Relevant for llamaR with quantized LLMs on AMD/Intel GPU (KHR cooperative matrix).
 
 ## System Requirements
 

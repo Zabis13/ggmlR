@@ -12,8 +12,10 @@
 ^\.claude$
 ^src/.*\.o$
 ^src/.*\.so$
+^src/.*\.a$
 ^src/bindings/.*\.o$
 ^src/ggml-cpu/.*\.o$
+^src/onnx/.*\.o$
 ^tests/\.Rhistory$
 ^tests/testthat/\.Rhistory$
 ^VULKAN_TODO\.md$

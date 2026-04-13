@@ -271,6 +271,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    AMD_RDNA4,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
 };
@@ -314,9 +315,13 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             return vk_device_architecture::AMD_GCN;
         }
         if (subgroup_size_control_props.maxSubgroupSize == 64 && subgroup_size_control_props.minSubgroupSize == 32) {
-            // RDNA
+            // RDNA1/2/3/4: distinguished by wavefrontsPerSimd
             if (shader_core_props_amd.wavefrontsPerSimd == 20) {
                 return vk_device_architecture::AMD_RDNA1;
+            }
+            if (shader_core_props_amd.wavefrontsPerSimd == 16) {
+                // RDNA4 (GFX12xx): 16 wavefronts per SIMD
+                return vk_device_architecture::AMD_RDNA4;
             }
             if (integer_dot_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated) {
                 return vk_device_architecture::AMD_RDNA3;
@@ -587,6 +592,7 @@ struct vk_device_struct {
     uint32_t subgroup_min_size;
     uint32_t subgroup_max_size;
     bool subgroup_require_full_support;
+    uint32_t wavefronts_per_simd;  // AMD only, from VK_AMD_shader_core_properties
 
     // floor(log2(maxComputeWorkGroupInvocations))
     uint32_t max_workgroup_size_log2 {};
@@ -787,6 +793,10 @@ struct vk_device_struct {
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f16_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f32[CONV_SHAPE_COUNT];
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f16_f32[CONV_SHAPE_COUNT];
+    std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f32_cm1[CONV_SHAPE_COUNT];
+    std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f16_f32_cm1[CONV_SHAPE_COUNT];
+    std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f32_cm1[CONV_SHAPE_COUNT];
+    std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv_transpose_2d_f16_f32_cm1[CONV_SHAPE_COUNT];
     vk_pipeline pipeline_conv2d_dw_whcn_f32, pipeline_conv2d_dw_whcn_f16_f32;
     vk_pipeline pipeline_conv2d_dw_cwhn_f32, pipeline_conv2d_dw_cwhn_f16_f32;
 
@@ -3096,12 +3106,14 @@ static void ggml_vk_load_shaders(vk_device& device) {
     CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, )
     CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, )
     CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_SCALAR, )
+    CREATE_FA(GGML_TYPE_Q4_K, q4_k, FA_SCALAR, )
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     if (device->coopmat1_fa_support) {
         CREATE_FA(GGML_TYPE_F32, f32, FA_COOPMAT1, _cm1)
         CREATE_FA(GGML_TYPE_F16, f16, FA_COOPMAT1, _cm1)
         CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_COOPMAT1, _cm1)
         CREATE_FA(GGML_TYPE_Q8_0, q8_0, FA_COOPMAT1, _cm1)
+        CREATE_FA(GGML_TYPE_Q4_K, q4_k, FA_COOPMAT1, _cm1)
     }
 #endif
 #if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
@@ -4331,6 +4343,51 @@ static void ggml_vk_load_shaders(vk_device& device) {
         } else {
             CREATE_CONVS( )
         }
+
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+        // cm1 pipelines use fixed 64×64 tiles regardless of shape slot.
+        // Only compile once, into the CONV_SHAPE_128x128 slot which is used at dispatch.
+        if (device->coopmat_support && !device->coopmat2 && s == CONV_SHAPE_128x128) {
+            // coopmat KHR (cm1) path: subgroup-scope 16x16x16 tiles.
+            // Fixed tile sizes independent of scalar-path conv2d_BS:
+            //   BS_K=64, BS_NPQ=64, BS_CRS=16, CM_TM/N/K=16
+            //   4 subgroups per WG along K → WG_SIZE = subgroup_size * 4
+            // wave64 (RDNA): 64*4=256 threads; wave32 (Turing+): 32*4=128 threads.
+            // Larger tiles (128x128) give a 512-thread WG on wave64 which hurts
+            // occupancy — 256 threads is the sweet spot for RDNA4.
+            const uint32_t cm1_BS_K   = 64;
+            const uint32_t cm1_BS_NPQ = 64;
+            const uint32_t cm1_BS_CRS = 16;
+            const uint32_t cm1_n_subgroups = cm1_BS_K / 16;  // == 4
+            const uint32_t cm1_wg_size = device->subgroup_size * cm1_n_subgroups;
+            std::vector<uint32_t> cm1_spec = { cm1_wg_size, cm1_BS_K, cm1_BS_CRS, cm1_BS_NPQ,
+                                               /*TS_K (unused in cm1)=*/4u, /*use_collectives=*/0u, /*SHMEM_PAD=*/8u };
+            std::array<uint32_t, 3> cm1_wg_denoms = { cm1_BS_K, 1, 1 };
+#define CREATE_CONV_CM1(name, type_suffix) \
+            for (auto &c : device->pipeline_##name##type_suffix##_cm1[s]) { \
+                const vk_conv2d_pipeline_state &state = c.first;  \
+                std::vector<uint32_t> sc = cm1_spec; \
+                sc.push_back(state.s0); \
+                sc.push_back(state.s1); \
+                sc.push_back(state.p0); \
+                sc.push_back(state.p1); \
+                sc.push_back(state.d0); \
+                sc.push_back(state.d1); \
+                sc.push_back(state.KW); \
+                sc.push_back(state.KH); \
+                ggml_vk_create_pipeline( \
+                    device, c.second, #name #type_suffix "_cm1", \
+                    name##type_suffix##_cm1_cm1_len, name##type_suffix##_cm1_cm1_data, "main", 3, \
+                    sizeof(vk_op_conv2d_push_constants), cm1_wg_denoms, sc, 1, true, false); \
+            }
+            CREATE_CONV_CM1(conv2d, _f32)
+            CREATE_CONV_CM1(conv2d, _f16_f32)
+            CREATE_CONV_CM1(conv_transpose_2d, _f32)
+            CREATE_CONV_CM1(conv_transpose_2d, _f16_f32)
+#undef CREATE_CONV_CM1
+        }
+#endif  // GGML_VULKAN_COOPMAT_GLSLC_SUPPORT
+
 #undef CREATE_CONV
 #undef CREATE_CONVS
     }
@@ -4397,6 +4454,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         bool fp16_compute = false;
         bool maintenance4_support = false;
         bool sm_builtins = false;
+        bool amd_shader_core_properties = false;
         bool amd_shader_core_properties2 = false;
         bool pipeline_robustness = false;
         bool coopmat2_support = false;
@@ -4415,6 +4473,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 fp16_compute = true;
             } else if (strcmp("VK_NV_shader_sm_builtins", properties.extensionName) == 0) {
                 sm_builtins = true;
+            } else if (strcmp("VK_AMD_shader_core_properties", properties.extensionName) == 0) {
+                amd_shader_core_properties = true;
             } else if (strcmp("VK_AMD_shader_core_properties2", properties.extensionName) == 0) {
                 amd_shader_core_properties2 = true;
             } else if (strcmp("VK_EXT_pipeline_robustness", properties.extensionName) == 0) {
@@ -4460,6 +4520,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         vk::PhysicalDeviceSubgroupProperties subgroup_props;
         vk::PhysicalDeviceDriverProperties driver_props;
         vk::PhysicalDeviceShaderSMBuiltinsPropertiesNV sm_props;
+        vk::PhysicalDeviceShaderCorePropertiesAMD amd_shader_core_props;
         vk::PhysicalDeviceShaderCoreProperties2AMD amd_shader_core_properties2_props;
         vk::PhysicalDeviceVulkan11Properties vk11_props;
         vk::PhysicalDeviceVulkan12Properties vk12_props;
@@ -4481,6 +4542,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (sm_builtins) {
             last_struct->pNext = (VkBaseOutStructure *)&sm_props;
             last_struct = (VkBaseOutStructure *)&sm_props;
+        }
+        if (amd_shader_core_properties) {
+            last_struct->pNext = (VkBaseOutStructure *)&amd_shader_core_props;
+            last_struct = (VkBaseOutStructure *)&amd_shader_core_props;
         }
         if (amd_shader_core_properties2) {
             last_struct->pNext = (VkBaseOutStructure *)&amd_shader_core_properties2_props;
@@ -4514,6 +4579,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->properties = props2.properties;
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
+
+        device->wavefronts_per_simd = amd_shader_core_properties ? amd_shader_core_props.wavefrontsPerSimd : 0;
 
         device->push_descriptors = push_descriptor_ext &&
                                    push_descriptor_props.maxPushDescriptors >= MAX_PARAMETER_COUNT &&
@@ -8987,17 +9054,28 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             vk_conv2d_pipeline_state conv2d_pipeline_state(s0, s1, p0, p1, d0, d1, KW, KH);
 
             std::map<vk_conv2d_pipeline_state, vk_pipeline> *pipelines = nullptr;
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+            const bool use_cm1 = ctx->device->coopmat_support && !ctx->device->coopmat2;
+#else
+            const bool use_cm1 = false;
+#endif
+            // cm1 pipelines are compiled only into CONV_SHAPE_128x128 slot (fixed 64x64 tiles).
+            const vk_conv_shapes cm1_shape = CONV_SHAPE_128x128;
             if (op == GGML_OP_CONV_2D) {
                 if (src0->type == GGML_TYPE_F32) {
-                    pipelines = &ctx->device->pipeline_conv2d_f32[shape];
+                    pipelines = use_cm1 ? &ctx->device->pipeline_conv2d_f32_cm1[cm1_shape]
+                                        : &ctx->device->pipeline_conv2d_f32[shape];
                 } else if (src0->type == GGML_TYPE_F16) {
-                    pipelines = &ctx->device->pipeline_conv2d_f16_f32[shape];
+                    pipelines = use_cm1 ? &ctx->device->pipeline_conv2d_f16_f32_cm1[cm1_shape]
+                                        : &ctx->device->pipeline_conv2d_f16_f32[shape];
                 }
             } else if (op == GGML_OP_CONV_TRANSPOSE_2D) {
                 if (src0->type == GGML_TYPE_F32) {
-                    pipelines = &ctx->device->pipeline_conv_transpose_2d_f32[shape];
+                    pipelines = use_cm1 ? &ctx->device->pipeline_conv_transpose_2d_f32_cm1[cm1_shape]
+                                        : &ctx->device->pipeline_conv_transpose_2d_f32[shape];
                 } else if (src0->type == GGML_TYPE_F16) {
-                    pipelines = &ctx->device->pipeline_conv_transpose_2d_f16_f32[shape];
+                    pipelines = use_cm1 ? &ctx->device->pipeline_conv_transpose_2d_f16_f32_cm1[cm1_shape]
+                                        : &ctx->device->pipeline_conv_transpose_2d_f16_f32[shape];
                 }
             }
 
@@ -9317,8 +9395,15 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_TRANSPOSE_2D:
         if constexpr (std::is_same_v<PC, vk_op_conv2d_push_constants>) {
             const uint32_t NPQ = pc.N * pc.OH * pc.OW;
-            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, pc.Cout, NPQ);
-            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, vk_conv_block_sizes[shape].NPQ);
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+            const bool use_cm1_dispatch = ctx->device->coopmat_support && !ctx->device->coopmat2;
+#else
+            const bool use_cm1_dispatch = false;
+#endif
+            // cm1 uses fixed 64x64 tiles; scalar path uses shape-selected block sizes.
+            const uint32_t npq_block_size = use_cm1_dispatch ? 64u
+                                          : vk_conv_block_sizes[ggml_vk_conv_select_shape(ctx, pc.Cout, NPQ)].NPQ;
+            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, npq_block_size);
 
             elements = { pc.Cout, NPQ_blocks, 1 };
             if (elements[1] > 512) {
@@ -14072,6 +14157,44 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     }
 }
 
+void ggml_backend_vk_get_device_caps(int device_idx, bool * coopmat_support, bool * coopmat1_fa_support,
+                                      bool * fp16, uint32_t * subgroup_size, bool * subgroup_no_shmem,
+                                      uint32_t * subgroup_min_size, uint32_t * subgroup_max_size,
+                                      uint32_t * wavefronts_per_simd, bool * bf16, bool * integer_dot_product,
+                                      const char ** arch_name,
+                                      uint32_t * coopmat_m, uint32_t * coopmat_n, uint32_t * coopmat_k) {
+    ggml_vk_instance_init();
+    GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
+    vk_device dev = ggml_vk_get_device((size_t)device_idx);
+    if (coopmat_support)    *coopmat_support    = dev->coopmat_support;
+    if (coopmat1_fa_support)*coopmat1_fa_support = dev->coopmat1_fa_support;
+    if (fp16)               *fp16               = dev->fp16;
+    if (subgroup_size)      *subgroup_size       = dev->subgroup_size;
+    // subgroup_no_shmem is active when subgroup_arithmetic is enabled and not AMD GCN
+    if (subgroup_no_shmem)  *subgroup_no_shmem  = dev->subgroup_arithmetic &&
+                                                   dev->architecture != vk_device_architecture::AMD_GCN;
+    if (subgroup_min_size)    *subgroup_min_size    = dev->subgroup_min_size;
+    if (subgroup_max_size)    *subgroup_max_size    = dev->subgroup_max_size;
+    if (wavefronts_per_simd)  *wavefronts_per_simd  = dev->wavefronts_per_simd;
+    if (bf16)                 *bf16                 = dev->bf16;
+    if (integer_dot_product)  *integer_dot_product  = dev->integer_dot_product;
+    if (arch_name) {
+        switch (dev->architecture) {
+            case vk_device_architecture::AMD_GCN:          *arch_name = "AMD_GCN";          break;
+            case vk_device_architecture::AMD_RDNA1:        *arch_name = "AMD_RDNA1";        break;
+            case vk_device_architecture::AMD_RDNA2:        *arch_name = "AMD_RDNA2";        break;
+            case vk_device_architecture::AMD_RDNA3:        *arch_name = "AMD_RDNA3";        break;
+            case vk_device_architecture::AMD_RDNA4:        *arch_name = "AMD_RDNA4";        break;
+            case vk_device_architecture::INTEL_XE2:        *arch_name = "INTEL_XE2";        break;
+            case vk_device_architecture::NVIDIA_PRE_TURING:*arch_name = "NVIDIA_PRE_TURING";break;
+            default:                                        *arch_name = "OTHER";            break;
+        }
+    }
+    if (coopmat_m) *coopmat_m = dev->coopmat_m;
+    if (coopmat_n) *coopmat_n = dev->coopmat_n;
+    if (coopmat_k) *coopmat_k = dev->coopmat_k;
+}
+
 static vk::PhysicalDeviceType ggml_backend_vk_get_device_type(int device_idx) {
     GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
 
@@ -14326,7 +14449,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 case GGML_TYPE_F32:
                 case GGML_TYPE_Q4_0:
                 case GGML_TYPE_Q8_0:
-                    // supported in scalar and coopmat2 paths
+                    // supported in scalar and coopmat1/coopmat2 paths
+                    break;
+                case GGML_TYPE_Q4_K:
+                    // supported in scalar and coopmat1 paths; most efficient when HSK is a multiple of 256
                     break;
                 case GGML_TYPE_Q4_1:
                 case GGML_TYPE_Q5_0:
@@ -14334,7 +14460,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // K dequants currently disabled because D dimension is rounded up to 256 and runs inefficiently
                 //case GGML_TYPE_Q2_K:
                 //case GGML_TYPE_Q3_K:
-                //case GGML_TYPE_Q4_K:
                 //case GGML_TYPE_Q5_K:
                 //case GGML_TYPE_Q6_K:
                 //case GGML_TYPE_IQ1_S:
@@ -14913,7 +15038,7 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
-            return arch == vk_device_architecture::AMD_RDNA3;
+            return arch == vk_device_architecture::AMD_RDNA3 || arch == vk_device_architecture::AMD_RDNA4;
         }
         return true;
     default:

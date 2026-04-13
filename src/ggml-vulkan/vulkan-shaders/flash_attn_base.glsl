@@ -130,6 +130,82 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
 }
 #endif
 
+#if defined(DATA_A_Q4_K)
+#define BLOCK_BYTE_SIZE 144
+
+// Dequantize 4 consecutive elements from a Q4_K block.
+// iqs: element index within block (multiple of 4, range [0, 252]).
+//
+// Q4_K layout (256 elements, qs[128 uint8]):
+//   8 sub-blocks of 32 elements with 8 6-bit (sc, min) pairs in scales[12 uint8].
+//   The key: each 64-element group shares 32 uint8 bytes of qs[].
+//     Elements group*64+0  .. group*64+31  → lower nibbles of qs[group*32 .. group*32+31]
+//     Elements group*64+32 .. group*64+63  → upper nibbles of qs[group*32 .. group*32+31]
+//   Sub-block index: is = iqs/32 (0..7), maps to (group=is/2, half=is%2).
+//   4 consecutive elements at iqs all share the same group and half (since iqs is mult of 4).
+//   Their uint8 byte indices: group*32 + (iqs%32), +1, +2, +3
+//   Nibble shift: half==0 → 0, half==1 → 4
+vec4 dequantize4_q4k(A_TYPE_PACKED16 blk, uint iqs) {
+    const uint is    = iqs / 32u;        // sub-block index 0..7
+    const uint group = is / 2u;          // 64-element group 0..3
+    const uint nibhalf = is % 2u;        // 0 = lower nibbles, 1 = upper nibbles
+    const uint shift = nibhalf * 4u;     // 0 or 4
+
+    // Position within the 32-byte qs region for this group
+    const uint pos_in_group = iqs % 32u;  // 0..28 (multiple of 4)
+
+    // --- Reconstruct 6-bit scale and 6-bit min for sub-block 'is' ---
+    // (same bit-field layout as dequant_funcs.glsl DATA_A_Q4_K)
+    // In packed16 view: scales_u8[i] = (blk.scales[i/2] >> ((i%2)*8)) & 0xFF
+    const uint scidx0  = (is < 4u) ? is       : (is + 4u);
+    const uint scidx1  = (is < 4u) ? is       : (is - 4u);
+    const uint scmask1 = (is < 4u) ? 0x30u    : 0xC0u;
+    const uint scshift1= (is < 4u) ? 0u       : 2u;
+    const uint mbidx0  = is + 4u;
+    const uint mbidx1  = (is < 4u) ? (is + 4u): is;
+    const uint mbmask0 = (is < 4u) ? 0x0Fu    : 0xF0u;
+    const uint mbshift0= (is < 4u) ? 0u       : 4u;
+    const uint mbmask1 = (is < 4u) ? 0x30u    : 0xC0u;
+    const uint mbshift1= (is < 4u) ? 0u       : 2u;
+
+    #define SC_U8(i) ((uint(blk.scales[(i)/2u]) >> (((i) % 2u) * 8u)) & 0xFFu)
+    const uint sc   = (SC_U8(scidx0) & 0xFu) | ((SC_U8(scidx1) & scmask1) >> scshift1);
+    const uint mval = ((SC_U8(mbidx0) & mbmask0) >> mbshift0) | ((SC_U8(mbidx1) & mbmask1) >> mbshift1);
+    #undef SC_U8
+
+    const vec2 dm = vec2(blk.dm);
+    const float d = dm.x * float(sc);
+    const float m = -dm.y * float(mval);
+
+    // --- Decode 4 nibble values from qs ---
+    // uint8 indices of the 4 bytes: base, base+1, base+2, base+3
+    // where base = group*32 + pos_in_half
+    // In packed16 view: blk.qs[u16_idx] holds qs_u8[2*u16_idx] in bits 0..7
+    //                                    and qs_u8[2*u16_idx+1] in bits 8..15
+    const uint base_u8 = group * 32u + pos_in_group;
+    // base_u8 is always even (group*32 is mult of 32, pos_in_group is mult of 4)
+    // so blk.qs[base_u8/2] holds bytes base_u8 and base_u8+1
+    //    blk.qs[base_u8/2+1] holds bytes base_u8+2 and base_u8+3
+    const uint w0 = uint(blk.qs[base_u8 / 2u]);
+    const uint w1 = uint(blk.qs[base_u8 / 2u + 1u]);
+
+    const float e0 = float((w0        >> shift) & 0xFu);   // byte base_u8+0
+    const float e1 = float((w0 >> 8u  >> shift) & 0xFu);   // byte base_u8+1
+    const float e2 = float((w1        >> shift) & 0xFu);   // byte base_u8+2
+    const float e3 = float((w1 >> 8u  >> shift) & 0xFu);   // byte base_u8+3
+
+    return vec4(fma(d, e0, m), fma(d, e1, m), fma(d, e2, m), fma(d, e3, m));
+}
+
+vec4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
+    if (binding_idx == BINDING_IDX_K) {
+        return dequantize4_q4k(k_packed.k_data_packed16[a_offset + ib], iqs);
+    } else {
+        return dequantize4_q4k(v_packed.v_data_packed16[a_offset + ib], iqs);
+    }
+}
+#endif
+
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 
 

@@ -216,3 +216,47 @@ SEXP R_ggml_vulkan_list_devices(void) {
     return allocVector(VECSXP, 0);
 #endif
 }
+
+SEXP R_ggml_vulkan_device_caps(SEXP device_idx) {
+#ifdef GGML_USE_VULKAN
+    bool coopmat_support = false, coopmat1_fa_support = false, fp16 = false, subgroup_no_shmem = false;
+    bool bf16 = false, integer_dot_product = false;
+    uint32_t subgroup_size = 0, subgroup_min_size = 0, subgroup_max_size = 0, wavefronts_per_simd = 0;
+    uint32_t coopmat_m = 0, coopmat_n = 0, coopmat_k = 0;
+    const char *arch_name = "OTHER";
+    ggml_backend_vk_get_device_caps(asInteger(device_idx), &coopmat_support, &coopmat1_fa_support,
+                                     &fp16, &subgroup_size, &subgroup_no_shmem,
+                                     &subgroup_min_size, &subgroup_max_size,
+                                     &wavefronts_per_simd, &bf16, &integer_dot_product, &arch_name,
+                                     &coopmat_m, &coopmat_n, &coopmat_k);
+
+    const char *nms[] = {"coopmat_support", "coopmat1_fa_support", "fp16", "bf16",
+                         "integer_dot_product",
+                         "subgroup_size", "subgroup_min_size", "subgroup_max_size",
+                         "subgroup_no_shmem", "wavefronts_per_simd", "arch",
+                         "coopmat_m", "coopmat_n", "coopmat_k"};
+    SEXP result = PROTECT(allocVector(VECSXP, 14));
+    SEXP names  = PROTECT(allocVector(STRSXP, 14));
+    SET_VECTOR_ELT(result, 0,  ScalarLogical(coopmat_support));
+    SET_VECTOR_ELT(result, 1,  ScalarLogical(coopmat1_fa_support));
+    SET_VECTOR_ELT(result, 2,  ScalarLogical(fp16));
+    SET_VECTOR_ELT(result, 3,  ScalarLogical(bf16));
+    SET_VECTOR_ELT(result, 4,  ScalarLogical(integer_dot_product));
+    SET_VECTOR_ELT(result, 5,  ScalarInteger((int)subgroup_size));
+    SET_VECTOR_ELT(result, 6,  ScalarInteger((int)subgroup_min_size));
+    SET_VECTOR_ELT(result, 7,  ScalarInteger((int)subgroup_max_size));
+    SET_VECTOR_ELT(result, 8,  ScalarLogical(subgroup_no_shmem));
+    SET_VECTOR_ELT(result, 9,  ScalarInteger((int)wavefronts_per_simd));
+    SET_VECTOR_ELT(result, 10, mkString(arch_name));
+    SET_VECTOR_ELT(result, 11, ScalarInteger((int)coopmat_m));
+    SET_VECTOR_ELT(result, 12, ScalarInteger((int)coopmat_n));
+    SET_VECTOR_ELT(result, 13, ScalarInteger((int)coopmat_k));
+    for (int i = 0; i < 14; i++) SET_STRING_ELT(names, i, mkChar(nms[i]));
+    setAttrib(result, R_NamesSymbol, names);
+    UNPROTECT(2);
+    return result;
+#else
+    error("Vulkan support not compiled");
+    return R_NilValue;
+#endif
+}

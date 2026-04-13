@@ -1,8 +1,21 @@
 # Keras-compatible generic API for ggmlR
 #
-# Provides compile(), fit(), evaluate() generics and predict() S3 methods
-# that mirror the keras3 interface.  These delegate to the existing
+# Re-exports compile(), fit(), evaluate() generics from the `generics` package
+# and registers S3 methods for ggml model classes.  predict() methods use the
+# stats::predict generic.  All methods delegate to the existing
 # ggml_compile(), ggml_fit(), ggml_evaluate(), ggml_predict() implementations.
+
+#' @importFrom generics compile
+#' @export
+generics::compile
+
+#' @importFrom generics fit
+#' @export
+generics::fit
+
+#' @importFrom generics evaluate
+#' @export
+generics::evaluate
 
 # ============================================================================
 # compile()
@@ -29,9 +42,6 @@
 #' model <- compile(model, optimizer = "adam",
 #'                  loss = "categorical_crossentropy")
 #' }
-compile <- function(object, ...) {
-  UseMethod("compile")
-}
 
 #' @rdname compile
 #' @export
@@ -78,10 +88,6 @@ compile.ggml_functional_model <- function(object, optimizer = "adam",
 #'                  loss = "categorical_crossentropy")
 #' # model <- fit(model, x_train, y_train, epochs = 5, batch_size = 32)
 #' }
-fit <- function(object, ...) {
-  UseMethod("fit")
-}
-
 #' @rdname fit
 #' @export
 fit.ggml_sequential_model <- function(object, x, y, epochs = 1L,
@@ -117,29 +123,24 @@ fit.ggml_functional_model <- function(object, x, y, epochs = 1L,
 #' Computes loss and metrics on test data.  This is the keras-compatible
 #' interface; it delegates to \code{\link{ggml_evaluate}}.
 #'
-#' @param object A trained model object.
-#' @param x Test data.
-#' @param y Test labels.
+#' @param x A trained model object.
+#' @param test_x Test data.
+#' @param test_y Test labels.
 #' @param batch_size Batch size (default 32).
 #' @param ... Additional arguments passed to \code{\link{ggml_evaluate}}.
 #' @return A named list with \code{loss} and metric values.
+#' @rdname evaluate
 #' @export
-evaluate <- function(object, ...) {
-  UseMethod("evaluate")
+evaluate.ggml_sequential_model <- function(x, test_x, test_y,
+                                            batch_size = 32L, ...) {
+  ggml_evaluate(x, x = test_x, y = test_y, batch_size = batch_size, ...)
 }
 
 #' @rdname evaluate
 #' @export
-evaluate.ggml_sequential_model <- function(object, x, y,
+evaluate.ggml_functional_model <- function(x, test_x, test_y,
                                             batch_size = 32L, ...) {
-  ggml_evaluate(object, x = x, y = y, batch_size = batch_size, ...)
-}
-
-#' @rdname evaluate
-#' @export
-evaluate.ggml_functional_model <- function(object, x, y,
-                                            batch_size = 32L, ...) {
-  ggml_evaluate(object, x = x, y = y, batch_size = batch_size, ...)
+  ggml_evaluate(x, x = test_x, y = test_y, batch_size = batch_size, ...)
 }
 
 # ============================================================================

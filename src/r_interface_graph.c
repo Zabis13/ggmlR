@@ -1961,6 +1961,10 @@ SEXP R_ggml_backend_tensor_set(SEXP tensor_ptr, SEXP data_sexp, SEXP offset_sexp
 
         ggml_backend_tensor_set(tensor, buffer, offset, size);
         free(buffer);
+    } else if (TYPEOF(data_sexp) == RAWSXP) {
+        // Raw bytes — pass through directly (for quantized types: Q4_K, Q8_0, etc.)
+        size_t size = (size_t) length(data_sexp);
+        ggml_backend_tensor_set(tensor, RAW(data_sexp), offset, size);
     } else {
         error("Unsupported tensor type for ggml_backend_tensor_set");
     }

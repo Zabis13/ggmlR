@@ -1,0 +1,211 @@
+---
+title: "Using ggmlR as a Backend in Your Package"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Using ggmlR as a Backend in Your Package}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE)
+```
+
+ggmlR exports a static library (`libggml.a`) and C headers so downstream
+packages can link against ggml directly — the same pattern used by `llamaR`
+(LLM inference) and `sd2R` (Stable Diffusion).
+
+---
+
+## 1. What ggmlR exports
+
+After installing ggmlR you will find:
+
+```
+$(R_HOME_DIR)/library/ggmlR/lib/libggml.a
+$(R_HOME_DIR)/library/ggmlR/include/ggml.h
+$(R_HOME_DIR)/library/ggmlR/include/ggml-backend.h
+$(R_HOME_DIR)/library/ggmlR/include/ggml-alloc.h
+$(R_HOME_DIR)/library/ggmlR/include/ggml-opt.h
+$(R_HOME_DIR)/library/ggmlR/include/ggml-quants.h
+$(R_HOME_DIR)/library/ggmlR/include/ggml-vulkan.h
+$(R_HOME_DIR)/library/ggmlR/include/r_ggml_compat.h
+... (full list in inst/include/)
+```
+
+`r_ggml_compat.h` redirects `printf`/`fprintf`/`abort` to R-safe equivalents
+(`Rprintf`, `Rf_error`).  Always include it (or use `-include r_ggml_compat.h`)
+in your C/C++ sources.
+
+---
+
+## 2. DESCRIPTION
+
+Add ggmlR to `LinkingTo` and `Imports`:
+
+```
+Package: myPackage
+...
+Imports:   ggmlR
+LinkingTo: ggmlR
+```
+
+`LinkingTo` makes R add `ggmlR/include` to the compiler include path
+automatically.
+
+---
+
+## 3. `src/Makevars`
+
+Link against the static library:
+
+```makefile
+GGMLR_LIB = $(shell Rscript -e "cat(system.file('lib', package='ggmlR'))")
+GGMLR_INC = $(shell Rscript -e "cat(system.file('include', package='ggmlR'))")
+
+PKG_CPPFLAGS = -I$(GGMLR_INC) -include r_ggml_compat.h
+PKG_LIBS     = $(GGMLR_LIB)/libggml.a
+```
+
+If ggmlR was built with Vulkan you also need to link Vulkan:
+
+```makefile
+# detect Vulkan (same logic as ggmlR's own configure)
+VULKAN_LIBS = $(shell pkg-config --libs vulkan 2>/dev/null)
+PKG_LIBS    = $(GGMLR_LIB)/libggml.a $(VULKAN_LIBS)
+```
+
+---
+
+## 4. `configure` — detect ggmlR at build time
+
+```sh
+#!/bin/sh
+# configure
+
+GGMLR_INC=$(Rscript -e "cat(system.file('include', package='ggmlR'))" 2>/dev/null)
+GGMLR_LIB=$(Rscript -e "cat(system.file('lib',     package='ggmlR'))" 2>/dev/null)
+
+if [ -z "$GGMLR_INC" ] || [ ! -f "$GGMLR_LIB/libggml.a" ]; then
+  echo "ERROR: ggmlR not found. Install it first: install.packages('ggmlR')" >&2
+  exit 1
+fi
+
+sed -e "s|@GGMLR_INC@|$GGMLR_INC|g" \
+    -e "s|@GGMLR_LIB@|$GGMLR_LIB|g" \
+    src/Makevars.in > src/Makevars
+```
+
+`src/Makevars.in`:
+
+```makefile
+PKG_CPPFLAGS = -I@GGMLR_INC@ -include r_ggml_compat.h
+PKG_LIBS     = @GGMLR_LIB@/libggml.a
+```
+
+---
+
+## 5. C code — minimal example
+
+```c
+/* src/my_model.c */
+#include "ggml.h"
+#include "ggml-backend.h"
+#include <R.h>
+#include <Rinternals.h>
+
+SEXP R_my_inference(SEXP r_input) {
+    struct ggml_init_params params = {
+        .mem_size   = 256 * 1024 * 1024,  /* 256 MB */
+        .mem_buffer = NULL,
+        .no_alloc   = false,
+    };
+    struct ggml_context *ctx = ggml_init(params);
+
+    int n = length(r_input);
+    struct ggml_tensor *x = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n);
+    memcpy(x->data, REAL(r_input), n * sizeof(float));
+
+    /* ... build graph, compute ... */
+
+    ggml_free(ctx);
+    return R_NilValue;
+}
+```
+
+Register in the `.Call` table (R's standard routine registration):
+
+```c
+/* src/init.c */
+#include <R.h>
+#include <Rinternals.h>
+#include <R_ext/Rdynload.h>
+
+extern SEXP R_my_inference(SEXP);
+
+static const R_CallMethodDef CallEntries[] = {
+    {"R_my_inference", (DL_FUNC) &R_my_inference, 1},
+    {NULL, NULL, 0}
+};
+
+void R_init_myPackage(DllInfo *dll) {
+    R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
+    R_useDynamicSymbols(dll, FALSE);
+}
+```
+
+---
+
+## 6. R wrapper
+
+```{r}
+my_inference <- function(input) {
+  .Call("R_my_inference", as.numeric(input))
+}
+```
+
+---
+
+## 7. Thread count
+
+ggmlR manages the CPU thread count via `ggmlR_get_n_threads()` (exported from
+`r_interface.c`).  If your package calls `ggml_backend_cpu_init()` directly,
+set the thread count to match:
+
+```c
+#include "ggml-backend.h"
+/* ggmlR_get_n_threads() is exported by ggmlR — link against libggml.a */
+extern int ggmlR_get_n_threads(void);
+
+ggml_backend_t cpu = ggml_backend_cpu_init();
+ggml_backend_cpu_set_n_threads(cpu, ggmlR_get_n_threads());
+```
+
+This ensures your package respects the same thread limit as ggmlR (important
+for CRAN compliance — tests must not exceed 2 threads).
+
+---
+
+## 8. Vulkan in downstream packages
+
+If your package needs Vulkan, the Vulkan backend is already compiled into
+`libggml.a` when ggmlR was built with Vulkan support.  You only need to link
+`-lvulkan`:
+
+```makefile
+VULKAN_LIBS = $(shell pkg-config --libs vulkan 2>/dev/null)
+PKG_LIBS    = @GGMLR_LIB@/libggml.a $(VULKAN_LIBS)
+```
+
+Do **not** vendor ggml source again — link the pre-built `libggml.a` from
+ggmlR to avoid symbol collisions.
+
+---
+
+## 9. Real-world references
+
+- `llamaR` — LLM inference (LLaMA, Mistral, …) using ggmlR as backend
+- `sd2R` — Stable Diffusion image generation using ggmlR as backend
+
+Both follow the pattern above: `LinkingTo: ggmlR`, `configure` script to
+locate headers and `libggml.a`, thin C wrappers, R `.Call` interface.

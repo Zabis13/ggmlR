@@ -7,6 +7,14 @@
 #extension GL_KHR_memory_scope_semantics : enable
 #endif
 
+#ifdef COOPMAT
+#extension GL_KHR_cooperative_matrix : enable
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#endif
+
 #ifdef USE_COLLECTIVES
 #    extension GL_KHR_shader_subgroup_shuffle : enable
 #endif
@@ -94,7 +102,7 @@ uint32_t n_elems_out = K * NPQ;
 // Number of blocktiles per input
 uint32_t NB_CRS = splitWork(CRS, BS_CRS);
 
-#ifdef COOPMAT2
+#if defined(COOPMAT2) || defined(COOPMAT)
 #define SHMEM_TYPE float16_t
 #else
 #define SHMEM_TYPE float
@@ -112,7 +120,20 @@ const uint32_t Bsh_len = BS_CRS * Bsh_stride;
 shared SHMEM_TYPE Ash[Ash_len];  // K x CRS
 shared SHMEM_TYPE Bsh[Bsh_len];  // CRS x NPQ
 
-// Threadtile sizes
+#ifdef COOPMAT
+// Per-subgroup float staging for coopMatStore output.
+// Layout: [CM_TILES_K][CM_TM][CM_TN + SHMEM_PAD]
+// Each subgroup (indexed by k_stripe) owns its own CM_TM rows.
+// Sizes are fixed: CM_TM=16, CM_TN=16, SHMEM_PAD=8, max CM_TILES_K=BS_K/16.
+// With BS_K=64: 4 * 16 * 24 = 1536 floats = 6KB.
+// Declared with upper-bound size; only k_stripe*CM_TM*Csh_stride portion used.
+#define CM_CSH_STRIDE 24    // CM_TN(16) + SHMEM_PAD(8)
+#define CM_CSH_LEN    1536  // (BS_K/CM_TM) * CM_TM * CM_CSH_STRIDE = 4*16*24
+const uint32_t Csh_stride = CM_CSH_STRIDE;
+shared float Csh[CM_CSH_LEN];
+#endif
+
+// Threadtile sizes (unused in COOPMAT path but must be defined for scalar path)
 const uint32_t TS_NPQ = BS_K * BS_NPQ / WG_SIZE / TS_K;
 
 // Number of threadtiles per blocktile
@@ -168,6 +189,68 @@ ACC_TYPE perElemOpStore(const in uint32_t r, const in uint32_t c, const in ACC_T
 }
 #endif
 
+#ifdef COOPMAT
+// KHR coopmat path (subgroup scope, Variant A)
+//
+// Workgroup layout: WG_SIZE threads, subgroup_size threads per subgroup.
+// BS_K  = coopmat tile M dimension (rows of A / output)  — equals CM_TM
+// BS_NPQ = coopmat tile N dimension (cols of B / output) — equals CM_TN
+// BS_CRS = inner K dimension of coopmat (columns of A / rows of B) — equals CM_TK
+//
+// Each subgroup handles one CM_TM x CM_TN output tile.
+// Multiple subgroups in the workgroup cover additional K or NPQ tiles.
+//
+// With BS_K=64, BS_NPQ=64, CM_TM=16, CM_TN=16:
+//   subgroups_K   = BS_K   / CM_TM = 4
+//   subgroups_NPQ = BS_NPQ / CM_TN = 4
+//   total subgroups per WG = 4 (split along K only, NPQ covered by WG grid)
+//   → WG_SIZE = 4 * subgroup_size
+
+// Coopmat tile dimensions (must match device coopmat_m/n/k reported by caps)
+const uint32_t CM_TM = 16;
+const uint32_t CM_TN = 16;
+const uint32_t CM_TK = 16;
+
+// How many coopmat tiles fit in the shared memory block per subgroup
+const uint32_t CM_TILES_K   = BS_K   / CM_TM;  // tiles along K per WG
+const uint32_t CM_TILES_NPQ = BS_NPQ / CM_TN;  // tiles along NPQ per subgroup
+
+// Which K-tile does this subgroup own within the workgroup block?
+// subgroup_id_in_wg = gl_SubgroupID (0..N_subgroups-1)
+// We assign subgroups along the K dimension.
+// Each subgroup covers all NPQ tiles for its K stripe.
+
+void cm_store_result(
+    coopmat<float, gl_ScopeSubgroup, CM_TM, CM_TN, gl_MatrixUseAccumulator> acc,
+    uint32_t k_tile,   // which CM_TM tile along K in this WG block
+    uint32_t npq_tile  // which CM_TN tile along NPQ in this WG block
+) {
+    uint32_t K_base   = B_idx_K   * BS_K   + k_tile   * CM_TM;
+    uint32_t NPQ_base = B_idx_NPQ * BS_NPQ + npq_tile * CM_TN;
+
+    // Each subgroup writes into its own slice of Csh (no inter-subgroup conflicts).
+    uint32_t csh_base = k_tile * CM_TM * Csh_stride;
+    coopMatStore(acc, Csh, csh_base, Csh_stride, gl_CooperativeMatrixLayoutRowMajor);
+
+    // Scatter from staging to global dst (threads in subgroup cover all elements).
+    uint32_t elems_per_thread = CM_TM * CM_TN / gl_SubgroupSize;
+    for (uint32_t e = 0; e < elems_per_thread; e++) {
+        uint32_t linear  = gl_SubgroupInvocationID * elems_per_thread + e;
+        uint32_t row     = linear / CM_TN;
+        uint32_t col     = linear % CM_TN;
+        uint32_t K_idx   = K_base   + row;
+        uint32_t NPQ_idx = NPQ_base + col;
+        if (K_idx < K && NPQ_idx < NPQ) {
+            uint32_t N_idx  = fastdiv(NPQ_idx, p.OWOHmp, p.OWOHL);
+            uint32_t OH_idx = fastdiv(NPQ_idx - N_idx * p.OH * p.OW, p.OWmp, p.OWL);
+            uint32_t OW_idx = NPQ_idx - N_idx * p.OH * p.OW - OH_idx * p.OW;
+            dst_data[OW_idx + OH_idx * p.nb1 + K_idx * p.nb2 + N_idx * p.nb3] =
+                D_TYPE(Csh[csh_base + row * Csh_stride + col]);
+        }
+    }
+}
+#endif  // COOPMAT
+
 void main() {
     if (B_idx_NPQ * BS_NPQ >= NPQ) {
         return;
@@ -176,6 +259,16 @@ void main() {
 #ifdef COOPMAT2
     coopmat<ACC_TYPE, gl_ScopeWorkgroup, BS_K, BS_NPQ, gl_MatrixUseAccumulator> matC;
     matC = coopmat<ACC_TYPE, gl_ScopeWorkgroup, BS_K, BS_NPQ, gl_MatrixUseAccumulator>(0.0);
+#elif defined(COOPMAT)
+    // Each subgroup handles CM_TILES_NPQ NPQ-tiles for its K-stripe.
+    // k_stripe = which CM_TM block along K this subgroup owns.
+    uint32_t k_stripe = gl_SubgroupID % CM_TILES_K;
+
+    // Accumulators: one per NPQ tile
+    coopmat<float, gl_ScopeSubgroup, CM_TM, CM_TN, gl_MatrixUseAccumulator> matC[CM_TILES_NPQ];
+    for (uint32_t t = 0; t < CM_TILES_NPQ; t++) {
+        matC[t] = coopmat<float, gl_ScopeSubgroup, CM_TM, CM_TN, gl_MatrixUseAccumulator>(0.0f);
+    }
 #else
     float regC[TS_K][TS_NPQ];
     for (uint32_t T_ly = 0; T_ly < TS_K; T_ly++) {
@@ -215,11 +308,11 @@ void main() {
             KW_idx_a               = CRS_remainder % KW;
         }
 #else
-        CRS_idx_a     = B_idx_CRS * BS_CRS + Ac;  // Global CRS_idx_a (column index of A)
-        Cin_idx_a     = CRS_idx_a / (KW * KH);
-        CRS_remainder = CRS_idx_a % (KW * KH);
-        KH_idx_a      = CRS_remainder / KW;
-        KW_idx_a      = CRS_remainder % KW;
+        CRS_idx_a              = B_idx_CRS * BS_CRS + Ac;  // Global CRS_idx_a (column index of A)
+        Cin_idx_a              = CRS_idx_a / (KW * KH);
+        uint32_t CRS_remainder = CRS_idx_a % (KW * KH);
+        KH_idx_a               = CRS_remainder / KW;
+        KW_idx_a               = CRS_remainder % KW;
 #endif
 
         /* Load kernel to A_block: (BS_K x BS_CRS)*/
@@ -303,6 +396,27 @@ void main() {
         coopMatLoad(matA, Ash, 0, Ash_stride, gl_CooperativeMatrixLayoutRowMajor);
         coopMatLoad(matB, Bsh, 0, Bsh_stride, gl_CooperativeMatrixLayoutRowMajor);
         matC = coopMatMulAdd(matA, matB, matC);
+#elif defined(COOPMAT)
+        // Each subgroup loads its K-stripe from Ash and all NPQ tiles from Bsh.
+        // Ash layout: [BS_K rows][BS_CRS cols] — subgroup owns rows [k_stripe*CM_TM .. (k_stripe+1)*CM_TM)
+        // Bsh layout: [BS_CRS rows][BS_NPQ cols]
+        // Inner loop: iterate over CM_TK-sized chunks of BS_CRS
+        for (uint32_t crs_tile = 0; crs_tile < BS_CRS / CM_TK; crs_tile++) {
+            coopmat<float16_t, gl_ScopeSubgroup, CM_TM, CM_TK, gl_MatrixUseA> matA;
+            coopMatLoad(matA, Ash,
+                        k_stripe * CM_TM * Ash_stride + crs_tile * CM_TK,
+                        Ash_stride,
+                        gl_CooperativeMatrixLayoutRowMajor);
+
+            for (uint32_t npq_tile = 0; npq_tile < CM_TILES_NPQ; npq_tile++) {
+                coopmat<float16_t, gl_ScopeSubgroup, CM_TK, CM_TN, gl_MatrixUseB> matB;
+                coopMatLoad(matB, Bsh,
+                            crs_tile * CM_TK * Bsh_stride + npq_tile * CM_TN,
+                            Bsh_stride,
+                            gl_CooperativeMatrixLayoutRowMajor);
+                matC[npq_tile] = coopMatMulAdd(matA, matB, matC[npq_tile]);
+            }
+        }
 #else
         if (T_y * TS_K < K) {
             UNROLL for (uint32_t CRS_lidx = 0; CRS_lidx < BS_CRS; CRS_lidx++) {
@@ -327,6 +441,10 @@ void main() {
     /* Save C* */
 #ifdef COOPMAT2
     coopMatPerElementNV(matC, matC, perElemOpStore);
+#elif defined(COOPMAT)
+    for (uint32_t npq_tile = 0; npq_tile < CM_TILES_NPQ; npq_tile++) {
+        cm_store_result(matC[npq_tile], k_stripe, npq_tile);
+    }
 #else
     if (T_y * TS_K < K) {
         for (uint32_t T_ly = 0; T_ly < TS_K; T_ly++) {

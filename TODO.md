@@ -103,6 +103,26 @@ pred <- predict(onnx, x)
 - [x] Push Descriptors (`VK_KHR_push_descriptor`) — убран descriptor pool overhead, runtime guard + fallback
 - [ ] Профилирование scheduler overhead
 - [ ] Минимизация копий между GPU
+- [ ] **KHR coopmat path в conv2d_mm.comp (Вариант A)** — ускорение VAE decode на RDNA4/Ampere+
+  - Цель: VAE decode 12.9s → ~4-6s на RX 9070 (сейчас F32 FMA, нет coopmat)
+  - Устройство: wave64, M=16 N=16 K=16, subgroup_size=64
+  - **Шаг 1 — шейдер** `conv2d_mm.comp`:
+    - `#ifdef COOPMAT` ветка (GL_KHR_cooperative_matrix, subgroup scope)
+    - Workgroup = 4 subgroup'а по 64 треда = 256 тредов (как в mul_mm.comp)
+    - Каждый subgroup вычисляет блок 32×32 результата из 4 coopmat 16×16
+    - Shared memory: F16 staging тайл BS_K × BS_CRS + BS_CRS × BS_NPQ (как сейчас)
+    - Все subgroup'ы читают общий CRS-тайл → максимальный reuse
+    - Accumulator: F32 (coopmat<float, subgroup, 16, 16, Accumulator>)
+    - A/B матрицы: F16 (загружаем F32→F16 в shared, потом coopMatLoad)
+    - Новые spec constants: `CM_TM`, `CM_TN`, `CM_TK` (дефолт 16×16×16)
+  - **Шаг 2 — генерация** `vulkan-shaders-gen.cpp`:
+    - Под `#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)` добавить `_cm1` варианты
+    - `string_to_spv(name + "_cm1", "conv2d_mm.comp", defines, true, true, false)`
+  - **Шаг 3 — pipeline** `ggml-vulkan.cpp`:
+    - `pipeline_conv2d_f32_cm1[CONV_SHAPE_COUNT]` и `_f16_f32_cm1`
+    - В блоке создания pipeline: `if (device->coopmat_support) { CREATE_CONVS(_cm1) } else if (coopmat2) ...`
+    - Spec constants для CM path: WG_SIZE=256, BS_K=64, BS_NPQ=64, BS_CRS=16
+  - **Шаг 4 — тест**: `test-flash-attn-q4k.R` как шаблон; benchmark в `test_vae_f16.R`
 - [ ] **Vulkan profiling API на R уровне** — экспортировать `vk_perf_logger` из `ggml-vulkan.cpp` в R через `.Call()`, чтобы видеть breakdown по операциям (мс на каждый op/fusion). Нужно для диагностики bottleneck'ов в sd2R sampling loop (552s на Flux). В ggml уже есть `vk_perf_logger_enabled` и timestamp queries — нужен R-интерфейс для включения/чтения результатов.
 
 ---
@@ -116,7 +136,8 @@ pred <- predict(onnx, x)
 
 #### Следующие фичи
 - [ ] Gradient checkpointing — экономия памяти при глубоких сетях
-- [ ] Flash Attention — эффективный attention через ggml_flash_attn_ext
+- [x] Flash Attention Q4_K — `GGML_OP_FLASH_ATTN_EXT` с Q4_K K/V на Vulkan (FA_SCALAR + FA_COOPMAT1) — v0.7.2
+- [ ] Flash Attention autograd — эффективный attention через ggml_flash_attn_ext в ag_* API
 - [ ] Optimizer states в f32 при f16 весах (true mixed precision training)
 
 ---
@@ -306,3 +327,60 @@ pred <- predict(onnx, x)
 - [ ] **Голосовые модели** (Whisper/TTS): LSTM/GRU → Transpose → Reshape → MatMul → LogSoftmax → ArgMax
 - [ ] **GAN / SD UNet**: RandomNormal → Conv → GroupNorm → SiLU → MatMul(attention) → Add(skip) → ConvTranspose
 - [ ] **Граф-нейросети** (SAGEConv): Gather(node_features) → ScatterElements → MatMul → Add(bias) → Relu → Concat → LayerNorm — все ops готовы
+
+---
+
+### mlr3 integration
+
+#### v1 (в работе)
+- [x] `LearnerClassifGGML` / `LearnerRegrGGML` — R6-классы, sequential + functional API через `model_fn`
+- [x] `ggml_default_mlp()` — дефолтный builder (classif + regr)
+- [x] Marshal через контейнер `ggmlR_marshaled` (format/version/sha256/payload) — sequential/functional only
+- [x] S3 методы `marshal_model` / `unmarshal_model` + ленивая регистрация в `.onLoad`
+- [x] Callbacks как `p_uty` (sequential-fit honour'ит; functional-fit молча игнорирует)
+- [x] `properties = "weights"` для classif — `task$weights_learner` → `sample_weight` в `ggml_fit`
+- [ ] `properties = "weights"` для regr — **заблокировано**: `ggml_fit_sequential` для mse делает
+  `y <- y * sample_weight`, что эквивалентно `(w*y - pred)²`, а не `w*(y - pred)²`. Сначала надо
+  исправить семантику weighted mse в самом `ggml_fit_sequential` (scale residual, не target),
+  потом пробросить в learner.
+- [x] Регистрация в `mlr_learners` (через `.onLoad`) + `DESCRIPTION` Suggests (mlr3 >= 0.21, paradox, R6, checkmate, digest, mlr3pipelines) — v0.7.1
+- [x] Обновлены README (секция mlr3 + parsnip Integration), NEWS (0.7.1), TODO — v0.7.1
+- [x] `tests/testthat/test-mlr3-learner.R` smoke-тесты train/predict/marshal/CV — v0.7.1
+- [x] `tests/testthat/test-parsnip.R` — тесты classif/regr/prob/learn_rate/backend=gpu — v0.7.1
+- [x] parsnip `"ggml"` engine для `mlp()` classif + regr — v0.7.1
+- [x] `backend="gpu"` → `"vulkan"` в parsnip fit функциях — v0.7.1
+- [x] Vignette `mlr3-integration.Rmd` — принудительная регистрация в setup chunk — v0.7.1
+- [x] R6 классы всегда определяются (убрана `if (requireNamespace)` обёртка) — v0.7.1
+- [x] Убран `mlr3misc` из Suggests, регистрация через `setHook` напрямую — v0.7.1
+
+#### v2 — autograd support (отложено)
+Причина отсрочки: autograd API (`ag_*`, `with_grad_tape`, `backward`, `ag_sequential`)
+использует другой training loop и не поддерживает `ggml_save_model()`. Параметры
+модели — external pointers на C-уровневые ggml тензоры, `saveRDS` даёт мусор.
+
+Нужно для полной поддержки в mlr3:
+
+- [ ] **autograd training tradepath в learner** — диспетчер в `.train()`:
+  `inherits(model, "ag_sequential") → autograd loop (optimizer_adam + grad tape + backward)`.
+  Дефолтный `training_fn`, переопределяемый пользователем. Новые параметры:
+  `learning_rate`, `max_grad_norm`. Даёт `learning_rate` в tuning (недоступен для
+  sequential API, т.к. `ggml_compile` его не принимает).
+- [ ] **Marshal для autograd — вариант M2 (weights + model_fn)**: контейнер хранит
+  `list(weights = named_list_of_numeric_vectors, pars)`, архитектура восстанавливается
+  вызовом `self$model_fn(task, ...)` заново, веса переливаются по именам из
+  `$parameters()`. Работает потому что `model_fn` сериализуется как часть learner'а.
+  Требует: (a) обход дерева слоёв с `ggml_backend_tensor_get_data()`, (b) обратная
+  заливка через `$data <- ...`, (c) проверка совпадения имён параметров.
+- [ ] **`ag_save_model()` / `ag_load_model()` в ggmlR** — опциональная альтернатива M2,
+  если хочется marshal без обязательного `model_fn`. Гораздо больше работы: нужна
+  сериализация произвольного environment-based module с замыканиями. Оценка 200-400
+  строк + тесты. Не блокер для mlr3 integration (M2 уже покрывает use case).
+- [ ] **`dp_train()` интеграция** — опционально, multi-GPU training как fast-path для
+  autograd learner'а когда `n_gpu > 1`. Нужно проработать: `dp_train` возвращает
+  `replicas[[1L]]`, learner хранит одну модель, predict идёт через forward на этой
+  модели. Профит — бесплатный grad clipping + weight sync.
+- [ ] **`class_weight` / `sample_weight` + `properties = "weights"`** — sequential
+  `ggml_fit` это поддерживает, learner'у надо пробросить `task$weights` (если
+  `"weights"` в properties, mlr3 автоматически кладёт их в task).
+- [ ] Документация: явное сравнение sequential vs autograd tradepath, когда какой
+  выбирать, ограничения marshal для autograd.
