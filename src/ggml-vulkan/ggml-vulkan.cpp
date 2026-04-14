@@ -1613,35 +1613,33 @@ class vk_perf_logger {
         }
         print_count = 0;
         uint64_t total_all_op_times = 0;
-        std::cerr << "----------------\nVulkan Timings:" << std::endl;
+        r_ggml_printf("----------------\nVulkan Timings:\n");
         for (const auto & t : timings) {
             uint64_t total_op_times = 0;
             for (const auto & time : t.second) {
                 total_op_times += time;
             }
-            std::cerr << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0)
-                      << " us = " << (total_op_times / 1000.0) << " us";
+            r_ggml_printf("%s: %zu x %.2f us = %.2f us",
+                t.first.c_str(), t.second.size(),
+                total_op_times / (double)t.second.size() / 1000.0,
+                total_op_times / 1000.0);
 
-            // If we have as many flops entries as timing entries for the op, then compute and log the flops/S.
             auto it = flops.find(t.first);
             if (it != flops.end() && (it->second).size() == t.second.size()) {
                 uint64_t total_op_flops = 0;
                 for (const auto & elem : it->second) {
                     total_op_flops += elem;
                 }
-                std::cerr << " ("
-                          << (double(total_op_flops) / (1000.0 * 1000.0 * 1000.0)) /
-                                 (double(total_op_times) / (1000.0 * 1000.0 * 1000.0))
-                          << " GFLOPS/s)";
+                r_ggml_printf(" (%.2f GFLOPS/s)",
+                    (double(total_op_flops) / 1e9) / (double(total_op_times) / 1e9));
             }
 
             total_all_op_times += total_op_times;
-
-            std::cerr << std::endl;
+            r_ggml_printf("\n");
         }
 
         if (timings.size() > 0) {
-            std::cerr << "Total time: " << total_all_op_times / 1000.0 << " us." << std::endl;
+            r_ggml_printf("Total time: %.2f us.\n", total_all_op_times / 1000.0);
         }
 
         timings.clear();
