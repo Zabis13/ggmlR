@@ -41,6 +41,26 @@ GGML_TYPE_Q8_0 <- 8L
 
 #' @rdname GGML_TYPE_F32
 #' @export
+GGML_TYPE_Q2_K <- 10L
+
+#' @rdname GGML_TYPE_F32
+#' @export
+GGML_TYPE_Q3_K <- 11L
+
+#' @rdname GGML_TYPE_F32
+#' @export
+GGML_TYPE_Q4_K <- 12L
+
+#' @rdname GGML_TYPE_F32
+#' @export
+GGML_TYPE_Q5_K <- 13L
+
+#' @rdname GGML_TYPE_F32
+#' @export
+GGML_TYPE_Q6_K <- 14L
+
+#' @rdname GGML_TYPE_F32
+#' @export
 GGML_TYPE_I32  <- 26L
 
 #' @rdname GGML_TYPE_F32

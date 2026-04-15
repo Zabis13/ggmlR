@@ -671,6 +671,8 @@ Ready-to-run example scripts in `inst/examples/`:
 | `transformer_encoder_demo.R` | Transformer encoder with multi-head attention (autograd) |
 | `dp_train_demo.R` | Data-parallel training across multiple replicas |
 | `benchmark_onnx.R` | GPU vs CPU inference benchmark for ONNX models |
+| `benchmark_ops.R` | Per-op micro-benchmark: every ggml op on CPU and GPU with auto-batching |
+| `profile_onnx_superres_gpu.R` | GPU profiler for SuperResolution ONNX model across input sizes |
 | `mlr3_integration.R` | mlr3 learners: CPU vs GPU comparison, iris + mtcars, 3-fold CV |
 | `tidymodels_integration.R` | parsnip engine: CPU vs GPU comparison, iris + mtcars |
 
@@ -687,17 +689,19 @@ Measured on AMD Ryzen 5 5600 + AMD RX 9070, single-image inference:
 
 | Model | CPU (ms) | GPU (ms) | Speedup | CPU FPS | GPU FPS |
 |---|---:|---:|---:|---:|---:|
-| Inception V3 | 457.0 | 15.0 | 30.5x | 2.2 | 66.7 |
+| Inception V3 | 204.3 | 7.3 | 27.9x | 4.9 | 136.4 |
 | MNIST | 0.0 | 0.3 | — | Inf | 3000.0 |
-| SqueezeNet 1.0 | 38.3 | 2.7 | 14.4x | 26.1 | 375.0 |
-| SuperResolution | 233.0 | 7.3 | 31.8x | 4.3 | 136.4 |
-| EmotionFerPlus | 66.7 | 1.7 | 40.0x | 15.0 | 600.0 |
-| Inception V3 Op18 | 456.7 | 15.3 | 29.8x | 2.2 | 65.2 |
-| BAT-ResNeXt26ts | 200.3 | 10.3 | 19.4x | 5.0 | 96.8 |
-| BERT (Opset17) | 788.0 | 11.3 | 69.5x | 1.3 | 88.2 |
-| GPT-NeoX | 2.0 | 3.7 | 0.6x | 500.0 | 272.7 |
+| SqueezeNet 1.0 | 21.7 | 2.0 | 10.8x | 46.2 | 500.0 |
+| SuperResolution | 87.3 | 3.0 | 29.1x | 11.5 | 333.3 |
+| EmotionFerPlus | 29.7 | 1.7 | 17.8x | 33.7 | 600.0 |
+| Inception V3 Op18 | 186.0 | 8.7 | 21.5x | 5.4 | 115.4 |
+| BAT-ResNeXt26ts | 87.0 | 6.3 | 13.7x | 11.5 | 157.9 |
+| BERT (Opset17) | 243.0 | 8.0 | 30.4x | 4.1 | 125.0 |
+| GPT-NeoX | 2.0 | 2.7 | 0.7x | 500.0 | 375.0 |
 
-Benchmark script: `inst/examples/benchmark_onnx.R`
+SuperResolution speedup improved from 31.8x to 29.1x while absolute GPU time dropped from 7.3 ms to 3.0 ms — the result of replacing IM2COL+GEMM with a direct `GGML_OP_CONV_2D` kernel.
+
+Benchmark scripts: `inst/examples/benchmark_onnx.R`, `inst/examples/profile_onnx_superres_gpu.R`
 
 ## GPU Acceleration
 
@@ -719,6 +723,7 @@ Supported GPUs: NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno.
 - **Vulkan 1.2** — uses legacy pipeline barriers (Synchronization2 avoided due to RADV performance regression on AMD)
 - **Push Descriptors** (`VK_KHR_push_descriptor`) — when available, descriptors are pushed directly into the command buffer, eliminating descriptor pool allocation overhead. Falls back to descriptor pools on older hardware.
 - **Q4_K flash attention** — `GGML_OP_FLASH_ATTN_EXT` with Q4_K key/value tensors now runs fully on GPU (FA_SCALAR and FA_COOPMAT1 paths). Previously Q4_K attention fell back to CPU. Relevant for llamaR with quantized LLMs on AMD/Intel GPU (KHR cooperative matrix).
+- **Subgroup-shuffle mmq** (`USE_SUBGROUP_NO_SHMEM`) — on wavefront-64 devices (RDNA4, subgroup_size=64) Q4_K / Q5_K / Q6_K weight tiles are loaded directly into registers via `subgroupShuffle`, eliminating the shared-memory staging round-trip. ~10-15% token-generation throughput gain on LLaMA 3.x models.
 
 ## System Requirements
 

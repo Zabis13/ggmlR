@@ -17,7 +17,7 @@
 
 ### Концепция API
 
-Один ядро-тип модели (`ggml_model`) с backend-полем (cpu, vulkan, sched).
+Один ядро-тип модели (`ggml_model`) с backend-полем (cpu, vulkan).
 Над ним: Functional API для создания, ONNX/GGUF загрузчики для импорта,
 keras-совместимый compile/fit/predict, deployment-helpers.
 
@@ -124,6 +124,19 @@ pred <- predict(onnx, x)
     - Spec constants для CM path: WG_SIZE=256, BS_K=64, BS_NPQ=64, BS_CRS=16
   - **Шаг 4 — тест**: `test-flash-attn-q4k.R` как шаблон; benchmark в `test_vae_f16.R`
 - [ ] **Vulkan profiling API на R уровне** — экспортировать `vk_perf_logger` из `ggml-vulkan.cpp` в R через `.Call()`, чтобы видеть breakdown по операциям (мс на каждый op/fusion). Нужно для диагностики bottleneck'ов в sd2R sampling loop (552s на Flux). В ggml уже есть `vk_perf_logger_enabled` и timestamp queries — нужен R-интерфейс для включения/чтения результатов.
+- [x] **Subgroup shuffle деквантование — Вариант 2 (Q4_K/Q5_K/Q6_K)** — `block_a_to_registers_shuffle()` в `mul_mmq_funcs.glsl`, `USE_SUBGROUP_NO_SHMEM` путь в `mul_mmq.comp`, новый pipeline `pipeline_dequant_mul_mat_mat_q8_1_no_shmem` в `ggml-vulkan.cpp`. Активен на wavefront-64 (RDNA4, subgroup_size=64). Выпущен в 0.7.3.
+- [ ] **Subgroup shuffle деквантование — Вариант 3 (все типы)** — расширение варианта 2 (Q4_K/Q5_K/Q6_K) на стандартные quants (Q4_0, Q5_0, Q8_0). Основная сложность: BLOCK_SIZE=256 > gl_SubgroupSize=64 → нужен multi-pass shuffle (4 прохода × 64) или partial shuffle + shmem для остатка.
+  - `mul_mmq_funcs.glsl`: `block_a_to_registers_shuffle()` для Q4_0/Q5_0/Q8_0; `block_b_to_registers_shuffle()` (B-сторона тоже через shmem)
+  - `mul_mmq.comp`: расширить `#ifdef USE_SUBGROUP_NO_SHMEM` на все типы; убрать `barrier()` в shuffle-пути
+  - `ggml-vulkan.cpp`: `CREATE_MMQ` для `pipeline_dequant_mul_mat_mat_q8_1[Q4_0/Q5_0/Q8_0]` с `_no_shmem` суффиксом; дублировать `.f32acc` вариант
+  - `vulkan-shaders-gen.cpp` / `CMakeLists.txt`: зарегистрировать новые `_no_shmem` шейдеры
+  - Тест: `test-vulkan.R` — сравнение CPU vs GPU output для Q4_0/Q8_0 matmul
+- [ ] **Async Compute (Vulkan dual-queue)** — перекрытие transfer и compute через второй VkQueue. Цель: убрать pipeline "пузыри" когда compute блоки ждут планировщика команд. Сейчас все команды идут в один VkQueue.
+  - `ggml-vulkan.cpp`: создать второй VkQueue (`compute_queue` + `transfer_queue`) при инициализации устройства, если `queueFamilyProperties` позволяет
+  - Добавить `VkSemaphore` для синхронизации между transfer и compute очередями
+  - Переделать `ggml_vk_submit()`: DMA upload → `transfer_queue`, compute dispatch → `compute_queue`, барьер через семафор
+  - Протестировать на RX 9070 (RDNA4 имеет выделенный DMA engine)
+  - Риск: большая правка в `ggml-vulkan.cpp`, возможны регрессии в планировщике (`ggml_backend_sched`)
 
 ---
 
@@ -144,26 +157,7 @@ pred <- predict(onnx, x)
 
 ### ONNX ops — MVP subset для трансформеров и SD
 
-#### 1. Базовые тензорные операции
-- [x] Add, Sub, Mul, Div
-- [x] MatMul (пофикшен ggml_cont после transpose)
-- [x] Reshape, View (через Reshape+Identity)
-- [x] Transpose (пофикшен ggml_cont после permute)
-- [x] Concat
-- [x] Gather (через ggml_get_rows)
-- [x] Identity
-- [x] Slice (через ggml_view, step=1)
-- [x] Unsqueeze, Squeeze (реальная логика dims, opset < 13 атрибуты + opset 13+ inputs)
-- [x] Split (равные части + explicit sizes, multi-output)
-- [x] Expand (через ggml_repeat)
 
-#### 2. Нормализация и активации
-- [x] LayerNormalization (1D работает, 2D+ нужен broadcast scale/bias)
-- [x] RMSNormalization
-- [x] GroupNormalization
-- [x] BatchNormalization
-- [x] GELU, Relu, SiLU/Swish, Sigmoid, Tanh, Softmax
-- [x] LeakyRelu, Elu (CPU + Vulkan OK)
 
 #### 3. Attention / линейные блоки
 - [x] MatMul, Softmax, Reshape, Transpose, Mul — всё реализовано
@@ -171,29 +165,7 @@ pred <- predict(onnx, x)
 
 > ONNX-экспортеры обычно не делают FlashAttention op, а оставляют классический QK^T → Softmax → V — маппится на имеющиеся ggml-ops.
 
-#### 4. Convolution / UNet (для SD)
-- [x] Conv (1D/2D, с padding/stride/dilation + bias)
-- [x] Conv grouped (group>1: split+conv+concat, depthwise: ggml_conv_2d_dw)
-- [x] BatchNormalization
-- [x] GroupNormalization
-- [x] ConvTranspose (1D: stride/pad/dilation, 2D: stride + pad cropping)
 
-#### 5. Pooling / Upsampling
-- [x] MaxPool, AveragePool, GlobalAveragePool (+ ceil_mode, asymmetric padding)
-- [x] Upsample / Resize (nearest/bilinear через ggml_interpolate, scales + sizes)
-
-#### 6. Прочие реализованные ops
-- [x] Sqrt, Exp, Log, Abs, Neg, Floor, Ceil, Clip
-- [x] ReduceMean, ReduceSum
-- [x] Flatten, Dropout (pass-through)
-- [x] Constant (TensorProto value + value_float/value_int скаляры)
-- [x] Shape (deferred int32 fill после sched alloc)
-- [x] Cast (pass-through, keep f32)
-- [x] Erf (tanh approximation для GELU exact)
-- [x] Where (condition * X + (1-cond) * Y)
-- [x] ConstantOfShape (deferred fill)
-- [x] Pow (exp(b * log(a)))
-- [x] Pad (ggml_pad)
 
 #### 7. Random / Scheduler
 > Для SD денойзинг лупа (scheduler, генерация латентов) обычно вне ONNX, в хост-коде. ONNX-UNet получает готовые латенты и timestep. Оставить в R-логике (как в sd2R), ONNX-граф — чистый UNet/VAE/text encoder.
@@ -204,13 +176,6 @@ pred <- predict(onnx, x)
 - [x] Vulkan: 24/24 ops проходят
 
 #### Реальные модели (ONNX Model Zoo) — 13/15 OK
-- [x] mnist-8 — OK (12 nodes)
-- [x] squeezenet1.0-8 — OK (66 nodes: Conv, Relu, MaxPool, Concat, Dropout, GlobalAveragePool, Softmax)
-- [x] adv_inception_v3 (Opset 17, 18) — OK (215 nodes)
-- [x] super-resolution-10 — OK с input_shapes (Conv, Reshape+Constant, Transpose)
-- [x] bert (Opset 17) — OK (533 nodes: MatMul, LayerNorm, GELU/Erf, Softmax, Shape, Gather, Cast, Where, ConstantOfShape)
-- [x] emotion-ferplus-8 — OK (52 nodes: Conv, Relu, MaxPool, Gemm, Constant)
-- [x] bat_resnext26ts — OK (grouped conv, AdaptiveMaxPool baked as fixed kernel, input 256x256)
 - [x] gptneox (Opset 18) — OK с input_shapes (482 nodes: MatMul, LayerNorm, GELU, Softmax)
 - [x] botnet26t_256 — RelPosBias2D fused custom op (pre-pass scanner + ggml_map_custom3)
 - [x] roberta-9 — OK (ConstantOfShape INT64 fix: attention mask + position IDs теперь корректны)
@@ -229,48 +194,10 @@ pred <- predict(onnx, x)
 - [x] **Scalar Constant** — TensorProto с n_dims=0 (скаляры) теперь корректно создают 1-элементный тензор
 - [x] **Broadcast** — numpy-style broadcast для Add/Sub/Mul/Div: left-align, right-align, greedy dim-matching
 
-#### MVP + трансформеры — готов ✓
-Все базовые + трансформерные ops реализованы. 12/15 моделей из ONNX Zoo работают.
 
-#### Исправлено в 0.6.7
-- [x] **Native 5D tensor support** — `ggml_view_5d()`, `ggml_repeat_5d()` добавлены в ggml API. CPU repeat kernels (f32/f16) обновлены на 5D. Vulkan repeat: dim3×dim4 collapse в dispatch (push constants 128 байт, шейдеры без изменений).
-- [x] **ONNX pipeline 4D→5D** — ~20 мест в onnx_ggml.c обновлены: initializers, inputs, Constant, ConstantOfShape, broadcast, Softmax, Reshape, Slice, Split, Expand, Tile, Gather. Helpers: `onnx_reshape_nd()`, `onnx_new_tensor_nd()`, `ne_product()`. slice_fill arrays в onnx_ggml.h обновлены на `[GGML_MAX_DIMS]`.
-- [x] Buffer overflow в deferred arrays — shape_tensors_ne[64] переполнялся, введён ONNX_MAX_DEFERRED=512
-- [x] Transpose: инвертированная перестановка осей — ggml_permute ожидает src→dst, код строил dst→src
-- [x] Generic path ndims — введена out_nd переменная, handler выставляет ndims авторитетно (Transpose, MatMul)
-- [x] ConstantOfShape ndims — tmap_put_nd с правильным рангом
-- [x] Auto-cast I32→F32 в бинарных операторах (Add, Sub, Mul, Div)
-- [x] cval propagation для Add, Sub, Div, Unsqueeze, Gather(scalar), Constant(scalar), initializers(int64)
-- [x] Cast F32↔I32 через ggml_cast (был pass-through)
-- [x] Gather auto-cast indices F32→I32
-- [x] Shape op: сохранение batch dim=1 через max(tmap_ndims, ggml_n_dims)
-- [x] NonZero deferred fill после sched alloc
-- [x] ConstantOfShape cval fallback (Shape→Gather→Add→Div цепочки)
-- [x] Expand rank promotion (left-pad с 1s)
-- [x] Squeeze: использует tmap_get_ndims вместо hardcoded 4
-- [x] Gather на shape-тензорах: scalar element access вместо ggml_get_rows
-- [x] **ConstantOfShape INT64/INT32/DOUBLE** — value attribute теперь читается с учётом data_type (было: всегда float → мусор для INT64). Закрыло roberta-9 NaN.
-- [x] **Gather axis=0 на rank>2** — reshape 2D → get_rows → reshape back (было: assert fail на 4D)
-- [x] **ScatterElements** — новый GGML_OP_SCATTER_ELEMENTS: CPU kernel + Vulkan шейдер (atomicAdd для reduction=add)
-- **РЕГРЕССИЯ**: Transpose fix сломал MaskRCNN и xcit_tiny (нужна проверка)
 
-#### Исправлено в 0.6.6
-- [x] botnet26t_256 — RelPosBias2D fused custom op (pre-pass scanner + emit ggml_map_custom3)
-- [x] Pinned staging buffer для GPU input transfer (ggml_backend_vk_host_buffer_type)
-- [x] onnx_device_info() NULL guards (segfault fix)
 
-#### Исправлено в 0.6.5
-- [x] `ggml_predict()` с `stochastic=TRUE` dropout — `training=FALSE` теперь передаётся в `nn_build_graph`, маска не применяется при инференсе
-- [x] `ggml_evaluate()` возвращает `n_samples` + считает метрики на всех сэмплах без truncation
-- [x] Новый пример `titanic_classification.R` — бинарная классификация, ~82% val accuracy
 
-#### Исправлено в 0.6.x
-- [x] Conv grouped (group>1: split+conv+concat, depthwise: ggml_conv_2d_dw)
-- [x] MaxPool ceil_mode + asymmetric padding
-- [x] Concat axis mapping (GGML_MAX_DIMS для multi-dim, 1 для 1D shape tensors)
-- [x] Compile-time value propagation (cval) для Shape→Slice→Concat→Reshape chains
-- [x] TP_RAW_DATA protobuf field fix (field 9, не 13)
-- [x] detectCores() NA handling (Kaggle/cloud)
 
 #### Следующий этап — расширенная совместимость
 - [ ] **sageconv ScatterElements** — op реализован, но indices shape mismatch (2D indices нужен 1D extract)

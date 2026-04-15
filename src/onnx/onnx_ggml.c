@@ -2436,8 +2436,11 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             out = ggml_conv_1d(c->ctx, bk, a,
                                (int)strides[0], (int)pads[0], (int)dilations[0]);
         } else if (groups == 1) {
-            /* Standard 2D conv */
-            out = ggml_conv_2d(c->ctx, b, a,
+            /* Standard 2D conv — use direct kernel (GGML_OP_CONV_2D) instead of
+             * ggml_conv_2d (IM2COL + MUL_MAT) to avoid dispatch overhead on GPU.
+             * ggml_conv_2d_direct expects kernel [KW,KH,IC,OC] which matches
+             * the reversed-dims layout already applied to ONNX weights. */
+            out = ggml_conv_2d_direct(c->ctx, b, a,
                                (int)strides[1], (int)strides[0],
                                (int)pads[1], (int)pads[0],
                                (int)dilations[1], (int)dilations[0]);
@@ -2479,7 +2482,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                         b->ne[0], b->ne[1], b->ne[2], C_out_g,
                         b->nb[1], b->nb[2], b->nb[3], off_b);
 
-                    group_outs[g] = ggml_conv_2d(c->ctx, b_g, a_g,
+                    group_outs[g] = ggml_conv_2d_direct(c->ctx, b_g, a_g,
                         (int)strides[1], (int)strides[0],
                         (int)pads[1], (int)pads[0],
                         (int)dilations[1], (int)dilations[0]);
@@ -3218,7 +3221,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
             out = ggml_conv_1d(c->ctx, dwk, dx,
                                (int)strides[0], (int)pads[0], (int)dilations[0]);
         } else if (groups == 1) {
-            out = ggml_conv_2d(c->ctx, dw, dx,
+            out = ggml_conv_2d_direct(c->ctx, dw, dx,
                                (int)strides[1], (int)strides[0],
                                (int)pads[1], (int)pads[0],
                                (int)dilations[1], (int)dilations[0]);
@@ -3244,7 +3247,7 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
                     struct ggml_tensor *b_g = ggml_view_4d(c->ctx, dw,
                         dw->ne[0], dw->ne[1], dw->ne[2], C_out_g,
                         dw->nb[1], dw->nb[2], dw->nb[3], off_b);
-                    group_outs[g] = ggml_conv_2d(c->ctx, b_g, a_g,
+                    group_outs[g] = ggml_conv_2d_direct(c->ctx, b_g, a_g,
                         (int)strides[1], (int)strides[0],
                         (int)pads[1], (int)pads[0],
                         (int)dilations[1], (int)dilations[0]);

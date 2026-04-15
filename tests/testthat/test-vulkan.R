@@ -1,3 +1,5 @@
+library(ggmlR)
+
 test_that("ggml_vulkan_available returns logical", {
   result <- ggml_vulkan_available()
   expect_type(result, "logical")
@@ -255,30 +257,64 @@ if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
     ggml_free(ctx)
   })
 
-  test_that("Vulkan: Quantized tensor support Q4_0", {
-    skip("Quantization tests require special setup - tested in quantized matmul")
+  # -----------------------------------------------------------------------
+  # Subgroup-shuffle mmq pipeline: Q4_K / Q5_K / Q6_K
+  # Tests that the new USE_SUBGROUP_NO_SHMEM path (selected automatically
+  # on wavefront-64 devices) computes without crash and returns finite output.
+  # No CPU cross-check — just smoke: correct shape, no NaN/Inf.
+  # -----------------------------------------------------------------------
 
-    # Note: Direct quantization roundtrip testing is complex because:
-    # 1. ggml_cpy between types needs proper tensor setup
-    # 2. Quantization happens at backend level, not in compute graph
-    # 3. Better to test through actual operations (mul_mat) that use quantized tensors
+  for (qspec in list(c(GGML_TYPE_Q4_K, "Q4_K"),
+                     c(GGML_TYPE_Q5_K, "Q5_K"),
+                     c(GGML_TYPE_Q6_K, "Q6_K"))) {
+    local({
+      qt    <- as.integer(qspec[1])
+      qname <- qspec[2]
 
-    expect_true(TRUE)
-  })
+      test_that(paste("Vulkan: quantized matmul", qname, "(mmq shuffle path)"), {
+        skip_if_not(ggml_vulkan_available(),        "Vulkan not available")
+        skip_if_not(ggml_vulkan_device_count() > 0, "No Vulkan devices")
 
-  test_that("Vulkan: Quantized matrix multiplication Q4_0", {
-    skip("Quantized matmul requires proper quantization setup - verified through benchmarks")
+        caps <- ggml_vulkan_device_caps(0L)
+        skip_if_not(caps$integer_dot_product, "integer_dot_product not supported")
 
-    # Note: Q4_0 and other quantized formats require:
-    # 1. Proper quantization at tensor creation
-    # 2. Backend-specific buffer management
-    # 3. Dequantization shaders (dequant_q4_0.comp, mul_mat_vec_q4_0.comp)
-    #
-    # The Vulkan backend supports all quantization formats (Q4_0, Q8_0, etc.)
-    # and is tested through real model inference and benchmarks.
+        # Dimensions: K must be multiple of block size (256 for k-quants)
+        M <- 32L; N <- 32L; K <- 256L
 
-    expect_true(TRUE)
-  })
+        ctx <- ggml_init(mem_size = 32L * 1024L * 1024L)
+        ggml_set_no_alloc(ctx, TRUE)
+
+        w   <- ggml_new_tensor_2d(ctx, qt, K, M)
+        x   <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, N)
+        out <- ggml_mul_mat(ctx, w, x)
+
+        backend_vk <- ggml_vulkan_init(0L)
+        buffer_vk  <- ggml_backend_alloc_ctx_tensors(ctx, backend_vk)
+
+        ggml_backend_tensor_set_data(x, rnorm(K * N))
+        # Quantize F32 → raw bytes, pass directly to tensor
+        w_raw <- switch(qname,
+          Q4_K = quantize_row_q4_K_ref(rnorm(K * M), K * M),
+          Q5_K = quantize_row_q5_K_ref(rnorm(K * M), K * M),
+          Q6_K = quantize_row_q6_K_ref(rnorm(K * M), K * M)
+        )
+        ggml_backend_tensor_set_data(w, w_raw)
+
+        graph <- ggml_build_forward_expand(ctx, out)
+        expect_no_error(ggml_backend_graph_compute(backend_vk, graph))
+
+        result <- ggml_backend_tensor_get_data(out)
+
+        expect_length(result, M * N)
+        expect_false(any(is.nan(result)),      label = paste(qname, "no NaN"))
+        expect_false(any(is.infinite(result)), label = paste(qname, "no Inf"))
+
+        ggml_backend_buffer_free(buffer_vk)
+        ggml_vulkan_free(backend_vk)
+        ggml_free(ctx)
+      })
+    })
+  }
 
 } else {
   test_that("Vulkan functions handle unavailable state", {

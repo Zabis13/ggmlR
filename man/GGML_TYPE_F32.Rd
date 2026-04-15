@@ -7,11 +7,26 @@
 \alias{GGML_TYPE_Q4_0}
 \alias{GGML_TYPE_Q4_1}
 \alias{GGML_TYPE_Q8_0}
+\alias{GGML_TYPE_Q2_K}
+\alias{GGML_TYPE_Q3_K}
+\alias{GGML_TYPE_Q4_K}
+\alias{GGML_TYPE_Q5_K}
+\alias{GGML_TYPE_Q6_K}
 \alias{GGML_TYPE_I32}
 \alias{GGML_TYPE_BF16}
 \title{GGML Data Types}
 \format{
 Integer constants
+
+An object of class \code{integer} of length 1.
+
+An object of class \code{integer} of length 1.
+
+An object of class \code{integer} of length 1.
+
+An object of class \code{integer} of length 1.
+
+An object of class \code{integer} of length 1.
 
 An object of class \code{integer} of length 1.
 
@@ -35,6 +50,16 @@ GGML_TYPE_Q4_0
 GGML_TYPE_Q4_1
 
 GGML_TYPE_Q8_0
+
+GGML_TYPE_Q2_K
+
+GGML_TYPE_Q3_K
+
+GGML_TYPE_Q4_K
+
+GGML_TYPE_Q5_K
+
+GGML_TYPE_Q6_K
 
 GGML_TYPE_I32
 

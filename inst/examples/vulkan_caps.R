@@ -85,5 +85,20 @@ for (i in seq_len(n)) {
     cat("  WARN: FP32 only — slow, check driver/device support\n")
   }
 
+  # --- Subgroup-shuffle mmq pipeline ---
+  cat("\n  --- Subgroup-shuffle mmq (Q4_K/Q5_K/Q6_K) ---\n")
+  shuffle_ok <- caps$integer_dot_product && caps$subgroup_size >= 64L
+  if (shuffle_ok) {
+    cat(sprintf("  subgroup_no_shmem mmq : ACTIVE (subgroup_size=%d, Q4_K/Q5_K/Q6_K)\n",
+                caps$subgroup_size))
+  } else if (caps$integer_dot_product) {
+    cat(sprintf("  USE_SUBGROUP_NO_SHMEM: INACTIVE (subgroup_size=%d < 64)\n",
+                caps$subgroup_size))
+    cat("    Standard mmq path (shmem staging) used instead\n")
+  } else {
+    cat("  USE_SUBGROUP_NO_SHMEM: INACTIVE (integer_dot_product not supported)\n")
+    cat("    mmq path unavailable, using dequant+F32 matmul\n")
+  }
+
   cat("\n")
 }

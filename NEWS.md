@@ -1,3 +1,22 @@
+# ggmlR 0.7.4
+
+* **ONNX Conv**: replaced `ggml_conv_2d` (IM2COL+GEMM) with `ggml_conv_2d_direct` (`GGML_OP_CONV_2D`) in `onnx_ggml.c` — SuperResolution GPU time 344 ms → 5 ms (~70×).
+* **Vulkan softmax**: `wg512` pipeline threshold lowered from `>1024` to `>=512` — improves attention softmax at seq_len 512–1024.
+* **New examples**: `benchmark_ops.R` (36-op CPU/GPU micro-benchmark), `profile_onnx_superres_gpu.R` (GPU profiler for SuperResolution).
+
+# ggmlR 0.7.3
+
+## Vulkan: subgroup-shuffle mmq for Q4_K / Q5_K / Q6_K (wavefront-64 devices)
+
+* **`USE_SUBGROUP_NO_SHMEM` path added to `mul_mmq.comp`** — on wavefront-64 devices (RDNA4, subgroup_size=64) the `block_a` weight tile is loaded directly into registers via `subgroupShuffle` / `subgroupBroadcast`, eliminating the shared-memory round-trip in `block_a_to_shmem → block_a_to_registers`. Measured on RX 9070: Flux 768×768 sampling 22.38s → 20.80s (~7% end-to-end; sampling is not pure matmul so the gain on isolated Q4_K GEMM is higher).
+* **New device capability field `subgroup_no_shmem`** — `ggml_vulkan_device_caps()` now returns this flag (logical), indicating whether the shuffle mmq path is active.
+* **`GL_EXT_shader_subgroup_extended_types_float16`** added to `mul_mmq.comp` under `#ifdef USE_SUBGROUP_NO_SHMEM && FLOAT16` — required for `subgroupShuffle` on `float16_t` components of `f16vec2`.
+* **`ggml_vulkan_device_caps()` extended** — `wavefronts_per_simd` and `arch` fields added; all 14 fields now documented.
+* **New pipeline `pipeline_dequant_mul_mat_mat_q8_1_no_shmem`** — registered in device struct; selected at dispatch when `subgroup_size == 64` and src0 is Q4_K / Q5_K / Q6_K; falls back to standard mmq pipeline gracefully when not compiled.
+* **`GGML_TYPE_Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K` exported** — these constants were defined in `tensors.R` but missing from NAMESPACE; `roxygen2::roxygenise()` now includes them.
+* **`inst/examples/vulkan_caps.R` extended** — new section shows `USE_SUBGROUP_NO_SHMEM: ACTIVE/INACTIVE` with explanation of conditions.
+* **Tests** — `tests/testthat/test-vulkan.R` adds smoke tests for Q4_K / Q5_K / Q6_K quantized matmul via Vulkan (no NaN/Inf, correct shape); `test-vulkan-caps.R` asserts `integer_dot_product=TRUE` on RDNA4.
+
 # ggmlR 0.7.2
 
 ## Vulkan: RDNA4 (RX 9000) cooperative matrix support

@@ -346,6 +346,50 @@ void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
     }
 }
 
+#ifdef USE_SUBGROUP_NO_SHMEM
+// Q4_K/Q5_K: each lane reads its own qs directly from global memory,
+// dm is broadcast from lane 0 of each BM-row group via subgroupShuffle.
+// Requires BLOCK_SIZE <= gl_SubgroupSize (wavefront-64 on RDNA4).
+void block_a_to_registers_shuffle(const uint reg_ib, const uint ib, const uint row_in_wg) {
+    const uint ib_k   = ib / 8;
+    const uint iqs_k  = (ib % 8) * 8 + (gl_SubgroupInvocationID % (BK / LOAD_VEC_A)) * QUANT_R_MMQ;
+
+    const uint qs_idx   = (iqs_k / 16) * 8 + (iqs_k % 8);
+    const uint qs_shift = ((iqs_k % 16) / 8) * 4;
+
+    // Lane that holds dm for this BM-row (the lane with iqs==0 for that row)
+    const uint dm_lane = row_in_wg * (BK / LOAD_VEC_A);
+
+#if defined(DATA_A_Q4_K)
+    const uint32_t vals0 = (data_a_packed32[ib_k].qs[qs_idx    ] >> qs_shift) & 0x0F0F0F0F;
+    const uint32_t vals1 = (data_a_packed32[ib_k].qs[qs_idx + 1] >> qs_shift) & 0x0F0F0F0F;
+    cache_a[reg_ib].qs[gl_SubgroupInvocationID % (BK / LOAD_VEC_A)] = int32_t(vals0 | (vals1 << 4));
+#else // DATA_A_Q5_K
+    const uint qh_idx   = (gl_SubgroupInvocationID % (BK / LOAD_VEC_A)) * QUANT_R_MMQ;
+    const uint qh_shift = iqs_k / 8;
+    cache_a[reg_ib].qs[gl_SubgroupInvocationID % (BK / LOAD_VEC_A)] =
+        int32_t(((data_a_packed32[ib_k].qs[qs_idx] >> qs_shift) & 0x0F0F0F0F) |
+               (((data_a_packed32[ib_k].qh[qh_idx] >> qh_shift) & 0x01010101) << 4));
+#endif
+
+    // Read dm on lane 0 of this row, broadcast to all lanes in subgroup
+    FLOAT_TYPE_VEC2 dm_val;
+    if (gl_SubgroupInvocationID == dm_lane) {
+        const uint is = iqs_k / 8;
+        u8vec2 scale_dm;
+        if (is < 4) {
+            scale_dm = u8vec2(data_a[ib_k].scales[is] & 0x3F, data_a[ib_k].scales[is + 4] & 0x3F);
+        } else {
+            scale_dm = u8vec2((data_a[ib_k].scales[is+4] & 0xF) | ((data_a[ib_k].scales[is-4] & 0xC0) >> 2),
+                              (data_a[ib_k].scales[is+4] >>  4) | ((data_a[ib_k].scales[is  ] & 0xC0) >> 2));
+        }
+        dm_val = FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm) * FLOAT_TYPE_VEC2(scale_dm);
+    }
+    cache_a[reg_ib].dm.x = subgroupShuffle(dm_val.x, dm_lane);
+    cache_a[reg_ib].dm.y = subgroupShuffle(dm_val.y, dm_lane);
+}
+#endif
+
 ACC_TYPE mmq_dot_product(const uint ib_a) {
     int32_t q_sum = 0;
 
@@ -396,6 +440,39 @@ void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
         cache_a[reg_ib].qs[iqs] = buf_a[buf_ib].qs[iqs];
     }
 }
+
+#ifdef USE_SUBGROUP_NO_SHMEM
+// Q6_K: each lane reads its own qs directly from global memory.
+// d_scales is broadcast from lane 0 of each row via subgroupShuffle.
+// Requires BLOCK_SIZE <= gl_SubgroupSize (wavefront-64 on RDNA4).
+void block_a_to_registers_shuffle(const uint reg_ib, const uint ib, const uint row_in_wg) {
+    const uint ib_k  = ib / 8;
+    const uint iqs   = gl_SubgroupInvocationID % (BK / LOAD_VEC_A);
+    const uint iqs_k = (ib % 8) * 8 + iqs;
+
+    const uint ql_idx   = (iqs_k / 32) * 16 + iqs_k % 16;
+    const uint ql_shift = ((iqs_k % 32) / 16) * 4;
+    const uint qh_idx   = (iqs_k / 32) * 8 + iqs;
+    const uint qh_shift = ((iqs_k % 32) / 8) * 2;
+
+    const i8vec2 vals00 = (unpack8(int32_t((data_a_packed16[ib_k].ql[ql_idx * 2    ] >> ql_shift) & uint16_t(0x0F0F))).xy |
+                          unpack8(int32_t(((data_a_packed16[ib_k].qh[qh_idx * 2    ] >> qh_shift) & uint16_t(0x0303)) << 4)).xy) - int8_t(32);
+    const i8vec2 vals01 = (unpack8(int32_t((data_a_packed16[ib_k].ql[ql_idx * 2 + 1] >> ql_shift) & uint16_t(0x0F0F))).xy |
+                          unpack8(int32_t(((data_a_packed16[ib_k].qh[qh_idx * 2 + 1] >> qh_shift) & uint16_t(0x0303)) << 4)).xy) - int8_t(32);
+    cache_a[reg_ib].qs[iqs] = pack32(i8vec4(vals00.x, vals00.y, vals01.x, vals01.y));
+
+    // Read d_scales on lane 0 of this row, broadcast to all lanes in subgroup
+    const uint dm_lane = row_in_wg * (BK / LOAD_VEC_A);
+    FLOAT_TYPE_VEC2 ds_val;
+    if (gl_SubgroupInvocationID == dm_lane) {
+        const uint is       = iqs_k / 4;
+        const i8vec2 scales = unpack8(int32_t(data_a_packed16[ib_k].scales[is / 2])).xy;
+        ds_val = FLOAT_TYPE(data_a_packed16[ib_k].d) * FLOAT_TYPE_VEC2(scales);
+    }
+    cache_a[reg_ib].d_scales.x = subgroupShuffle(ds_val.x, dm_lane);
+    cache_a[reg_ib].d_scales.y = subgroupShuffle(ds_val.y, dm_lane);
+}
+#endif
 
 ACC_TYPE mmq_dot_product(const uint ib_a) {
     float result = 0.0;
