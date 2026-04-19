@@ -2022,6 +2022,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_solve_tri(params, tensor);
             } break;
+        case GGML_OP_REL_POS_BIAS:
+            {
+                ggml_compute_forward_rel_pos_bias(params, tensor);
+            } break;
+        case GGML_OP_CAST_NUMERIC:
+            {
+                ggml_compute_forward_cast_numeric(params, tensor);
+            } break;
         case GGML_OP_MAP_CUSTOM1:
             {
                 ggml_compute_forward_map_custom1(params, tensor);
@@ -2198,6 +2206,11 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ARGMAX:
             {
                 n_tasks = 1;
+            } break;
+        case GGML_OP_REL_POS_BIAS:
+        case GGML_OP_CAST_NUMERIC:
+            {
+                n_tasks = n_threads;
             } break;
         case GGML_OP_COUNT_EQUAL:
         case GGML_OP_SOLVE_TRI:

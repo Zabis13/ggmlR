@@ -9,15 +9,21 @@
 .pb_varint <- function(value) {
   value <- as.numeric(value)
   if (value < 0) {
-    # Protobuf encodes negative int as 10-byte two's complement uint64
-    # For small negatives: -1 → 0xFFFFFFFFFFFFFFFF, -2 → 0xFFFFFFFFFFFFFFFE
+    # Protobuf encodes negative sint as 10-byte two's complement uint64.
+    # Represent value mod 2^64 as two 32-bit halves to avoid int32 truncation.
+    lo <- value %% 2^32          # unsigned low 32 bits (as double)
+    hi <- (2^32 - 1)             # sign-extended: all 1s in bits 32-63
     bytes <- raw(10)
-    v <- value + 2^64  # two's complement
-    for (i in 1:9) {
-      bytes[i] <- as.raw(bitwOr(as.integer(v %% 128), 0x80L))
-      v <- floor(v / 128)
+    for (i in 1:10) {
+      if (i <= 5) {
+        b <- as.integer(lo %% 128)
+        lo <- floor(lo / 128)
+      } else {
+        b <- as.integer(hi %% 128)
+        hi <- floor(hi / 128)
+      }
+      bytes[i] <- as.raw(if (i < 10) bitwOr(b, 0x80L) else b)
     }
-    bytes[10] <- as.raw(as.integer(v %% 128))  # last byte, no continuation
     return(bytes)
   }
   bytes <- raw(0)
@@ -62,9 +68,31 @@
   writeBin(as.double(x), raw(), size = 4)
 }
 
-# Encode int64 as 8 bytes (little-endian)
+# Encode int64 as 8 bytes (little-endian).
+# writeBin with numeric writes IEEE 754 double, not int64 — must split manually.
+# Supports values in [-2^31, 2^31-1] (sufficient for all shape/axis values).
+# Encode value as 8-byte little-endian int64.
+# writeBin with numeric always writes IEEE 754, never raw int — decompose manually.
+# Handles negative via sign-extension: high 4 bytes = 0xFFFFFFFF for x < 0.
 .int64_bytes <- function(x) {
-  writeBin(as.integer(x), raw(), size = 8, endian = "little")
+  x <- as.numeric(x)
+  bytes <- raw(8)
+  if (x >= 0) {
+    for (i in 1:8) {
+      bytes[i] <- as.raw(as.integer(x %% 256))
+      x <- floor(x / 256)
+    }
+  } else {
+    # two's complement: low 4 bytes from abs(x), high 4 = 0xff
+    # For shape values, x is always >= -2^31, so lo fits in int32
+    lo <- as.integer(x)  # R integer is 32-bit signed — fine for -1, -2, etc.
+    for (i in 1:4) {
+      bytes[i] <- as.raw(bitwAnd(lo, 0xFFL))
+      lo <- bitwShiftR(lo, 8L)
+    }
+    for (i in 5:8) bytes[i] <- as.raw(0xffL)
+  }
+  bytes
 }
 
 # ── ONNX protobuf message builders ──────────────────────────────
@@ -220,10 +248,10 @@
 # Create a simple binary op model: (A, B) → op → Y
 .onnx_make_binary <- function(op_type, dims_a = c(1L, 4L),
                                dims_b = dims_a, elem_type = 1L,
-                               attrs = list()) {
+                               dims_out = dims_a, attrs = list()) {
   inp_a <- .onnx_value_info("A", elem_type, dims_a)
   inp_b <- .onnx_value_info("B", elem_type, dims_b)
-  outp  <- .onnx_value_info("Y", elem_type, dims_a)
+  outp  <- .onnx_value_info("Y", elem_type, dims_out)
   node  <- .onnx_node(op_type, c("A", "B"), "Y", attrs = attrs)
   graph <- .onnx_graph("test", list(node), list(inp_a, inp_b), list(outp))
   model <- .onnx_model(graph)
@@ -269,8 +297,8 @@
   # Bias C as initializer
   if (!is.null(bias_data)) {
     c_raw <- unlist(lapply(bias_data, .float_bytes))
-    c_tensor <- .onnx_tensor("C", N, 1L, c_raw)
-    c_vi <- .onnx_value_info("C", 1L, N)
+    c_tensor <- .onnx_tensor("C", c(N), 1L, c_raw)
+    c_vi <- .onnx_value_info("C", 1L, c(N))
     inits <- c(inits, list(c_tensor))
     graph_inputs <- c(graph_inputs, list(c_vi))
   }
@@ -342,8 +370,8 @@
     shape_raw <- c(shape_raw, writeBin(as.integer(d), raw(), size = 8,
                                         endian = "little"))
   }
-  shape_tensor <- .onnx_tensor("shape", length(output_dims), 7L, shape_raw)
-  shape_vi <- .onnx_value_info("shape", 7L, length(output_dims))
+  shape_tensor <- .onnx_tensor("shape", c(length(output_dims)), 7L, shape_raw)
+  shape_vi <- .onnx_value_info("shape", 7L, c(length(output_dims)))
 
   # Resolve -1 and 0 for output value_info (protobuf can't encode negative varints)
   resolved <- output_dims

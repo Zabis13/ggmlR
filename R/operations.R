@@ -3234,6 +3234,29 @@ ggml_conv_2d <- function(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L, d0 = 1L,
         PACKAGE = "ggmlR")
 }
 
+#' Direct 2D Convolution (Graph)
+#'
+#' Applies 2D convolution using the direct algorithm (no im2col).
+#'
+#' @param ctx GGML context
+#' @param a Convolution kernel tensor
+#' @param b Input data tensor
+#' @param s0 Stride dimension 0 (default 1)
+#' @param s1 Stride dimension 1 (default 1)
+#' @param p0 Padding dimension 0 (default 0)
+#' @param p1 Padding dimension 1 (default 0)
+#' @param d0 Dilation dimension 0 (default 1)
+#' @param d1 Dilation dimension 1 (default 1)
+#' @return Convolved tensor
+#' @export
+ggml_conv_2d_direct <- function(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L, d0 = 1L, d1 = 1L) {
+  .Call("R_ggml_conv_2d_direct", ctx, a, b,
+        as.integer(s0), as.integer(s1),
+        as.integer(p0), as.integer(p1),
+        as.integer(d0), as.integer(d1),
+        PACKAGE = "ggmlR")
+}
+
 #' Transposed 1D Convolution (Graph)
 #'
 #' Applies transposed 1D convolution (deconvolution) to input data.

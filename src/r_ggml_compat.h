@@ -93,6 +93,8 @@ R_GGML_NORETURN
 void r_ggml_abort(const char *file, int line, const char *msg);
 R_GGML_NORETURN
 void r_ggml_exit(int status);
+R_GGML_FORMAT_PRINTF(1, 2) R_GGML_NORETURN
+void r_ggml_error(const char *format, ...);
 
 #ifdef __cplusplus
 }
@@ -103,13 +105,15 @@ void r_ggml_exit(int status);
  * Note: These redefine standard library functions to use our R-safe wrappers
  */
 
-/* Redirect stderr/stdout to NULL so their symbols don't appear in the .so.
- * Our wrapper functions (r_ggml_fprintf, r_ggml_fputs, r_ggml_fflush) all
- * ignore the stream argument and route to REprintf/Rprintf instead. */
+/* Redirect stderr/stdout to a non-NULL sentinel so GCC's nonnull attribute
+ * on fprintf/fputs/fflush does not fire. Our wrapper functions ignore the
+ * stream argument entirely and route to REprintf/Rprintf instead. */
+extern FILE * r_ggml_stderr_sentinel;
+extern FILE * r_ggml_stdout_sentinel;
 #undef stderr
-#define stderr NULL
+#define stderr r_ggml_stderr_sentinel
 #undef stdout
-#define stdout NULL
+#define stdout r_ggml_stdout_sentinel
 
 /* I/O redirections */
 #undef fprintf

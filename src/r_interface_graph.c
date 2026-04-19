@@ -3065,6 +3065,34 @@ SEXP R_ggml_conv_2d(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+SEXP R_ggml_conv_2d_direct(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                           SEXP s0_sexp, SEXP s1_sexp,
+                           SEXP p0_sexp, SEXP p1_sexp,
+                           SEXP d0_sexp, SEXP d1_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+
+    int s0 = asInteger(s0_sexp);
+    int s1 = asInteger(s1_sexp);
+    int p0 = asInteger(p0_sexp);
+    int p1 = asInteger(p1_sexp);
+    int d0 = asInteger(d0_sexp);
+    int d1 = asInteger(d1_sexp);
+
+    struct ggml_tensor * result = ggml_conv_2d_direct(ctx, a, b, s0, s1, p0, p1, d0, d1);
+
+    if (result == NULL) {
+        error("Failed to create conv_2d_direct operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // Transposed 1D Convolution
 SEXP R_ggml_conv_transpose_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                                SEXP s0_sexp, SEXP p0_sexp, SEXP d0_sexp) {

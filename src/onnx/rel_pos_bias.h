@@ -24,6 +24,9 @@ typedef struct {
     int C;          /* channel dim */
     int rel_h;      /* 2*H-1 */
     int rel_w;      /* 2*W-1 */
+    /* CPU-side copies of W_h and W_w weights (needed when weights live on GPU) */
+    float *w_cpu;   /* concat(W_h, W_w): [(rel_h+rel_w) * C] floats, col-major */
+    int    w_cpu_stride; /* rel_h + rel_w */
 } rel_pos_bias_params_t;
 
 /* CPU callback for ggml_map_custom3.

@@ -1,0 +1,63 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+/* push_constants: H, W, B (heads/batch), C, rel_h (=2*H-1) */
+layout(push_constant) uniform Params {
+    uint H;
+    uint W;
+    uint B;
+    uint C;
+    uint rel_h;   /* 2*H-1 */
+    uint rel_w;   /* 2*W-1; rel_h + rel_w = W-stride of weight table */
+} p;
+
+/* src0 = x:    [C, H*W, B]  (ggml col-major = ONNX [B, H*W, C]) */
+layout(binding = 0) readonly buffer SrcX { float data_x[]; };
+
+/* src1 = wcat: [rel_h+rel_w, C]  (col-major = ONNX [C, rel_h+rel_w]) */
+layout(binding = 1) readonly buffer SrcW { float data_w[]; };
+
+/* dst:         [H*W, H*W, B]  (col-major = ONNX [B, H*W, H*W]) */
+layout(binding = 2) writeonly buffer Dst { float data_dst[]; };
+
+void main() {
+    /* Each thread computes one output element: (wk, hk, b) dispatched over
+     * (wq*hq) outer loop. Dispatch: x=wk, y=hk, z=b*HW+q_idx */
+    const uint wk   = gl_GlobalInvocationID.x;
+    const uint hk   = gl_GlobalInvocationID.y;
+    const uint bq   = gl_GlobalInvocationID.z;  /* b * HW + q_idx */
+
+    const uint HW     = p.H * p.W;
+    const uint Wstride = p.rel_h + p.rel_w;
+
+    if (wk >= p.W || hk >= p.H || bq >= p.B * HW) return;
+
+    const uint b     = bq / HW;
+    const uint q_idx = bq % HW;
+    const uint hq    = q_idx / p.W;
+    const uint wq    = q_idx % p.W;
+
+    /* x[b, hq*W+wq, c]  for H-axis dot  — ggml offset: c + q_idx*C + b*C*HW */
+    /* x[b, wq*H+hq, c]  for W-axis dot  — ggml offset: c + (wq*H+hq)*C + b*C*HW */
+    const uint x_base_hw = b * p.C * HW + q_idx * p.C;
+    const uint x_base_wh = b * p.C * HW + (wq * p.H + hq) * p.C;
+
+    const uint r_h = hq - hk + p.H - 1;   /* relative height index */
+    const uint r_w = wq - wk + p.W - 1;   /* relative width  index */
+
+    /* dot(x_hw, W_h[:, r_h]):  W_h is first rel_h columns of wcat
+     * wcat layout: w[c * Wstride + r] */
+    float dot_h = 0.0;
+    float dot_w = 0.0;
+    for (uint ci = 0; ci < p.C; ci++) {
+        dot_h += data_x[x_base_hw + ci] * data_w[ci * Wstride + r_h];
+        dot_w += data_x[x_base_wh + ci] * data_w[ci * Wstride + p.rel_h + r_w];
+    }
+
+    const uint k_idx = hk * p.W + wk;
+    /* dst ggml [HW, HW, B]: dst[k_idx + q_idx*HW + b*HW*HW] */
+    data_dst[k_idx + q_idx * HW + b * HW * HW] = dot_h + dot_w;
+}

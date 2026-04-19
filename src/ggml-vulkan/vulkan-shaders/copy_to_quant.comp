@@ -259,17 +259,17 @@ void main() {
         return;
     }
 
-    uint i00, i01, i02, i03;
-    get_indices(idx, i00, i01, i02, i03);
+    uint i00, i01, i02, i03, i04;
+    get_indices(idx, i00, i01, i02, i03, i04);
 
     uint i12 = fastmod(i03, p.ne12);
     uint i11 = fastmod(i02, p.ne11);
     uint i10 = i01;
 
-    uint i1 = data_i[src1_idx(i10, i11, i12, 0) + get_boffset()] DATA_I_SWIZZLE;
+    uint i1 = data_i[src1_idx(i10, i11, i12, 0, i04) + get_boffset()] DATA_I_SWIZZLE;
 
-    uint src0_idx = src0_idx(i00, i01, i02, i03) + get_aoffset();
-    uint dst_idx = dst_idx(i00 / QUANT_K, i1, i02, i03) + get_doffset();
+    uint src0_idx = src0_idx(i00, i01, i02, i03, i04) + get_aoffset();
+    uint dst_idx = dst_idx(i00 / QUANT_K, i1, i02, i03, i04) + get_doffset();
 
     quantize(dst_idx, src0_idx);
 }

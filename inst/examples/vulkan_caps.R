@@ -100,5 +100,17 @@ for (i in seq_len(n)) {
     cat("    mmq path unavailable, using dequant+F32 matmul\n")
   }
 
+  # --- Push constants ---
+  cat("\n  --- Push constants ---\n")
+  cat(sprintf("  maxPushConstantsSize   : %d bytes", caps$max_push_constants_size))
+  cat("   (Vulkan spec minimum: 128; ggmlR requires 256 for 5D ops)\n")
+  cat(sprintf("  supports_256_push_const: %s",
+              if (caps$supports_256_push_constants) "YES" else "NO"))
+  if (caps$supports_256_push_constants) {
+    cat("   (5D tensor ops fully supported)\n")
+  } else {
+    cat("   (WARNING: 5D ops will error at runtime — update driver)\n")
+  }
+
   cat("\n")
 }

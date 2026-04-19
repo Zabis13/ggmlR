@@ -553,6 +553,8 @@ extern "C" {
         GGML_OP_GATED_LINEAR_ATTN,
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
+        GGML_OP_REL_POS_BIAS,
+        GGML_OP_CAST_NUMERIC,
 
         GGML_OP_UNARY,
 
@@ -1526,6 +1528,13 @@ extern "C" {
 
     // note: casting from f32 to i32 will discard the fractional part
     GGML_API struct ggml_tensor * ggml_cast(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            enum   ggml_type      type);
+
+    // numeric type conversion (truncate/round, not bitwise reinterpret)
+    // supports F32<->I32, F32<->I16, F32<->I8, F16<->F32, BF16<->F32
+    GGML_API struct ggml_tensor * ggml_cast_numeric(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             enum   ggml_type      type);
@@ -2517,6 +2526,17 @@ extern "C" {
         bool                  left,
         bool                  lower,
         bool                  uni);
+
+    /* 2D Relative Position Bias (BoTNet-style).
+     * x:    [C, H*W, B]  — query/key features (col-major)
+     * wcat: [rel_h+rel_w, C]  — concat(W_h, W_w) weight table (col-major)
+     * H, W: spatial dims; returns [H*W, H*W, B] bias matrix. */
+    GGML_API struct ggml_tensor * ggml_rel_pos_bias(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * wcat,
+        int                   H,
+        int                   W);
 
     // custom operators
 

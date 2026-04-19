@@ -107,6 +107,7 @@ typedef struct {
         int    first_node_idx;                  /* index of first node in block */
         int    last_node_idx;                   /* index of last node (final Reshape) */
         rel_pos_bias_params_t params;           /* H, W, B, C, rel_h, rel_w */
+        struct ggml_tensor *x_cpu_tensor;       /* ggml_cont copy of x — pinned to CPU */
     } pos_embed_blocks[ONNX_MAX_POS_EMBED];
     int n_pos_embed_blocks;
 

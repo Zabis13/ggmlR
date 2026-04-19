@@ -6,7 +6,6 @@
 
 library(ggmlR)
 library(mlr3)
-library(mlr3pipelines)
 
 ggmlR:::.register_mlr3()
 
@@ -24,7 +23,7 @@ run_classif <- function(backend) {
     verbose       = 0,
     predict_type  = "prob"
   )
-  pipe <- as_learner(po("scale") %>>% learner)
+  pipe <- learner
   split <- partition(task, ratio = 0.8)
 
   elapsed <- system.time({
@@ -49,7 +48,7 @@ run_regr <- function(backend) {
     optimizer     = "adam",
     backend       = backend
   )
-  pipe <- as_learner(po("scale") %>>% learner)
+  pipe <- learner
   split <- partition(task, ratio = 0.8)
 
   elapsed <- system.time({
@@ -95,7 +94,7 @@ task <- tsk("iris")
 learner <- lrn("classif.ggml",
   epochs = 200, batch_size = 16, backend = "cpu", verbose = 0
 )
-pipe <- as_learner(po("scale") %>>% learner)
+pipe <- learner
 elapsed_cv <- system.time(
   rr <- resample(task, pipe, rsmp("cv", folds = 3))
 )[["elapsed"]]

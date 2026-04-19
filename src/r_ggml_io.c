@@ -25,6 +25,11 @@
 #include <Rinternals.h>
 #include <R_ext/Print.h>
 
+/* Non-NULL sentinels for stderr/stdout — the actual pointer value is never
+ * dereferenced; our wrappers ignore the stream argument entirely. */
+FILE * r_ggml_stderr_sentinel = (FILE *)1;
+FILE * r_ggml_stdout_sentinel = (FILE *)1;
+
 /*
  * fprintf replacement
  * Redirects all output to R's error stream (REprintf) for safety
@@ -110,5 +115,18 @@ void r_ggml_abort(const char *file, int line, const char *msg) {
 void r_ggml_exit(int status) {
     Rf_error("ggml: exit called with status %d", status);
     /* Rf_error never returns */
+    while(1) {}
+}
+
+/*
+ * User-facing error — R-catchable via tryCatch(), unlike abort().
+ */
+void r_ggml_error(const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    char buf[512];
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    Rf_error("%s", buf);
     while(1) {}
 }

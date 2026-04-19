@@ -197,6 +197,7 @@ test_that("chain classify: batch=2, 1x1 spatial (boundary)", {
 
   x <- c(3.0, -1.0)  # batch of 2, one pixel each
   result <- run_onnx(path, list(X = x))
+
   r <- as.numeric(result)
 
   expect_equal(length(r), 6)  # 2 batches x 3 classes

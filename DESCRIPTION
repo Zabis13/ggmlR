@@ -42,24 +42,19 @@ Encoding: UTF-8
 SystemRequirements: C++17, GNU make, libvulkan-dev, glslc (optional, for
     GPU on Linux), 'Vulkan' 'SDK' (optional, for GPU on Windows)
 Suggests:
-    Rcpp,
     testthat (>= 3.0.0),
     mlr3 (>= 0.21.0),
     paradox,
     R6,
-    checkmate,
     digest,
-    mlr3pipelines,
     parsnip,
     tibble,
     rlang,
     dials,
     lgr,
     knitr,
-    rmarkdown,
-    rpart,
-    future
-VignetteBuilder: knitr, rmarkdown, Rcpp
+    rmarkdown
+VignetteBuilder: knitr, rmarkdown
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3
 Config/build/clean-inst-doc: false

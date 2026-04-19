@@ -53,18 +53,25 @@ PKG_LIBS = $(OPENMP_CXXFLAGS) $(VULKAN_LIBS) -lpthread -lm
 # GGML library objects (for static library export)
 GGML_OBJECTS = \
   r_ggml_io.o \
-  ggml.o ggml-alloc.o ggml-quants.o ggml-opt.o gguf.o \
+  ggml-private.o \
+  ggml-alloc.o \
+  ggml-quants-legacy.o ggml-quants-iq.o ggml-quants-validate.o \
+  ggml-opt.o gguf.o \
   ggml-backend.o ggml-backend-reg.o ggml-threading.o \
   ggml-cpu/traits.o \
   ggml-cpu/ggml-cpu-backend.o ggml-cpu/ggml-cpu.o \
-  ggml-cpu/ops.o ggml-cpu/vec.o \
+  ggml-cpu/ops-private.o \
+  ggml-cpu/vec.o \
   ggml-cpu/binary-ops.o ggml-cpu/unary-ops.o ggml-cpu/repack.o \
   ggml-cpu/quants.o ggml-cpu/hbm.o \
   @X86_OBJECTS@
 
 # ONNX loader objects
 ONNX_OBJECTS = \
-  onnx/onnx_loader.o onnx/onnx_ggml.o onnx/r_onnx.o onnx/rel_pos_bias.o onnx/roi_align.o onnx/nms.o
+  onnx/onnx_loader.o onnx/onnx_ggml.o \
+  onnx/onnx_ops_basic.o onnx/onnx_ops_tensor.o onnx/onnx_ops_nn.o \
+  onnx/onnx_ops_quant.o onnx/onnx_ops_special.o \
+  onnx/r_onnx.o onnx/rel_pos_bias.o onnx/roi_align.o onnx/nms.o
 
 # R interface objects
 R_INTERFACE_OBJECTS = \
@@ -86,6 +93,7 @@ $(SHLIB): $(OBJECTS) staticlib
 
 staticlib: $(GGML_OBJECTS)
 	mkdir -p ../inst/lib
+	rm -f ../inst/lib/$(STATICLIB)
 	$(AR) rcs ../inst/lib/$(STATICLIB) $(GGML_OBJECTS)
 	strip --strip-debug ../inst/lib/$(STATICLIB) 2>/dev/null || true
 
@@ -105,6 +113,9 @@ r_interface_opt.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_backend.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_quants.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_gguf.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
-# ONNX files: r_onnx.c includes R headers, onnx_ggml.c uses fprintf for warnings
+# ONNX files: only r_onnx.c includes R headers directly (needs R_GGML_IO_IMPL to
+# suppress macro redirections that conflict with R's format attributes).
+# All other onnx files use plain C stdio — the -include r_ggml_compat.h flag
+# redirects their fprintf/stderr to REprintf automatically.
 onnx/r_onnx.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
-# onnx/onnx_ggml.o: PKG_CFLAGS += -DONNX_NAN_DEBUG -DR_GGML_IO_IMPL
+

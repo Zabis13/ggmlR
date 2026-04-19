@@ -48,18 +48,24 @@ PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS) $(VULKAN_LIBS)
 # GGML library objects (for static library export)
 GGML_OBJECTS = \
   r_ggml_io.o \
-  ggml.o ggml-alloc.o ggml-quants.o ggml-opt.o gguf.o \
+  ggml-private.o \
+  ggml-alloc.o \
+  ggml-quants-legacy.o ggml-quants-iq.o ggml-quants-validate.o \
+  ggml-opt.o gguf.o \
   ggml-backend.o ggml-backend-reg.o ggml-threading.o \
   ggml-cpu/traits.o \
   ggml-cpu/ggml-cpu-backend.o ggml-cpu/ggml-cpu.o \
-  ggml-cpu/ops.o ggml-cpu/vec.o \
+  ggml-cpu/ops-private.o ggml-cpu/vec.o \
   ggml-cpu/binary-ops.o ggml-cpu/unary-ops.o ggml-cpu/repack.o \
   ggml-cpu/quants.o ggml-cpu/hbm.o \
   ggml-cpu/arch/x86/cpu-feats.o ggml-cpu/arch/x86/quants.o ggml-cpu/arch/x86/repack.o
 
 # ONNX loader objects
 ONNX_OBJECTS = \
-  onnx/onnx_loader.o onnx/onnx_ggml.o onnx/r_onnx.o onnx/rel_pos_bias.o onnx/roi_align.o onnx/nms.o
+  onnx/onnx_loader.o onnx/onnx_ggml.o \
+  onnx/onnx_ops_basic.o onnx/onnx_ops_tensor.o onnx/onnx_ops_nn.o \
+  onnx/onnx_ops_quant.o onnx/onnx_ops_special.o \
+  onnx/r_onnx.o onnx/rel_pos_bias.o onnx/roi_align.o onnx/nms.o
 
 # R interface objects
 R_INTERFACE_OBJECTS = \
@@ -82,6 +88,7 @@ $(SHLIB): $(OBJECTS) staticlib
 
 staticlib: $(GGML_OBJECTS)
 	mkdir -p ../inst/lib
+	rm -f ../inst/lib/$(STATICLIB)
 	$(AR) rcs ../inst/lib/$(STATICLIB) $(GGML_OBJECTS)
 	strip --strip-debug ../inst/lib/$(STATICLIB) 2>/dev/null || true
 

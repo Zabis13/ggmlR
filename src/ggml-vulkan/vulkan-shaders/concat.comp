@@ -13,21 +13,30 @@ void main() {
         return;
     }
 
-    const uint i3 = idx / (p.ne22*p.ne21*p.ne20);
-    const uint i3_offset = i3 * p.ne22*p.ne21*p.ne20;
-    const uint i2 = (idx - i3_offset) / (p.ne21*p.ne20);
-    const uint i2_offset = i2*p.ne21*p.ne20;
-    const uint i1 = (idx - i3_offset - i2_offset) / p.ne20;
-    const uint i0 = idx - i3_offset - i2_offset - i1*p.ne20;
+    // Decompose flat dst index into 5D coords using dst shape (ne20..ne24)
+    const uint vol4d = p.ne23*p.ne22*p.ne21*p.ne20;
+    const uint i4 = idx / vol4d;
+    const uint rem4 = idx - i4*vol4d;
+    const uint i3 = rem4 / (p.ne22*p.ne21*p.ne20);
+    const uint rem3 = rem4 - i3*(p.ne22*p.ne21*p.ne20);
+    const uint i2 = rem3 / (p.ne21*p.ne20);
+    const uint rem2 = rem3 - i2*(p.ne21*p.ne20);
+    const uint i1 = rem2 / p.ne20;
+    const uint i0 = rem2 - i1*p.ne20;
 
-    uint o[4] = {0, 0, 0, 0};
-    o[dim] = dim == 0 ? p.ne00 : (dim == 1 ? p.ne01 : (dim == 2 ? p.ne02 : p.ne03));
+    // For each dim, offset into src1 starts after src0's extent in that dim
+    uint o[5] = {0, 0, 0, 0, 0};
+    if (dim == 0)      o[0] = p.ne00;
+    else if (dim == 1) o[1] = p.ne01;
+    else if (dim == 2) o[2] = p.ne02;
+    else if (dim == 3) o[3] = p.ne03;
+    else               o[4] = p.ne04;
 
-    const uint src0_idx = i3*p.nb03 + i2*p.nb02 + i1*p.nb01 + i0*p.nb00;
-    const uint src1_idx = (i3 - o[3])*p.nb13 + (i2 - o[2])*p.nb12 + (i1 - o[1])*p.nb11 + (i0 - o[0])*p.nb10;
-    const uint dst_idx = i3*p.nb23 + i2*p.nb22 + i1*p.nb21 + i0*p.nb20;
+    const bool is_src0 = i0 < p.ne00 && i1 < p.ne01 && i2 < p.ne02 && i3 < p.ne03 && i4 < p.ne04;
 
-    const bool is_src0 = i0 < p.ne00 && i1 < p.ne01 && i2 < p.ne02 && i3 < p.ne03;
+    const uint src0_idx = i4*p.nb04 + i3*p.nb03 + i2*p.nb02 + i1*p.nb01 + i0*p.nb00;
+    const uint src1_idx = (i4-o[4])*p.nb14 + (i3-o[3])*p.nb13 + (i2-o[2])*p.nb12 + (i1-o[1])*p.nb11 + (i0-o[0])*p.nb10;
+    const uint dst_idx  = i4*p.nb24 + i3*p.nb23 + i2*p.nb22 + i1*p.nb21 + i0*p.nb20;
 
 #ifndef OPTIMIZATION_ERROR_WORKAROUND
     data_d[get_doffset() + dst_idx] = D_TYPE(is_src0 ? data_a[get_aoffset() + src0_idx] : data_b[get_boffset() + src1_idx]);

@@ -1,0 +1,5 @@
+#include "ggml-vulkan-shaders.cpp"
+#include "ggml-vulkan-misc.cpp"
+#include "ggml-vulkan-matmul.cpp"
+#include "ggml-vulkan-attn.cpp"
+#include "ggml-vulkan-elemwise.cpp"

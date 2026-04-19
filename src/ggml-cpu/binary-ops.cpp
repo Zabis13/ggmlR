@@ -81,18 +81,27 @@ static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * ds
     }
 #endif
 
-    for (int64_t ir = ir0; ir < ir1; ++ir) {
-        const int64_t i03 = ir/(ne02*ne01);
-        const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
-        const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+    const int64_t ne04 = src0->ne[4];
+    const int64_t ne14 = src1->ne[4];
+    const size_t  nb04 = src0->nb[4];
+    const size_t  nb14 = src1->nb[4];
+    const size_t  nb4  = dst->nb[4];
 
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i04 = ir/(ne03*ne02*ne01);
+        const int64_t rem3 = ir - i04*ne03*ne02*ne01;
+        const int64_t i03 = rem3/(ne02*ne01);
+        const int64_t i02 = (rem3 - i03*ne02*ne01)/ne01;
+        const int64_t i01 = (rem3 - i03*ne02*ne01 - i02*ne01);
+
+        const int64_t i14 = i04 % ne14;
         const int64_t i13 = i03 % ne13;
         const int64_t i12 = i02 % ne12;
         const int64_t i11 = i01 % ne11;
 
-        dst_t        * dst_ptr  = (dst_t  *)       ((char *)       dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
-        const src0_t * src0_ptr = (const src0_t *) ((const char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
-        const src1_t * src1_ptr = (const src1_t *) ((const char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
+        dst_t        * dst_ptr  = (dst_t  *)       ((char *)       dst->data  + i04*nb4  + i03*nb3  + i02*nb2  + i01*nb1 );
+        const src0_t * src0_ptr = (const src0_t *) ((const char *) src0->data + i04*nb04 + i03*nb03 + i02*nb02 + i01*nb01);
+        const src1_t * src1_ptr = (const src1_t *) ((const char *) src1->data + i14*nb14 + i13*nb13 + i12*nb12 + i11*nb11);
 
         if (is_src1_contiguous) {
             // src1 is broadcastable across src0 and dst in i1, i2, i3

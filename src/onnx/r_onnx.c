@@ -186,11 +186,28 @@ SEXP R_onnx_run(SEXP ctx_ptr_, SEXP input_names_, SEXP input_data_) {
         if (t) {
             int64_t nel = ggml_nelements(t);
             SEXP vec = PROTECT(Rf_allocVector(REALSXP, nel));
-            float *buf = (float *)R_alloc(nel, sizeof(float));
-            ggml_backend_tensor_get(t, buf, 0, nel * sizeof(float));
             double *rdata = REAL(vec);
-            for (int64_t j = 0; j < nel; j++) {
-                rdata[j] = (double)buf[j];
+            if (t->type == GGML_TYPE_I32) {
+                int32_t *ibuf = (int32_t *)R_alloc(nel, sizeof(int32_t));
+                ggml_backend_tensor_get(t, ibuf, 0, nel * sizeof(int32_t));
+                for (int64_t j = 0; j < nel; j++)
+                    rdata[j] = (double)ibuf[j];
+            } else if (t->type == GGML_TYPE_F16) {
+                ggml_fp16_t *hbuf = (ggml_fp16_t *)R_alloc(nel, sizeof(ggml_fp16_t));
+                ggml_backend_tensor_get(t, hbuf, 0, nel * sizeof(ggml_fp16_t));
+                for (int64_t j = 0; j < nel; j++)
+                    rdata[j] = (double)ggml_fp16_to_fp32(hbuf[j]);
+            } else if (t->type == GGML_TYPE_BF16) {
+                ggml_bf16_t *bbuf = (ggml_bf16_t *)R_alloc(nel, sizeof(ggml_bf16_t));
+                ggml_backend_tensor_get(t, bbuf, 0, nel * sizeof(ggml_bf16_t));
+                for (int64_t j = 0; j < nel; j++)
+                    rdata[j] = (double)ggml_bf16_to_fp32(bbuf[j]);
+            } else {
+                /* F32 and all other types — read as float */
+                float *buf = (float *)R_alloc(nel, sizeof(float));
+                ggml_backend_tensor_get(t, buf, 0, nel * sizeof(float));
+                for (int64_t j = 0; j < nel; j++)
+                    rdata[j] = (double)buf[j];
             }
 
             /* Set dim attribute in ONNX order (reverse ggml ne[]) */

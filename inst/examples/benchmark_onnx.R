@@ -249,12 +249,16 @@ for (m in models) {
                 mem_after$free / 1e6, gpu_used))
   }
 
-  # Speedup
+  # Speedup + top-5
   if (!is.null(res$cpu) && !is.null(res$gpu)) {
     speedup <- res$cpu$mean_ms / res$gpu$mean_ms
     cat(sprintf("  Speedup: %.2fx\n", speedup))
     match <- identical(res$cpu$top5, res$gpu$top5)
     cat(sprintf("  Top-5 match: %s\n", if (match) "YES" else "NO"))
+    if (!match) {
+      cat(sprintf("    CPU top-5: %s\n", paste(res$cpu$top5, collapse = ", ")))
+      cat(sprintf("    GPU top-5: %s\n", paste(res$gpu$top5, collapse = ", ")))
+    }
   }
 
   cat("\n")

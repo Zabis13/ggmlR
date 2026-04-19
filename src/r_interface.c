@@ -980,6 +980,8 @@ SEXP R_ggml_conv_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                     SEXP s0, SEXP p0, SEXP d0);
 SEXP R_ggml_conv_2d(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                     SEXP s0, SEXP s1, SEXP p0, SEXP p1, SEXP d0, SEXP d1);
+SEXP R_ggml_conv_2d_direct(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                           SEXP s0, SEXP s1, SEXP p0, SEXP p1, SEXP d0, SEXP d1);
 SEXP R_ggml_conv_transpose_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                                SEXP s0, SEXP p0, SEXP d0);
 SEXP R_ggml_pool_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP op,
@@ -1495,6 +1497,7 @@ static const R_CallMethodDef CallEntries[] = {
     // CNN operations
     {"R_ggml_conv_1d",           (DL_FUNC) &R_ggml_conv_1d,           6},
     {"R_ggml_conv_2d",           (DL_FUNC) &R_ggml_conv_2d,           9},
+    {"R_ggml_conv_2d_direct",    (DL_FUNC) &R_ggml_conv_2d_direct,    9},
     {"R_ggml_conv_transpose_1d", (DL_FUNC) &R_ggml_conv_transpose_1d, 6},
     {"R_ggml_pool_1d",           (DL_FUNC) &R_ggml_pool_1d,           6},
     {"R_ggml_pool_2d",           (DL_FUNC) &R_ggml_pool_2d,           9},

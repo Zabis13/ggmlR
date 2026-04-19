@@ -28,11 +28,20 @@ void rel_pos_bias_2d_cpu(struct ggml_tensor *dst,
      * x[b, h*W+w, c] = data[c + (h*W+w)*C + b*C*HW] */
     const float *x = (const float *)b_tensor->data;
 
-    /* c_tensor = concat(W_h, W_w) along dim0: ggml ne[0]=rel_h+rel_w, ne[1]=C
-     * W_h[r, c] = Wdata[r + c * Wstride]     for r in [0, rel_h)
-     * W_w[r, c] = Wdata[rel_h + r + c * Wstride] for r in [0, rel_w) */
-    const float *Wdata = (const float *)c_tensor->data;
+    /* c_tensor = concat(W_h, W_w): weights may live on GPU buffer (->data invalid).
+     * Use CPU-side copy from params if available, fall back to ->data for CPU runs. */
+    const float *Wdata = p->w_cpu ? p->w_cpu : (const float *)c_tensor->data;
     const int Wstride = rel_h + rel_w;
+    fprintf(stderr, "[rpb_dbg] H=%d W=%d B=%d C=%d "
+            "b_ne=[%d,%d,%d] b_nb=[%zu,%zu,%zu] x=%p x[0]=%.4f x[1]=%.4f "
+            "dst=%p dst_ne=[%d,%d,%d] Wdata=%p W[0]=%.4f W[1]=%.4f\n",
+            H, W, B, C,
+            (int)b_tensor->ne[0], (int)b_tensor->ne[1], (int)b_tensor->ne[2],
+            b_tensor->nb[0], b_tensor->nb[1], b_tensor->nb[2],
+            (void*)x, x ? x[0] : 0.f, x ? x[1] : 0.f,
+            (void*)dst->data,
+            (int)dst->ne[0], (int)dst->ne[1], (int)dst->ne[2],
+            (void*)Wdata, Wdata ? Wdata[0] : 0.f, Wdata ? Wdata[1] : 0.f);
 
     /* Output: dst ggml ne[0]=H*W, ne[1]=H*W, ne[2]=B
      * = ONNX [B, H*W, H*W]

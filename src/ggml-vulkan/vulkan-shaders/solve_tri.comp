@@ -30,15 +30,17 @@ void main() {
     const uint batch = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
     const uint tid = gl_LocalInvocationID.x;
 
-    if (batch >= p.ne02 * p.ne03) {
+    if (batch >= p.ne02 * p.ne03 * p.ne04) {
         return;
     }
 
-    const uint i3 = batch / p.ne22;
-    const uint i2 = batch % p.ne22;
-    a_base = get_aoffset() + i2 * p.nb02 + i3 * p.nb03;
-    b_base = get_boffset() + i2 * p.nb12 + i3 * p.nb13;
-    x_base = get_doffset() + i2 * p.nb22 + i3 * p.nb23;
+    const uint i4 = batch / (p.ne22 * p.ne23);
+    const uint rem4 = batch - i4 * (p.ne22 * p.ne23);
+    const uint i3 = rem4 / p.ne22;
+    const uint i2 = rem4 % p.ne22;
+    a_base = get_aoffset() + i2 * p.nb02 + i3 * p.nb03 + i4 * p.nb04;
+    b_base = get_boffset() + i2 * p.nb12 + i3 * p.nb13 + i4 * p.nb14;
+    x_base = get_doffset() + i2 * p.nb22 + i3 * p.nb23 + i4 * p.nb24;
 
     FLOAT_TYPE X[N];
 

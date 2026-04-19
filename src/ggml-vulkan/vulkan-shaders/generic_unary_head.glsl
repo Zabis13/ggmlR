@@ -4,17 +4,21 @@
 layout (push_constant) uniform parameter
 {
     uint ne;
-    uint ne00; uint ne01; uint ne02; uint ne03; uint nb00; uint nb01; uint nb02; uint nb03;
-    uint ne10; uint ne11; uint ne12; uint ne13; uint nb10; uint nb11; uint nb12; uint nb13;
+    uint ne00; uint ne01; uint ne02; uint ne03; uint ne04;
+    uint nb00; uint nb01; uint nb02; uint nb03; uint nb04;
+    uint ne10; uint ne11; uint ne12; uint ne13; uint ne14;
+    uint nb10; uint nb11; uint nb12; uint nb13; uint nb14;
     uint misalign_offsets;
     float param1; float param2;
 
-    uint ne0_012mp; uint ne0_012L;
-    uint ne0_01mp;  uint ne0_01L;
-    uint ne0_0mp;   uint ne0_0L;
-    uint ne1_012mp; uint ne1_012L;
-    uint ne1_01mp;  uint ne1_01L;
-    uint ne1_0mp;   uint ne1_0L;
+    uint ne0_0123mp; uint ne0_0123L;
+    uint ne0_012mp;  uint ne0_012L;
+    uint ne0_01mp;   uint ne0_01L;
+    uint ne0_0mp;    uint ne0_0L;
+    uint ne1_0123mp; uint ne1_0123L;
+    uint ne1_012mp;  uint ne1_012L;
+    uint ne1_01mp;   uint ne1_01L;
+    uint ne1_0mp;    uint ne1_0L;
 } p;
 
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
@@ -43,41 +47,49 @@ uint fastdiv(uint n, uint mp, uint L) {
 }
 
 uint src0_idx(uint idx) {
-    const uint i03 = fastdiv(idx, p.ne0_012mp, p.ne0_012L);
-    const uint i03_offset = i03 * p.ne02*p.ne01*p.ne00;
-    const uint i02 = fastdiv(idx - i03_offset, p.ne0_01mp, p.ne0_01L);
-    const uint i02_offset = i02*p.ne01*p.ne00;
-    const uint i01 = fastdiv(idx - i03_offset - i02_offset, p.ne0_0mp, p.ne0_0L);
-    const uint i00 = idx - i03_offset - i02_offset - i01*p.ne00;
-    return i03*p.nb03 + i02*p.nb02 + i01*p.nb01 + i00*p.nb00;
+    const uint i04 = fastdiv(idx, p.ne0_0123mp, p.ne0_0123L);
+    const uint rem4 = idx - i04 * p.ne03*p.ne02*p.ne01*p.ne00;
+    const uint i03 = fastdiv(rem4, p.ne0_012mp, p.ne0_012L);
+    const uint rem3 = rem4 - i03 * p.ne02*p.ne01*p.ne00;
+    const uint i02 = fastdiv(rem3, p.ne0_01mp, p.ne0_01L);
+    const uint rem2 = rem3 - i02*p.ne01*p.ne00;
+    const uint i01 = fastdiv(rem2, p.ne0_0mp, p.ne0_0L);
+    const uint i00 = rem2 - i01*p.ne00;
+    return i04*p.nb04 + i03*p.nb03 + i02*p.nb02 + i01*p.nb01 + i00*p.nb00;
 }
 
 uint dst_idx(uint idx) {
-    const uint i13 = fastdiv(idx, p.ne1_012mp, p.ne1_012L);
-    const uint i13_offset = i13 * p.ne12*p.ne11*p.ne10;
-    const uint i12 = fastdiv(idx - i13_offset, p.ne1_01mp, p.ne1_01L);
-    const uint i12_offset = i12*p.ne11*p.ne10;
-    const uint i11 = fastdiv(idx - i13_offset - i12_offset, p.ne1_0mp, p.ne1_0L);
-    const uint i10 = idx - i13_offset - i12_offset - i11*p.ne10;
-    return i13*p.nb13 + i12*p.nb12 + i11*p.nb11 + i10*p.nb10;
+    const uint i14 = fastdiv(idx, p.ne1_0123mp, p.ne1_0123L);
+    const uint rem4 = idx - i14 * p.ne13*p.ne12*p.ne11*p.ne10;
+    const uint i13 = fastdiv(rem4, p.ne1_012mp, p.ne1_012L);
+    const uint rem3 = rem4 - i13 * p.ne12*p.ne11*p.ne10;
+    const uint i12 = fastdiv(rem3, p.ne1_01mp, p.ne1_01L);
+    const uint rem2 = rem3 - i12*p.ne11*p.ne10;
+    const uint i11 = fastdiv(rem2, p.ne1_0mp, p.ne1_0L);
+    const uint i10 = rem2 - i11*p.ne10;
+    return i14*p.nb14 + i13*p.nb13 + i12*p.nb12 + i11*p.nb11 + i10*p.nb10;
 }
 
 uint src0_idx_quant(uint idx, uint qk) {
-    const uint i03 = fastdiv(idx, p.ne0_012mp, p.ne0_012L);
-    const uint i03_offset = i03 * p.ne02*p.ne01*p.ne00;
-    const uint i02 = fastdiv(idx - i03_offset, p.ne0_01mp, p.ne0_01L);
-    const uint i02_offset = i02*p.ne01*p.ne00;
-    const uint i01 = fastdiv(idx - i03_offset - i02_offset, p.ne0_0mp, p.ne0_0L);
-    const uint i00 = idx - i03_offset - i02_offset - i01*p.ne00;
-    return i03*p.nb03 + i02*p.nb02 + i01*p.nb01 + (i00/qk)*p.nb00;
+    const uint i04 = fastdiv(idx, p.ne0_0123mp, p.ne0_0123L);
+    const uint rem4 = idx - i04 * p.ne03*p.ne02*p.ne01*p.ne00;
+    const uint i03 = fastdiv(rem4, p.ne0_012mp, p.ne0_012L);
+    const uint rem3 = rem4 - i03 * p.ne02*p.ne01*p.ne00;
+    const uint i02 = fastdiv(rem3, p.ne0_01mp, p.ne0_01L);
+    const uint rem2 = rem3 - i02*p.ne01*p.ne00;
+    const uint i01 = fastdiv(rem2, p.ne0_0mp, p.ne0_0L);
+    const uint i00 = rem2 - i01*p.ne00;
+    return i04*p.nb04 + i03*p.nb03 + i02*p.nb02 + i01*p.nb01 + (i00/qk)*p.nb00;
 }
 
 uint dst_idx_quant(uint idx, uint qk) {
-    const uint i13 = fastdiv(idx, p.ne1_012mp, p.ne1_012L);
-    const uint i13_offset = i13 * p.ne12*p.ne11*p.ne10;
-    const uint i12 = fastdiv(idx - i13_offset, p.ne1_01mp, p.ne1_01L);
-    const uint i12_offset = i12*p.ne11*p.ne10;
-    const uint i11 = fastdiv(idx - i13_offset - i12_offset, p.ne1_0mp, p.ne1_0L);
-    const uint i10 = idx - i13_offset - i12_offset - i11*p.ne10;
-    return i13*p.nb13 + i12*p.nb12 + i11*p.nb11 + (i10/qk)*p.nb10;
+    const uint i14 = fastdiv(idx, p.ne1_0123mp, p.ne1_0123L);
+    const uint rem4 = idx - i14 * p.ne13*p.ne12*p.ne11*p.ne10;
+    const uint i13 = fastdiv(rem4, p.ne1_012mp, p.ne1_012L);
+    const uint rem3 = rem4 - i13 * p.ne12*p.ne11*p.ne10;
+    const uint i12 = fastdiv(rem3, p.ne1_01mp, p.ne1_01L);
+    const uint rem2 = rem3 - i12*p.ne11*p.ne10;
+    const uint i11 = fastdiv(rem2, p.ne1_0mp, p.ne1_0L);
+    const uint i10 = rem2 - i11*p.ne10;
+    return i14*p.nb14 + i13*p.nb13 + i12*p.nb12 + i11*p.nb11 + (i10/qk)*p.nb10;
 }
