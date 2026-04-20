@@ -720,7 +720,7 @@ Supported GPUs: NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno.
 
 ### Vulkan optimizations
 
-- **Vulkan 1.2** — uses legacy pipeline barriers (Synchronization2 avoided due to RADV performance regression on AMD)
+- **Vulkan 1.4** — push constants limit raised to 256 bytes, enabling full 5D tensor parameter blocks in compute shaders without staging buffers.
 - **Push Descriptors** (`VK_KHR_push_descriptor`) — when available, descriptors are pushed directly into the command buffer, eliminating descriptor pool allocation overhead. Falls back to descriptor pools on older hardware.
 - **Q4_K flash attention** — `GGML_OP_FLASH_ATTN_EXT` with Q4_K key/value tensors now runs fully on GPU (FA_SCALAR and FA_COOPMAT1 paths). Previously Q4_K attention fell back to CPU. Relevant for llamaR with quantized LLMs on AMD/Intel GPU (KHR cooperative matrix).
 - **Subgroup-shuffle mmq** (`USE_SUBGROUP_NO_SHMEM`) — on wavefront-64 devices (RDNA4, subgroup_size=64) Q4_K / Q5_K / Q6_K weight tiles are loaded directly into registers via `subgroupShuffle`, eliminating the shared-memory staging round-trip. ~10-15% token-generation throughput gain on LLaMA 3.x models.

@@ -1,3 +1,8 @@
+# ggmlR 0.7.5
+
+* **Vulkan 1.4 Support**: integrated push constants raised to 256 bytes, targeting 5D tensor operations — enables larger parameter blocks in compute shaders without staging buffers.
+* **Architecture Update**: refactored core file structure for improved project organization.
+
 # ggmlR 0.7.4
 
 * **ONNX Conv**: replaced `ggml_conv_2d` (IM2COL+GEMM) with `ggml_conv_2d_direct` (`GGML_OP_CONV_2D`) in `onnx_ggml.c` — SuperResolution GPU time 344 ms → 5 ms (~70×).

@@ -61,7 +61,13 @@ heavy <- c(
   "onnx-chain-attn-mask",
   "onnx-chain-postprocess",
   "onnx-chain-cast",
-  "onnx-chain-preprocess"
+  "onnx-chain-preprocess",
+  "model-ops",
+  "onnx-boundary",
+  "onnx-edge",
+  "parsnip",
+  "mlr3-learner",
+  "keras-api"
 )
 
 on_cran <- !identical(Sys.getenv("NOT_CRAN"), "true")
