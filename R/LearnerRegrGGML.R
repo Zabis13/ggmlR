@@ -67,8 +67,8 @@
 #' }
 #' }
 #'
-#' @keywords internal
-LearnerRegrGGML <- R6::R6Class(
+#' @noRd
+.make_LearnerRegrGGML <- function() R6::R6Class(
   "LearnerRegrGGML",
   inherit = mlr3::LearnerRegr,
   public = list(

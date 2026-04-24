@@ -1,12 +1,8 @@
 # Package-level state
 .ggmlr_state <- new.env(parent = emptyenv())
 
-# Silence R CMD check NOTEs about symbols introduced lazily:
-#   - LearnerClassifGGML / LearnerRegrGGML: defined inside an
-#     `if (requireNamespace("mlr3")) { ... }` block, so codetools cannot see them
-#   - object / new_data: rlang::expr() placeholders in parsnip::set_pred() args
-utils::globalVariables(c("LearnerClassifGGML", "LearnerRegrGGML",
-                         "object", "new_data"))
+# Silence R CMD check NOTEs about rlang::expr() placeholders in parsnip::set_pred() args
+utils::globalVariables(c("object", "new_data", "self", "super", "private"))
 
 .register_mlr3 <- function(...) {
   # Ignore arguments: when invoked via setHook(packageEvent(..., "onLoad")),
@@ -19,6 +15,10 @@ utils::globalVariables(c("LearnerClassifGGML", "LearnerRegrGGML",
   }
 
   ns <- asNamespace("ggmlR")
+
+  # Build R6 classes and store in package state (not namespace bindings).
+  .ggmlr_state$LearnerClassifGGML <- .make_LearnerClassifGGML()
+  .ggmlr_state$LearnerRegrGGML    <- .make_LearnerRegrGGML()
 
   # S3 methods for mlr3's marshal_model / unmarshal_model generics.
   registerS3method("marshal_model",   "classif_ggml_model",
@@ -34,19 +34,13 @@ utils::globalVariables(c("LearnerClassifGGML", "LearnerRegrGGML",
                    get("unmarshal_model.regr_ggml_model_marshaled", envir = ns),
                    envir = asNamespace("mlr3"))
 
-  # Register learners idempotently in mlr3's dictionary. Users access them
-  # via lrn("classif.ggml") / lrn("regr.ggml"); we do not namespaceExport
-  # the R6 classes because that would fail when called after the ggmlR
-  # namespace has been sealed (e.g. via the post-load hook).
-  if (exists("LearnerClassifGGML", envir = ns, inherits = FALSE) &&
-      !is.null(get("LearnerClassifGGML", envir = ns))) {
-    learners <- utils::getFromNamespace("mlr_learners", ns = "mlr3")
-    if (!learners$has("classif.ggml")) {
-      learners$add("classif.ggml", get("LearnerClassifGGML", envir = ns))
-    }
-    if (!learners$has("regr.ggml")) {
-      learners$add("regr.ggml", get("LearnerRegrGGML", envir = ns))
-    }
+  # Register learners idempotently in mlr3's dictionary.
+  learners <- utils::getFromNamespace("mlr_learners", ns = "mlr3")
+  if (!learners$has("classif.ggml")) {
+    learners$add("classif.ggml", .ggmlr_state$LearnerClassifGGML)
+  }
+  if (!learners$has("regr.ggml")) {
+    learners$add("regr.ggml", .ggmlr_state$LearnerRegrGGML)
   }
 
   invisible(TRUE)

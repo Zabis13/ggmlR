@@ -77,8 +77,8 @@
 #' }
 #' }
 #'
-#' @keywords internal
-LearnerClassifGGML <- R6::R6Class(
+#' @noRd
+.make_LearnerClassifGGML <- function() R6::R6Class(
   "LearnerClassifGGML",
   inherit = mlr3::LearnerClassif,
   public = list(

@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.7.5
+Version: 0.7.6
 Authors@R: c(
     person("Yuri", "Baramykov",
         email = "lbsbmsu@mail.ru",
@@ -34,7 +34,8 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     underlying library.
 Depends: R (>= 4.1.0)
 Imports:
-    generics
+    generics,
+    R6
 License: MIT + file LICENSE
 URL: https://github.com/Zabis13/ggmlR
 BugReports: https://github.com/Zabis13/ggmlR/issues
@@ -45,7 +46,6 @@ Suggests:
     testthat (>= 3.0.0),
     mlr3 (>= 0.21.0),
     paradox,
-    R6,
     digest,
     parsnip,
     tibble,

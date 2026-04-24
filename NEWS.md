@@ -1,3 +1,8 @@
+# ggmlR 0.7.6
+
+* **Fix**: `R6` moved from `Suggests` to `Imports` — package now loads correctly when `R6` is not pre-installed.
+* **Fix**: `LearnerClassifGGML` and `LearnerRegrGGML` R6 class definitions are now deferred until `mlr3`/`R6`/`paradox` are available, preventing namespace load failure in environments without these optional packages.
+
 # ggmlR 0.7.5
 
 * **Vulkan 1.4 Support**: integrated push constants raised to 256 bytes, targeting 5D tensor operations — enables larger parameter blocks in compute shaders without staging buffers.
