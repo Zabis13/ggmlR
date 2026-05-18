@@ -17,7 +17,7 @@ Useful links:
 
 }
 \author{
-\strong{Maintainer}: Yuri Baramykov \email{lbsbmsu@mail.ru}
+\strong{Maintainer}: Yuri Baramykov \email{lbsbmsu@mail.ru} (\href{https://orcid.org/0009-0000-7627-4217}{ORCID})
 
 Other contributors:
 \itemize{

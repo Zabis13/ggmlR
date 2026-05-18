@@ -6,6 +6,9 @@
 \usage{
 nn_build_batch_norm(ctx, input_tensor, layer)
 }
+\value{
+A \code{ggml_tensor} with RMS-normalized, scaled and shifted values.
+}
 \description{
 Build batch_norm forward pass
 }

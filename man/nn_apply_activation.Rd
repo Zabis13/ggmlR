@@ -6,6 +6,9 @@
 \usage{
 nn_apply_activation(ctx, tensor, activation)
 }
+\value{
+A \code{ggml_tensor} with the activation applied, or \code{tensor} unchanged when \code{activation} is \code{NULL}.
+}
 \description{
 Apply activation function
 }

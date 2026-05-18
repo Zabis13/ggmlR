@@ -17,6 +17,11 @@ void main() {
         return;
     }
 
-    const float val = float(data_a[i]);
-    data_d[i] = D_TYPE(val > 0.0f ? val : exp(val) - 1.0f);
+    float x = float(data_a[i]);
+
+    if (x < 0.0f) {
+        x = exp(x) - 1;
+    }
+
+    data_d[i] = D_TYPE(x);
 }

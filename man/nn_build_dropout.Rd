@@ -6,6 +6,9 @@
 \usage{
 nn_build_dropout(ctx, input_tensor, layer, training = TRUE)
 }
+\value{
+A \code{ggml_tensor}: scaled input during training, the input unchanged when \code{training = FALSE}.
+}
 \description{
 Build dropout forward pass
 }

@@ -6,6 +6,9 @@
 \usage{
 nn_build_conv_1d(ctx, input_tensor, layer)
 }
+\value{
+A \code{ggml_tensor} holding the 1-D convolution output (with bias and activation applied).
+}
 \description{
 Build conv_1d forward pass
 }

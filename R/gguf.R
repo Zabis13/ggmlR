@@ -86,6 +86,7 @@ gguf_tensor_data <- function(x, name) {
 #' garbage collector, but can be called manually to release memory sooner.
 #'
 #' @param x A \code{gguf} object.
+#' @return Called for its side effect (releases the GGUF context); invisibly returns \code{NULL}.
 #' @export
 gguf_free <- function(x) {
   if (!inherits(x, "gguf")) stop("Expected a gguf object")

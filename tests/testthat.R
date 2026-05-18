@@ -67,7 +67,8 @@ heavy <- c(
   "onnx-edge",
   "parsnip",
   "mlr3-learner",
-  "keras-api"
+  "keras-api",
+  "quants-iq-degenerate"
 )
 
 on_cran <- !identical(Sys.getenv("NOT_CRAN"), "true")

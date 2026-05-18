@@ -9,6 +9,9 @@ gguf_free(x)
 \arguments{
 \item{x}{A \code{gguf} object.}
 }
+\value{
+Called for its side effect (releases the GGUF context); invisibly returns \code{NULL}.
+}
 \description{
 Explicitly frees the internal GGUF context. Called automatically by the
 garbage collector, but can be called manually to release memory sooner.

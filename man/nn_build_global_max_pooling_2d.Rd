@@ -6,6 +6,9 @@
 \usage{
 nn_build_global_max_pooling_2d(ctx, input_tensor, layer)
 }
+\value{
+A \code{ggml_tensor} of shape \code{[C, N]} with channel-wise maxima.
+}
 \description{
 Tensor layout in ggml (column-major): [W, H, C, N].
 Pool the entire spatial extent (k0=W, k1=H), then reshape [1,1,C,N]->[C,N].

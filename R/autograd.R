@@ -94,6 +94,8 @@ ag_param <- function(data, device = .ag_device_state$device,
 }
 
 #' Check if object is an ag_tensor
+#' @param x Any R object to test.
+#' @return \code{TRUE} if \code{x} is an \code{ag_tensor} object, \code{FALSE} otherwise.
 #' @keywords internal
 is_ag_tensor <- function(x) inherits(x, "ag_tensor")
 
@@ -101,6 +103,7 @@ is_ag_tensor <- function(x) inherits(x, "ag_tensor")
 #'
 #' @param x An \code{ag_tensor}
 #' @param ... Ignored
+#' @return The input \code{x}, returned invisibly (called for its side effect of printing).
 #' @export
 print.ag_tensor <- function(x, ...) {
   d <- .ag_data(x)

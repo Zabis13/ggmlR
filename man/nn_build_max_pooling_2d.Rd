@@ -6,6 +6,9 @@
 \usage{
 nn_build_max_pooling_2d(ctx, input_tensor, layer)
 }
+\value{
+A \code{ggml_tensor} holding the 2-D max-pooled output.
+}
 \description{
 Build max_pooling_2d forward pass
 }

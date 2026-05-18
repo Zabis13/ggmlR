@@ -441,7 +441,15 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->almost_ready_fence = ctx->device->device.createFence({});
 
     ctx->compute_cmd_pool.init(ctx->device, &ctx->device->compute_queue);
-    ctx->transfer_cmd_pool.init(ctx->device, &ctx->device->transfer_queue);
+    if (ctx->device->async_use_transfer_queue) {
+        vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eTimeline, 0 };
+        vk::SemaphoreCreateInfo ci{};
+        ci.setPNext(&tci);
+        ctx->transfer_semaphore.s = ctx->device->device.createSemaphore(ci);
+        ctx->transfer_semaphore.value = 0;
+
+        ctx->transfer_cmd_pool.init(ctx->device, &ctx->device->transfer_queue);
+    }
 
     if (vk_perf_logger_enabled) {
         ctx->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
@@ -453,6 +461,7 @@ static vk_pipeline ggml_vk_get_to_fp16(ggml_backend_vk_context * ctx, ggml_type 
     VK_LOG_DEBUG("ggml_vk_get_to_fp16()");
     switch (type) {
         case GGML_TYPE_F32:
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -533,6 +542,7 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_pipeline(ggml_backend_vk_conte
     }
 
     switch (src0_type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -596,6 +606,7 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context * 
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -686,6 +697,7 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
     GGML_ASSERT(src1_type == GGML_TYPE_F32 || (ctx->device->coopmat2 && src1_type == GGML_TYPE_F16));
 
     switch (src0_type) {
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -752,6 +764,7 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec_id(ggml_backend_vk_context
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -895,11 +908,11 @@ static vk_subbuffer ggml_vk_tensor_subbuffer(
 
 static vk_submission ggml_vk_begin_submission(vk_device& device, vk_command_pool& p, bool one_time = true) {
     vk_submission s;
-    s.buffer = ggml_vk_create_cmd_buffer(device, p);
+    s.buffer = ggml_vk_get_or_create_cmd_buffer(device, p);
     if (one_time) {
-        s.buffer.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
+        s.buffer->buf.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
     } else {
-        s.buffer.begin({ vk::CommandBufferUsageFlags{} });
+        s.buffer->buf.begin({ vk::CommandBufferUsageFlags{} });
     }
 
     return s;
@@ -946,25 +959,25 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     GGML_ASSERT(descriptor_buffer_infos.size() <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(pipeline->parameter_count == descriptor_buffer_infos.size());
 
-    subctx->s->buffer.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size(push_constants), push_constant_data(push_constants));
-    subctx->s->buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
+    subctx->s->buffer->buf.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size(push_constants), push_constant_data(push_constants));
+    subctx->s->buffer->buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
 
     if (ctx->device->push_descriptors) {
         vk::WriteDescriptorSet write_descriptor_set{ {}, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
-        subctx->s->buffer.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, pipeline->layout, 0, { write_descriptor_set });
+        subctx->s->buffer->buf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, pipeline->layout, 0, { write_descriptor_set });
     } else {
         GGML_ASSERT(ctx->descriptor_set_idx < ctx->descriptor_sets.size());
         vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[ctx->descriptor_set_idx++];
         vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
         ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
-        subctx->s->buffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline->layout, 0, { descriptor_set }, {});
+        subctx->s->buffer->buf.bindDescriptorSets(vk::PipelineBindPoint::eCompute, pipeline->layout, 0, { descriptor_set }, {});
     }
 
-    subctx->s->buffer.dispatch(wg0, wg1, wg2);
+    subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
 }
 
 static void ggml_vk_end_submission(vk_submission& s, std::vector<vk_semaphore> wait_semaphores, std::vector<vk_semaphore> signal_semaphores) {
-    s.buffer.end();
+    s.buffer->buf.end();
 
     s.wait_semaphores = std::move(wait_semaphores);
     s.signal_semaphores = std::move(signal_semaphores);
@@ -976,7 +989,7 @@ static void ggml_vk_ctx_end(vk_context& ctx) {
         return;
     }
 
-    ctx->s->buffer.end();
+    ctx->s->buffer->buf.end();
     ctx->s = nullptr;
 }
 
@@ -988,6 +1001,44 @@ static void ggml_vk_ctx_begin(vk_device& device, vk_context& subctx) {
 
     subctx->seqs.push_back({ ggml_vk_begin_submission(device, *subctx->p) });
     subctx->s = subctx->seqs[subctx->seqs.size() - 1].data();
+}
+
+static vk_context ggml_vk_get_compute_ctx(ggml_backend_vk_context * ctx) {
+    vk_context result;
+    if (!ctx->compute_ctx.expired()) {
+        result = ctx->compute_ctx.lock();
+    } else {
+        result = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+
+        ctx->compute_ctx = result;
+        ggml_vk_ctx_begin(ctx->device, result);
+    }
+
+    if (ctx->device->async_use_transfer_queue && ctx->transfer_semaphore_last_submitted < ctx->transfer_semaphore.value) {
+        result->s->wait_semaphores.push_back(ctx->transfer_semaphore);
+        ctx->transfer_semaphore_last_submitted = ctx->transfer_semaphore.value;
+    }
+
+    return result;
+}
+
+// Submit any pending transfer queue work and signal the transfer semaphore.
+// The next compute context created via ggml_vk_get_compute_ctx will wait on this semaphore.
+// Returns true if work was submitted.
+static bool ggml_vk_submit_transfer_ctx(ggml_backend_vk_context * ctx) {
+    if (!ctx->device->async_use_transfer_queue || ctx->transfer_ctx.expired()) {
+        return false;
+    }
+
+    vk_context cpy_ctx = ctx->transfer_ctx.lock();
+    ggml_vk_ctx_end(cpy_ctx);
+
+    ctx->transfer_semaphore.value++;
+    cpy_ctx->seqs.back().back().signal_semaphores.push_back(ctx->transfer_semaphore);
+    ggml_vk_submit(cpy_ctx, vk::Fence{});
+    ctx->transfer_ctx.reset();
+
+    return true;
 }
 
 static size_t ggml_vk_align_size(size_t width, size_t align) {
@@ -1089,7 +1140,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
         }
 
         ggml_vk_sync_buffers(ctx, subctx);
-        subctx->s->buffer.copyBuffer(buf->buffer, dst->buffer, slices);
+        subctx->s->buffer->buf.copyBuffer(buf->buffer, dst->buffer, slices);
         return;
     }
 
@@ -1104,7 +1155,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
     VkBufferCopy buf_copy{ 0, offset, copy_size };
 
     ggml_vk_sync_buffers(ctx, subctx);
-    vkCmdCopyBuffer(subctx->s->buffer, (VkBuffer)staging->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
+    vkCmdCopyBuffer(subctx->s->buffer->buf, (VkBuffer)staging->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
 
     for (uint64_t i3 = 0; i3 < ne3; i3++) {
         for (uint64_t i2 = 0; i2 < ne2; i2++) {
@@ -1153,7 +1204,7 @@ static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, siz
         }
 
         ggml_vk_sync_buffers(nullptr, subctx);
-        subctx->s->buffer.copyBuffer(buf->buffer, dst->buffer, slices);
+        subctx->s->buffer->buf.copyBuffer(buf->buffer, dst->buffer, slices);
         return true;
     }
     VK_LOG_DEBUG("STAGING");
@@ -1175,7 +1226,7 @@ static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, siz
         copy_size};
 
     ggml_vk_sync_buffers(nullptr, subctx);
-    vkCmdCopyBuffer(subctx->s->buffer, (VkBuffer)staging_buffer->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
+    vkCmdCopyBuffer(subctx->s->buffer->buf, (VkBuffer)staging_buffer->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
 
     if (width == spitch) {
         deferred_memcpy((uint8_t *)staging_buffer->ptr, src, width * height, &subctx->in_memcpys);
@@ -1261,7 +1312,7 @@ static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size
     if (buf != nullptr) {
         // Memory is pinned, use as staging buffer
         ggml_vk_sync_buffers(nullptr, subctx);
-        subctx->s->buffer.copyBuffer(src->buffer, buf->buffer, slices);
+        subctx->s->buffer->buf.copyBuffer(src->buffer, buf->buffer, slices);
 
         return true;
     }
@@ -1279,7 +1330,7 @@ static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size
     vk_buffer& staging_buffer = src->device->sync_staging;
 
     ggml_vk_sync_buffers(nullptr, subctx);
-    subctx->s->buffer.copyBuffer(src->buffer, staging_buffer->buffer, slices);
+    subctx->s->buffer->buf.copyBuffer(src->buffer, staging_buffer->buffer, slices);
 
     deferred_memcpy(dst, staging_buffer->ptr, copy_size, &subctx->out_memcpys);
     return true;
@@ -1326,7 +1377,7 @@ static void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t ds
 
     VkBufferCopy bc{ src_offset, dst_offset, size };
 
-    vkCmdCopyBuffer(ctx->s->buffer, (VkBuffer)src->buffer, (VkBuffer)dst->buffer, 1, &bc);
+    vkCmdCopyBuffer(ctx->s->buffer->buf, (VkBuffer)src->buffer, (VkBuffer)dst->buffer, 1, &bc);
 }
 
 static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size) {
@@ -1364,7 +1415,7 @@ static void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t 
     }
 
     // Fall back to GPU fillBuffer for non-UMA or non-host-visible buffers
-    ctx->s->buffer.fillBuffer(dst->buffer, offset, size, c);
+    ctx->s->buffer->buf.fillBuffer(dst->buffer, offset, size, c);
 }
 
 static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t size) {
@@ -1379,7 +1430,7 @@ static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, siz
     std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
     vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
     ggml_vk_ctx_begin(dst->device, subctx);
-    subctx->s->buffer.fillBuffer(dst->buffer, offset, size, c);
+    subctx->s->buffer->buf.fillBuffer(dst->buffer, offset, size, c);
     ggml_vk_ctx_end(subctx);
 
     ggml_vk_submit(subctx, dst->device->fence);

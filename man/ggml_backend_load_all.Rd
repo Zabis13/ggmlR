@@ -55,6 +55,7 @@ Other backend:
 \code{\link{ggml_backend_init_by_name}()},
 \code{\link{ggml_backend_init_by_type}()},
 \code{\link{ggml_backend_load}()},
+\code{\link{ggml_backend_meta_device}()},
 \code{\link{ggml_backend_multi_buffer_alloc_buffer}()},
 \code{\link{ggml_backend_multi_buffer_set_usage}()},
 \code{\link{ggml_backend_reg_by_name}()},

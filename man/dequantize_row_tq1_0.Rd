@@ -25,6 +25,8 @@ TQ1_0 and TQ2_0 are extreme compression formats.
 Other quantization: 
 \code{\link{dequantize_row_iq2_xxs}()},
 \code{\link{dequantize_row_mxfp4}()},
+\code{\link{dequantize_row_nvfp4}()},
+\code{\link{dequantize_row_q1_0}()},
 \code{\link{dequantize_row_q2_K}()},
 \code{\link{dequantize_row_q4_0}()},
 \code{\link{ggml_quant_block_info}()},
@@ -34,6 +36,8 @@ Other quantization:
 \code{\link{iq3xs_init_impl}()},
 \code{\link{quantize_iq2_xxs}()},
 \code{\link{quantize_mxfp4}()},
+\code{\link{quantize_nvfp4}()},
+\code{\link{quantize_q1_0}()},
 \code{\link{quantize_q2_K}()},
 \code{\link{quantize_q4_0}()},
 \code{\link{quantize_row_iq3_xxs_ref}()},

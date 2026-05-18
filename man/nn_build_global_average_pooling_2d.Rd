@@ -6,6 +6,9 @@
 \usage{
 nn_build_global_average_pooling_2d(ctx, input_tensor, layer)
 }
+\value{
+A \code{ggml_tensor} of shape \code{[C, N]} with channel-wise means.
+}
 \description{
 Build global_average_pooling_2d forward pass
 }

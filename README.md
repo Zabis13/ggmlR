@@ -623,7 +623,7 @@ Pass-through: Dropout.
 
 ## GGUF Pre-trained Weights
 
-Load pre-trained weights from GGUF files (llama.cpp, Hugging Face, etc.) with automatic dequantization. Supports all ggml quantization types (F32, F16, Q4_0, Q8_0, K-quants, IQ, etc.).
+Load pre-trained weights from GGUF files (llama.cpp, Hugging Face, etc.) with automatic dequantization. Supports all ggml quantization types (F32, F16, Q4_0, Q8_0, K-quants, IQ, MXFP4, Q1_0, NVFP4).
 
 ```r
 library(ggmlR)

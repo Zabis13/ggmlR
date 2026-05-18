@@ -220,6 +220,7 @@ extern SEXP R_ggml_backend_buffer_is_multi_buffer(SEXP);
 extern SEXP R_ggml_backend_multi_buffer_set_usage(SEXP, SEXP);
 extern SEXP R_ggml_backend_register(SEXP);
 extern SEXP R_ggml_backend_device_register(SEXP);
+extern SEXP R_ggml_backend_meta_device(SEXP, SEXP, SEXP);
 
 // Advanced Attention/Loss functions (defined in r_interface_graph.c)
 extern SEXP R_ggml_cross_entropy_loss(SEXP, SEXP, SEXP);
@@ -289,6 +290,8 @@ extern SEXP R_dequantize_row_iq4_xs(SEXP, SEXP);
 extern SEXP R_dequantize_row_iq1_s(SEXP, SEXP);
 extern SEXP R_dequantize_row_iq1_m(SEXP, SEXP);
 extern SEXP R_dequantize_row_mxfp4(SEXP, SEXP);
+extern SEXP R_dequantize_row_q1_0(SEXP, SEXP);
+extern SEXP R_dequantize_row_nvfp4(SEXP, SEXP);
 // Quantize functions (with imatrix)
 extern SEXP R_quantize_q4_0(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_quantize_q4_1(SEXP, SEXP, SEXP, SEXP);
@@ -312,6 +315,8 @@ extern SEXP R_quantize_iq1_m(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_quantize_iq4_nl(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_quantize_iq4_xs(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_quantize_mxfp4(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_q1_0(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_quantize_nvfp4(SEXP, SEXP, SEXP, SEXP);
 // Quantize row ref functions
 extern SEXP R_quantize_row_q4_0_ref(SEXP, SEXP);
 extern SEXP R_quantize_row_q4_1_ref(SEXP, SEXP);
@@ -333,6 +338,8 @@ extern SEXP R_quantize_row_iq4_xs_ref(SEXP, SEXP);
 extern SEXP R_quantize_row_iq3_s_ref(SEXP, SEXP);
 extern SEXP R_quantize_row_iq2_s_ref(SEXP, SEXP);
 extern SEXP R_quantize_row_mxfp4_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_q1_0_ref(SEXP, SEXP);
+extern SEXP R_quantize_row_nvfp4_ref(SEXP, SEXP);
 // IQ init/free
 extern SEXP R_iq2xs_init_impl(SEXP);
 extern SEXP R_iq2xs_free_impl(SEXP);
@@ -690,12 +697,12 @@ SEXP R_ggml_cpu_mul(SEXP a_ptr, SEXP b_ptr) {
 // ============================================================================
 
 SEXP R_ggml_version(void) {
-    return mkString("0.9.5");
+    return mkString("0.11.0");
 }
 
 SEXP R_ggml_test(void) {
     Rprintf("GGML library loaded successfully!\n");
-    Rprintf("GGML version: %s\n", "0.9.5");
+    Rprintf("GGML version: %s\n", "0.11.0");
     Rprintf("Tensor overhead: %zu bytes\n", ggml_tensor_overhead());
     return ScalarLogical(1);
 }
@@ -1696,6 +1703,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_backend_multi_buffer_set_usage",   (DL_FUNC) &R_ggml_backend_multi_buffer_set_usage,    2},
     {"R_ggml_backend_register",                 (DL_FUNC) &R_ggml_backend_register,                  1},
     {"R_ggml_backend_device_register",          (DL_FUNC) &R_ggml_backend_device_register,           1},
+    {"R_ggml_backend_meta_device",              (DL_FUNC) &R_ggml_backend_meta_device,               3},
 
     // Advanced Attention/Loss
     {"R_ggml_cross_entropy_loss",               (DL_FUNC) &R_ggml_cross_entropy_loss,                3},
@@ -1746,6 +1754,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_dequantize_row_iq1_s",                  (DL_FUNC) &R_dequantize_row_iq1_s,                   2},
     {"R_dequantize_row_iq1_m",                  (DL_FUNC) &R_dequantize_row_iq1_m,                   2},
     {"R_dequantize_row_mxfp4",                  (DL_FUNC) &R_dequantize_row_mxfp4,                   2},
+    {"R_dequantize_row_q1_0",                   (DL_FUNC) &R_dequantize_row_q1_0,                    2},
+    {"R_dequantize_row_nvfp4",                  (DL_FUNC) &R_dequantize_row_nvfp4,                   2},
 
     // Low-level quantization - quantize (with imatrix)
     {"R_quantize_q4_0",                         (DL_FUNC) &R_quantize_q4_0,                          4},
@@ -1770,6 +1780,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_quantize_iq4_nl",                       (DL_FUNC) &R_quantize_iq4_nl,                        4},
     {"R_quantize_iq4_xs",                       (DL_FUNC) &R_quantize_iq4_xs,                        4},
     {"R_quantize_mxfp4",                        (DL_FUNC) &R_quantize_mxfp4,                         4},
+    {"R_quantize_q1_0",                         (DL_FUNC) &R_quantize_q1_0,                          4},
+    {"R_quantize_nvfp4",                        (DL_FUNC) &R_quantize_nvfp4,                         4},
 
     // Low-level quantization - quantize row ref
     {"R_quantize_row_q4_0_ref",                 (DL_FUNC) &R_quantize_row_q4_0_ref,                  2},
@@ -1792,6 +1804,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_quantize_row_iq3_s_ref",                (DL_FUNC) &R_quantize_row_iq3_s_ref,                 2},
     {"R_quantize_row_iq2_s_ref",                (DL_FUNC) &R_quantize_row_iq2_s_ref,                 2},
     {"R_quantize_row_mxfp4_ref",                (DL_FUNC) &R_quantize_row_mxfp4_ref,                 2},
+    {"R_quantize_row_q1_0_ref",                 (DL_FUNC) &R_quantize_row_q1_0_ref,                  2},
+    {"R_quantize_row_nvfp4_ref",                (DL_FUNC) &R_quantize_row_nvfp4_ref,                 2},
 
     // IQ init/free
     {"R_iq2xs_init_impl",                       (DL_FUNC) &R_iq2xs_init_impl,                        1},

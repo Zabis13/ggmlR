@@ -21,7 +21,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
     buf_a[buf_ib].qs[iqs] = data_a_packed32[ib].qs[iqs];
 
     if (iqs == 0) {
-        buf_a[buf_ib].dm = FLOAT_TYPE_VEC2(data_a_packed32[ib].dm);
+        buf_a[buf_ib].dm = FLOAT_TYPEV2(data_a_packed32[ib].dm);
     }
 #endif
 }
@@ -72,7 +72,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
     buf_a[buf_ib].qs[iqs] = data_a_packed32[ib].qs[iqs];
 
     if (iqs == 0) {
-        buf_a[buf_ib].dm = FLOAT_TYPE_VEC2(data_a_packed32[ib].dm);
+        buf_a[buf_ib].dm = FLOAT_TYPEV2(data_a_packed32[ib].dm);
         buf_a[buf_ib].qh = data_a_packed32[ib].qh;
     }
 #endif
@@ -203,7 +203,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
     buf_a[buf_ib].qs[iqs] = vals0 | (vals1 << 2) | (vals2 << 4) | (vals3 << 6);
 
     if (iqs == 0) {
-        buf_a[buf_ib].dm = FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm);
+        buf_a[buf_ib].dm = FLOAT_TYPEV2(data_a_packed32[ib_k].dm);
         buf_a[buf_ib].scales = unpack8(uint32_t(data_a_packed16[ib_k].scales[iqs_k / 8])).xy; // vec4 used due to #12147
     }
 }
@@ -264,7 +264,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
         const i8vec2 scales = i8vec2(unpack8(uint32_t(((data_a_packed16[ib_k].scales[(is % 8      ) / 2] >> (4 * (is / 8))) & 0x0F0F) |
                                                      (((data_a_packed16[ib_k].scales[(8 + (is % 4)) / 2] >> (2 * (is / 4))) & 0x0303) << 4))).xy); // vec4 used due to #12147
 
-        buf_a[buf_ib].d_scales = FLOAT_TYPE(data_a_packed16[ib_k].d) * FLOAT_TYPE_VEC2(scales - 32);
+        buf_a[buf_ib].d_scales = FLOAT_TYPEV2(float(data_a_packed16[ib_k].d) * vec2(scales - 32));
     }
 }
 
@@ -334,7 +334,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
                               (data_a[ib_k].scales[is+4] >>  4) | ((data_a[ib_k].scales[is  ] & 0xC0) >> 2));
         }
 
-        buf_a[buf_ib].dm = FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm) * FLOAT_TYPE_VEC2(scale_dm);
+        buf_a[buf_ib].dm = FLOAT_TYPEV2(vec2(data_a_packed32[ib_k].dm) * vec2(scale_dm));
     }
 }
 
@@ -373,7 +373,7 @@ void block_a_to_registers_shuffle(const uint reg_ib, const uint ib, const uint r
 #endif
 
     // Read dm on lane 0 of this row, broadcast to all lanes in subgroup
-    FLOAT_TYPE_VEC2 dm_val;
+    FLOAT_TYPEV2 dm_val;
     if (gl_SubgroupInvocationID == dm_lane) {
         const uint is = iqs_k / 8;
         u8vec2 scale_dm;
@@ -383,7 +383,7 @@ void block_a_to_registers_shuffle(const uint reg_ib, const uint ib, const uint r
             scale_dm = u8vec2((data_a[ib_k].scales[is+4] & 0xF) | ((data_a[ib_k].scales[is-4] & 0xC0) >> 2),
                               (data_a[ib_k].scales[is+4] >>  4) | ((data_a[ib_k].scales[is  ] & 0xC0) >> 2));
         }
-        dm_val = FLOAT_TYPE_VEC2(data_a_packed32[ib_k].dm) * FLOAT_TYPE_VEC2(scale_dm);
+        dm_val = FLOAT_TYPEV2(vec2(data_a_packed32[ib_k].dm) * vec2(scale_dm));
     }
     cache_a[reg_ib].dm.x = subgroupShuffle(dm_val.x, dm_lane);
     cache_a[reg_ib].dm.y = subgroupShuffle(dm_val.y, dm_lane);
@@ -429,7 +429,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
         const uint is = iqs_k / 4;
         const i8vec2 scales = unpack8(int32_t(data_a_packed16[ib_k].scales[is / 2])).xy;
 
-        buf_a[buf_ib].d_scales = FLOAT_TYPE(data_a_packed16[ib_k].d) * FLOAT_TYPE_VEC2(scales);
+        buf_a[buf_ib].d_scales = FLOAT_TYPEV2(float(data_a_packed16[ib_k].d) * vec2(scales));
     }
 }
 
@@ -463,11 +463,11 @@ void block_a_to_registers_shuffle(const uint reg_ib, const uint ib, const uint r
 
     // Read d_scales on lane 0 of this row, broadcast to all lanes in subgroup
     const uint dm_lane = row_in_wg * (BK / LOAD_VEC_A);
-    FLOAT_TYPE_VEC2 ds_val;
+    FLOAT_TYPEV2 ds_val;
     if (gl_SubgroupInvocationID == dm_lane) {
         const uint is       = iqs_k / 4;
         const i8vec2 scales = unpack8(int32_t(data_a_packed16[ib_k].scales[is / 2])).xy;
-        ds_val = FLOAT_TYPE(data_a_packed16[ib_k].d) * FLOAT_TYPE_VEC2(scales);
+        ds_val = FLOAT_TYPEV2(float(data_a_packed16[ib_k].d) * vec2(scales));
     }
     cache_a[reg_ib].d_scales.x = subgroupShuffle(ds_val.x, dm_lane);
     cache_a[reg_ib].d_scales.y = subgroupShuffle(ds_val.y, dm_lane);
@@ -503,7 +503,7 @@ void block_b_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const bo
         const uint ib_inner = ib % 4;
 
         if (iqs == 0) {
-            buf_b[buf_ib].ds = FLOAT_TYPE_VEC2(data_b[ib_outer].ds[ib_inner]);
+            buf_b[buf_ib].ds = FLOAT_TYPEV2(data_b[ib_outer].ds[ib_inner]);
         }
 
         const ivec4 values = data_b[ib_outer].qs[ib_inner * 2 + iqs];
@@ -513,7 +513,7 @@ void block_b_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const bo
         buf_b[buf_ib].qs[iqs * 4 + 3] = values.w;
     } else {
         if (iqs == 0) {
-            buf_b[buf_ib].ds = FLOAT_TYPE_VEC2(0.0f);
+            buf_b[buf_ib].ds = FLOAT_TYPEV2(0.0f);
         }
 
         buf_b[buf_ib].qs[iqs * 4    ] = 0;

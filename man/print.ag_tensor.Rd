@@ -11,6 +11,9 @@
 
 \item{...}{Ignored}
 }
+\value{
+The input \code{x}, returned invisibly (called for its side effect of printing).
+}
 \description{
 Print method for ag_tensor
 }

@@ -6,6 +6,12 @@
 \usage{
 is_ag_tensor(x)
 }
+\arguments{
+\item{x}{Any R object to test.}
+}
+\value{
+\code{TRUE} if \code{x} is an \code{ag_tensor} object, \code{FALSE} otherwise.
+}
 \description{
 Check if object is an ag_tensor
 }

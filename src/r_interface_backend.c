@@ -819,3 +819,221 @@ SEXP R_ggml_backend_device_register(SEXP device_ptr) {
     ggml_backend_device_register(device);
     return R_NilValue;
 }
+
+// ============================================================================
+// Meta backend (tensor parallelism across multiple devices)
+// ============================================================================
+
+// User data carried alongside the C callback. Holds the R closure that
+// computes the split state plus a flag for sticky errors so we don't keep
+// re-entering R after a failure.
+typedef struct {
+    SEXP fn;            // R function: function(tensor_info, n_devs) -> list(axis, ne, n_segments)
+    SEXP env;           // evaluation environment
+    size_t n_devs;
+    int    error_flag;  // becomes 1 if any callback invocation reported an R error
+} r_meta_callback_ud_t;
+
+// Builds a small R-side description of the tensor for the user's callback.
+// Keeps everything inside one PROTECT level to keep the trampoline lean.
+static SEXP r_meta_make_tensor_info(const struct ggml_tensor * t) {
+    SEXP info = PROTECT(Rf_allocVector(VECSXP, 5));
+    SEXP names = PROTECT(Rf_allocVector(STRSXP, 5));
+
+    SET_STRING_ELT(names, 0, Rf_mkChar("name"));
+    SET_STRING_ELT(names, 1, Rf_mkChar("type"));
+    SET_STRING_ELT(names, 2, Rf_mkChar("ne"));
+    SET_STRING_ELT(names, 3, Rf_mkChar("op"));
+    SET_STRING_ELT(names, 4, Rf_mkChar("flags"));
+
+    SET_VECTOR_ELT(info, 0, Rf_mkString(t->name));
+    SET_VECTOR_ELT(info, 1, Rf_ScalarInteger((int) t->type));
+
+    SEXP ne = PROTECT(Rf_allocVector(REALSXP, GGML_MAX_DIMS));
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        REAL(ne)[i] = (double) t->ne[i];
+    }
+    SET_VECTOR_ELT(info, 2, ne);
+    UNPROTECT(1);
+
+    SET_VECTOR_ELT(info, 3, Rf_ScalarInteger((int) t->op));
+    SET_VECTOR_ELT(info, 4, Rf_ScalarInteger((int) t->flags));
+
+    Rf_setAttrib(info, R_NamesSymbol, names);
+    UNPROTECT(2);
+    return info;
+}
+
+// Default (safe) split state returned when the R callback fails or returns
+// something unparseable: MIRRORED, n_segments = 1, ne is the original shape
+// repeated for every device.
+static struct ggml_backend_meta_split_state r_meta_default_split_state(const struct ggml_tensor * t, size_t n_devs) {
+    struct ggml_backend_meta_split_state ret = { GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, 1 };
+    for (size_t d = 0; d < n_devs && d < (size_t) GGML_BACKEND_META_MAX_DEVICES; d++) {
+        // For MIRRORED the per-device ne is just the tensor's own ne[axis],
+        // but axis is meaningless for mirrored; ggml only inspects axis here.
+        ret.ne[d] = 0;
+    }
+    return ret;
+}
+
+// C trampoline registered with ggml. Must be safe to call from any context
+// reachable through the meta backend; in practice ggml-0.11.0 invokes this
+// only from the thread that drives the API.
+static struct ggml_backend_meta_split_state r_meta_split_state_trampoline(const struct ggml_tensor * tensor, void * userdata) {
+    r_meta_callback_ud_t * ud = (r_meta_callback_ud_t *) userdata;
+
+    // Sticky error: if we already failed once, stop calling into R and return
+    // a safe default for every subsequent tensor — otherwise a broken callback
+    // would spray errors for every tensor in the model.
+    if (ud == NULL || ud->error_flag) {
+        return r_meta_default_split_state(tensor, ud ? ud->n_devs : 1);
+    }
+
+    SEXP tensor_info = PROTECT(r_meta_make_tensor_info(tensor));
+    SEXP n_devs_sxp  = PROTECT(Rf_ScalarInteger((int) ud->n_devs));
+    SEXP call        = PROTECT(Rf_lang3(ud->fn, tensor_info, n_devs_sxp));
+
+    int err = 0;
+    SEXP result = R_tryEvalSilent(call, ud->env, &err);
+
+    struct ggml_backend_meta_split_state ret = r_meta_default_split_state(tensor, ud->n_devs);
+
+    if (err) {
+        ud->error_flag = 1;
+        UNPROTECT(3);
+        return ret;
+    }
+
+    // The R wrapper (ggml_backend_meta_device) catches user errors with
+    // tryCatch and returns a sentinel object of class "ggmlR_meta_split_error"
+    // instead of letting the error propagate (which a session-level
+    // options(error = recover/browser) would otherwise hijack). Treat the
+    // sentinel exactly like a raw R error: sticky fallback to MIRRORED.
+    if (result != R_NilValue && Rf_inherits(result, "ggmlR_meta_split_error")) {
+        ud->error_flag = 1;
+        UNPROTECT(3);
+        return ret;
+    }
+
+    if (result != R_NilValue && Rf_isVectorList(result)) {
+        PROTECT(result);
+        SEXP axis_sxp       = R_NilValue;
+        SEXP ne_sxp         = R_NilValue;
+        SEXP n_segments_sxp = R_NilValue;
+        SEXP names          = Rf_getAttrib(result, R_NamesSymbol);
+        if (names != R_NilValue) {
+            for (R_xlen_t i = 0; i < XLENGTH(result); i++) {
+                const char * nm = CHAR(STRING_ELT(names, i));
+                SEXP v = VECTOR_ELT(result, i);
+                if      (strcmp(nm, "axis")       == 0) axis_sxp       = v;
+                else if (strcmp(nm, "ne")         == 0) ne_sxp         = v;
+                else if (strcmp(nm, "n_segments") == 0) n_segments_sxp = v;
+            }
+        }
+
+        if (axis_sxp != R_NilValue && (Rf_isInteger(axis_sxp) || Rf_isReal(axis_sxp))) {
+            ret.axis = (enum ggml_backend_meta_split_axis) Rf_asInteger(axis_sxp);
+        }
+        if (n_segments_sxp != R_NilValue && (Rf_isInteger(n_segments_sxp) || Rf_isReal(n_segments_sxp))) {
+            int ns = Rf_asInteger(n_segments_sxp);
+            if (ns >= 1) {
+                ret.n_segments = (uint32_t) ns;
+            }
+        }
+        if (ne_sxp != R_NilValue && (Rf_isInteger(ne_sxp) || Rf_isReal(ne_sxp))) {
+            const R_xlen_t want = (R_xlen_t) ret.n_segments * (R_xlen_t) ud->n_devs;
+            const R_xlen_t have = XLENGTH(ne_sxp);
+            const R_xlen_t cap  = (R_xlen_t) (16 * GGML_BACKEND_META_MAX_DEVICES);
+            const R_xlen_t lim  = want < have ? want : have;
+            const R_xlen_t use  = lim  < cap  ? lim  : cap;
+            if (Rf_isInteger(ne_sxp)) {
+                for (R_xlen_t i = 0; i < use; i++) {
+                    ret.ne[i] = (int64_t) INTEGER(ne_sxp)[i];
+                }
+            } else {
+                for (R_xlen_t i = 0; i < use; i++) {
+                    ret.ne[i] = (int64_t) REAL(ne_sxp)[i];
+                }
+            }
+        }
+        UNPROTECT(1);
+    }
+
+    UNPROTECT(3);
+    return ret;
+}
+
+// Finalizer for the meta-device XPtr: releases the preserved R objects.
+// Note: ggml does not currently expose a destroy callback for meta devices,
+// so the device itself outlives the finalizer; this is acceptable because the
+// finalizer only fires when no R-side reference remains, which implies the
+// device is no longer reachable from R code either.
+static void r_meta_callback_ud_finalizer(SEXP xp) {
+    r_meta_callback_ud_t * ud = (r_meta_callback_ud_t *) R_ExternalPtrAddr(xp);
+    if (ud != NULL) {
+        if (ud->fn  != R_NilValue) R_ReleaseObject(ud->fn);
+        if (ud->env != R_NilValue) R_ReleaseObject(ud->env);
+        free(ud);
+        R_ClearExternalPtr(xp);
+    }
+}
+
+SEXP R_ggml_backend_meta_device(SEXP devs_list, SEXP fn, SEXP env) {
+    if (TYPEOF(devs_list) != VECSXP) {
+        Rf_error("devs must be a list of device external pointers");
+    }
+    const R_xlen_t n_devs = XLENGTH(devs_list);
+    if (n_devs <= 0 || n_devs > GGML_BACKEND_META_MAX_DEVICES) {
+        Rf_error("n_devs must be in [1, %d]", GGML_BACKEND_META_MAX_DEVICES);
+    }
+    if (!Rf_isFunction(fn)) {
+        Rf_error("fn must be a function(tensor_info, n_devs)");
+    }
+    if (!Rf_isEnvironment(env)) {
+        Rf_error("env must be an environment");
+    }
+
+    ggml_backend_dev_t devs[GGML_BACKEND_META_MAX_DEVICES];
+    for (R_xlen_t i = 0; i < n_devs; i++) {
+        SEXP p = VECTOR_ELT(devs_list, i);
+        if (TYPEOF(p) != EXTPTRSXP) {
+            Rf_error("devs[[%d]] is not an external pointer", (int)(i+1));
+        }
+        ggml_backend_dev_t d = (ggml_backend_dev_t) R_ExternalPtrAddr(p);
+        if (d == NULL) {
+            Rf_error("devs[[%d]] is a NULL device pointer", (int)(i+1));
+        }
+        devs[i] = d;
+    }
+
+    r_meta_callback_ud_t * ud = (r_meta_callback_ud_t *) calloc(1, sizeof(r_meta_callback_ud_t));
+    if (ud == NULL) {
+        Rf_error("out of memory");
+    }
+    ud->fn         = fn;
+    ud->env        = env;
+    ud->n_devs     = (size_t) n_devs;
+    ud->error_flag = 0;
+    R_PreserveObject(fn);
+    R_PreserveObject(env);
+
+    ggml_backend_dev_t meta_dev = ggml_backend_meta_device(devs, (size_t) n_devs, r_meta_split_state_trampoline, ud);
+    if (meta_dev == NULL) {
+        R_ReleaseObject(fn);
+        R_ReleaseObject(env);
+        free(ud);
+        Rf_error("ggml_backend_meta_device() returned NULL");
+    }
+
+    // Wrap in two XPtrs: outer (returned) holds the device; inner holds ud and
+    // its finalizer. We attach the ud-XPtr as the device-XPtr's tag so it lives
+    // exactly as long as the device-XPtr.
+    SEXP ud_xp = PROTECT(R_MakeExternalPtr(ud, R_NilValue, R_NilValue));
+    R_RegisterCFinalizerEx(ud_xp, r_meta_callback_ud_finalizer, TRUE);
+
+    SEXP dev_xp = PROTECT(R_MakeExternalPtr(meta_dev, ud_xp, R_NilValue));
+
+    UNPROTECT(2);
+    return dev_xp;
+}

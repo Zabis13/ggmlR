@@ -283,7 +283,13 @@ if [ "$USE_VULKAN" = "yes" ]; then
     exit 1
   fi
 
-  # Create output directories
+  # Wipe any stale generated/ from a previous configure run (possibly built
+  # with a different glslc). The shader set depends on glslc feature support
+  # (integer_dot, coopmat, bf16); a partial overwrite would leave orphan .cpp
+  # whose symbols are no longer declared in the regenerated header, breaking
+  # the final link with "undefined symbol: arr_dmmv_*". Always regenerate the
+  # full set from scratch so generated/ matches the current glslc exactly.
+  rm -rf ../generated
   mkdir -p ../generated/spv
 
   # Generate header file

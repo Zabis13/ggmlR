@@ -6,6 +6,9 @@
 \usage{
 nn_build_layer(ctx, input_tensor, layer, training = TRUE, ctx_weights = NULL)
 }
+\value{
+A \code{ggml_tensor} produced by the appropriate per-type build helper.
+}
 \description{
 Build a layer's forward pass
 }

@@ -6,6 +6,9 @@
 \usage{
 nn_build_dense(ctx, input_tensor, layer)
 }
+\value{
+A \code{ggml_tensor} with the dense (matmul + bias + activation) output.
+}
 \description{
 Build dense forward pass
 }

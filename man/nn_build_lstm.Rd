@@ -6,6 +6,9 @@
 \usage{
 nn_build_lstm(ctx, input_tensor, layer, batch_size)
 }
+\value{
+A \code{ggml_tensor}: last hidden state \code{[units, N]}, or all hidden states \code{[units, seq_len, N]} if \code{return_sequences = TRUE}.
+}
 \description{
 Build LSTM forward pass for Sequential model
 }

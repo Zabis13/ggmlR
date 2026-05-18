@@ -6,6 +6,9 @@
 \usage{
 nn_init_zeros(tensor)
 }
+\value{
+Called for its side effect (zero-fills \code{tensor}); invisibly returns \code{NULL}.
+}
 \description{
 Initialize bias tensor to zeros
 }

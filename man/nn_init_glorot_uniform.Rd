@@ -6,6 +6,9 @@
 \usage{
 nn_init_glorot_uniform(tensor, fan_in, fan_out)
 }
+\value{
+Called for its side effect (writes initial weights into \code{tensor}); invisibly returns \code{NULL}.
+}
 \description{
 Initialize weight tensor with Glorot uniform distribution
 }

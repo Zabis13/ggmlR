@@ -89,19 +89,18 @@
 namespace fs = std::filesystem;
 
 static std::string path_str(const fs::path & path) {
-    std::string u8path;
     try {
 #if defined(__cpp_lib_char8_t)
         // C++20 and later: u8string() returns std::u8string
-        std::u8string u8str = path.u8string();
-        u8path = std::string(reinterpret_cast<const char*>(u8str.c_str()));
+        const std::u8string u8str = path.u8string();
+        return std::string(reinterpret_cast<const char *>(u8str.data()), u8str.size());
 #else
         // C++17: u8string() returns std::string
-        u8path = path.u8string();
+        return path.u8string();
 #endif
     } catch (...) {
+        return std::string();
     }
-    return u8path;
 }
 
 #if defined(__clang__)
@@ -242,6 +241,12 @@ struct ggml_backend_registry {
             return;
         }
 
+        for (auto & entry : backends) {
+            if (entry.reg == reg) {
+                return;
+            }
+        }
+
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: registered backend %s (%zu devices)\n",
             __func__, ggml_backend_reg_name(reg), ggml_backend_reg_dev_count(reg));
@@ -253,6 +258,12 @@ struct ggml_backend_registry {
     }
 
     void register_device(ggml_backend_dev_t device) {
+        for (auto & dev : devices) {
+            if (dev == device) {
+                return;
+            }
+        }
+
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: registered device %s (%s)\n", __func__, ggml_backend_dev_name(device), ggml_backend_dev_description(device));
 #endif
@@ -539,9 +550,10 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
 
     int best_score = 0;
     fs::path best_path;
+    std::error_code ec;
 
     for (const auto & search_path : search_paths) {
-        if (std::error_code ec; !fs::exists(search_path, ec)) {
+        if (!fs::exists(search_path, ec)) {
             if (ec) {
                 GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(search_path).c_str(), ec.message().c_str());
             } else {
@@ -551,7 +563,7 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
         }
         fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied);
         for (const auto & entry : dir_it) {
-            if (entry.is_regular_file()) {
+            if (entry.is_regular_file(ec)) {
                 auto filename = entry.path().filename();
                 auto ext = entry.path().extension();
                 if (filename.native().find(file_prefix) == 0 && ext == file_extension) {

@@ -20,6 +20,9 @@ nn_build_functional_node(
 (for shared layers -- second+ application of a named layer).  When not
 NULL the function uses these tensors instead of allocating new ones.}
 }
+\value{
+A \code{ggml_tensor} produced by building the given functional graph node.
+}
 \description{
 Build a single ggml tensor for one functional node
 }

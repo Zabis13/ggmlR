@@ -72,6 +72,68 @@ for (i in seq_len(n)) {
     cat("   (KHR coopmat subgroup tile sizes)\n")
   }
 
+  # --- BF16 coopmat path (Flux/SD3 native weights) ---
+  # caps$bf16 reports the VK_KHR_shader_bfloat16 extension only. The actual
+  # BF16 coopmat matmul pipeline is additionally gated at BUILD time by
+  # -DGGML_VULKAN_BFLOAT16_GLSLC_SUPPORT, set in configure ONLY if the glslc
+  # used at install time can compile GL_EXT_bfloat16. An old system glslc
+  # silently disables the whole BF16 coopmat path even though the hardware
+  # and the C++ pipeline both support it. This block reproduces that exact
+  # configure feature test so the gate is visible without a rebuild.
+  if (i == 1L) {  # build gate is global; report once
+    cat("\n  --- BF16 coopmat build gate (Flux/SD3) ---\n")
+
+    bf16_test <- system.file("ggml-vulkan/vulkan-shaders/feature-tests/bfloat16.comp",
+                             package = "ggmlR")
+    if (!nzchar(bf16_test)) {
+      # installed package strips src/; fall back to repo-relative path
+      cand <- "src/ggml-vulkan/vulkan-shaders/feature-tests/bfloat16.comp"
+      if (file.exists(cand)) bf16_test <- cand
+    }
+
+    glslc <- Sys.which("glslc")
+    if (!nzchar(glslc)) {
+      cat("  glslc                : NOT FOUND in PATH\n")
+      cat("    Cannot verify BF16 build gate. Source the Vulkan SDK\n")
+      cat("    setup-env.sh before installing ggmlR.\n")
+    } else {
+      cat(sprintf("  glslc                : %s\n", glslc))
+      ver <- tryCatch(
+        system2(glslc, "--version", stdout = TRUE, stderr = TRUE)[1],
+        error = function(e) NA_character_)
+      if (!is.na(ver)) cat(sprintf("    (%s)\n", trimws(ver)))
+
+      if (nzchar(bf16_test) && file.exists(bf16_test)) {
+        rc <- suppressWarnings(system2(
+          glslc, c("--target-env=vulkan1.2", "-o", "/dev/null",
+                   shQuote(bf16_test)),
+          stdout = FALSE, stderr = FALSE))
+        gate_ok <- identical(rc, 0L)
+        cat(sprintf("  GL_EXT_bfloat16      : %s\n",
+                    if (gate_ok) "COMPILES (gate would PASS)"
+                    else         "REJECTED (gate FAILS)"))
+        if (gate_ok && caps$bf16) {
+          cat("  => BF16 coopmat ACTIVE: Flux/SD3 BF16 weights use\n")
+          cat("     native BF16xBF16 coopmat (no BF16->F16 fallback)\n")
+        } else if (gate_ok && !caps$bf16) {
+          cat("  => glslc OK but device lacks VK_KHR_shader_bfloat16\n")
+          cat("     (BF16 coopmat unavailable on this GPU)\n")
+        } else {
+          cat("  => BF16 coopmat DISABLED at build time.\n")
+          cat("     Hardware/pipeline support it, but this glslc is too\n")
+          cat("     old. Rebuild with Vulkan SDK glslc first in PATH:\n")
+          cat("       source <vulkansdk>/setup-env.sh\n")
+          cat("       which glslc   # must NOT be /usr/bin/glslc\n")
+          cat("       ./cleanup && R CMD INSTALL . --configure-args=\"--with-simd\"\n")
+        }
+      } else {
+        cat("  bfloat16.comp        : test shader not found\n")
+        cat("    (installed package; run this from the ggmlR repo root\n")
+        cat("     to verify the build gate)\n")
+      }
+    }
+  }
+
   # --- Summary verdict ---
   cat("\n  --- Verdict ---\n")
 

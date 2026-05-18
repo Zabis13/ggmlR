@@ -50,9 +50,9 @@ GGML_OBJECTS = \
   r_ggml_io.o \
   ggml-private.o \
   ggml-alloc.o \
-  ggml-quants-legacy.o ggml-quants-iq.o ggml-quants-validate.o \
+  ggml-quants-legacy.o ggml-quants-iq.o ggml-quants-validate.o ggml-quants-new.o \
   ggml-opt.o gguf.o \
-  ggml-backend.o ggml-backend-reg.o ggml-threading.o \
+  ggml-backend.o ggml-backend-reg.o ggml-backend-meta.o ggml-threading.o \
   ggml-cpu/traits.o \
   ggml-cpu/ggml-cpu-backend.o ggml-cpu/ggml-cpu.o \
   ggml-cpu/ops-private.o ggml-cpu/vec.o \

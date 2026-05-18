@@ -189,6 +189,32 @@ dequantize_row_mxfp4 <- function(raw_data, n_elements) {
   .Call("R_dequantize_row_mxfp4", raw_data, as.numeric(n_elements))
 }
 
+#' Dequantize Q1_0 Data
+#'
+#' Converts Q1_0 quantized data back to float values.
+#'
+#' @param raw_data Raw vector of Q1_0 quantized data
+#' @param n_elements Number of dequantized elements (must be multiple of 128)
+#' @return Numeric vector of dequantized values
+#' @export
+#' @family quantization
+dequantize_row_q1_0 <- function(raw_data, n_elements) {
+  .Call("R_dequantize_row_q1_0", raw_data, as.numeric(n_elements))
+}
+
+#' Dequantize NVFP4 Data
+#'
+#' Converts NVFP4 quantized data back to float values.
+#'
+#' @param raw_data Raw vector of NVFP4 quantized data
+#' @param n_elements Number of dequantized elements (must be multiple of 64)
+#' @return Numeric vector of dequantized values
+#' @export
+#' @family quantization
+dequantize_row_nvfp4 <- function(raw_data, n_elements) {
+  .Call("R_dequantize_row_nvfp4", raw_data, as.numeric(n_elements))
+}
+
 # ============================================================================
 # Quantize Functions (with importance matrix support)
 # ============================================================================
@@ -399,6 +425,38 @@ quantize_iq4_xs <- function(src_data, n_rows, n_per_row, imatrix = NULL) {
 #' @family quantization
 quantize_mxfp4 <- function(src_data, n_rows, n_per_row, imatrix = NULL) {
   .Call("R_quantize_mxfp4", as.numeric(src_data), as.numeric(n_rows),
+        as.numeric(n_per_row), imatrix)
+}
+
+#' Quantize Data (Q1_0)
+#'
+#' Quantizes float data to Q1_0 format (1-bit-per-weight sign quantization).
+#'
+#' @param src_data Numeric vector of float values to quantize
+#' @param n_rows Number of rows
+#' @param n_per_row Number of elements per row (must be multiple of 128)
+#' @param imatrix Optional importance matrix (currently ignored)
+#' @return Raw vector of quantized data
+#' @export
+#' @family quantization
+quantize_q1_0 <- function(src_data, n_rows, n_per_row, imatrix = NULL) {
+  .Call("R_quantize_q1_0", as.numeric(src_data), as.numeric(n_rows),
+        as.numeric(n_per_row), imatrix)
+}
+
+#' Quantize Data (NVFP4)
+#'
+#' Quantizes float data to NVFP4 format (NVIDIA FP4 with UE4M3 per-sub-block scale).
+#'
+#' @param src_data Numeric vector of float values to quantize
+#' @param n_rows Number of rows
+#' @param n_per_row Number of elements per row (must be multiple of 64)
+#' @param imatrix Optional importance matrix (currently ignored)
+#' @return Raw vector of quantized data
+#' @export
+#' @family quantization
+quantize_nvfp4 <- function(src_data, n_rows, n_per_row, imatrix = NULL) {
+  .Call("R_quantize_nvfp4", as.numeric(src_data), as.numeric(n_rows),
         as.numeric(n_per_row), imatrix)
 }
 

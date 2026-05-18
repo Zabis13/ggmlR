@@ -492,6 +492,7 @@ nn_topo_sort <- function(outputs) {
 # ============================================================================
 
 #' Infer output shape of a functional node given its parent shapes
+#' @return An integer vector with the inferred output shape (excluding the batch dimension).
 #' @keywords internal
 nn_functional_output_shape <- function(node, parent_shapes) {
   switch(node$node_type,
@@ -594,6 +595,7 @@ nn_functional_output_shape <- function(node, parent_shapes) {
 #' @param reuse_weights Named list of pre-allocated weight tensors to reuse
 #'   (for shared layers -- second+ application of a named layer).  When not
 #'   NULL the function uses these tensors instead of allocating new ones.
+#' @return A \code{ggml_tensor} produced by building the given functional graph node.
 #' @keywords internal
 nn_build_functional_node <- function(node, built_tensors, built_shapes,
                                       ctx_weights, ctx_compute, batch_size,

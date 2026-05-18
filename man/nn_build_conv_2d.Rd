@@ -6,6 +6,9 @@
 \usage{
 nn_build_conv_2d(ctx, input_tensor, layer)
 }
+\value{
+A \code{ggml_tensor} holding the 2-D convolution output (with bias and activation applied).
+}
 \description{
 Build conv_2d forward pass
 }

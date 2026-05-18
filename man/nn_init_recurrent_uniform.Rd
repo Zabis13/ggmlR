@@ -6,6 +6,9 @@
 \usage{
 nn_init_recurrent_uniform(tensor)
 }
+\value{
+Called for its side effect (fills \code{tensor} with deterministic small values); invisibly returns \code{NULL}.
+}
 \description{
 Uses a fixed zigzag pattern in [-0.01, 0.01] — no RNG, fully reproducible
 across all platforms and independent of the R random seed state.

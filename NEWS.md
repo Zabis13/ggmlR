@@ -1,3 +1,11 @@
+# ggmlR 0.7.7
+
+* **ggml-0.11.0 migration complete** (vendored library upgraded from 0.9.5); all ggmlR features and optimizations preserved (5D indexing, Q4_K Flash Attention, RDNA4 subgroup-shuffle MMQ, Vulkan 1.4 push constants).
+* CPU backend updated to 0.11.0: `use_ref` flag, Hadamard FWHT op, rewritten Flash Attention (split-KV + tiled).
+* Vulkan shaders synchronized with 0.11.0 across all stages.
+* New quantization types **Q1_0** and **NVFP4**. CPU works end-to-end; Vulkan registers dequant shaders, `MUL_MAT` falls back to CPU.
+* New exports: `quantize_q1_0()`, `quantize_nvfp4()`, `dequantize_row_q1_0()`, `dequantize_row_nvfp4()`.
+
 # ggmlR 0.7.6
 
 * **Fix**: `R6` moved from `Suggests` to `Imports` — package now loads correctly when `R6` is not pre-installed.

@@ -6,6 +6,9 @@
 \usage{
 nn_init_he_uniform(tensor, fan_in)
 }
+\value{
+Called for its side effect (writes initial weights into \code{tensor}); invisibly returns \code{NULL}.
+}
 \description{
 Initialize weight tensor with He uniform distribution
 }

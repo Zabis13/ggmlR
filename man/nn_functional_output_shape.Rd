@@ -6,6 +6,9 @@
 \usage{
 nn_functional_output_shape(node, parent_shapes)
 }
+\value{
+An integer vector with the inferred output shape (excluding the batch dimension).
+}
 \description{
 Infer output shape of a functional node given its parent shapes
 }

@@ -6,6 +6,9 @@
 \usage{
 nn_build_embedding(ctx_weights, ctx_compute, input_tensor, layer)
 }
+\value{
+A \code{ggml_tensor} with the embedded rows for each input index.
+}
 \description{
 Build embedding forward pass
 }

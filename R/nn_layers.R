@@ -728,6 +728,7 @@ nn_infer_shapes <- function(model) {
 # ============================================================================
 
 #' Apply activation function
+#' @return A \code{ggml_tensor} with the activation applied, or \code{tensor} unchanged when \code{activation} is \code{NULL}.
 #' @keywords internal
 nn_apply_activation <- function(ctx, tensor, activation) {
   if (is.null(activation)) return(tensor)
@@ -746,6 +747,7 @@ nn_apply_activation <- function(ctx, tensor, activation) {
 }
 
 #' Build conv_1d forward pass
+#' @return A \code{ggml_tensor} holding the 1-D convolution output (with bias and activation applied).
 #' @keywords internal
 nn_build_conv_1d <- function(ctx, input_tensor, layer) {
   kernel <- layer$weights$kernel
@@ -769,6 +771,7 @@ nn_build_conv_1d <- function(ctx, input_tensor, layer) {
 }
 
 #' Build conv_2d forward pass
+#' @return A \code{ggml_tensor} holding the 2-D convolution output (with bias and activation applied).
 #' @keywords internal
 nn_build_conv_2d <- function(ctx, input_tensor, layer) {
   kernel <- layer$weights$kernel
@@ -797,6 +800,7 @@ nn_build_conv_2d <- function(ctx, input_tensor, layer) {
 }
 
 #' Build max_pooling_2d forward pass
+#' @return A \code{ggml_tensor} holding the 2-D max-pooled output.
 #' @keywords internal
 nn_build_max_pooling_2d <- function(ctx, input_tensor, layer) {
   k0 <- layer$config$pool_size[2]  # width (ne0)
@@ -812,6 +816,7 @@ nn_build_max_pooling_2d <- function(ctx, input_tensor, layer) {
 #'
 #' Tensor layout in ggml (column-major): [W, H, C, N].
 #' Pool the entire spatial extent (k0=W, k1=H), then reshape [1,1,C,N]->[C,N].
+#' @return A \code{ggml_tensor} of shape \code{[C, N]} with channel-wise maxima.
 #' @keywords internal
 nn_build_global_max_pooling_2d <- function(ctx, input_tensor, layer) {
   sh <- ggml_tensor_shape(input_tensor)   # [W, H, C, N] (ggml order)
@@ -824,6 +829,7 @@ nn_build_global_max_pooling_2d <- function(ctx, input_tensor, layer) {
 }
 
 #' Build global_average_pooling_2d forward pass
+#' @return A \code{ggml_tensor} of shape \code{[C, N]} with channel-wise means.
 #' @keywords internal
 nn_build_global_average_pooling_2d <- function(ctx, input_tensor, layer) {
   sh <- ggml_tensor_shape(input_tensor)
@@ -835,6 +841,7 @@ nn_build_global_average_pooling_2d <- function(ctx, input_tensor, layer) {
 }
 
 #' Build flatten forward pass
+#' @return A 2-D \code{ggml_tensor} of shape \code{[features, batch]}.
 #' @keywords internal
 nn_build_flatten <- function(ctx, input_tensor, layer) {
   n_features <- prod(layer$input_shape)
@@ -847,6 +854,7 @@ nn_build_flatten <- function(ctx, input_tensor, layer) {
 }
 
 #' Build dense forward pass
+#' @return A \code{ggml_tensor} with the dense (matmul + bias + activation) output.
 #' @keywords internal
 nn_build_dense <- function(ctx, input_tensor, layer) {
   W <- layer$weights$weight
@@ -858,6 +866,7 @@ nn_build_dense <- function(ctx, input_tensor, layer) {
 }
 
 #' Build batch_norm forward pass
+#' @return A \code{ggml_tensor} with RMS-normalized, scaled and shifted values.
 #' @keywords internal
 nn_build_batch_norm <- function(ctx, input_tensor, layer) {
   gamma <- layer$weights$gamma
@@ -889,6 +898,7 @@ nn_build_batch_norm <- function(ctx, input_tensor, layer) {
 }
 
 #' Build dropout forward pass
+#' @return A \code{ggml_tensor}: scaled input during training, the input unchanged when \code{training = FALSE}.
 #' @keywords internal
 nn_build_dropout <- function(ctx, input_tensor, layer, training = TRUE) {
   if (!training) return(input_tensor)
@@ -904,6 +914,7 @@ nn_build_dropout <- function(ctx, input_tensor, layer, training = TRUE) {
 }
 
 #' Build embedding forward pass
+#' @return A \code{ggml_tensor} with the embedded rows for each input index.
 #' @keywords internal
 nn_build_embedding <- function(ctx_weights, ctx_compute, input_tensor, layer) {
   vocab_size <- layer$config$vocab_size
@@ -913,6 +924,7 @@ nn_build_embedding <- function(ctx_weights, ctx_compute, input_tensor, layer) {
 }
 
 #' Build a layer's forward pass
+#' @return A \code{ggml_tensor} produced by the appropriate per-type build helper.
 #' @keywords internal
 nn_build_layer <- function(ctx, input_tensor, layer, training = TRUE,
                             ctx_weights = NULL) {
@@ -938,6 +950,7 @@ nn_build_layer <- function(ctx, input_tensor, layer, training = TRUE,
 # ============================================================================
 
 #' Initialize weight tensor with He uniform distribution
+#' @return Called for its side effect (writes initial weights into \code{tensor}); invisibly returns \code{NULL}.
 #' @importFrom stats runif
 #' @keywords internal
 nn_init_he_uniform <- function(tensor, fan_in) {
@@ -947,6 +960,7 @@ nn_init_he_uniform <- function(tensor, fan_in) {
 }
 
 #' Initialize weight tensor with Glorot uniform distribution
+#' @return Called for its side effect (writes initial weights into \code{tensor}); invisibly returns \code{NULL}.
 #' @keywords internal
 nn_init_glorot_uniform <- function(tensor, fan_in, fan_out) {
   n <- ggml_nelements(tensor)
@@ -955,6 +969,7 @@ nn_init_glorot_uniform <- function(tensor, fan_in, fan_out) {
 }
 
 #' Initialize bias tensor to zeros
+#' @return Called for its side effect (zero-fills \code{tensor}); invisibly returns \code{NULL}.
 #' @keywords internal
 nn_init_zeros <- function(tensor) {
   n <- ggml_nelements(tensor)
@@ -965,6 +980,7 @@ nn_init_zeros <- function(tensor) {
 #'
 #' Uses a fixed zigzag pattern in [-0.01, 0.01] — no RNG, fully reproducible
 #' across all platforms and independent of the R random seed state.
+#' @return Called for its side effect (fills \code{tensor} with deterministic small values); invisibly returns \code{NULL}.
 #' @keywords internal
 nn_init_recurrent_uniform <- function(tensor) {
   n <- ggml_nelements(tensor)
@@ -1266,6 +1282,7 @@ nn_gru_step <- function(ctx, x_t, h_t, W_zh, U_zh, b_zh,
 }
 
 #' Build LSTM forward pass for Sequential model
+#' @return A \code{ggml_tensor}: last hidden state \code{[units, N]}, or all hidden states \code{[units, seq_len, N]} if \code{return_sequences = TRUE}.
 #' @keywords internal
 nn_build_lstm <- function(ctx, input_tensor, layer, batch_size) {
   units        <- layer$config$units
@@ -1325,6 +1342,7 @@ nn_build_lstm <- function(ctx, input_tensor, layer, batch_size) {
 }
 
 #' Build GRU forward pass for Sequential model
+#' @return A \code{ggml_tensor}: last hidden state \code{[units, N]}, or all hidden states \code{[units, seq_len, N]} if \code{return_sequences = TRUE}.
 #' @keywords internal
 nn_build_gru <- function(ctx, input_tensor, layer, batch_size) {
   units     <- layer$config$units

@@ -131,3 +131,57 @@ test_that("backend_register and device_register exist", {
   expect_true(is.function(ggml_backend_register))
   expect_true(is.function(ggml_backend_device_register))
 })
+
+test_that("ggml_backend_load returns NULL for a missing shared object", {
+  # Loading a non-existent backend plugin must not crash; it warns and
+  # returns NULL (the C dlopen fails).
+  res <- ggml_backend_load("/nonexistent/libggml-doesnotexist.so")
+  expect_null(res)
+})
+
+test_that("ggml_backend_multi_buffer_alloc_buffer wraps real buffers", {
+  skip_on_cran()
+
+  backend <- ggml_backend_cpu_init()
+  skip_if(is.null(backend), "CPU backend not available")
+  on.exit(ggml_backend_free(backend), add = TRUE)
+
+  ctx1 <- ggml_init(1024 * 1024, no_alloc = TRUE)
+  on.exit(ggml_free(ctx1), add = TRUE)
+  ctx2 <- ggml_init(1024 * 1024, no_alloc = TRUE)
+  on.exit(ggml_free(ctx2), add = TRUE)
+
+  ggml_new_tensor_1d(ctx1, GGML_TYPE_F32, 10)
+  ggml_new_tensor_1d(ctx2, GGML_TYPE_F32, 20)
+
+  buf1 <- ggml_backend_alloc_ctx_tensors(ctx1, backend)
+  buf2 <- ggml_backend_alloc_ctx_tensors(ctx2, backend)
+
+  multi <- ggml_backend_multi_buffer_alloc_buffer(list(buf1, buf2))
+  on.exit(ggml_backend_buffer_free(multi), add = TRUE)
+
+  expect_false(is.null(multi))
+  # The wrapper around several backend buffers must report as a multi-buffer.
+  expect_true(ggml_backend_buffer_is_multi_buffer(multi))
+})
+
+test_that("ggml_backend_multi_buffer_set_usage runs on a multi-buffer", {
+  skip_on_cran()
+
+  backend <- ggml_backend_cpu_init()
+  skip_if(is.null(backend), "CPU backend not available")
+  on.exit(ggml_backend_free(backend), add = TRUE)
+
+  ctx <- ggml_init(1024 * 1024, no_alloc = TRUE)
+  on.exit(ggml_free(ctx), add = TRUE)
+  ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 16)
+  buf <- ggml_backend_alloc_ctx_tensors(ctx, backend)
+
+  multi <- ggml_backend_multi_buffer_alloc_buffer(list(buf))
+  on.exit(ggml_backend_buffer_free(multi), add = TRUE)
+
+  # Setting usage on every wrapped buffer must succeed silently.
+  expect_silent(
+    ggml_backend_multi_buffer_set_usage(multi, ggml_backend_buffer_usage_weights())
+  )
+})

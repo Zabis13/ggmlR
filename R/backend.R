@@ -627,3 +627,79 @@ ggml_backend_register <- function(reg) {
 ggml_backend_device_register <- function(device) {
   invisible(.Call("R_ggml_backend_device_register", device))
 }
+
+# ============================================================================
+# Meta backend (tensor parallelism across multiple devices) — experimental
+# ============================================================================
+
+#' Create a Meta Backend Device
+#'
+#' Creates a "meta" device that wraps multiple "simple" backend devices for
+#' tensor parallelism. Each tensor is split across the wrapped devices
+#' according to the result of \code{split_fn}, which is called by ggml when
+#' weight buffers are allocated.
+#'
+#' The split function is invoked with two arguments:
+#' \describe{
+#'   \item{tensor_info}{a named list with fields \code{name} (character),
+#'     \code{type} (integer ggml_type enum), \code{ne} (numeric vector of
+#'     dimensions), \code{op} (integer op enum), \code{flags} (integer).}
+#'   \item{n_devs}{the number of simple devices wrapped by the meta backend.}
+#' }
+#'
+#' It must return a named list with:
+#' \describe{
+#'   \item{axis}{integer; one of 0..3 to split along a tensor axis,
+#'     10 for \code{MIRRORED} (full copy on each device),
+#'     11 for \code{PARTIAL} (each device has a partial sum), or
+#'     98/99 for \code{NONE}/\code{UNKNOWN}.}
+#'   \item{ne}{integer or numeric vector of length \code{n_segments * n_devs}
+#'     giving the per-segment, per-device slice size along the split axis.}
+#'   \item{n_segments}{integer; usually 1, larger for fused tensors like QKV.}
+#' }
+#'
+#' If \code{split_fn} errors or returns an unparseable result, the meta
+#' backend silently falls back to \code{MIRRORED} for that tensor and stops
+#' calling the callback (sticky error). This is intentional: a misbehaving
+#' callback would otherwise spray errors for every tensor in the model.
+#'
+#' Note: with a single device this is a degenerate (no-op) configuration —
+#' useful for testing but provides no parallelism benefit. The feature is
+#' \strong{experimental} and the API may change.
+#'
+#' @param devs A list of \code{ggml_backend_dev_t} external pointers.
+#' @param split_fn A function \code{function(tensor_info, n_devs)} returning
+#'   the split state as described above.
+#' @param env An environment in which to evaluate \code{split_fn};
+#'   defaults to the function's enclosing environment.
+#' @return External pointer to the meta \code{ggml_backend_dev_t}.
+#' @export
+#' @family backend
+ggml_backend_meta_device <- function(devs, split_fn, env = environment(split_fn)) {
+  stopifnot(is.list(devs), length(devs) >= 1L)
+  stopifnot(is.function(split_fn))
+  if (is.null(env)) env <- globalenv()
+
+  # The C trampoline treats an errored split_fn as the signal to fall back to
+  # MIRRORED (sticky after the first failure). Letting the error propagate
+  # works, but a session-level options(error = recover/browser) would hijack
+  # it and drop into a debugger prompt mid-callback (devtools::test() sets
+  # error = recover). Catch it here and hand the C side an explicit sentinel
+  # of class "ggmlR_meta_split_error" instead; the trampoline recognises it
+  # and applies the exact same sticky MIRRORED fallback. options() is left
+  # untouched so this is CRAN-clean.
+  user_split_fn <- split_fn
+  split_fn <- function(tensor_info, n_devs) {
+    tryCatch(
+      user_split_fn(tensor_info, n_devs),
+      error = function(e) {
+        structure(
+          list(message = conditionMessage(e)),
+          class = "ggmlR_meta_split_error"
+        )
+      }
+    )
+  }
+
+  .Call("R_ggml_backend_meta_device", devs, split_fn, env)
+}

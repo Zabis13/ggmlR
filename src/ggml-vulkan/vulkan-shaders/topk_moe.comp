@@ -23,6 +23,10 @@ layout(constant_id = 1) const uint n_experts_spec = 512;
 layout(constant_id = 2) const bool with_norm = true;
 layout(constant_id = 3) const bool late_softmax = false;
 layout(constant_id = 4) const bool nexperts_use_push = false;
+// ggmlR per-mode spec extension: sigmoid gating + additive bias on the
+// selection score (TOPK_MOE_SIGMOID_NORM_BIAS). Keeps the ggmlR spec-constant
+// architecture instead of the upstream push-constant gating_func model.
+layout(constant_id = 5) const bool sigmoid_bias = false;
 
 uint n_experts = nexperts_use_push ? n_experts_push : n_experts_spec;
 
@@ -33,6 +37,8 @@ const uint experts_per_thread = CEIL_DIV(n_experts_spec, WARP_SIZE);
 layout (binding = 0, std430) readonly buffer Logits {float logits[];};
 layout (binding = 1, std430) writeonly buffer Weights {float weights[];};
 layout (binding = 2, std430) writeonly buffer Ids {uint ids[];};
+// Only bound/used when sigmoid_bias is set; 1D additive bias over experts.
+layout (binding = 3, std430) readonly buffer BiasProbs {float bias[];};
 
 const float INFINITY = 1.0 / 0.0;
 
@@ -87,6 +93,7 @@ void main() {
     }
 
     const uint logits_offset = n_experts * row;
+    const uint bias_offset = 0; // bias is 1D over experts
     const uint weights_offset = n_expert_used * row;
     const uint ids_offset = n_experts * row;
     const uint lane = gl_SubgroupInvocationID;
@@ -99,8 +106,34 @@ void main() {
         wt[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? logits[logits_offset + expert] : -INFINITY;
     }
 
-    if (!late_softmax) {
+    if (sigmoid_bias) {
+        // probs = sigmoid(logits): the value carried into the output weights
+        [[unroll]]
+        for (uint i = 0; i < n_experts; i += WARP_SIZE) {
+            const uint expert = i + lane;
+            wt[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts)
+                ? 1.f / (1.f + exp(-wt[i / WARP_SIZE])) : -INFINITY;
+        }
+    } else if (!late_softmax) {
         softmax_warp_inplace(wt, n_experts, lane, nexperts_use_push);
+    }
+
+    // selection_probs = probs + bias: used only to *pick* the top-k experts
+    // (argmax key), never written to the output weights. Mirrors upstream
+    // probs/selection_probs split for TOPK_MOE_SIGMOID_NORM_BIAS.
+    float sel[experts_per_thread];
+    if (sigmoid_bias) {
+        [[unroll]]
+        for (uint i = 0; i < n_experts; i += WARP_SIZE) {
+            const uint expert = i + lane;
+            sel[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts)
+                ? wt[i / WARP_SIZE] + bias[bias_offset + expert] : -INFINITY;
+        }
+    } else {
+        [[unroll]]
+        for (int i = 0; i < experts_per_thread; i++) {
+            sel[i] = wt[i];
+        }
     }
 
     // at this point, each thread holds a portion of softmax,
@@ -117,14 +150,16 @@ void main() {
     }
 
     for (int k = 0; k < n_expert_used; k++) {
-        float max_val    = wt[0];
+        float max_val    = wt[0];   // probs value -> goes to output
+        float max_val_s  = sel[0];  // selection score -> argmax key
         uint   max_expert = lane;
 
         [[unroll]]
         for (int i = 1; i < experts_per_thread; i++) {
             const uint expert = lane + i * WARP_SIZE;
-            if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && wt[i] > max_val) {
+            if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && sel[i] > max_val_s) {
                 max_val    = wt[i];
+                max_val_s  = sel[i];
                 max_expert = expert;
             }
         }
@@ -132,9 +167,11 @@ void main() {
         [[unroll]]
         for (uint mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
             const float val    = subgroupShuffleXor(max_val, mask);
+            const float val_s  = subgroupShuffleXor(max_val_s, mask);
             const uint  expert = subgroupShuffleXor(max_expert, mask);
-            if (val > max_val || (val == max_val && expert < max_expert)) {
+            if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
                 max_val    = val;
+                max_val_s  = val_s;
                 max_expert = expert;
             }
         }
@@ -144,7 +181,7 @@ void main() {
         }
 
         if ((max_expert & (WARP_SIZE - 1)) == lane) {
-            wt[max_expert / WARP_SIZE] = -INFINITY;
+            sel[max_expert / WARP_SIZE] = -INFINITY;
 
             ids[ids_offset + k] = max_expert;
             if (with_norm) {

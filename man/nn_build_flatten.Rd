@@ -6,6 +6,9 @@
 \usage{
 nn_build_flatten(ctx, input_tensor, layer)
 }
+\value{
+A 2-D \code{ggml_tensor} of shape \code{[features, batch]}.
+}
 \description{
 Build flatten forward pass
 }

@@ -65,6 +65,10 @@ IMPL_DEQUANTIZE_ROW(iq1_m, block_iq1_m)
 // MXFP4
 IMPL_DEQUANTIZE_ROW(mxfp4, block_mxfp4)
 
+// Q1_0 and NVFP4 (new in ggml-0.11.0)
+IMPL_DEQUANTIZE_ROW(q1_0, block_q1_0)
+IMPL_DEQUANTIZE_ROW(nvfp4, block_nvfp4)
+
 // ============================================================================
 // Quantize Functions (with importance matrix support)
 // These convert float arrays to quantized format
@@ -149,6 +153,10 @@ IMPL_QUANTIZE(iq4_xs, GGML_TYPE_IQ4_XS)
 // MXFP4
 IMPL_QUANTIZE(mxfp4, GGML_TYPE_MXFP4)
 
+// Q1_0 and NVFP4
+IMPL_QUANTIZE(q1_0, GGML_TYPE_Q1_0)
+IMPL_QUANTIZE(nvfp4, GGML_TYPE_NVFP4)
+
 // ============================================================================
 // Quantize Row Reference Functions
 // These are the basic row-level quantization without imatrix
@@ -211,6 +219,10 @@ IMPL_QUANTIZE_ROW_REF(iq2_s, block_iq2_s, GGML_TYPE_IQ2_S)
 
 // MXFP4
 IMPL_QUANTIZE_ROW_REF(mxfp4, block_mxfp4, GGML_TYPE_MXFP4)
+
+// Q1_0 and NVFP4
+IMPL_QUANTIZE_ROW_REF(q1_0, block_q1_0, GGML_TYPE_Q1_0)
+IMPL_QUANTIZE_ROW_REF(nvfp4, block_nvfp4, GGML_TYPE_NVFP4)
 
 // ============================================================================
 // IQ Init/Free Functions
