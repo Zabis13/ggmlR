@@ -998,6 +998,20 @@ SEXP R_ggml_pool_2d(SEXP ctx_ptr, SEXP a_ptr, SEXP op,
 SEXP R_ggml_im2col(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                    SEXP s0, SEXP s1, SEXP p0, SEXP p1,
                    SEXP d0, SEXP d1, SEXP is_2D, SEXP dst_type);
+SEXP R_ggml_conv_1d_dw(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                       SEXP s0, SEXP p0, SEXP d0);
+SEXP R_ggml_conv_2d_dw(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                       SEXP s0, SEXP s1, SEXP p0, SEXP p1, SEXP d0, SEXP d1);
+SEXP R_ggml_conv_2d_dw_direct(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                              SEXP s0, SEXP s1, SEXP p0, SEXP p1, SEXP d0, SEXP d1);
+SEXP R_ggml_conv_transpose_2d_p0(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP stride);
+SEXP R_ggml_arange(SEXP ctx_ptr, SEXP start, SEXP stop, SEXP step);
+SEXP R_ggml_roll(SEXP ctx_ptr, SEXP a_ptr, SEXP shift0, SEXP shift1, SEXP shift2, SEXP shift3);
+SEXP R_ggml_pad_reflect_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP p0, SEXP p1);
+SEXP R_ggml_get_rel_pos(SEXP ctx_ptr, SEXP a_ptr, SEXP qh, SEXP kh);
+SEXP R_ggml_add_rel_pos(SEXP ctx_ptr, SEXP a_ptr, SEXP pw_ptr, SEXP ph_ptr);
+SEXP R_ggml_win_part(SEXP ctx_ptr, SEXP a_ptr, SEXP w);
+SEXP R_ggml_win_unpart(SEXP ctx_ptr, SEXP a_ptr, SEXP w0, SEXP h0, SEXP w);
 
 // Quantization functions
 SEXP R_ggml_quantize_init(SEXP type);
@@ -1506,6 +1520,17 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_conv_2d",           (DL_FUNC) &R_ggml_conv_2d,           9},
     {"R_ggml_conv_2d_direct",    (DL_FUNC) &R_ggml_conv_2d_direct,    9},
     {"R_ggml_conv_transpose_1d", (DL_FUNC) &R_ggml_conv_transpose_1d, 6},
+    {"R_ggml_conv_1d_dw",        (DL_FUNC) &R_ggml_conv_1d_dw,        6},
+    {"R_ggml_conv_2d_dw",        (DL_FUNC) &R_ggml_conv_2d_dw,        9},
+    {"R_ggml_conv_2d_dw_direct", (DL_FUNC) &R_ggml_conv_2d_dw_direct, 9},
+    {"R_ggml_conv_transpose_2d_p0", (DL_FUNC) &R_ggml_conv_transpose_2d_p0, 4},
+    {"R_ggml_arange",            (DL_FUNC) &R_ggml_arange,            4},
+    {"R_ggml_roll",              (DL_FUNC) &R_ggml_roll,              6},
+    {"R_ggml_pad_reflect_1d",    (DL_FUNC) &R_ggml_pad_reflect_1d,    4},
+    {"R_ggml_get_rel_pos",       (DL_FUNC) &R_ggml_get_rel_pos,       4},
+    {"R_ggml_add_rel_pos",       (DL_FUNC) &R_ggml_add_rel_pos,       4},
+    {"R_ggml_win_part",          (DL_FUNC) &R_ggml_win_part,          3},
+    {"R_ggml_win_unpart",        (DL_FUNC) &R_ggml_win_unpart,        5},
     {"R_ggml_pool_1d",           (DL_FUNC) &R_ggml_pool_1d,           6},
     {"R_ggml_pool_2d",           (DL_FUNC) &R_ggml_pool_2d,           9},
     {"R_ggml_im2col",            (DL_FUNC) &R_ggml_im2col,            11},

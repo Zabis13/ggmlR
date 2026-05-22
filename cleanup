@@ -16,6 +16,10 @@ rm -f src/ggml-cpu/amx/*.o
 # Remove Vulkan objects
 rm -f src/ggml-vulkan/*.o
 rm -f src/ggml-vulkan/generated/*.o
+rm -f src/ggml-vulkan/vulkan-shaders/*.o
+
+# Remove synced public headers (regenerated from src/ by configure)
+rm -f inst/include/*.h
 
 # Remove generated files created by configure
 rm -f src/Makevars

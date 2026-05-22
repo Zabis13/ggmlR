@@ -65,7 +65,6 @@ cat("dL/db:\n"); print(grads[["b"]])
 | `ag_relu(x)` | ReLU activation |
 | `ag_sigmoid(x)` | Sigmoid activation |
 | `ag_tanh(x)` | Tanh activation |
-| `ag_gelu(x)` | GELU activation |
 | `ag_softmax(x)` | Softmax (column-wise) |
 | `ag_sum(x)` | Sum all elements → scalar |
 | `ag_mean(x)` | Mean all elements → scalar |

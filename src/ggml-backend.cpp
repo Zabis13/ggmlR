@@ -1555,6 +1555,17 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
+    if (getenv("GGML_VKG_SUBMITS")) {
+        int n_cpu = 0, n_gpu = 0, tot_inputs = 0;
+        for (int s = 0; s < sched->n_splits; s++) {
+            const char * bn = ggml_backend_name(sched->backends[sched->splits[s].backend_id]);
+            if (bn && (bn[0] == 'C' || bn[0] == 'c')) n_cpu++; else n_gpu++;
+            tot_inputs += sched->splits[s].n_inputs;
+        }
+        fprintf(stderr, "[SCHED_SPLITS] n_splits=%d (gpu~%d cpu~%d) tot_split_inputs=%d\n",
+                sched->n_splits, n_gpu, n_cpu, tot_inputs);
+    }
+
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
@@ -1897,6 +1908,7 @@ enum ggml_status ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, st
 
 enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     GGML_ASSERT(sched);
+
     if (!sched->is_reset && !sched->is_alloc) {
         ggml_backend_sched_reset(sched);
     }

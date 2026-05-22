@@ -3117,6 +3117,229 @@ SEXP R_ggml_conv_transpose_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+// Depthwise 1D Convolution
+SEXP R_ggml_conv_1d_dw(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                       SEXP s0_sexp, SEXP p0_sexp, SEXP d0_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_conv_1d_dw(ctx, a, b,
+        asInteger(s0_sexp), asInteger(p0_sexp), asInteger(d0_sexp));
+
+    if (result == NULL) {
+        error("Failed to create conv_1d_dw operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Depthwise 2D Convolution
+SEXP R_ggml_conv_2d_dw(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                       SEXP s0_sexp, SEXP s1_sexp,
+                       SEXP p0_sexp, SEXP p1_sexp,
+                       SEXP d0_sexp, SEXP d1_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_conv_2d_dw(ctx, a, b,
+        asInteger(s0_sexp), asInteger(s1_sexp),
+        asInteger(p0_sexp), asInteger(p1_sexp),
+        asInteger(d0_sexp), asInteger(d1_sexp));
+
+    if (result == NULL) {
+        error("Failed to create conv_2d_dw operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Depthwise 2D Convolution (direct, no im2col)
+SEXP R_ggml_conv_2d_dw_direct(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
+                              SEXP s0_sexp, SEXP s1_sexp,
+                              SEXP p0_sexp, SEXP p1_sexp,
+                              SEXP d0_sexp, SEXP d1_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_conv_2d_dw_direct(ctx, a, b,
+        asInteger(s0_sexp), asInteger(s1_sexp),
+        asInteger(p0_sexp), asInteger(p1_sexp),
+        asInteger(d0_sexp), asInteger(d1_sexp));
+
+    if (result == NULL) {
+        error("Failed to create conv_2d_dw_direct operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Transposed 2D Convolution (zero padding)
+SEXP R_ggml_conv_transpose_2d_p0(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP stride_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_conv_transpose_2d_p0(ctx, a, b, asInteger(stride_sexp));
+
+    if (result == NULL) {
+        error("Failed to create conv_transpose_2d_p0 operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Arange: 1D tensor [start, stop) with step
+SEXP R_ggml_arange(SEXP ctx_ptr, SEXP start_sexp, SEXP stop_sexp, SEXP step_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    if (ctx == NULL) {
+        error("Invalid context pointer");
+    }
+
+    struct ggml_tensor * result = ggml_arange(ctx,
+        (float) asReal(start_sexp), (float) asReal(stop_sexp), (float) asReal(step_sexp));
+
+    if (result == NULL) {
+        error("Failed to create arange operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Roll: circular shift along dims 0..3
+SEXP R_ggml_roll(SEXP ctx_ptr, SEXP a_ptr,
+                 SEXP shift0_sexp, SEXP shift1_sexp, SEXP shift2_sexp, SEXP shift3_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_roll(ctx, a,
+        asInteger(shift0_sexp), asInteger(shift1_sexp),
+        asInteger(shift2_sexp), asInteger(shift3_sexp));
+
+    if (result == NULL) {
+        error("Failed to create roll operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Reflective 1D padding
+SEXP R_ggml_pad_reflect_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP p0_sexp, SEXP p1_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_pad_reflect_1d(ctx, a,
+        asInteger(p0_sexp), asInteger(p1_sexp));
+
+    if (result == NULL) {
+        error("Failed to create pad_reflect_1d operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Relative position: gather rel-pos rows
+SEXP R_ggml_get_rel_pos(SEXP ctx_ptr, SEXP a_ptr, SEXP qh_sexp, SEXP kh_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_get_rel_pos(ctx, a,
+        asInteger(qh_sexp), asInteger(kh_sexp));
+
+    if (result == NULL) {
+        error("Failed to create get_rel_pos operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Relative position: add rel-pos bias (width + height)
+SEXP R_ggml_add_rel_pos(SEXP ctx_ptr, SEXP a_ptr, SEXP pw_ptr, SEXP ph_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * pw = (struct ggml_tensor *) R_ExternalPtrAddr(pw_ptr);
+    struct ggml_tensor * ph = (struct ggml_tensor *) R_ExternalPtrAddr(ph_ptr);
+
+    if (ctx == NULL || a == NULL || pw == NULL || ph == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_add_rel_pos(ctx, a, pw, ph);
+
+    if (result == NULL) {
+        error("Failed to create add_rel_pos operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Window partition
+SEXP R_ggml_win_part(SEXP ctx_ptr, SEXP a_ptr, SEXP w_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_win_part(ctx, a, asInteger(w_sexp));
+
+    if (result == NULL) {
+        error("Failed to create win_part operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Window un-partition
+SEXP R_ggml_win_unpart(SEXP ctx_ptr, SEXP a_ptr, SEXP w0_sexp, SEXP h0_sexp, SEXP w_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+
+    struct ggml_tensor * result = ggml_win_unpart(ctx, a,
+        asInteger(w0_sexp), asInteger(h0_sexp), asInteger(w_sexp));
+
+    if (result == NULL) {
+        error("Failed to create win_unpart operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // 1D Pooling
 // op: 0 = max, 1 = avg
 SEXP R_ggml_pool_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP op_sexp,

@@ -3275,6 +3275,187 @@ ggml_conv_transpose_1d <- function(ctx, a, b, s0 = 1L, p0 = 0L, d0 = 1L) {
         PACKAGE = "ggmlR")
 }
 
+#' Depthwise 1D Convolution (Graph)
+#'
+#' Applies depthwise 1D convolution: each input channel is convolved with its
+#' own kernel.
+#'
+#' @param ctx GGML context
+#' @param a Convolution kernel tensor
+#' @param b Input data tensor
+#' @param s0 Stride (default 1)
+#' @param p0 Padding (default 0)
+#' @param d0 Dilation (default 1)
+#' @return Convolved tensor
+#' @export
+ggml_conv_1d_dw <- function(ctx, a, b, s0 = 1L, p0 = 0L, d0 = 1L) {
+  .Call("R_ggml_conv_1d_dw", ctx, a, b,
+        as.integer(s0), as.integer(p0), as.integer(d0),
+        PACKAGE = "ggmlR")
+}
+
+#' Depthwise 2D Convolution (Graph)
+#'
+#' Applies depthwise 2D convolution: each input channel is convolved with its
+#' own kernel. Uses the im2col-based path.
+#'
+#' @param ctx GGML context
+#' @param a Convolution kernel tensor
+#' @param b Input data tensor
+#' @param s0,s1 Strides along dim 0 and 1 (default 1)
+#' @param p0,p1 Padding along dim 0 and 1 (default 0)
+#' @param d0,d1 Dilation along dim 0 and 1 (default 1)
+#' @return Convolved tensor
+#' @export
+ggml_conv_2d_dw <- function(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L,
+                            d0 = 1L, d1 = 1L) {
+  .Call("R_ggml_conv_2d_dw", ctx, a, b,
+        as.integer(s0), as.integer(s1), as.integer(p0), as.integer(p1),
+        as.integer(d0), as.integer(d1),
+        PACKAGE = "ggmlR")
+}
+
+#' Depthwise 2D Convolution, direct (Graph)
+#'
+#' Direct depthwise 2D convolution without an explicit im2col intermediate.
+#'
+#' @inheritParams ggml_conv_2d_dw
+#' @return Convolved tensor
+#' @export
+ggml_conv_2d_dw_direct <- function(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L,
+                                   d0 = 1L, d1 = 1L) {
+  .Call("R_ggml_conv_2d_dw_direct", ctx, a, b,
+        as.integer(s0), as.integer(s1), as.integer(p0), as.integer(p1),
+        as.integer(d0), as.integer(d1),
+        PACKAGE = "ggmlR")
+}
+
+#' Transposed 2D Convolution, zero padding (Graph)
+#'
+#' Applies transposed 2D convolution (deconvolution) with zero padding.
+#'
+#' @param ctx GGML context
+#' @param a Convolution kernel tensor
+#' @param b Input data tensor
+#' @param stride Stride (default 1)
+#' @return Transposed convolved tensor
+#' @export
+ggml_conv_transpose_2d_p0 <- function(ctx, a, b, stride = 1L) {
+  .Call("R_ggml_conv_transpose_2d_p0", ctx, a, b, as.integer(stride),
+        PACKAGE = "ggmlR")
+}
+
+#' Arange (Graph)
+#'
+#' Creates a 1D F32 tensor with values from \code{start} (inclusive) to
+#' \code{stop} (exclusive) in steps of \code{step}.
+#'
+#' @param ctx GGML context
+#' @param start Start value (inclusive)
+#' @param stop Stop value (exclusive)
+#' @param step Step between values (default 1)
+#' @return 1D F32 tensor
+#' @export
+ggml_arange <- function(ctx, start, stop, step = 1) {
+  .Call("R_ggml_arange", ctx,
+        as.double(start), as.double(stop), as.double(step),
+        PACKAGE = "ggmlR")
+}
+
+#' Roll (Graph)
+#'
+#' Circularly shifts tensor elements along dimensions 0..3.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @param shift0,shift1,shift2,shift3 Shift amount along each dimension
+#' @return Rolled tensor
+#' @export
+ggml_roll <- function(ctx, a, shift0 = 0L, shift1 = 0L, shift2 = 0L, shift3 = 0L) {
+  .Call("R_ggml_roll", ctx, a,
+        as.integer(shift0), as.integer(shift1),
+        as.integer(shift2), as.integer(shift3),
+        PACKAGE = "ggmlR")
+}
+
+#' Reflective 1D Padding (Graph)
+#'
+#' Pads the first dimension of a tensor using reflection of its values.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @param p0 Left padding
+#' @param p1 Right padding
+#' @return Padded tensor
+#' @export
+ggml_pad_reflect_1d <- function(ctx, a, p0, p1) {
+  .Call("R_ggml_pad_reflect_1d", ctx, a,
+        as.integer(p0), as.integer(p1),
+        PACKAGE = "ggmlR")
+}
+
+#' Get Relative Position (Graph)
+#'
+#' Gathers relative-position rows for relative-position attention bias.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @param qh Query height
+#' @param kh Key height
+#' @return Relative-position tensor
+#' @export
+ggml_get_rel_pos <- function(ctx, a, qh, kh) {
+  .Call("R_ggml_get_rel_pos", ctx, a,
+        as.integer(qh), as.integer(kh),
+        PACKAGE = "ggmlR")
+}
+
+#' Add Relative Position Bias (Graph)
+#'
+#' Adds width and height relative-position bias to \code{a}.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @param pw Width relative-position tensor
+#' @param ph Height relative-position tensor
+#' @return Tensor with added relative-position bias
+#' @export
+ggml_add_rel_pos <- function(ctx, a, pw, ph) {
+  .Call("R_ggml_add_rel_pos", ctx, a, pw, ph,
+        PACKAGE = "ggmlR")
+}
+
+#' Window Partition (Graph)
+#'
+#' Partitions a tensor into non-overlapping windows of size \code{w}.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @param w Window size
+#' @return Partitioned tensor
+#' @export
+ggml_win_part <- function(ctx, a, w) {
+  .Call("R_ggml_win_part", ctx, a, as.integer(w),
+        PACKAGE = "ggmlR")
+}
+
+#' Window Un-partition (Graph)
+#'
+#' Reassembles windowed partitions produced by \code{\link{ggml_win_part}}.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @param w0 Original width
+#' @param h0 Original height
+#' @param w Window size
+#' @return Un-partitioned tensor
+#' @export
+ggml_win_unpart <- function(ctx, a, w0, h0, w) {
+  .Call("R_ggml_win_unpart", ctx, a,
+        as.integer(w0), as.integer(h0), as.integer(w),
+        PACKAGE = "ggmlR")
+}
+
 #' 1D Pooling (Graph)
 #'
 #' Applies 1D pooling operation for downsampling.

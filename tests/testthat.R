@@ -68,7 +68,8 @@ heavy <- c(
   "parsnip",
   "mlr3-learner",
   "keras-api",
-  "quants-iq-degenerate"
+  "quants-iq-degenerate",
+  "getrows-offload-vulkan"
 )
 
 on_cran <- !identical(Sys.getenv("NOT_CRAN"), "true")

@@ -689,19 +689,38 @@ Measured on AMD Ryzen 5 5600 + AMD RX 9070, single-image inference:
 
 | Model | CPU (ms) | GPU (ms) | Speedup | CPU FPS | GPU FPS |
 |---|---:|---:|---:|---:|---:|
-| Inception V3 | 204.3 | 7.3 | 27.9x | 4.9 | 136.4 |
-| MNIST | 0.0 | 0.3 | — | Inf | 3000.0 |
-| SqueezeNet 1.0 | 21.7 | 2.0 | 10.8x | 46.2 | 500.0 |
-| SuperResolution | 87.3 | 3.0 | 29.1x | 11.5 | 333.3 |
-| EmotionFerPlus | 29.7 | 1.7 | 17.8x | 33.7 | 600.0 |
-| Inception V3 Op18 | 186.0 | 8.7 | 21.5x | 5.4 | 115.4 |
-| BAT-ResNeXt26ts | 87.0 | 6.3 | 13.7x | 11.5 | 157.9 |
-| BERT (Opset17) | 243.0 | 8.0 | 30.4x | 4.1 | 125.0 |
-| GPT-NeoX | 2.0 | 2.7 | 0.7x | 500.0 | 375.0 |
-
-SuperResolution speedup improved from 31.8x to 29.1x while absolute GPU time dropped from 7.3 ms to 3.0 ms — the result of replacing IM2COL+GEMM with a direct `GGML_OP_CONV_2D` kernel.
+| Inception V3 | 265.3 | 9.7 | 27.5x | 3.8 | 103.4 |
+| MNIST | 0.0 | 0.0 | — | Inf | Inf |
+| SqueezeNet 1.0 | 22.3 | 1.7 | 13.4x | 44.8 | 600.0 |
+| SuperResolution | 100.0 | 3.3 | 30.0x | 10.0 | 300.0 |
+| EmotionFerPlus | 31.3 | 2.3 | 13.4x | 31.9 | 428.6 |
+| Inception V3 Op18 | 204.7 | 8.3 | 24.6x | 4.9 | 120.0 |
+| BAT-ResNeXt26ts | 116.0 | 7.3 | 15.8x | 8.6 | 136.4 |
+| BERT (Opset17) | 243.7 | 9.0 | 27.1x | 4.1 | 111.1 |
+| GPT-NeoX | 1.3 | 3.3 | 0.4x | 750.0 | 300.0 |
 
 Benchmark scripts: `inst/examples/benchmark_onnx.R`, `inst/examples/profile_onnx_superres_gpu.R`
+
+## LLM Inference Benchmark
+
+Measured on AMD Ryzen 5 5600 + AMD RX 9070, via [llamaR](https://github.com/Zabis13/llamaR). Model: Ministral-3-3B-Instruct-2512-Q8_0, 50 tokens, avg of 3 runs:
+
+| Backend | Speed (tokens/sec) | Speedup |
+|---|---:|---:|
+| CPU (8 threads) | 8.5 | 1.0x |
+| GPU (Vulkan) | 108.0 | 12.7x |
+
+## Flux Image Generation Benchmark
+
+Measured on AMD Ryzen 5 5600 + AMD RX 9070, via [sd2R](https://github.com/Zabis13/sd2R):
+
+| Scenario | Resolution | Time (s) |
+|---|---|---:|
+| Direct | 768×768 | 13.94 |
+| Tiled VAE | 1024×1024 | 25.32 |
+| Highres fix | 2048×1024 | 52.53 |
+| img2img | 768×768 | 8.73 |
+| Direct | 1024×1024 | 25.40 |
 
 ## GPU Acceleration
 

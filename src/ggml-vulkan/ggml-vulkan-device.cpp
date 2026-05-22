@@ -2148,7 +2148,12 @@ static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
         ctx->almost_ready_fence_pending = false;
     }
 
-    // Spin (w/pause) waiting for the graph to finish executing.
+    // Spin (w/pause) waiting for the graph to finish executing. A blocking
+    // waitForFences here would let the CPU sleep, but adds thread-wakeup
+    // latency (syscall + scheduler) that dominates wall time for short graphs
+    // (small ONNX inference: SuperResolution, EmotionFerPlus), so we keep the
+    // upstream low-latency spin. The almost_ready_fence waitForFences above
+    // already lets the CPU sleep through the bulk of longer graphs.
     vk::Result result;
     while ((result = ctx->device->device.getFenceStatus(ctx->fence)) != vk::Result::eSuccess) {
         if (result != vk::Result::eNotReady) {

@@ -151,11 +151,11 @@ model <- ggml_fit(model, x_train, y_train, epochs = 50L,
 
 ```{r, eval = FALSE}
 # Weights loaded to GPU once at load time
-model_onnx <- ggml_onnx_load("model.onnx", backend = "vulkan")
+model_onnx <- onnx_load("model.onnx", device = "vulkan")
 
 # Repeated inference — no weight re-transfer
 for (i in seq_len(100L)) {
-  out <- ggml_onnx_run(model_onnx, list(input = batch[[i]]))
+  out <- onnx_run(model_onnx, list(input = batch[[i]]))
 }
 ```
 
