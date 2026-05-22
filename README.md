@@ -710,7 +710,7 @@ Measured on AMD Ryzen 5 5600 + AMD RX 9070, via [llamaR](https://github.com/Zabi
 | CPU (8 threads) | 8.5 | 1.0x |
 | GPU (Vulkan) | 108.0 | 12.7x |
 
-## Flux Image Generation Benchmark
+## Flux Image Generation Benchmark (10 steps)
 
 Measured on AMD Ryzen 5 5600 + AMD RX 9070, via [sd2R](https://github.com/Zabis13/sd2R):
 
