@@ -18,6 +18,7 @@ src/ggml-cpu/arch/**/*.o
 
 # R package build artifacts
 *.tar.gz
+Rplots.pdf
 ..Rcheck/
 src/Makevars
 src/Makevars.win
