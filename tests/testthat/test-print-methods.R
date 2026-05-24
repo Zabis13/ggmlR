@@ -113,6 +113,9 @@ test_that("plot.ggml_history works without error", {
     val_loss = c(1.1, 0.6, 0.3),
     val_accuracy = c(0.2, 0.5, 0.8)
   ), class = "ggml_history")
+  tmp <- tempfile(fileext = ".pdf")
+  pdf(tmp)
+  on.exit({ dev.off(); unlink(tmp) })
   expect_no_error(plot(h))
 })
 
