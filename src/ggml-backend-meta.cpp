@@ -109,7 +109,12 @@ static void ggml_backend_meta_device_get_memory(ggml_backend_dev_t dev, size_t *
 }
 
 static enum ggml_backend_dev_type ggml_backend_meta_device_get_type(ggml_backend_dev_t dev) {
-    return GGML_BACKEND_DEVICE_TYPE_META;
+    // CRAN compat: GGML_BACKEND_DEVICE_TYPE_META is temporarily removed from the
+    // public enum in ggml-backend.h (see comment there). The meta device is
+    // identified by its iface pointer in ggml_backend_dev_is_meta(), not by this
+    // type, so reporting ACCEL here is harmless. Restore META once the enumerator
+    // is re-enabled.
+    return GGML_BACKEND_DEVICE_TYPE_ACCEL;
 
     GGML_UNUSED(dev);
 }

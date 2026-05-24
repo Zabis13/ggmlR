@@ -141,7 +141,14 @@ extern "C" {
         // accelerator devices intended to be used together with the CPU backend (e.g. BLAS or AMX)
         GGML_BACKEND_DEVICE_TYPE_ACCEL,
         // "meta" device wrapping multiple other devices for tensor parallelism
-        GGML_BACKEND_DEVICE_TYPE_META,
+        // CRAN compat: temporarily removed from the public enum so reverse
+        // dependencies (llamaR) whose switch over ggml_backend_dev_type does not
+        // yet handle this value compile without -Wswitch. The meta backend itself
+        // still works (it is identified by its iface pointer, not by this type);
+        // see ggml-backend-meta.cpp where get_type() maps to ACCEL while disabled.
+        // Restore this enumerator once downstream packages on CRAN carry a
+        // default: branch in that switch.
+        // GGML_BACKEND_DEVICE_TYPE_META,
     };
 
     // functionality supported by the device

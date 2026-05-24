@@ -1,3 +1,15 @@
+## Submission (0.7.7)
+
+This version preserves reverse-dependency compatibility. The
+`GGML_BACKEND_DEVICE_TYPE_META` enumerator (added upstream to
+`ggml_backend_dev_type`) is temporarily withheld from the public enum in
+the installed `ggml-backend.h`. This keeps the published `llamaR`, whose
+`switch` over `ggml_backend_dev_type` does not yet handle that value,
+compiling without a `-Wswitch` warning. The meta backend itself remains
+functional (the device is identified by its interface pointer, not by the
+enum value). The enumerator will be restored in a later release once a
+`llamaR` update carrying a `default:` branch is on CRAN.
+
 ## Resubmission (0.7.0)
 
 This version addresses the gcc-UBSAN issue flagged for the last
@@ -38,4 +50,6 @@ Other changes in 0.7.0:
 
 ## Downstream dependencies
 
+* llamaR — checked; compiles without the `-Wswitch` warning previously
+  triggered by the new device-type enumerator (see Submission note above).
 * sd2R — checked, no issues.

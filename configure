@@ -169,9 +169,16 @@ OPENMP_CFLAGS=""
 OPENMP_CXXFLAGS=""
 OPENMP_CPPFLAGS=""
 
+# Strip the static library on native builds to shrink it. Under Emscripten
+# the system `strip` corrupts the wasm/bitcode sections of the archive
+# members (wasm-ld then rejects libggml.a as "neither Wasm object file nor
+# LLVM bitcode"), so disable it there — emcc strips at link time anyway.
+STATICLIB_STRIP="strip --strip-debug ../inst/lib/\$(STATICLIB) 2>/dev/null || true"
+
 # Emscripten (WASM) does not provide omp.h - disable OpenMP
 if echo "$HOST" | grep -q "emscripten"; then
   echo "  Emscripten target detected, disabling OpenMP"
+  STATICLIB_STRIP=":"
 elif [ -f "$MAKECONF" ]; then
   OPENMP_CFLAGS=$(grep '^SHLIB_OPENMP_CFLAGS' "$MAKECONF" | sed 's/[^=]*= *//')
   OPENMP_CXXFLAGS=$(grep '^SHLIB_OPENMP_CXXFLAGS' "$MAKECONF" | sed 's/[^=]*= *//')
@@ -348,6 +355,7 @@ sed \
   -e "s|@SIMD_CFLAGS@|$SIMD_CFLAGS|g" \
   -e "s|@GENERIC_CPPFLAGS@|$GENERIC_CPPFLAGS|g" \
   -e "s|@X86_OBJECTS@|$X86_OBJECTS|g" \
+  -e "s#@STATICLIB_STRIP@#$STATICLIB_STRIP#g" \
   src/Makevars.in > src/Makevars
 
 # Sync public headers from src/ to inst/include/
