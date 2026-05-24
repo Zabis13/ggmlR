@@ -47,7 +47,9 @@ void ggml_print_backtrace(void);
 // ref: https://stackoverflow.com/a/53923785/4039976
 #ifndef __cplusplus
     #ifndef static_assert
-        #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201100L)
+        #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202311L)
+            // static_assert is a keyword since C23 - nothing to define
+        #elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201100L)
             #define static_assert(cond, msg) _Static_assert(cond, msg)
         #else
             #define static_assert(cond, msg) struct global_scope_noop_trick
