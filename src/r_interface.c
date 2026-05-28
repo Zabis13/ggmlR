@@ -37,6 +37,7 @@ extern SEXP R_ggml_opt_loss_type_mean(void);
 extern SEXP R_ggml_opt_loss_type_sum(void);
 extern SEXP R_ggml_opt_loss_type_cross_entropy(void);
 extern SEXP R_ggml_opt_loss_type_mse(void);
+extern SEXP R_ggml_opt_loss_type_weighted_mse(void);
 extern SEXP R_ggml_opt_optimizer_type_adamw(void);
 extern SEXP R_ggml_opt_optimizer_type_sgd(void);
 extern SEXP R_ggml_opt_dataset_init(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -44,6 +45,7 @@ extern SEXP R_ggml_opt_dataset_free(SEXP);
 extern SEXP R_ggml_opt_dataset_ndata(SEXP);
 extern SEXP R_ggml_opt_dataset_data(SEXP);
 extern SEXP R_ggml_opt_dataset_labels(SEXP);
+extern SEXP R_ggml_opt_dataset_weights(SEXP);
 extern SEXP R_ggml_opt_dataset_shuffle(SEXP, SEXP, SEXP);
 extern SEXP R_ggml_opt_dataset_get_batch(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_opt_default_params(SEXP, SEXP);
@@ -86,6 +88,7 @@ extern SEXP R_ggml_backend_device_type_accel(void);
 extern SEXP R_ggml_backend_buffer_usage_any(void);
 extern SEXP R_ggml_backend_buffer_usage_weights(void);
 extern SEXP R_ggml_backend_buffer_usage_compute(void);
+extern SEXP R_ggml_backend_meta_free_cached_bufts(void);
 // Device enumeration
 extern SEXP R_ggml_backend_dev_count(void);
 extern SEXP R_ggml_backend_dev_get(SEXP);
@@ -352,6 +355,16 @@ extern SEXP R_ggml_quant_block_info(SEXP);
 // Context Management
 // ============================================================================
 
+// Finalizer: free the ggml context when its external pointer is GC'd.
+// Cleared on manual R_ggml_free, so this never double-frees.
+static void r_ggml_ctx_finalizer(SEXP ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ptr);
+    if (ctx != NULL) {
+        ggml_free(ctx);
+        R_ClearExternalPtr(ptr);
+    }
+}
+
 SEXP R_ggml_init(SEXP mem_size, SEXP no_alloc) {
     size_t size = (size_t) asReal(mem_size);
     int no_alloc_flag = asLogical(no_alloc);
@@ -369,6 +382,7 @@ SEXP R_ggml_init(SEXP mem_size, SEXP no_alloc) {
     }
 
     SEXP ptr = PROTECT(R_MakeExternalPtr(ctx, R_NilValue, R_NilValue));
+    R_RegisterCFinalizerEx(ptr, r_ggml_ctx_finalizer, TRUE);
     UNPROTECT(1);
     return ptr;
 }
@@ -1574,6 +1588,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_opt_loss_type_sum",                (DL_FUNC) &R_ggml_opt_loss_type_sum,                0},
     {"R_ggml_opt_loss_type_cross_entropy",      (DL_FUNC) &R_ggml_opt_loss_type_cross_entropy,      0},
     {"R_ggml_opt_loss_type_mse",                (DL_FUNC) &R_ggml_opt_loss_type_mse,                0},
+    {"R_ggml_opt_loss_type_weighted_mse",       (DL_FUNC) &R_ggml_opt_loss_type_weighted_mse,       0},
     {"R_ggml_opt_optimizer_type_adamw",         (DL_FUNC) &R_ggml_opt_optimizer_type_adamw,         0},
     {"R_ggml_opt_optimizer_type_sgd",           (DL_FUNC) &R_ggml_opt_optimizer_type_sgd,           0},
     {"R_ggml_opt_dataset_init",                 (DL_FUNC) &R_ggml_opt_dataset_init,                 6},
@@ -1581,6 +1596,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_opt_dataset_ndata",                (DL_FUNC) &R_ggml_opt_dataset_ndata,                1},
     {"R_ggml_opt_dataset_data",                 (DL_FUNC) &R_ggml_opt_dataset_data,                 1},
     {"R_ggml_opt_dataset_labels",               (DL_FUNC) &R_ggml_opt_dataset_labels,               1},
+    {"R_ggml_opt_dataset_weights",              (DL_FUNC) &R_ggml_opt_dataset_weights,              1},
     {"R_ggml_opt_dataset_shuffle",              (DL_FUNC) &R_ggml_opt_dataset_shuffle,              3},
     {"R_ggml_opt_dataset_get_batch",            (DL_FUNC) &R_ggml_opt_dataset_get_batch,            4},
     {"R_ggml_opt_default_params",               (DL_FUNC) &R_ggml_opt_default_params,               2},
@@ -1621,6 +1637,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_backend_buffer_usage_any",         (DL_FUNC) &R_ggml_backend_buffer_usage_any,          0},
     {"R_ggml_backend_buffer_usage_weights",     (DL_FUNC) &R_ggml_backend_buffer_usage_weights,      0},
     {"R_ggml_backend_buffer_usage_compute",     (DL_FUNC) &R_ggml_backend_buffer_usage_compute,      0},
+    {"R_ggml_backend_meta_free_cached_bufts",   (DL_FUNC) &R_ggml_backend_meta_free_cached_bufts,    0},
     {"R_ggml_backend_dev_count",                (DL_FUNC) &R_ggml_backend_dev_count,                 0},
     {"R_ggml_backend_dev_get",                  (DL_FUNC) &R_ggml_backend_dev_get,                   1},
     {"R_ggml_backend_dev_by_name",              (DL_FUNC) &R_ggml_backend_dev_by_name,               1},

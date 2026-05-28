@@ -43,6 +43,13 @@ SEXP R_ggml_backend_buffer_usage_compute(void) {
     return ScalarInteger(GGML_BACKEND_BUFFER_USAGE_COMPUTE);
 }
 
+// Free the process-lifetime meta buffer-type cache. Called from .onUnload so
+// valgrind doesn't report the cached buft contexts as leaked at exit.
+SEXP R_ggml_backend_meta_free_cached_bufts(void) {
+    ggml_backend_meta_free_cached_bufts();
+    return R_NilValue;
+}
+
 // ============================================================================
 // Device Enumeration
 // ============================================================================
@@ -741,6 +748,14 @@ SEXP R_ggml_backend_graph_compute_async(SEXP backend_ptr, SEXP graph_ptr) {
 // Multi-buffer Operations
 // ============================================================================
 
+static void r_ggml_multi_buffer_finalizer(SEXP ptr) {
+    ggml_backend_buffer_t buffer = (ggml_backend_buffer_t) R_ExternalPtrAddr(ptr);
+    if (buffer != NULL) {
+        ggml_backend_buffer_free(buffer);
+        R_ClearExternalPtr(ptr);
+    }
+}
+
 SEXP R_ggml_backend_multi_buffer_alloc_buffer(SEXP buffers_list) {
     if (TYPEOF(buffers_list) != VECSXP) {
         error("buffers must be a list of buffer pointers");
@@ -767,7 +782,18 @@ SEXP R_ggml_backend_multi_buffer_alloc_buffer(SEXP buffers_list) {
         error("Failed to allocate multi-buffer");
     }
 
-    SEXP ptr = PROTECT(R_MakeExternalPtr(multi_buffer, R_NilValue, R_NilValue));
+    // The multi-buffer takes ownership of the source buffers and frees them in
+    // its own free_buffer. Clear the source external pointers so their R
+    // finalizers become no-ops (otherwise GC would double-free the buffers).
+    for (size_t i = 0; i < n_buffers; i++) {
+        R_ClearExternalPtr(VECTOR_ELT(buffers_list, i));
+    }
+
+    // Keep the source list reachable via the tag: its elements' tags hold the
+    // backends, which the GPU buffer_free may dereference when the multi-buffer
+    // is finalized.
+    SEXP ptr = PROTECT(R_MakeExternalPtr(multi_buffer, buffers_list, R_NilValue));
+    R_RegisterCFinalizerEx(ptr, r_ggml_multi_buffer_finalizer, TRUE);
     UNPROTECT(1);
     return ptr;
 }

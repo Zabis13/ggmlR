@@ -85,6 +85,18 @@ SEXP R_ggml_vulkan_device_memory(SEXP device_idx) {
 #endif
 }
 
+#ifdef GGML_USE_VULKAN
+// Finalizer: free the Vulkan backend when its external pointer is GC'd.
+// Cleared on manual R_ggml_backend_free, so this never double-frees.
+static void r_ggml_vk_backend_finalizer(SEXP ptr) {
+    ggml_backend_t backend = (ggml_backend_t) R_ExternalPtrAddr(ptr);
+    if (backend != NULL) {
+        ggml_backend_free(backend);
+        R_ClearExternalPtr(ptr);
+    }
+}
+#endif
+
 // Initialize Vulkan backend
 SEXP R_ggml_vulkan_init(SEXP device_idx) {
 #ifdef GGML_USE_VULKAN
@@ -106,6 +118,7 @@ SEXP R_ggml_vulkan_init(SEXP device_idx) {
     }
 
     SEXP ptr = PROTECT(R_MakeExternalPtr(backend, R_NilValue, R_NilValue));
+    R_RegisterCFinalizerEx(ptr, r_ggml_vk_backend_finalizer, TRUE);
     UNPROTECT(1);
     return ptr;
 #else

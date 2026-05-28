@@ -42,6 +42,10 @@ SEXP R_ggml_opt_loss_type_mse(void) {
     return ScalarInteger(GGML_OPT_LOSS_TYPE_MEAN_SQUARED_ERROR);
 }
 
+SEXP R_ggml_opt_loss_type_weighted_mse(void) {
+    return ScalarInteger(GGML_OPT_LOSS_TYPE_WEIGHTED_MEAN_SQUARED_ERROR);
+}
+
 // ============================================================================
 // Optimizer Type Constants
 // ============================================================================
@@ -134,6 +138,21 @@ SEXP R_ggml_opt_dataset_labels(SEXP dataset_ptr) {
     }
 
     SEXP ptr = PROTECT(R_MakeExternalPtr(labels, R_NilValue, R_NilValue));
+    UNPROTECT(1);
+    return ptr;
+}
+
+// Get (lazily allocating) per-datapoint weights tensor [1, ndata]
+SEXP R_ggml_opt_dataset_weights(SEXP dataset_ptr) {
+    ggml_opt_dataset_t dataset = (ggml_opt_dataset_t)R_ExternalPtrAddr(dataset_ptr);
+
+    if (dataset == NULL) {
+        error("Invalid dataset pointer");
+    }
+
+    struct ggml_tensor * weights = ggml_opt_dataset_weights(dataset);
+
+    SEXP ptr = PROTECT(R_MakeExternalPtr(weights, R_NilValue, R_NilValue));
     UNPROTECT(1);
     return ptr;
 }

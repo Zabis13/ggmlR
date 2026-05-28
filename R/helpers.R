@@ -12,8 +12,38 @@ abind_first <- function(a, b) {
   if (length(da) != length(db) || !all(da[-1] == db[-1])) {
     stop("validation_data dimensions do not match training data dimensions")
   }
-  out <- array(c(a, b), dim = c(da[1] + db[1], da[-1]))
-  out
+  nd <- length(da)
+  if (nd == 1L) {
+    return(c(a, b))
+  }
+  # Concatenate along dim 1. R arrays are column-major, so c(a, b) only works
+  # when the trailing dims are 1. General case: move dim 1 to the last axis
+  # (where concatenation is contiguous), c(), then move it back.
+  perm_to   <- c(seq_len(nd)[-1L], 1L)   # 1 -> last
+  perm_back <- c(nd, seq_len(nd - 1L))   # last -> 1
+  at <- aperm(a, perm_to)
+  bt <- aperm(b, perm_to)
+  combined <- array(c(at, bt), dim = c(da[-1], da[1] + db[1]))
+  aperm(combined, perm_back)
+}
+
+#' Slice an Array or Matrix Along Its First Dimension
+#'
+#' Selects rows \code{idx} along the first (sample) axis, keeping all other
+#' dimensions intact, regardless of how many dimensions the array has.
+#'
+#' @param x A matrix or array.
+#' @param idx Integer indices into the first dimension.
+#' @return \code{x} restricted to \code{idx} along dim 1 (\code{drop = FALSE}).
+#' @keywords internal
+slice_first_dim <- function(x, idx) {
+  nd <- length(dim(x))
+  if (nd <= 1L) {
+    return(x[idx])
+  }
+  # Build x[idx, , , ..., drop = FALSE] with the right number of empty args.
+  args <- c(list(x, idx), rep(list(quote(expr = )), nd - 1L), list(drop = FALSE))
+  do.call(`[`, args)
 }
 
 #' Create Context with Auto-sizing

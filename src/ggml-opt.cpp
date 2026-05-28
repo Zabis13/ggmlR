@@ -41,6 +41,14 @@ struct ggml_opt_dataset {
     struct ggml_tensor    * data   = nullptr;
     struct ggml_tensor    * labels = nullptr;
 
+    // Optional per-datapoint loss weights [1, ndata], lazily allocated in a
+    // separate ctx/buffer so ggml_opt_dataset_init() and its buffer stay
+    // untouched. Used by GGML_OPT_LOSS_TYPE_WEIGHTED_MEAN_SQUARED_ERROR.
+    struct ggml_context   * ctx_weights = nullptr;
+    ggml_backend_buffer_t   buf_weights = nullptr;
+    struct ggml_tensor    * weights     = nullptr;
+    size_t                  nbs_weights = 0;
+
     int64_t ndata       = -1;
     int64_t ndata_shard = -1;
     size_t  nbs_data    = -1;
@@ -64,9 +72,10 @@ struct ggml_opt_context {
     enum ggml_opt_build_type   build_type;
     enum ggml_opt_build_type   build_type_alloc;
 
-    struct ggml_tensor * inputs  = nullptr;
-    struct ggml_tensor * outputs = nullptr;
-    struct ggml_tensor * labels  = nullptr;
+    struct ggml_tensor * inputs       = nullptr;
+    struct ggml_tensor * outputs      = nullptr;
+    struct ggml_tensor * labels       = nullptr;
+    struct ggml_tensor * loss_weights = nullptr; // per-datapoint weights for weighted MSE
 
     struct ggml_tensor * loss     = nullptr;
     struct ggml_tensor * pred     = nullptr;
@@ -154,7 +163,46 @@ ggml_opt_dataset_t ggml_opt_dataset_init(
 void ggml_opt_dataset_free(ggml_opt_dataset_t dataset) {
     ggml_backend_buffer_free(dataset->buf);
     ggml_free(dataset->ctx);
+    if (dataset->buf_weights) {
+        ggml_backend_buffer_free(dataset->buf_weights);
+    }
+    if (dataset->ctx_weights) {
+        ggml_free(dataset->ctx_weights);
+    }
     delete dataset;
+}
+
+struct ggml_tensor * ggml_opt_dataset_weights(ggml_opt_dataset_t dataset) {
+    if (!dataset->weights) {
+        struct ggml_init_params params = {
+            /*.mem_size   =*/ ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        dataset->ctx_weights = ggml_init(params);
+        dataset->weights     = ggml_new_tensor_2d(dataset->ctx_weights, GGML_TYPE_F32, 1, dataset->ndata);
+        dataset->nbs_weights = ggml_nbytes(dataset->weights) * dataset->ndata_shard/dataset->ndata;
+        dataset->buf_weights = ggml_backend_alloc_ctx_tensors_from_buft(
+            dataset->ctx_weights, ggml_backend_cpu_buffer_type());
+    }
+    return dataset->weights;
+}
+
+void ggml_opt_dataset_get_batch_weights(ggml_opt_dataset_t dataset, struct ggml_tensor * weights_batch, int64_t ibatch) {
+    GGML_ASSERT(weights_batch && ggml_is_contiguous(weights_batch));
+    GGML_ASSERT(dataset->weights && "ggml_opt_dataset_weights() must be called first");
+
+    const size_t nb_weights_batch = ggml_nbytes(weights_batch);
+    GGML_ASSERT(nb_weights_batch % dataset->nbs_weights == 0);
+    const int64_t shards_per_batch = nb_weights_batch / dataset->nbs_weights;
+
+    GGML_ASSERT((ibatch + 1)*shards_per_batch <= int64_t(dataset->permutation.size()));
+
+    for (int64_t ishard_batch = 0; ishard_batch < shards_per_batch; ++ishard_batch) {
+        const int64_t ishard = dataset->permutation[ibatch*shards_per_batch + ishard_batch];
+        const char * ptr_weights = (const char *) dataset->weights->data + ishard*dataset->nbs_weights;
+        ggml_backend_tensor_set(weights_batch, ptr_weights, ishard_batch*dataset->nbs_weights, dataset->nbs_weights);
+    }
 }
 
 int64_t ggml_opt_dataset_ndata(ggml_opt_dataset_t dataset) {
@@ -450,6 +498,33 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             opt_ctx->loss_per_datapoint = true;
             break;
         }
+        case GGML_OPT_LOSS_TYPE_WEIGHTED_MEAN_SQUARED_ERROR: {
+            // sum( w * (out - y)^2 ) / (opt_period * nelements), with a
+            // per-datapoint weight w broadcast over the output dimension.
+            opt_ctx->labels = ggml_dup_tensor(ctx_results, opt_ctx->outputs);
+            ggml_set_input(opt_ctx->labels);
+            ggml_set_name(opt_ctx->labels, "labels");
+
+            // weights: [1, batch] (one scalar per datapoint), broadcast over ne[0].
+            const int64_t nbatch = opt_ctx->outputs->ne[ggml_n_dims(opt_ctx->outputs) - 1];
+            opt_ctx->loss_weights = ggml_new_tensor_2d(ctx_results, GGML_TYPE_F32, 1, nbatch);
+            ggml_set_input(opt_ctx->loss_weights);
+            ggml_set_name(opt_ctx->loss_weights, "loss_weights");
+
+            opt_ctx->loss = ggml_sub(ctx_results, opt_ctx->outputs, opt_ctx->labels);
+            ggml_set_name(opt_ctx->loss, "loss_error");
+            opt_ctx->loss = ggml_sqr(ctx_results, opt_ctx->loss);
+            ggml_set_name(opt_ctx->loss, "loss_squared_error");
+            opt_ctx->loss = ggml_mul(ctx_results, opt_ctx->loss, opt_ctx->loss_weights);
+            ggml_set_name(opt_ctx->loss, "loss_weighted_squared_error");
+            opt_ctx->loss = ggml_sum(ctx_results, opt_ctx->loss);
+            ggml_set_name(opt_ctx->loss, "loss_sum_weighted_squared_error");
+            const float scale = 1.0f / (opt_ctx->opt_period * ggml_nelements(opt_ctx->outputs));
+            opt_ctx->loss = ggml_scale(ctx_results, opt_ctx->loss, scale);
+            ggml_set_name(opt_ctx->loss, "loss_weighted_mean_squared_error");
+            opt_ctx->loss_per_datapoint = true;
+            break;
+        }
     }
     ggml_set_output(opt_ctx->loss);
     ggml_set_loss(opt_ctx->loss);
@@ -645,6 +720,10 @@ struct ggml_tensor * ggml_opt_outputs(ggml_opt_context_t opt_ctx) {
 
 struct ggml_tensor * ggml_opt_labels(ggml_opt_context_t opt_ctx) {
     return opt_ctx->labels;
+}
+
+struct ggml_tensor * ggml_opt_loss_weights(ggml_opt_context_t opt_ctx) {
+    return opt_ctx->loss_weights;
 }
 
 struct ggml_tensor * ggml_opt_loss(ggml_opt_context_t opt_ctx) {
@@ -916,9 +995,10 @@ void ggml_opt_epoch(
         ggml_opt_epoch_callback callback_train,
         ggml_opt_epoch_callback callback_eval) {
     GGML_ASSERT(ggml_opt_static_graphs(opt_ctx) && "ggml_opt_epoch requires static graphs");
-    struct ggml_tensor * inputs = ggml_opt_inputs(opt_ctx);
-    struct ggml_tensor * labels = ggml_opt_labels(opt_ctx);
-    struct ggml_tensor * data   = ggml_opt_dataset_data(dataset);
+    struct ggml_tensor * inputs  = ggml_opt_inputs(opt_ctx);
+    struct ggml_tensor * labels  = ggml_opt_labels(opt_ctx);
+    struct ggml_tensor * weights = ggml_opt_loss_weights(opt_ctx); // non-null only for weighted MSE
+    struct ggml_tensor * data    = ggml_opt_dataset_data(dataset);
     // Dataset is always 2D [ne_datapoint, ndata], inputs may be N-D with batch in last dim.
     // Verify that per-sample element counts match.
     GGML_ASSERT(data->ne[0] == ggml_opt_ne_per_sample(inputs));
@@ -938,6 +1018,9 @@ void ggml_opt_epoch(
     for (; ibatch < ibatch_split; ++ibatch) {
         ggml_opt_alloc(opt_ctx, /*backward =*/ true);
         ggml_opt_dataset_get_batch(dataset, inputs, labels, ibatch);
+        if (weights) {
+            ggml_opt_dataset_get_batch_weights(dataset, weights, ibatch);
+        }
         ggml_opt_eval(opt_ctx, result_train);
         if (callback_train) {
             callback_train(true, opt_ctx, dataset, result_train, ibatch+1, ibatch_split, t_loop_start);
@@ -947,6 +1030,9 @@ void ggml_opt_epoch(
     for (; ibatch < nbatches; ++ibatch) {
         ggml_opt_alloc(opt_ctx, /*backward =*/ false);
         ggml_opt_dataset_get_batch(dataset, inputs, labels, ibatch);
+        if (weights) {
+            ggml_opt_dataset_get_batch_weights(dataset, weights, ibatch);
+        }
         ggml_opt_eval(opt_ctx, result_eval);
         if (callback_eval) {
             callback_eval(false, opt_ctx, dataset, result_eval, ibatch+1-ibatch_split, nbatches-ibatch_split, t_loop_start);

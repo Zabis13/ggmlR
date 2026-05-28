@@ -987,6 +987,15 @@ static int pos_embed_block_end(onnx_ggml_ctx_t *c, int node_idx) {
 
 static int sched_alloc_and_fill(onnx_ggml_ctx_t *c) {
 
+    /* Free orphan-input buffers from a previous run before re-allocating. */
+    for (int i = 0; i < c->n_orphan_input_bufs; i++) {
+        if (c->orphan_input_bufs[i]) {
+            ggml_backend_buffer_free(c->orphan_input_bufs[i]);
+            c->orphan_input_bufs[i] = NULL;
+        }
+    }
+    c->n_orphan_input_bufs = 0;
+
     /* GPU-first: pre-assign all graph nodes and their leaf sources to GPU.
      * Weight tensors already have ->buffer set (from weight_buf), so sched
      * will skip them.  Only non-weight inputs and intermediates get assigned. */
@@ -1037,6 +1046,10 @@ static int sched_alloc_and_fill(onnx_ggml_ctx_t *c) {
                                                                        ggml_nbytes(t) + 64);
                 if (buf) {
                     ggml_backend_tensor_alloc(buf, t, (char *)ggml_backend_buffer_get_base(buf));
+                    /* Track so it can be freed on the next alloc / at ctx free. */
+                    if (c->n_orphan_input_bufs < ONNX_MAX_DEFERRED) {
+                        c->orphan_input_bufs[c->n_orphan_input_bufs++] = buf;
+                    }
                 }
             }
         }
@@ -1627,6 +1640,9 @@ struct ggml_tensor *onnx_ggml_output(onnx_ggml_ctx_t *ctx, int index) {
 
 void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     if (!ctx) return;
+    for (int i = 0; i < ctx->n_orphan_input_bufs; i++) {
+        if (ctx->orphan_input_bufs[i]) ggml_backend_buffer_free(ctx->orphan_input_bufs[i]);
+    }
     if (ctx->sched)       ggml_backend_sched_free(ctx->sched);
     if (ctx->pinned_buf)  ggml_backend_buffer_free(ctx->pinned_buf);
     if (ctx->weight_buf)  ggml_backend_buffer_free(ctx->weight_buf);

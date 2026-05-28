@@ -45,8 +45,11 @@ run_conv2d <- function(backend) {
   gf <- ggml_build_forward_expand(ctx, r)
   ggml_backend_graph_compute(backend, gf)
 
+  # `im` is a standalone im2col node not part of the computed graph (only `r`
+  # is), so its F16 buffer is never written. Read its element count via the
+  # shape API rather than its data to avoid touching uninitialised memory.
   list(conv = ggml_backend_tensor_get_data(r),
-       im_len = length(ggml_backend_tensor_get_data(im)))
+       im_len = ggml_nelements(im))
 }
 
 test_that("conv2d produces upstream reference values (CPU)", {

@@ -822,11 +822,20 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
     if (anyNA(w)) stop("class_weight must cover all classes present in y.")
     y <- y * w  # scale each row
   }
+  # When TRUE, sample weights are applied through the weighted-MSE loss node
+  # (sum(w*(pred-y)^2)) instead of by scaling the labels, which would be wrong
+  # for squared error. CE is unaffected: CE(p, w*y) == w*CE(p, y).
+  use_weighted_mse <- FALSE
   if (!is.null(sample_weight)) {
     if (length(sample_weight) != nrow(y)) {
       stop("sample_weight length must match number of training samples.")
     }
-    y <- y * sample_weight  # scale each row
+    is_mse <- model$compilation$loss %in% c("mse", "mean_squared_error")
+    if (is_mse) {
+      use_weighted_mse <- TRUE   # weights go into the loss node below, not y
+    } else {
+      y <- y * sample_weight     # cross-entropy: scaling the label is correct
+    }
   }
 
   if (!is.null(validation_data)) {
@@ -844,6 +853,11 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
       x <- abind_first(x, x_val)
     }
     y <- rbind(y, y_val)
+    # Validation rows carry no user weight; default to 1.0 so weighted MSE
+    # reduces to plain MSE on the validation split.
+    if (use_weighted_mse) {
+      sample_weight <- c(sample_weight, rep(1.0, n_val))
+    }
     validation_split <- n_val / (n_train + n_val)
   }
 
@@ -860,12 +874,11 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
             " -> ", usable_samples, ") because batch_size=", batch_size,
             " must divide evenly. Training metrics are computed on ",
             usable_samples, " samples only.")
-    if (is.matrix(x)) {
-      x <- x[seq_len(usable_samples), , drop = FALSE]
-    } else {
-      x <- x[seq_len(usable_samples), , , , drop = FALSE]
-    }
+    x <- slice_first_dim(x, seq_len(usable_samples))
     y <- y[seq_len(usable_samples), , drop = FALSE]
+    if (use_weighted_mse) {
+      sample_weight <- sample_weight[seq_len(usable_samples)]
+    }
     n_samples <- usable_samples
   }
 
@@ -902,6 +915,12 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
   ggml_backend_tensor_set_data(data_tensor, x_ggml)
   ggml_backend_tensor_set_data(labels_tensor, y_ggml)
 
+  # Per-datapoint weights for weighted MSE (loss = sum(w*(pred-y)^2)/nelem)
+  if (use_weighted_mse) {
+    weights_tensor <- ggml_opt_dataset_weights(dataset)
+    ggml_backend_tensor_set_data(weights_tensor, as.numeric(sample_weight))
+  }
+
   # Build graph (creates contexts, weights, inputs, outputs)
   graph_info <- nn_build_graph(model, batch_size)
 
@@ -912,11 +931,15 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
     ggml_opt_optimizer_type_adamw()
   )
 
-  loss_type <- switch(model$compilation$loss,
-    "categorical_crossentropy" = , "crossentropy" = ggml_opt_loss_type_cross_entropy(),
-    "mse" = , "mean_squared_error" = ggml_opt_loss_type_mse(),
-    ggml_opt_loss_type_cross_entropy()
-  )
+  loss_type <- if (use_weighted_mse) {
+    ggml_opt_loss_type_weighted_mse()
+  } else {
+    switch(model$compilation$loss,
+      "categorical_crossentropy" = , "crossentropy" = ggml_opt_loss_type_cross_entropy(),
+      "mse" = , "mean_squared_error" = ggml_opt_loss_type_mse(),
+      ggml_opt_loss_type_cross_entropy()
+    )
+  }
 
   # Train (returns history list from C)
   history_raw <- ggml_opt_fit(
@@ -1150,11 +1173,7 @@ ggml_predict.ggml_sequential_model <- function(model, x, batch_size = 32L, ...) 
 
   # Main batches
   if (n_full > 0L) {
-    if (is.matrix(x)) {
-      x_main <- x[seq_len(n_full), , drop = FALSE]
-    } else {
-      x_main <- x[seq_len(n_full), , , , drop = FALSE]
-    }
+    x_main <- slice_first_dim(x, seq_len(n_full))
     x_ggml_main <- nn_convert_to_ggml(x_main, input_shape)
     n_batches <- n_full %/% batch_size
     all_preds[seq_len(n_full), ] <- nn_predict_batch_run(
@@ -1166,11 +1185,7 @@ ggml_predict.ggml_sequential_model <- function(model, x, batch_size = 32L, ...) 
   # Remainder batch with rebuilt graph
   if (remainder > 0L) {
     idx_rem <- (n_full + 1L):n_samples
-    if (is.matrix(x)) {
-      x_rem <- x[idx_rem, , drop = FALSE]
-    } else {
-      x_rem <- x[idx_rem, , , , drop = FALSE]
-    }
+    x_rem <- slice_first_dim(x, idx_rem)
     x_ggml_rem <- nn_convert_to_ggml(x_rem, input_shape)
     all_preds[idx_rem, ] <- nn_predict_batch_run(
       model, x_ggml_rem, remainder, ne_datapoint, ne_output,

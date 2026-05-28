@@ -128,6 +128,11 @@ typedef struct {
     float               nms_iou_thresh[ONNX_MAX_DEFERRED];
     float               nms_score_thresh[ONNX_MAX_DEFERRED];
     int                 n_nms_deferred;
+
+    /* Orphan-input CPU buffers allocated in sched_alloc_and_fill (one per
+     * unbuffered real input). Freed and reset on each re-alloc and at ctx free. */
+    ggml_backend_buffer_t orphan_input_bufs[ONNX_MAX_DEFERRED];
+    int                   n_orphan_input_bufs;
 } onnx_ggml_ctx_t;
 
 /* Minimum number of elements for a weight tensor to be stored in FP16.

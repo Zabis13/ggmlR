@@ -53,6 +53,19 @@ ggml_opt_loss_type_mse <- function() {
   .Call("R_ggml_opt_loss_type_mse")
 }
 
+#' Loss type: Weighted Mean Squared Error
+#'
+#' Returns the constant for per-datapoint weighted MSE loss type. Computes
+#' \code{sum(w * (pred - y)^2) / nelements}, where \code{w} is a per-sample
+#' weight supplied via \code{\link{ggml_opt_dataset_weights}}.
+#'
+#' @return Integer constant for weighted MSE loss
+#' @export
+#' @family optimization
+ggml_opt_loss_type_weighted_mse <- function() {
+  .Call("R_ggml_opt_loss_type_weighted_mse")
+}
+
 # ============================================================================
 # Optimizer Type Constants
 # ============================================================================
@@ -152,6 +165,21 @@ ggml_opt_dataset_data <- function(dataset) {
 #' @family optimization
 ggml_opt_dataset_labels <- function(dataset) {
   .Call("R_ggml_opt_dataset_labels", dataset)
+}
+
+#' Get dataset per-datapoint weights tensor
+#'
+#' Returns the (lazily allocated) per-datapoint weights tensor with shape
+#' [1, ndata]. The first call allocates it; fill it via
+#' \code{ggml_backend_tensor_set_data()}. Used together with
+#' \code{\link{ggml_opt_loss_type_weighted_mse}}.
+#'
+#' @param dataset External pointer to dataset
+#' @return External pointer to weights tensor
+#' @export
+#' @family optimization
+ggml_opt_dataset_weights <- function(dataset) {
+  .Call("R_ggml_opt_dataset_weights", dataset)
 }
 
 #' Shuffle dataset

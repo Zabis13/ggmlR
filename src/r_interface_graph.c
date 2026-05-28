@@ -2064,6 +2064,16 @@ SEXP R_ggml_backend_tensor_get(SEXP tensor_ptr, SEXP offset_sexp, SEXP size_sexp
 // Backend Context Tensor Allocation
 // ============================================================================
 
+// Finalizer: free the backend buffer when its external pointer is GC'd.
+// Cleared on manual R_ggml_backend_buffer_free, so this never double-frees.
+static void r_ggml_backend_buffer_finalizer(SEXP ptr) {
+    ggml_backend_buffer_t buffer = (ggml_backend_buffer_t) R_ExternalPtrAddr(ptr);
+    if (buffer != NULL) {
+        ggml_backend_buffer_free(buffer);
+        R_ClearExternalPtr(ptr);
+    }
+}
+
 // Allocate all tensors in a context using a backend
 SEXP R_ggml_backend_alloc_ctx_tensors(SEXP ctx_ptr, SEXP backend_ptr) {
     struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
@@ -2079,7 +2089,12 @@ SEXP R_ggml_backend_alloc_ctx_tensors(SEXP ctx_ptr, SEXP backend_ptr) {
         error("Failed to allocate context tensors");
     }
 
-    return R_MakeExternalPtr(buffer, R_NilValue, R_NilValue);
+    // Keep the backend reachable via the tag so its finalizer cannot fire
+    // before the buffer's (GPU buffer_free may dereference the backend).
+    SEXP ptr = PROTECT(R_MakeExternalPtr(buffer, backend_ptr, R_NilValue));
+    R_RegisterCFinalizerEx(ptr, r_ggml_backend_buffer_finalizer, TRUE);
+    UNPROTECT(1);
+    return ptr;
 }
 
 // ============================================================================
@@ -2951,13 +2966,26 @@ SEXP R_ggml_get_name(SEXP tensor_ptr) {
 // ============================================================================
 
 // Initialize CPU backend
+// Finalizer: free the backend when its external pointer is GC'd.
+// Cleared on manual R_ggml_backend_free, so this never double-frees.
+static void r_ggml_backend_finalizer(SEXP ptr) {
+    ggml_backend_t backend = (ggml_backend_t) R_ExternalPtrAddr(ptr);
+    if (backend != NULL) {
+        ggml_backend_free(backend);
+        R_ClearExternalPtr(ptr);
+    }
+}
+
 SEXP R_ggml_backend_cpu_init(void) {
     ggml_backend_t backend = ggml_backend_cpu_init();
     if (backend == NULL) {
         error("Failed to initialize CPU backend");
     }
     ggml_backend_cpu_set_n_threads(backend, ggmlR_get_n_threads());
-    return R_MakeExternalPtr(backend, R_NilValue, R_NilValue);
+    SEXP ptr = PROTECT(R_MakeExternalPtr(backend, R_NilValue, R_NilValue));
+    R_RegisterCFinalizerEx(ptr, r_ggml_backend_finalizer, TRUE);
+    UNPROTECT(1);
+    return ptr;
 }
 
 // Free backend
@@ -4383,6 +4411,15 @@ SEXP R_ggml_soft_max_add_sinks(SEXP tensor_ptr, SEXP sinks_ptr) {
 // Graph Introspection Functions
 // ============================================================================
 
+// Finalizer: free the malloc'd cgraph copy when the external pointer is GC'd
+static void r_ggml_graph_view_finalizer(SEXP ptr) {
+    struct ggml_cgraph * view_copy = (struct ggml_cgraph *) R_ExternalPtrAddr(ptr);
+    if (view_copy != NULL) {
+        free(view_copy);
+        R_ClearExternalPtr(ptr);
+    }
+}
+
 // Create a view of a subgraph (nodes from i0 to i1)
 // Note: ggml_graph_view returns struct by value, we allocate and copy
 SEXP R_ggml_graph_view(SEXP graph_ptr, SEXP i0, SEXP i1) {
@@ -4405,7 +4442,7 @@ SEXP R_ggml_graph_view(SEXP graph_ptr, SEXP i0, SEXP i1) {
     *view_copy = view;
 
     SEXP ptr = PROTECT(R_MakeExternalPtr(view_copy, R_NilValue, R_NilValue));
-    // Note: caller is responsible for freeing this memory
+    R_RegisterCFinalizerEx(ptr, r_ggml_graph_view_finalizer, TRUE);
     UNPROTECT(1);
     return ptr;
 }

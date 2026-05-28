@@ -133,7 +133,7 @@
         param_set      = ps,
         predict_types  = "response",
         feature_types  = "numeric",
-        properties     = "marshal",
+        properties     = c("marshal", "weights"),
         packages       = c("mlr3", "ggmlR"),
         label          = "ggmlR Neural Network",
         man            = "ggmlR::LearnerRegrGGML"
@@ -142,6 +142,21 @@
   ),
 
   private = list(
+    # Read observation weights from a task, handling both current
+    # (`weights_learner`) and legacy (`weights`) mlr3 API. Returns a numeric
+    # vector aligned to the row order produced by `task$data()`, or NULL.
+    .extract_weights = function(task) {
+      wdt <- tryCatch(task$weights_learner, error = function(e) NULL)
+      if (is.null(wdt) || nrow(wdt) == 0L) return(NULL)
+      w <- wdt$weight[match(task$row_ids, wdt$row_id)]
+      if (anyNA(w)) {
+        stop("LearnerRegrGGML: task weights are missing for ",
+             sum(is.na(w)), " of ", length(w), " training rows.",
+             call. = FALSE)
+      }
+      as.double(w)
+    },
+
     .train = function(task) {
       pars <- self$param_set$get_values(tags = "train")
       if (identical(pars$backend, "gpu")) pars$backend <- "vulkan"
@@ -176,7 +191,9 @@
         backend   = pars$backend
       )
 
-      model <- ggml_fit(
+      sample_weight <- private$.extract_weights(task)
+
+      fit_args <- list(
         model,
         x                = x,
         y                = y,
@@ -186,6 +203,10 @@
         verbose          = pars$verbose,
         callbacks        = pars$callbacks %||% list()
       )
+      if (!is.null(sample_weight)) {
+        fit_args$sample_weight <- sample_weight
+      }
+      model <- do.call(ggml_fit, fit_args)
 
       out <- list(
         model         = model,

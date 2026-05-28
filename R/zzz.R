@@ -86,4 +86,9 @@ utils::globalVariables(c("object", "new_data", "self", "super", "private"))
     if (learners$has("classif.ggml")) learners$remove("classif.ggml")
     if (learners$has("regr.ggml"))    learners$remove("regr.ggml")
   }
+
+  # Free the process-lifetime meta buffer-type cache while the DLL is still
+  # loaded, so valgrind doesn't report its contexts as leaked at exit.
+  try(.Call("R_ggml_backend_meta_free_cached_bufts", PACKAGE = "ggmlR"),
+      silent = TRUE)
 }

@@ -109,12 +109,7 @@ static void ggml_backend_meta_device_get_memory(ggml_backend_dev_t dev, size_t *
 }
 
 static enum ggml_backend_dev_type ggml_backend_meta_device_get_type(ggml_backend_dev_t dev) {
-    // CRAN compat: GGML_BACKEND_DEVICE_TYPE_META is temporarily removed from the
-    // public enum in ggml-backend.h (see comment there). The meta device is
-    // identified by its iface pointer in ggml_backend_dev_is_meta(), not by this
-    // type, so reporting ACCEL here is harmless. Restore META once the enumerator
-    // is re-enabled.
-    return GGML_BACKEND_DEVICE_TYPE_ACCEL;
+    return GGML_BACKEND_DEVICE_TYPE_META;
 
     GGML_UNUSED(dev);
 }
@@ -345,8 +340,21 @@ bool ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft) {
     return buft != nullptr && buft->iface.get_name == ggml_backend_meta_buffer_type_iface.get_name;
 }
 
+// Process-lifetime cache of meta buffer types, one per meta device. The ctx
+// of each entry is heap-allocated (new) and lives until ggmlR unloads — see
+// ggml_backend_meta_free_cached_bufts(), called from .onUnload.
+static std::map<ggml_backend_dev_t, struct ggml_backend_buffer_type> g_meta_bufts;
+
+void ggml_backend_meta_free_cached_bufts(void) {
+    for (auto & kv : g_meta_bufts) {
+        delete (ggml_backend_meta_buffer_type_context *) kv.second.context;
+        kv.second.context = nullptr;
+    }
+    g_meta_bufts.clear();
+}
+
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_backend_dev_t dev) {
-    static std::map<ggml_backend_dev_t, struct ggml_backend_buffer_type> meta_bufts;
+    std::map<ggml_backend_dev_t, struct ggml_backend_buffer_type> & meta_bufts = g_meta_bufts;
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
     {
         auto it = meta_bufts.find(dev);

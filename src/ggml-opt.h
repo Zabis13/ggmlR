@@ -32,6 +32,7 @@ extern "C" {
         GGML_OPT_LOSS_TYPE_SUM,
         GGML_OPT_LOSS_TYPE_CROSS_ENTROPY,
         GGML_OPT_LOSS_TYPE_MEAN_SQUARED_ERROR,
+        GGML_OPT_LOSS_TYPE_WEIGHTED_MEAN_SQUARED_ERROR, // per-datapoint weighted MSE (ggmlR extension)
     };
 
     // ====== Dataset ======
@@ -50,6 +51,9 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_opt_dataset_data  (ggml_opt_dataset_t dataset); // shape = [ne_datapoint, ndata]
     GGML_API struct ggml_tensor * ggml_opt_dataset_labels(ggml_opt_dataset_t dataset); // shape = [nd_label,     ndata]
 
+    // per-datapoint loss weights, lazily allocated on first call (ggmlR extension); shape = [1, ndata]
+    GGML_API struct ggml_tensor * ggml_opt_dataset_weights(ggml_opt_dataset_t dataset);
+
     // shuffle idata first datapoints from dataset with RNG from opt_ctx, shuffle all datapoints if idata is negative
     GGML_API void ggml_opt_dataset_shuffle(ggml_opt_context_t opt_ctx, ggml_opt_dataset_t dataset, int64_t idata);
 
@@ -64,6 +68,11 @@ extern "C" {
             void               * data_batch,
             size_t               nb_data_batch,
             void               * labels_batch,
+            int64_t              ibatch);
+    // copy weights batch using the same permutation/ibatch as ggml_opt_dataset_get_batch (ggmlR extension)
+    GGML_API void ggml_opt_dataset_get_batch_weights(
+            ggml_opt_dataset_t   dataset,
+            struct ggml_tensor * weights_batch, // shape = [1, ndata_batch]
             int64_t              ibatch);
 
     // ====== Model / Context ======
@@ -148,6 +157,7 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_opt_inputs(  ggml_opt_context_t opt_ctx); // forward graph input tensor
     GGML_API struct ggml_tensor * ggml_opt_outputs( ggml_opt_context_t opt_ctx); // forward graph output tensor
     GGML_API struct ggml_tensor * ggml_opt_labels(  ggml_opt_context_t opt_ctx); // labels to compare outputs against
+    GGML_API struct ggml_tensor * ggml_opt_loss_weights(ggml_opt_context_t opt_ctx); // per-datapoint weights (weighted MSE), NULL otherwise
     GGML_API struct ggml_tensor * ggml_opt_loss(    ggml_opt_context_t opt_ctx); // scalar tensor that contains the loss
     GGML_API struct ggml_tensor * ggml_opt_pred(    ggml_opt_context_t opt_ctx); // predictions made by outputs
     GGML_API struct ggml_tensor * ggml_opt_ncorrect(ggml_opt_context_t opt_ctx); // number of matching predictions between outputs and labels

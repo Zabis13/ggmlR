@@ -18,6 +18,26 @@ extern int ggmlR_get_n_threads(void);
 // parallel: whether to run backends in parallel
 // graph_size: expected maximum graph size (default: 2048)
 // add_cpu: whether to automatically add CPU backend (default: TRUE)
+// Finalizer: free the scheduler (and the CPU backend it owns, stored in the
+// protected tag) when the external pointer is GC'd. Cleared on manual
+// R_ggml_backend_sched_free, so this never double-frees.
+static void r_ggml_sched_finalizer(SEXP sched_ptr) {
+    ggml_backend_sched_t sched = (ggml_backend_sched_t) R_ExternalPtrAddr(sched_ptr);
+    if (sched != NULL) {
+        ggml_backend_sched_free(sched);
+        R_ClearExternalPtr(sched_ptr);
+
+        SEXP cpu_ptr = R_ExternalPtrProtected(sched_ptr);
+        if (cpu_ptr != R_NilValue) {
+            ggml_backend_t cpu_backend = (ggml_backend_t) R_ExternalPtrAddr(cpu_ptr);
+            if (cpu_backend != NULL) {
+                ggml_backend_free(cpu_backend);
+                R_ClearExternalPtr(cpu_ptr);
+            }
+        }
+    }
+}
+
 SEXP R_ggml_backend_sched_new(SEXP backends_list, SEXP parallel, SEXP graph_size) {
     if (!isNewList(backends_list)) {
         error("backends must be a list of backend pointers");
@@ -81,10 +101,14 @@ SEXP R_ggml_backend_sched_new(SEXP backends_list, SEXP parallel, SEXP graph_size
         error("Failed to create backend scheduler");
     }
 
-    // Create external pointer with CPU backend stored in tag for cleanup
-    // tag = CPU backend pointer (to free when scheduler is freed)
+    // External pointer layout:
+    //   prot = cpu_ptr   — the CPU backend we created here (freed in finalizer)
+    //   tag  = backends_list — the user backends, kept reachable so their own
+    //                          finalizers cannot fire before the scheduler's
+    //                          (sched_free dereferences these backends)
     SEXP cpu_ptr = PROTECT(R_MakeExternalPtr(cpu_backend, R_NilValue, R_NilValue));
-    SEXP ptr = PROTECT(R_MakeExternalPtr(sched, R_NilValue, cpu_ptr));
+    SEXP ptr = PROTECT(R_MakeExternalPtr(sched, backends_list, cpu_ptr));
+    R_RegisterCFinalizerEx(ptr, r_ggml_sched_finalizer, TRUE);
     UNPROTECT(2);
     return ptr;
 }

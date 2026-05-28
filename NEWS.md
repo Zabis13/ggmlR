@@ -1,3 +1,7 @@
+# ggmlR 0.7.8
+
+* Re-enabled the `GGML_BACKEND_DEVICE_TYPE_META` device type (tensor-parallel meta backend).
+
 # ggmlR 0.7.7
 
 * **ggml-0.11.0 migration complete** (vendored library upgraded from 0.9.5); all ggmlR features and optimizations preserved (5D indexing, Q4_K Flash Attention, RDNA4 subgroup-shuffle MMQ, Vulkan 1.4 push constants).
