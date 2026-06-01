@@ -4,15 +4,23 @@
 \alias{gguf_load}
 \title{Load a GGUF File}
 \usage{
-gguf_load(path)
+gguf_load(path, meta_only = FALSE)
 }
 \arguments{
 \item{path}{Path to a .gguf file.}
+
+\item{meta_only}{If \code{TRUE}, read only the header and metadata without
+allocating tensor data. Metadata, tensor names and tensor info remain
+available; \code{\link{gguf_tensor_data}} is not (reload with
+\code{meta_only = FALSE}). Default \code{FALSE}.}
 }
 \value{
 An object of class \code{"gguf"}.
 }
 \description{
-Opens a GGUF file and reads all metadata and tensor data into memory.
-Returns an S3 object of class \code{"gguf"} wrapping the internal pointer.
+Opens a GGUF file and reads its metadata. By default also reads tensor data
+into memory; with \code{meta_only = TRUE} only the header and key-value
+metadata are read (no tensor data is allocated), which is cheap and enough
+for inspecting architecture / type fields. Returns an S3 object of class
+\code{"gguf"} wrapping the internal pointer.
 }

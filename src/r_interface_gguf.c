@@ -25,13 +25,16 @@ static void gguf_finalizer(SEXP ptr) {
 
 /* ── R_gguf_load(path) ─────────────────────────────────────── */
 
-SEXP R_gguf_load(SEXP r_path) {
+SEXP R_gguf_load(SEXP r_path, SEXP r_meta_only) {
     const char *path = CHAR(STRING_ELT(r_path, 0));
+    int meta_only = (Rf_asLogical(r_meta_only) == TRUE);
 
+    /* meta_only: read header + KV metadata only, do not allocate tensor data
+       (no ggml_context). Used for cheap architecture/type detection. */
     struct ggml_context *ggml_ctx = NULL;
     struct gguf_init_params params = {
-        .no_alloc = false,
-        .ctx      = &ggml_ctx,
+        .no_alloc = meta_only ? true : false,
+        .ctx      = meta_only ? NULL : &ggml_ctx,
     };
 
     struct gguf_context *gf = gguf_init_from_file(path, params);
@@ -214,18 +217,16 @@ SEXP R_gguf_tensor_info(SEXP r_ptr, SEXP r_name) {
     struct gguf_context *gf = (struct gguf_context *)R_ExternalPtrAddr(r_ptr);
     if (!gf) Rf_error("GGUF context already freed");
 
-    /* get ggml_context from tag */
-    SEXP tag = R_ExternalPtrTag(r_ptr);
-    if (tag == R_NilValue) Rf_error("No tensor data loaded (no_alloc was true?)");
-    struct ggml_context *ggml_ctx =
-        (struct ggml_context *)R_ExternalPtrAddr(tag);
-    if (!ggml_ctx) Rf_error("ggml context already freed");
-
     const char *name = CHAR(STRING_ELT(r_name, 0));
-    struct ggml_tensor *t = ggml_get_tensor(ggml_ctx, name);
-    if (!t) Rf_error("Tensor '%s' not found", name);
 
-    int n_dims = ggml_n_dims(t);
+    /* Two paths:
+       - full load (tag holds a ggml_context): read shape/type/size from the
+         materialized ggml_tensor (exact, includes per-dim shape).
+       - meta_only (no_alloc, tag == NULL): no ggml tensors exist, so read what
+         the gguf API exposes directly — name, type, size_bytes. The GGUF tensor
+         shape (ne) is NOT exposed by the public gguf API without allocating
+         tensors, so `shape` is returned as NA in this mode. */
+    SEXP tag = R_ExternalPtrTag(r_ptr);
 
     SEXP result = PROTECT(Rf_allocVector(VECSXP, 4));
     SEXP rnames = PROTECT(Rf_allocVector(STRSXP, 4));
@@ -234,18 +235,40 @@ SEXP R_gguf_tensor_info(SEXP r_ptr, SEXP r_name) {
     SET_STRING_ELT(rnames, 2, Rf_mkChar("type"));
     SET_STRING_ELT(rnames, 3, Rf_mkChar("size_bytes"));
 
-    SET_VECTOR_ELT(result, 0, Rf_mkString(ggml_get_name(t)));
+    if (tag != R_NilValue) {
+        struct ggml_context *ggml_ctx =
+            (struct ggml_context *)R_ExternalPtrAddr(tag);
+        if (!ggml_ctx) Rf_error("ggml context already freed");
 
-    SEXP shape = PROTECT(Rf_allocVector(INTSXP, n_dims));
-    for (int d = 0; d < n_dims; d++)
-        INTEGER(shape)[d] = (int)t->ne[d];
-    SET_VECTOR_ELT(result, 1, shape);
+        struct ggml_tensor *t = ggml_get_tensor(ggml_ctx, name);
+        if (!t) Rf_error("Tensor '%s' not found", name);
 
-    SET_VECTOR_ELT(result, 2, Rf_mkString(ggml_type_name(t->type)));
-    SET_VECTOR_ELT(result, 3, Rf_ScalarReal((double)ggml_nbytes(t)));
+        int n_dims = ggml_n_dims(t);
+        SET_VECTOR_ELT(result, 0, Rf_mkString(ggml_get_name(t)));
+
+        SEXP shape = PROTECT(Rf_allocVector(INTSXP, n_dims));
+        for (int d = 0; d < n_dims; d++)
+            INTEGER(shape)[d] = (int)t->ne[d];
+        SET_VECTOR_ELT(result, 1, shape);
+        UNPROTECT(1);
+
+        SET_VECTOR_ELT(result, 2, Rf_mkString(ggml_type_name(t->type)));
+        SET_VECTOR_ELT(result, 3, Rf_ScalarReal((double)ggml_nbytes(t)));
+    } else {
+        /* meta_only path: query the gguf context directly. */
+        int64_t tid = gguf_find_tensor(gf, name);
+        if (tid < 0) Rf_error("Tensor '%s' not found", name);
+
+        SET_VECTOR_ELT(result, 0, Rf_mkString(name));
+        SET_VECTOR_ELT(result, 1, Rf_ScalarInteger(NA_INTEGER)); /* shape n/a */
+        SET_VECTOR_ELT(result, 2,
+            Rf_mkString(ggml_type_name(gguf_get_tensor_type(gf, tid))));
+        SET_VECTOR_ELT(result, 3,
+            Rf_ScalarReal((double)gguf_get_tensor_size(gf, tid)));
+    }
 
     Rf_setAttrib(result, R_NamesSymbol, rnames);
-    UNPROTECT(3);
+    UNPROTECT(2);
     return result;
 }
 

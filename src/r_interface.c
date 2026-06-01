@@ -125,7 +125,7 @@ extern SEXP R_ggml_backend_graph_plan_create(SEXP, SEXP);
 extern SEXP R_ggml_backend_graph_plan_free(SEXP, SEXP);
 extern SEXP R_ggml_backend_graph_plan_compute(SEXP, SEXP);
 // GGUF reader (defined in r_interface_gguf.c)
-extern SEXP R_gguf_load(SEXP);
+extern SEXP R_gguf_load(SEXP, SEXP);
 extern SEXP R_gguf_free(SEXP);
 extern SEXP R_gguf_info(SEXP);
 extern SEXP R_gguf_metadata(SEXP);
@@ -1887,7 +1887,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_set_omp_threads",                  (DL_FUNC) &R_ggml_set_omp_threads,                   1},
 
     // GGUF
-    {"R_gguf_load",                             (DL_FUNC) &R_gguf_load,                              1},
+    {"R_gguf_load",                             (DL_FUNC) &R_gguf_load,                              2},
     {"R_gguf_free",                             (DL_FUNC) &R_gguf_free,                              1},
     {"R_gguf_info",                             (DL_FUNC) &R_gguf_info,                              1},
     {"R_gguf_metadata",                         (DL_FUNC) &R_gguf_metadata,                          1},

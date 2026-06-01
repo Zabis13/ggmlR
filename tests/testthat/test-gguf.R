@@ -141,3 +141,79 @@ test_that("gguf functions error on non-gguf objects", {
   expect_error(gguf_tensor_data(NULL, "w"), "Expected a gguf object")
   expect_error(gguf_free(list()), "Expected a gguf object")
 })
+
+# --- meta_only (header-only load, no_alloc) --------------------------------
+
+test_that("gguf_load(meta_only = TRUE) reads header without tensor data", {
+  tmp <- tempfile(fileext = ".gguf")
+  on.exit(unlink(tmp))
+  create_test_gguf(tmp)
+
+  g <- gguf_load(tmp, meta_only = TRUE)
+  expect_s3_class(g, "gguf")
+  expect_true(isTRUE(g$meta_only))
+  # Header fields are still populated from the header read.
+  expect_equal(g$version, 3L)
+  expect_equal(g$n_tensors, 1L)
+  expect_true(g$n_kv >= 1L)
+  gguf_free(g)
+})
+
+test_that("metadata and tensor info are available with meta_only = TRUE", {
+  tmp <- tempfile(fileext = ".gguf")
+  on.exit(unlink(tmp))
+  create_test_gguf(tmp)
+
+  g <- gguf_load(tmp, meta_only = TRUE)
+  meta <- gguf_metadata(g)
+  expect_true("test.key" %in% names(meta))
+  expect_equal(meta[["test.key"]], "hello")
+
+  nms <- gguf_tensor_names(g)
+  expect_true("w" %in% nms)
+
+  # tensor_info works under meta_only: name/type/size from the gguf API.
+  # shape is NA because the public gguf API does not expose per-dim ne
+  # without allocating tensors.
+  info <- gguf_tensor_info(g, "w")
+  expect_equal(info$name, "w")
+  expect_equal(info$type, "f32")
+  expect_true(is.na(info$shape))
+  gguf_free(g)
+})
+
+test_that("gguf_tensor_data errors informatively under meta_only = TRUE", {
+  tmp <- tempfile(fileext = ".gguf")
+  on.exit(unlink(tmp))
+  create_test_gguf(tmp)
+
+  g <- gguf_load(tmp, meta_only = TRUE)
+  expect_error(gguf_tensor_data(g, "w"),
+               "meta_only=TRUE, tensor data not available")
+  expect_error(gguf_tensor_data(g, "w"),
+               "gguf_load\\(path, meta_only=FALSE\\)")
+  gguf_free(g)
+})
+
+test_that("print.gguf notes meta_only mode", {
+  tmp <- tempfile(fileext = ".gguf")
+  on.exit(unlink(tmp))
+  create_test_gguf(tmp)
+
+  g <- gguf_load(tmp, meta_only = TRUE)
+  out <- capture.output(print(g))
+  expect_true(any(grepl("meta_only", out)))
+  gguf_free(g)
+})
+
+test_that("default load (meta_only = FALSE) still returns tensor data", {
+  tmp <- tempfile(fileext = ".gguf")
+  on.exit(unlink(tmp))
+  create_test_gguf(tmp)
+
+  g <- gguf_load(tmp)                       # default
+  expect_false(isTRUE(g$meta_only))
+  d <- gguf_tensor_data(g, "w")
+  expect_equal(as.numeric(d), c(1, 2, 3, 4), tolerance = 1e-5)
+  gguf_free(g)
+})

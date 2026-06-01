@@ -18,3 +18,9 @@ A list with elements \code{name}, \code{shape}, \code{type},
 \description{
 Returns name, shape, type, and size in bytes for a single tensor.
 }
+\details{
+When the file was opened with \code{meta_only = TRUE}, the per-dimension
+\code{shape} is \code{NA} (the public GGUF API does not expose tensor
+dimensions without allocating tensors); \code{name}, \code{type} and
+\code{size_bytes} are still returned.
+}
