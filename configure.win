@@ -127,9 +127,16 @@ fi
 # --- Build Vulkan shaders ---
 if [ "$USE_VULKAN" = "yes" ]; then
 
+  # Normalize the SDK path: convert Windows backslashes to forward slashes.
+  # gcc/MinGW accept forward slashes, and this keeps the path safe for use in
+  # the right-hand side of the sed substitutions below. Native backslashes
+  # (e.g. C:\VulkanSDK\1.4.350.0) would be misread by sed as backreferences
+  # (\1, \4, ...) -> "invalid reference \1 on 's' command's RHS".
+  VULKAN_SDK_FWD=$(printf '%s' "$VULKAN_SDK" | tr '\\' '/')
+
   # Set Vulkan include and lib paths from SDK
-  VULKAN_CPPFLAGS="-I\"${VULKAN_SDK}/Include\""
-  VULKAN_LIBS="-L\"${VULKAN_SDK}/Lib\" -lvulkan-1"
+  VULKAN_CPPFLAGS="-I\"${VULKAN_SDK_FWD}/Include\""
+  VULKAN_LIBS="-L\"${VULKAN_SDK_FWD}/Lib\" -lvulkan-1"
 
   echo "Vulkan CPPFLAGS: $VULKAN_CPPFLAGS"
   echo "Vulkan LIBS: $VULKAN_LIBS"
