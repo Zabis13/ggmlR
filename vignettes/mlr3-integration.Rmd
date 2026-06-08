@@ -2,7 +2,7 @@
 title: "mlr3 Integration"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{mlr3 Integration}
+  %\VignetteIndexEntry{05. mlr3 Integration}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -11,13 +11,18 @@ vignette: >
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment  = "#>",
-  eval     = requireNamespace("mlr3", quietly = TRUE) &&
+  # Executed locally (NOT_CRAN=true); skipped on CRAN to avoid the
+  # "CPU time > elapsed" vignette NOTE from the CPU fallback.
+  eval     = identical(Sys.getenv("NOT_CRAN"), "true") &&
+             requireNamespace("mlr3", quietly = TRUE) &&
              requireNamespace("paradox", quietly = TRUE)
 )
 library(ggmlR)
+# Loading ggmlR installs a load hook that registers the mlr3 learners
+# (classif.ggml / regr.ggml) automatically once mlr3 is loaded — no manual
+# registration call is needed.
 if (requireNamespace("mlr3", quietly = TRUE)) {
   library(mlr3)
-  ggmlR:::.register_mlr3()
 }
 ```
 
@@ -92,7 +97,7 @@ learner$param_set$values$backend       <- "gpu"
 
 Set `backend = "gpu"` (or leave `"auto"` if a Vulkan GPU is available):
 
-```{r, eval=ggml_vulkan_available()}
+```{r, eval=identical(Sys.getenv("NOT_CRAN"), "true") && ggml_vulkan_available()}
 learner <- lrn("classif.ggml",
                backend = "gpu",
                epochs  = 100L)

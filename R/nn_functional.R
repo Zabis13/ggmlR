@@ -1366,6 +1366,13 @@ ggml_compile.ggml_functional_model <- function(model,
   model$compilation$optimizer <- optimizer
   model$compilation$loss      <- loss
   model$compilation$metrics   <- metrics
+  # Record requested vs actually-used backend so a silent "auto" -> CPU
+  # fallback is inspectable later (see ggml_model_backend()).
+  model$compilation$backend_requested <- backend
+  model$compilation$backend_used      <- if (use_vulkan) "vulkan" else "cpu"
+  model$compilation$device <- if (use_vulkan) {
+    ggml_vulkan_device_description(0L)
+  } else "cpu"
   model$compiled              <- TRUE
 
   invisible(model)

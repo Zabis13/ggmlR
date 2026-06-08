@@ -2,13 +2,15 @@
 title: "Autograd Engine"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Autograd Engine}
+  %\VignetteIndexEntry{03. Autograd Engine}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(eval = TRUE)
+# Vignette code is executed locally (NOT_CRAN=true) but not on CRAN, where
+# the CPU fallback would multi-thread and trip the "CPU time > elapsed" NOTE.
+knitr::opts_chunk$set(eval = identical(Sys.getenv("NOT_CRAN"), "true"))
 ```
 
 ggmlR includes a PyTorch-style dynamic autograd engine built on top of ggml

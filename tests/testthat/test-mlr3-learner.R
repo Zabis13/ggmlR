@@ -183,7 +183,7 @@ test_that("LearnerClassifGGML rejects an unsupported model_fn return", {
     list(not = "a model")
   }
 
-  expect_error(learner$train(task), "sequential or")
+  expect_error(learner$train(task), "sequential, functional, or ag_sequential")
 })
 
 test_that("LearnerClassifGGML honours observation weights", {

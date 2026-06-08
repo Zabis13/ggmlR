@@ -69,7 +69,11 @@ make_mlp_ggml <- function() {
     options              = list(
       predictor_indicators = "one_hot",
       compute_intercept    = FALSE,
-      remove_intercept     = FALSE,
+      # Drop the formula-supplied "(Intercept)" column before it reaches the
+      # engine fit. parsnip 1.5+ adds it during formula processing even when
+      # compute_intercept = FALSE; without removal it inflates ncol(x) (e.g.
+      # iris 4 -> 5) and leaks into the predict path.
+      remove_intercept     = TRUE,
       allow_sparse_x       = FALSE
     )
   )
@@ -81,7 +85,7 @@ make_mlp_ggml <- function() {
     options              = list(
       predictor_indicators = "one_hot",
       compute_intercept    = FALSE,
-      remove_intercept     = FALSE,
+      remove_intercept     = TRUE,
       allow_sparse_x       = FALSE
     )
   )
@@ -194,7 +198,10 @@ ggmlr_parsnip_fit_classif <- function(x, y,
                                       callbacks = list(),
                                       optimizer = "adam",
                                       backend = "auto",
+                                      seed = NULL,
                                       ...) {
+  ggml_set_seed(seed)
+
   if (!is.null(learn_rate)) {
     callbacks <- c(callbacks,
                    list(.ggmlr_parsnip_lr_callback(learn_rate, optimizer)))
@@ -224,22 +231,25 @@ ggmlr_parsnip_fit_classif <- function(x, y,
                         loss      = "categorical_crossentropy",
                         backend   = backend)
 
-  model <- ggml_fit(
-    model,
-    x                = x,
-    y                = y_mat,
-    epochs           = as.integer(epochs),
-    batch_size       = as.integer(batch_size),
-    validation_split = validation_split,
-    verbose          = as.integer(verbose),
-    callbacks        = callbacks
-  )
+  fit_time <- system.time(
+    model <- ggml_fit(
+      model,
+      x                = x,
+      y                = y_mat,
+      epochs           = as.integer(epochs),
+      batch_size       = as.integer(batch_size),
+      validation_split = validation_split,
+      verbose          = as.integer(verbose),
+      callbacks        = callbacks
+    )
+  )[["elapsed"]]
 
   out <- list(
     model       = model,
     class_names = class_names,
     n_features  = n_features,
-    mode        = "classification"
+    mode        = "classification",
+    fit_time    = fit_time
   )
   class(out) <- "ggmlr_parsnip_model"
   out
@@ -267,7 +277,10 @@ ggmlr_parsnip_fit_regr <- function(x, y,
                                    callbacks = list(),
                                    optimizer = "adam",
                                    backend = "auto",
+                                   seed = NULL,
                                    ...) {
+  ggml_set_seed(seed)
+
   if (!is.null(learn_rate)) {
     callbacks <- c(callbacks,
                    list(.ggmlr_parsnip_lr_callback(learn_rate, optimizer)))
@@ -292,21 +305,24 @@ ggmlr_parsnip_fit_regr <- function(x, y,
 
   y_mat <- matrix(as.double(y), ncol = 1L)
 
-  model <- ggml_fit(
-    model,
-    x                = x,
-    y                = y_mat,
-    epochs           = as.integer(epochs),
-    batch_size       = as.integer(batch_size),
-    validation_split = validation_split,
-    verbose          = as.integer(verbose),
-    callbacks        = callbacks
-  )
+  fit_time <- system.time(
+    model <- ggml_fit(
+      model,
+      x                = x,
+      y                = y_mat,
+      epochs           = as.integer(epochs),
+      batch_size       = as.integer(batch_size),
+      validation_split = validation_split,
+      verbose          = as.integer(verbose),
+      callbacks        = callbacks
+    )
+  )[["elapsed"]]
 
   out <- list(
     model      = model,
     n_features = n_features,
-    mode       = "regression"
+    mode       = "regression",
+    fit_time   = fit_time
   )
   class(out) <- "ggmlr_parsnip_model"
   out

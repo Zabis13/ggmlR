@@ -2,7 +2,7 @@
 title: "ONNX Model Import"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{ONNX Model Import}
+  %\VignetteIndexEntry{09. ONNX Model Import}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---

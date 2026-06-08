@@ -2,20 +2,105 @@
 title: "Using ggmlR as a Backend in Your Package"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Using ggmlR as a Backend in Your Package}
+  %\VignetteIndexEntry{10. Using ggmlR as a Backend in Your Package}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(eval = TRUE)
+# Vignette code is executed locally (NOT_CRAN=true) but not on CRAN, where
+# the CPU fallback would multi-thread and trip the "CPU time > elapsed" NOTE.
+knitr::opts_chunk$set(eval = identical(Sys.getenv("NOT_CRAN"), "true"))
 ```
 
-ggmlR exports a static library (`libggml.a`) and C headers so downstream
-packages can link against ggml directly — the same pattern used by `llamaR`
-(LLM inference) and `sd2R` (Stable Diffusion).
+There are two ways another package can build on ggmlR:
+
+1. **R level** — depend on the ggmlR *R API* (`Imports: ggmlR`) and call the
+   exported `ggml_*` / `ag_*` functions. This is the simplest path and is right
+   for packages that build, train or run models from R. See *Part A* below.
+2. **C level** — link against the exported static library (`libggml.a`) and C
+   headers (`LinkingTo: ggmlR`) to call ggml directly from your own C/C++ code.
+   This is the path used by `llamaR` (LLM inference) and `sd2R` (Stable
+   Diffusion). See *Part B* below.
+
+The two are independent — most packages need only one. You can also combine
+them (use the R API for orchestration and drop to C for a custom kernel).
 
 ---
+
+# Part A — Using the ggmlR R API from your package
+
+## A1. Depend on ggmlR
+
+In your `DESCRIPTION`:
+
+```
+Package: myPackage
+...
+Imports:
+    ggmlR
+```
+
+Then import the functions you use in `NAMESPACE` (via roxygen
+`@importFrom ggmlR ...`), or call them fully qualified as `ggmlR::ggml_fit()`.
+
+```r
+#' @importFrom ggmlR ggml_model_sequential ggml_layer_dense ggml_compile
+#' @importFrom ggmlR ggml_fit ggml_predict
+NULL
+```
+
+## A2. Everything the examples use is exported
+
+The whole high-level surface is exported and therefore usable from a downstream
+package — the sequential, functional and autograd APIs, optimizers, schedulers,
+the dataloader, data-parallel training, plus the diagnostics/reproducibility
+helpers. For instance, the entire `titanic_classification.R` example (Keras-like
++ functional + autograd, ~30 ggmlR functions) runs unchanged from another
+package once `ggmlR` is in `Imports`.
+
+```r
+my_train <- function(x, y, epochs = 50L) {
+  model <- ggmlR::ggml_model_sequential() |>
+    ggmlR::ggml_layer_dense(64L, activation = "relu", input_shape = ncol(x)) |>
+    ggmlR::ggml_layer_dense(ncol(y), activation = "softmax") |>
+    ggmlR::ggml_compile(optimizer = "adam", loss = "categorical_crossentropy")
+  ggmlR::ggml_fit(model, x, y, epochs = epochs, verbose = 0L)
+}
+```
+
+A few things worth knowing:
+
+- **S3 dispatch works across packages.** `ggml_compile()`, `ggml_fit()` and
+  `ggml_predict()` are S3 generics with methods registered for the sequential
+  and functional model classes; the dispatch resolves correctly when called
+  from your package.
+- **Object methods need no extra imports.** Autograd objects expose methods
+  through their environment (`model$forward()`, `opt$step()`,
+  `dl$epoch()`, …). These are fields of objects returned by exported
+  functions, so they just work — there is nothing extra to import.
+- **The pipe `|>`** is base R (≥ 4.1); it is not a ggmlR dependency.
+- **Reproducibility & diagnostics** are exported too: `ggml_set_seed()`,
+  `ggml_training_history()` and `ggml_model_backend()` let your package fix
+  seeds and inspect the loss curve / actual backend of a fitted model.
+- **Local helpers stay local.** Example scripts define their own convenience
+  helpers (e.g. `ag_predict_colmajor()`, custom autograd layers). Those are
+  *not* part of the ggmlR API — copy them into your own package if you want
+  them.
+
+## A3. tidymodels / mlr3 engines
+
+ggmlR registers a parsnip `"ggml"` engine and `mlr3` learners
+(`classif.ggml`, `regr.ggml`) in its `.onLoad`: if `mlr3` / `parsnip` are
+already loaded they are registered immediately, otherwise a load hook registers
+them as soon as those packages load. A downstream package that `Imports: ggmlR`
+therefore gets these registrations with no manual call — just make sure ggmlR's
+namespace is loaded (any `ggmlR::` call or `importFrom` does that). See the
+*tidymodels* and *mlr3* vignettes for usage.
+
+---
+
+# Part B — Linking ggml from your package's C/C++ code
 
 ## 1. What ggmlR exports
 

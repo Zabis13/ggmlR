@@ -54,7 +54,9 @@
 #' numeric vector of length equal to the number of training rows; missing
 #' weights for any row cause an error. Row alignment follows
 #' \code{task$row_ids}, so arbitrary internal ordering inside the task is
-#' handled correctly.
+#' handled correctly. Weights are only applied by the sequential/functional
+#' tradepath; an autograd \code{model_fn} (returning an \code{ag_sequential})
+#' does not apply them and the learner warns when weights are present.
 #'
 #' @section Predict types:
 #' Supports \code{"response"} and \code{"prob"}. The underlying softmax output
@@ -82,6 +84,18 @@
   "LearnerClassifGGML",
   inherit = mlr3::LearnerClassif,
   public = list(
+
+    #' @field training_fn Optional user-supplied training loop for the
+    #'   autograd tradepath. Only consulted when \code{model_fn} returns an
+    #'   \code{ag_sequential} module. Signature
+    #'   \code{function(model, x, y, pars) -> trained model}, where \code{x} is
+    #'   the feature matrix \code{[rows, features]}, \code{y} is the one-hot
+    #'   label matrix \code{[rows, classes]}, and \code{pars} is the learner's
+    #'   current parameter list. If \code{NULL} (default), a built-in Adam/SGD
+    #'   loop with fused softmax cross-entropy is used. The autograd model must
+    #'   output raw logits (no terminal softmax). Sequential and functional
+    #'   models ignore this field.
+    training_fn = NULL,
 
     #' @field model_fn Optional user-supplied model builder. See the
     #'   \dQuote{The \code{model_fn} field} section above. If \code{NULL}
@@ -122,7 +136,16 @@
         activation       = paradox::p_uty(default = "relu", tags = "train"),
         dropout          = paradox::p_dbl(lower = 0, upper = 1 - 1e-8,
                                           default = 0.2, tags = "train"),
-        callbacks        = paradox::p_uty(default = list(), tags = "train")
+        callbacks        = paradox::p_uty(default = list(), tags = "train"),
+        # Autograd-only parameters (ignored by the sequential/functional
+        # tradepath, where ggml_compile() owns the learning rate).
+        learning_rate    = paradox::p_dbl(lower = 0, default = 1e-3,
+                                          tags = "train"),
+        max_grad_norm    = paradox::p_dbl(lower = 0, default = Inf,
+                                          tags = "train"),
+        # Reproducibility: fixes weight init, dropout masks and shuffling.
+        # Unset = non-deterministic. See ggml_set_seed().
+        seed             = paradox::p_int(tags = "train")
       )
 
       ps$values <- list(
@@ -135,7 +158,9 @@
         hidden_layers    = c(128L, 64L),
         activation       = "relu",
         dropout          = 0.2,
-        callbacks        = list()
+        callbacks        = list(),
+        learning_rate    = 1e-3,
+        max_grad_norm    = Inf
       )
 
       super$initialize(
@@ -168,8 +193,57 @@
       as.double(w)
     },
 
+    # Default autograd training loop (classification). Activated when
+    # `model_fn` returns an ag_sequential module. `x` is [rows, features] and
+    # `y` is the one-hot label matrix [rows, classes]; autograd modules expect
+    # [features, batch] / [classes, batch], so both are transposed. The model
+    # must output raw logits; fused softmax cross-entropy is applied here.
+    # Returns the trained (in-place updated) ag_sequential module.
+    .train_autograd = function(model, x, y, pars) {
+      xt <- t(x)                       # [features, rows]
+      yt <- t(y)                       # [classes, rows]
+      n  <- ncol(xt)
+      bs <- min(pars$batch_size, n)
+
+      params <- model$parameters()
+      opt <- switch(pars$optimizer,
+        sgd  = optimizer_sgd(params, lr = pars$learning_rate),
+        adam = optimizer_adam(params, lr = pars$learning_rate),
+        optimizer_adam(params, lr = pars$learning_rate)
+      )
+
+      ag_train(model)
+      for (epoch in seq_len(pars$epochs)) {
+        perm <- sample.int(n)
+        for (start in seq(1L, n, by = bs)) {
+          idx <- perm[start:min(start + bs - 1L, n)]
+          xb  <- ag_tensor(xt[, idx, drop = FALSE])
+          yb  <- yt[, idx, drop = FALSE]
+
+          with_grad_tape({
+            logits <- model$forward(xb)
+            loss   <- ag_softmax_cross_entropy_loss(logits, yb)
+          })
+          grads <- backward(loss)
+          if (is.finite(pars$max_grad_norm)) {
+            clip_grad_norm(params, grads, pars$max_grad_norm)
+          }
+          opt$step(grads)
+          opt$zero_grad()
+        }
+        if (pars$verbose > 0L) {
+          cat(sprintf("[classif.ggml autograd] epoch %d/%d  loss = %.6f\n",
+                      epoch, pars$epochs, as.numeric(.ag_data(loss))))
+        }
+      }
+      ag_eval(model)
+      model
+    },
+
     .train = function(task) {
       pars <- self$param_set$get_values(tags = "train")
+      # Reproducibility: fix RNG before any weight init / shuffling / dropout.
+      ggml_set_seed(pars$seed)
       if (identical(pars$backend, "gpu")) pars$backend <- "vulkan"
 
       x <- as.matrix(task$data(cols = task$feature_names))
@@ -194,10 +268,44 @@
       }
 
       model <- builder(task, ncol(x), n_out, pars)
-      if (!inherits(model, c("ggml_sequential_model", "ggml_functional_model"))) {
-        stop("`model_fn` must return an uncompiled ggml sequential or ",
-             "functional model (got class: ",
+      if (!inherits(model, c("ggml_sequential_model", "ggml_functional_model",
+                             "ag_sequential"))) {
+        stop("`model_fn` must return an uncompiled ggml sequential, ",
+             "functional, or ag_sequential model (got class: ",
              paste(class(model), collapse = "/"), ").")
+      }
+
+      # Autograd tradepath: ag_sequential modules use an R-level training loop
+      # (gradient tape + Adam/SGD) rather than ggml_compile()/ggml_fit().
+      if (inherits(model, "ag_sequential")) {
+        # Observation weights are only honoured by the sequential/functional
+        # tradepath (via ggml_fit). The autograd loop does not apply them, so
+        # warn loudly rather than silently ignoring task weights.
+        if (!is.null(private$.extract_weights(task))) {
+          warning("LearnerClassifGGML: task observation weights are ignored ",
+                  "by the autograd tradepath (ag_sequential model_fn). They ",
+                  "are only applied by the sequential/functional tradepath.",
+                  call. = FALSE)
+        }
+        train_loop <- self$training_fn %||% private$.train_autograd
+        model <- train_loop(model, x, y, pars)
+
+        # Zero-arg rebuild closure for marshal (M2): captures only dims + pars,
+        # NOT the task (so it serializes cheaply). User `model_fn`s that read
+        # `task` are therefore not marshalable in the autograd tradepath.
+        local_builder <- builder
+        nf <- ncol(x); no <- n_out; pars_snap <- pars
+        rebuild_fn <- function() local_builder(NULL, nf, no, pars_snap)
+
+        out <- list(
+          model         = model,
+          class_names   = class_names,
+          n_features    = ncol(x),
+          feature_names = task$feature_names,
+          ag_rebuild_fn = rebuild_fn
+        )
+        class(out) <- c("classif_ggml_model", "list")
+        return(out)
       }
 
       model <- ggml_compile(
@@ -238,9 +346,20 @@
       x <- as.matrix(task$data(cols = task$feature_names))
       storage.mode(x) <- "double"
 
-      prob <- ggml_predict(self$model$model, x)
-      if (!is.matrix(prob)) {
-        prob <- matrix(prob, nrow = nrow(x))
+      model <- self$model$model
+
+      if (inherits(model, "ag_sequential")) {
+        ag_eval(model)
+        logits <- .ag_data(model$forward(ag_tensor(t(x))))  # [classes, rows]
+        # Numerically stable softmax over classes (columns are samples).
+        mx   <- apply(logits, 2L, max)
+        e    <- exp(sweep(logits, 2L, mx, "-"))
+        prob <- t(sweep(e, 2L, colSums(e), "/"))             # [rows, classes]
+      } else {
+        prob <- ggml_predict(model, x)
+        if (!is.matrix(prob)) {
+          prob <- matrix(prob, nrow = nrow(x))
+        }
       }
       colnames(prob) <- self$model$class_names
 

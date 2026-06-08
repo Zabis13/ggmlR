@@ -2,7 +2,7 @@
 title: "tidymodels / parsnip Integration"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{tidymodels / parsnip Integration}
+  %\VignetteIndexEntry{04. tidymodels / parsnip Integration}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -11,7 +11,10 @@ vignette: >
 knitr::opts_chunk$set(
   collapse = TRUE,
   comment  = "#>",
-  eval     = requireNamespace("parsnip", quietly = TRUE)
+  # Executed locally (NOT_CRAN=true); skipped on CRAN to avoid the
+  # "CPU time > elapsed" vignette NOTE from the CPU fallback.
+  eval     = identical(Sys.getenv("NOT_CRAN"), "true") &&
+             requireNamespace("parsnip", quietly = TRUE)
 )
 ```
 
@@ -210,6 +213,73 @@ rank_results(specs, rank_metric = "accuracy")
 
 ---
 
+## 8. Extracting the fitted engine and fit time
+
+After fitting a workflow or `parsnip` model you can reach the native ggmlR
+object and the training time with the standard `hardhat`/`tune` extractors.
+
+```{r}
+spec <- mlp(hidden_units = c(16L), epochs = 10L) |>
+  set_engine("ggml") |>
+  set_mode("classification")
+
+fit_obj <- fit(spec, Species ~ ., data = iris)
+
+# The native ggmlR engine object (class "ggmlr_parsnip_model").
+# extract_fit_*() are re-exported by parsnip (originally from hardhat).
+eng <- parsnip::extract_fit_engine(fit_obj)
+class(eng)
+
+# Training time parsnip recorded for the fit (one-row tibble: stage_id, elapsed).
+parsnip::extract_fit_time(fit_obj)
+```
+
+The engine object is the same one returned by ggmlR's own fit wrappers, so all
+the inspection helpers work on it directly:
+
+```{r}
+ggml_model_backend(eng)            # "vulkan" or "cpu" (actual backend used)
+head(ggml_training_history(eng))   # per-epoch loss / accuracy curve
+generics::glance(eng)              # one-row model summary
+generics::tidy(eng)                # one row per layer
+```
+
+---
+
+## 9. Limitations of the engine object
+
+The fitted engine object holds a *live* compiled model. Keep these limits in
+mind, especially for resampling and tuning on a GPU.
+
+- **Serialization / GPU state.** A compiled model carries external pointers
+  (the ggml backend and scheduler) and, on GPU, weights living in Vulkan
+  buffers. These do **not** survive a plain `saveRDS()` / `readRDS()` or being
+  shipped to a worker process as-is. For mlr3 the learner marshals the model
+  (`marshal_model()` / `unmarshal_model()`); within tidymodels, persist via
+  ggmlR's own `ggml_save_model()` / `ggml_load_model()` (sequential/functional)
+  or `ag_save_model()` / `ag_load_model()` (autograd) rather than serializing
+  the raw engine object.
+
+- **Parallel resampling.** `fit_resamples()` / `tune_grid()` with a parallel
+  backend serialize fitted models across workers; because of the GPU state
+  above, prefer sequential execution (or CPU) when in doubt. In particular,
+  avoid `control_grid(parallel_over = "everything")` together with a live GPU
+  model — it can crash or return wrong results. The safe pattern is
+  `parallel_over = "resamples"` (the default), or running on CPU.
+
+- **Autograd tradepath.** Autograd (`ag_sequential`) models are reconstructed
+  on unmarshal from a captured `(dims, hyperparameters)` snapshot, **not** from
+  the training task. A custom `model_fn` that reads the `task` at fit time is
+  therefore not round-trippable through marshal (the task is `NULL` at rebuild).
+  Stick to dims/parameters-driven architectures if you need marshalable
+  autograd models.
+
+- **One device per fit.** A compiled model is bound to the backend chosen at
+  `set_engine("ggml", backend = ...)` (or auto-detected). It is not migrated
+  between CPU and GPU after fitting; re-fit to change device.
+
+---
+
 ## Summary
 
 | Feature | Supported |
@@ -221,3 +291,4 @@ rank_results(specs, rank_metric = "accuracy")
 | Resampling | Yes |
 | Tuning | Yes |
 | Workflows | Yes |
+| `extract_fit_engine()` / `extract_fit_time()` | Yes |

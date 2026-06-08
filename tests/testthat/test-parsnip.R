@@ -174,3 +174,107 @@ test_that("parsnip ggml backend='gpu' is accepted (converted to vulkan)", {
   )
   expect_s3_class(fit_obj$fit, "ggmlr_parsnip_model")
 })
+
+# ---------------------------------------------------------------------------
+# Contract entry points (called directly, not via parsnip::fit)
+# ---------------------------------------------------------------------------
+
+test_that("ggmlr_parsnip_fit_classif() returns a well-formed model object", {
+  skip_if_no_parsnip()
+  set.seed(42)
+
+  x <- as.matrix(iris[, 1:4]); storage.mode(x) <- "double"
+  y <- iris$Species
+
+  fit <- ggmlr_parsnip_fit_classif(
+    x, y,
+    hidden_layers = c(8L),
+    epochs        = 3L,
+    batch_size    = 10L,
+    backend       = "cpu"
+  )
+
+  expect_s3_class(fit, "ggmlr_parsnip_model")
+  expect_equal(fit$mode, "classification")
+  expect_equal(fit$n_features, 4L)
+  expect_equal(fit$class_names, levels(iris$Species))
+
+  preds <- predict(fit, iris[, 1:4], type = "class")
+  expect_s3_class(preds, "tbl_df")
+  expect_true(is.factor(preds$.pred_class))
+  expect_equal(nrow(preds), nrow(iris))
+
+  probs <- predict(fit, iris[, 1:4], type = "prob")
+  prob_cols <- paste0(".pred_", levels(iris$Species))
+  expect_true(all(prob_cols %in% names(probs)))
+  expect_true(all(abs(rowSums(as.matrix(probs[, prob_cols])) - 1) < 1e-4))
+})
+
+test_that("ggmlr_parsnip_fit_regr() returns a well-formed model object", {
+  skip_if_no_parsnip()
+  set.seed(42)
+
+  x <- as.matrix(mtcars[, -1]); storage.mode(x) <- "double"
+  y <- mtcars$mpg
+
+  fit <- ggmlr_parsnip_fit_regr(
+    x, y,
+    hidden_layers = c(8L),
+    epochs        = 3L,
+    batch_size    = 8L,
+    backend       = "cpu"
+  )
+
+  expect_s3_class(fit, "ggmlr_parsnip_model")
+  expect_equal(fit$mode, "regression")
+  expect_equal(fit$n_features, ncol(x))
+  expect_null(fit$class_names)
+
+  preds <- predict(fit, mtcars[, -1])
+  expect_s3_class(preds, "tbl_df")
+  expect_true(".pred" %in% names(preds))
+  expect_equal(nrow(preds), nrow(mtcars))
+  expect_true(all(is.finite(preds$.pred)))
+})
+
+# ---------------------------------------------------------------------------
+# hardhat extract_fit_engine() / extract_fit_time()
+# ---------------------------------------------------------------------------
+
+test_that("extract_fit_engine() returns the native ggmlR engine object", {
+  skip_if_no_parsnip()
+  skip_if_not_installed("hardhat")
+  set.seed(42)
+
+  spec <- parsnip::mlp(hidden_units = c(16L), epochs = 3L) |>
+    parsnip::set_engine("ggml", batch_size = 10L) |>
+    parsnip::set_mode("classification")
+
+  fit_obj <- parsnip::fit(spec, Species ~ ., data = iris)
+
+  eng <- hardhat::extract_fit_engine(fit_obj)
+  expect_s3_class(eng, "ggmlr_parsnip_model")
+  expect_equal(eng$mode, "classification")
+  expect_equal(eng$class_names, levels(iris$Species))
+  # identical to the stored $fit
+  expect_identical(eng, fit_obj$fit)
+})
+
+test_that("extract_fit_time() returns a one-row tibble with elapsed time", {
+  skip_if_no_parsnip()
+  skip_if_not_installed("hardhat")
+  set.seed(42)
+
+  spec <- parsnip::mlp(hidden_units = c(16L), epochs = 3L) |>
+    parsnip::set_engine("ggml", batch_size = 8L) |>
+    parsnip::set_mode("regression")
+
+  fit_obj <- parsnip::fit(spec, mpg ~ ., data = mtcars)
+
+  ft <- hardhat::extract_fit_time(fit_obj)
+  expect_s3_class(ft, "tbl_df")
+  expect_true(all(c("stage_id", "elapsed") %in% names(ft)))
+  expect_equal(nrow(ft), 1L)
+  expect_true(is.numeric(ft$elapsed))
+  expect_true(is.finite(ft$elapsed) && ft$elapsed >= 0)
+})

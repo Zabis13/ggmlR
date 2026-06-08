@@ -2,13 +2,15 @@
 title: "Keras-like API in ggmlR"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Keras-like API in ggmlR}
+  %\VignetteIndexEntry{02. Keras-like API in ggmlR}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(eval = TRUE)
+# Vignette code is executed locally (NOT_CRAN=true) but not on CRAN, where
+# the CPU fallback would multi-thread and trip the "CPU time > elapsed" NOTE.
+knitr::opts_chunk$set(eval = identical(Sys.getenv("NOT_CRAN"), "true"))
 ```
 
 ggmlR provides a high-level Keras-like interface for building and training neural

@@ -13,8 +13,10 @@
 #     payload       = <raw vector: bytes of the RDS produced by ggml_save_model>
 #   )
 #
-# Only sequential and functional models are supported. Autograd modules return
-# NULL from ggml_marshal_model() and learners expose marshaled = FALSE for them.
+# The ggml_marshal_model()/ggml_unmarshal_model() helpers below cover sequential
+# and functional models. Autograd (ag_sequential) learner models are marshaled
+# separately via the M2 state-dict path (ag_save_model/ag_load_model); see the
+# marshal_inner()/unmarshal_inner() helpers further down.
 # ============================================================================
 
 GGML_MARSHAL_FORMAT  <- "ggmlR.marshal"
@@ -139,25 +141,68 @@ ggml_unmarshal_model <- function(x, backend = NULL) {
 # Object shape expected by the classif/regr methods:
 #   self$model in the learner is a list with class "classif_ggml_model" or
 #   "regr_ggml_model" containing:
-#     - model:         the compiled ggml sequential/functional model
+#     - model:         the trained model — sequential, functional, OR
+#                      ag_sequential (autograd)
 #     - class_names:   (classif only) character vector of class levels
 #     - n_features:    integer
 #     - feature_names: character vector
+#     - ag_rebuild_fn: (autograd only) zero-arg closure rebuilding the module
+#                      architecture; captured by the learner at fit time, used by
+#                      the M2 state-dict marshal path (ag_save_model/ag_load_model)
+#
+# Sequential/functional models marshal via ggml_marshal_model(); autograd models
+# marshal via ag_save_model() (state dict). See marshal_inner()/unmarshal_inner().
 # ---------------------------------------------------------------------------
+
+# Marshal the inner model, dispatching on its API. Returns a tagged payload that
+# unmarshal_inner() can reverse. Autograd (ag_sequential) modules use the M2
+# state-dict path (ag_save_model) and require a zero-arg rebuild closure that the
+# learner captured at fit time in `model$ag_rebuild_fn`.
+marshal_inner <- function(model, learner_label) {
+  inner <- model$model
+  if (inherits(inner, c("ggml_sequential_model", "ggml_functional_model"))) {
+    return(list(api = "seq", payload = ggml_marshal_model(inner)))
+  }
+  if (inherits(inner, "ag_sequential")) {
+    rebuild_fn <- model$ag_rebuild_fn
+    if (is.null(rebuild_fn) || !is.function(rebuild_fn)) {
+      stop(learner_label, ": cannot marshal this autograd model because no ",
+           "rebuild function was captured at fit time (this can happen if the ",
+           "model was constructed outside the learner's `.train()`).",
+           call. = FALSE)
+    }
+    dir  <- tempfile(pattern = "ggmlR_ag_marshal_")
+    dir.create(dir, recursive = TRUE, mode = "0700")
+    on.exit(unlink(dir, recursive = TRUE, force = TRUE), add = TRUE)
+    file <- file.path(dir, "model.rds")
+    ag_save_model(inner, file, model_fn = rebuild_fn)
+    bytes <- readBin(file, what = "raw", n = file.info(file)$size)
+    return(list(api = "autograd", payload = bytes))
+  }
+  stop(learner_label, ": cannot marshal a model of class '",
+       paste(class(inner), collapse = "/"),
+       "'. Supported: sequential, functional, autograd (ag_sequential).",
+       call. = FALSE)
+}
+
+# Reverse marshal_inner(): reconstruct the inner model from a tagged payload.
+unmarshal_inner <- function(tagged) {
+  if (identical(tagged$api, "autograd")) {
+    dir  <- tempfile(pattern = "ggmlR_ag_unmarshal_")
+    dir.create(dir, recursive = TRUE, mode = "0700")
+    on.exit(unlink(dir, recursive = TRUE, force = TRUE), add = TRUE)
+    file <- file.path(dir, "model.rds")
+    writeBin(tagged$payload, file)
+    return(ag_load_model(file))
+  }
+  # sequential / functional
+  ggml_unmarshal_model(tagged$payload)
+}
 
 #' @noRd
 marshal_model.classif_ggml_model <- function(model, inplace = FALSE, ...) {
-  inner <- model$model
-  if (!inherits(inner, c("ggml_sequential_model", "ggml_functional_model"))) {
-    stop("LearnerClassifGGML: cannot marshal a model of class '",
-         paste(class(inner), collapse = "/"),
-         "'. Only sequential and functional ggmlR models are supported ",
-         "(autograd models cannot be transported to parallel workers in v1).",
-         call. = FALSE)
-  }
-  marshaled <- ggml_marshal_model(inner)
   payload <- list(
-    marshaled     = marshaled,
+    inner         = marshal_inner(model, "LearnerClassifGGML"),
     class_names   = model$class_names,
     n_features    = model$n_features,
     feature_names = model$feature_names
@@ -171,9 +216,8 @@ marshal_model.classif_ggml_model <- function(model, inplace = FALSE, ...) {
 #' @noRd
 unmarshal_model.classif_ggml_model_marshaled <- function(model, inplace = FALSE, ...) {
   payload <- model$marshaled
-  inner <- ggml_unmarshal_model(payload$marshaled)
   out <- list(
-    model         = inner,
+    model         = unmarshal_inner(payload$inner),
     class_names   = payload$class_names,
     n_features    = payload$n_features,
     feature_names = payload$feature_names
@@ -184,17 +228,8 @@ unmarshal_model.classif_ggml_model_marshaled <- function(model, inplace = FALSE,
 
 #' @noRd
 marshal_model.regr_ggml_model <- function(model, inplace = FALSE, ...) {
-  inner <- model$model
-  if (!inherits(inner, c("ggml_sequential_model", "ggml_functional_model"))) {
-    stop("LearnerRegrGGML: cannot marshal a model of class '",
-         paste(class(inner), collapse = "/"),
-         "'. Only sequential and functional ggmlR models are supported ",
-         "(autograd models cannot be transported to parallel workers in v1).",
-         call. = FALSE)
-  }
-  marshaled <- ggml_marshal_model(inner)
   payload <- list(
-    marshaled     = marshaled,
+    inner         = marshal_inner(model, "LearnerRegrGGML"),
     n_features    = model$n_features,
     feature_names = model$feature_names
   )
@@ -207,9 +242,8 @@ marshal_model.regr_ggml_model <- function(model, inplace = FALSE, ...) {
 #' @noRd
 unmarshal_model.regr_ggml_model_marshaled <- function(model, inplace = FALSE, ...) {
   payload <- model$marshaled
-  inner <- ggml_unmarshal_model(payload$marshaled)
   out <- list(
-    model         = inner,
+    model         = unmarshal_inner(payload$inner),
     n_features    = payload$n_features,
     feature_names = payload$feature_names
   )
