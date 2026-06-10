@@ -22,10 +22,17 @@ GGML_CPPFLAGS = -I. -Iggml-cpu -Iggml-cpu/arch/x86 \
 #   - Each SHLIB_OPENMP_* in PKG_C(XX)FLAGS must have a match in PKG_LIBS
 #   - PKG_LIBS macro must match the linker language (C++ for this package)
 #
-# Therefore we use only SHLIB_OPENMP_CXXFLAGS everywhere:
+# Therefore we use SHLIB_OPENMP_CXXFLAGS for C++ and linker:
 #   - PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) -- C++ compilation + linker match
 #   - PKG_LIBS     = $(SHLIB_OPENMP_CXXFLAGS) -- linker (C++)
-#   - PKG_CFLAGS   is not set (C code still gets OpenMP via the toolchain)
+#
+# C code needs -fopenmp too: the CPU graph executor's "#pragma omp parallel"
+# lives in ggml-cpu-backend.c (a C file). Without -fopenmp on the C compile,
+# that pragma is silently ignored and the whole CPU executor runs on ONE thread
+# (observed: an LLM text encoder taking ~10 min on a strong CPU). We can't put
+# the SHLIB_OPENMP_CXXFLAGS macro in PKG_CFLAGS (R CMD check forbids the wrong
+# macro in CFLAGS), so configure.win resolves it to the literal -fopenmp and
+# feeds it via @OPENMP_CFLAGS@ (see PKG_CFLAGS below).
 #
 # The -DGGML_USE_OPENMP define is set conditionally below for all code.
 #
@@ -41,7 +48,12 @@ PKG_CPPFLAGS = $(GGML_CPPFLAGS) $(VULKAN_CPPFLAGS) -DGGML_R_PACKAGE -include r_g
 # CPU SIMD flags (set by configure.win: individual -msse4.2 -mavx2 etc. or empty)
 SIMD_CFLAGS = @SIMD_CFLAGS@
 
-PKG_CFLAGS = $(SIMD_CFLAGS)
+# OpenMP flag for C code, resolved to its literal value (-fopenmp) by
+# configure.win so the C graph executor is actually multi-threaded. Empty if
+# OpenMP is unavailable. See the OpenMP note above.
+OPENMP_CFLAGS = @OPENMP_CFLAGS@
+
+PKG_CFLAGS = $(SIMD_CFLAGS) $(OPENMP_CFLAGS)
 PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) $(SIMD_CFLAGS)
 PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS) $(VULKAN_LIBS)
 

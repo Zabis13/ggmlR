@@ -16,11 +16,11 @@ details (see Value).}
 }
 \value{
 If \code{verbose = FALSE}, a length-1 character: the backend in use
-(\code{"vulkan"} or \code{"cpu"}). If \code{verbose = TRUE}, a list with:
-\code{requested} (what was asked: \code{"auto"}/\code{"cpu"}/\code{"vulkan"}),
-\code{used} (\code{"vulkan"}/\code{"cpu"}), \code{device} (GPU device
-description, or \code{"cpu"}) and \code{fallback} (logical: \code{TRUE} when
-a non-CPU backend was requested but CPU was used instead).
+  (\code{"vulkan"} or \code{"cpu"}). If \code{verbose = TRUE}, a list with:
+  \code{requested} (what was asked: \code{"auto"}/\code{"cpu"}/\code{"vulkan"}),
+  \code{used} (\code{"vulkan"}/\code{"cpu"}), \code{device} (GPU device
+  description, or \code{"cpu"}) and \code{fallback} (logical: \code{TRUE} when
+  a non-CPU backend was requested but CPU was used instead).
 }
 \description{
 Reports the backend the model was \emph{actually} compiled onto, making a

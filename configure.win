@@ -80,6 +80,33 @@ if [ "$USE_VULKAN" = "auto" ] || [ "$USE_VULKAN" = "yes" ]; then
   fi
 fi
 
+# --- OpenMP flags ---
+#
+# The ggml CPU graph executor parallelizes via "#pragma omp parallel" in
+# ggml-cpu-backend.c (a C file). That pragma is a no-op unless the file is
+# compiled with -fopenmp. Makevars.win passes the OpenMP flag to C++ only
+# (PKG_CXXFLAGS), so the C executor stayed single-threaded on Windows even with
+# -DGGML_USE_OPENMP defined — text-heavy CPU work (e.g. an LLM text encoder)
+# ran on one core and could take minutes.
+#
+# We resolve SHLIB_OPENMP_CXXFLAGS from R's Makeconf to its literal value
+# (-fopenmp on Rtools) here, so PKG_CFLAGS in Makevars.win carries the literal
+# flag rather than the SHLIB_OPENMP_* macro name. R CMD check's strict macro
+# pairing only inspects the macro names, so emitting the literal keeps the C
+# code multi-threaded without tripping the check (same approach as the Linux
+# configure and the SIMD flags below). The linker pairing is already satisfied
+# by PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS) ... (this is a C++-linked package).
+OPENMP_CFLAGS=""
+MAKECONF="${R_HOME}/etc/Makeconf"
+if [ -f "$MAKECONF" ]; then
+  OPENMP_CFLAGS=$(grep '^SHLIB_OPENMP_CXXFLAGS' "$MAKECONF" | sed 's/[^=]*= *//')
+fi
+if [ -n "$OPENMP_CFLAGS" ]; then
+  echo "OpenMP: enabled for C (${OPENMP_CFLAGS})"
+else
+  echo "OpenMP: not available for C (CPU graph executor will be single-threaded)"
+fi
+
 # --- CPU SIMD flags ---
 #
 # CRAN policy forbids non-portable compilation flags like -mavx2, -msse4.2 etc.
@@ -250,6 +277,7 @@ sed \
   -e "s|@VULKAN_LIBS@|$VULKAN_LIBS|g" \
   -e "s|@VULKAN_OBJECTS@|$VULKAN_OBJECTS|g" \
   -e "s|@SIMD_CFLAGS@|$SIMD_CFLAGS|g" \
+  -e "s|@OPENMP_CFLAGS@|$OPENMP_CFLAGS|g" \
   src/Makevars.win.in > src/Makevars.win
 
 # Sync public headers from src/ to inst/include/
@@ -273,4 +301,9 @@ if [ "$USE_SIMD" = "yes" ]; then
   echo "  SIMD:   ENABLED ($SIMD_CFLAGS )"
 else
   echo "  SIMD:   disabled"
+fi
+if [ -n "$OPENMP_CFLAGS" ]; then
+  echo "  OpenMP: ENABLED ($OPENMP_CFLAGS )"
+else
+  echo "  OpenMP: disabled (single-threaded CPU)"
 fi

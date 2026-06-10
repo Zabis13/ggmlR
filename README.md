@@ -430,6 +430,43 @@ predict(fit_reg, new_data = mtcars)
 
 `parsnip`, `tibble`, `rlang`, and `dials` are in `Suggests` — ggmlR only wires up the engine when they are installed.
 
+## Single-cell GPU Acceleration (Seurat)
+
+Run GPU-accelerated operations directly on `Seurat` objects — no conversion on your side, and no hard dependency: `Seurat`/`SeuratObject` stay in `Suggests`, so ggmlR installs fine without them and the adapter activates only when they are present.
+
+`RunGGML()` is the one-call, Seurat-style entry point (object in, object out — pipe-friendly, mirrors `RunPCA()`). The first operation is `"embed"` (PCA): the gene-by-gene covariance multiply runs on the Vulkan GPU, the eigendecomposition on the CPU (ggml has no eigensolver). Vulkan is used automatically when a GPU is present, with a transparent CPU fallback.
+
+```r
+library(Seurat)
+
+# pbmc: a normalized Seurat object
+pbmc <- RunGGML(pbmc, op = "embed", n_components = 30, reduction_name = "ggml")
+
+DimPlot(pbmc, reduction = "ggml")
+```
+
+The adapter is layered, and each layer is a public generic you can call on its own:
+
+| Function | Layer | Responsibility |
+|----------|-------|----------------|
+| `ggml_extract()` | Extraction | Pull a feature × cell matrix out of a `Seurat`/`dgCMatrix`/`matrix`; handles Seurat v4 (`GetAssayData`) vs v5 (`LayerData`) and sparse → dense |
+| `ggml_run()` | Dispatch | Validate against `ggml_ops_registry()`, route to Vulkan GPU or CPU (auto, with fallback) |
+| `ggml_inject()` | Injection | Write the result back as a Seurat reduction via `CreateDimReducObject()` |
+
+```r
+# Compose the layers manually (e.g. on a bare matrix, no Seurat needed):
+mat  <- ggml_extract(expr_matrix)               # genes × cells, dense
+task <- ggml_task("embed", mat, params = list(n_components = 30))
+res  <- ggml_run(task)                           # ggml_result: cells × components
+res$embedding
+
+# Check capabilities before dispatch:
+ggml_ops_registry()        # all supported operations
+ggml_ops_registry("embed") # required params + description
+```
+
+A `SingleCellExperiment` (Bioconductor) path with an S4 `runGGML()` generic is planned next.
+
 ## ONNX Model Import
 
 Load pre-trained ONNX models from PyTorch, TensorFlow, or other frameworks and run inference on Vulkan GPU or CPU. No Python or external libraries required — ggmlR includes a built-in zero-dependency protobuf parser.

@@ -7,16 +7,16 @@
 \method{tidy}{ggmlr_parsnip_model}(x, ...)
 }
 \arguments{
-\item{x}{A fitted \code{ggmlr_parsnip_model} (the engine object inside a parsnip
-fit; e.g. from \code{extract_fit_engine()}).}
+\item{x}{A fitted `ggmlr_parsnip_model` (the engine object inside a parsnip
+fit; e.g. from `extract_fit_engine()`).}
 
 \item{...}{Unused; for generic compatibility.}
 }
 \value{
-A \link[tibble:tibble]{tibble} with columns: \code{layer} (name), \code{type},
-\code{units} (output units, \code{NA} if not applicable), \code{activation},
-\code{output_shape} (character), \code{params} (trainable parameter count) and
-\code{trainable} (logical).
+A [tibble][tibble::tibble] with columns: `layer` (name), `type`,
+  `units` (output units, `NA` if not applicable), `activation`,
+  `output_shape` (character), `params` (trainable parameter count) and
+  `trainable` (logical).
 }
 \description{
 Returns one row per layer of the underlying sequential network, in
@@ -24,7 +24,7 @@ broom style. Useful for comparing architectures across experiments in a
 R Markdown / Quarto report.
 }
 \examples{
-\dontshow{if (rlang::is_installed(c("parsnip", "tibble"))) (if (getRversion() >= "3.4") withAutoprint else force)(\{ # examplesIf}
+\dontshow{if (rlang::is_installed(c("parsnip", "tibble"))) withAutoprint(\{ # examplesIf}
 spec <- parsnip::mlp(hidden_units = 8L, epochs = 3L) |>
   parsnip::set_engine("ggml", backend = "cpu") |>
   parsnip::set_mode("regression")

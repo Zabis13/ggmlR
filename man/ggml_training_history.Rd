@@ -20,10 +20,10 @@ columns \code{epoch}, \code{metric} (e.g. \code{"loss"}/\code{"accuracy"}),
 }
 \value{
 A data frame (tibble if \pkg{tibble} is installed). Wide columns:
-\code{epoch}, \code{train_loss}, \code{train_accuracy}, and
-\code{val_loss} / \code{val_accuracy} when a validation split was used.
-Returns \code{NULL} with a warning if the model has no recorded history
-(e.g. not yet fitted).
+  \code{epoch}, \code{train_loss}, \code{train_accuracy}, and
+  \code{val_loss} / \code{val_accuracy} when a validation split was used.
+  Returns \code{NULL} with a warning if the model has no recorded history
+  (e.g. not yet fitted).
 }
 \description{
 Returns the per-epoch loss / accuracy curve recorded during

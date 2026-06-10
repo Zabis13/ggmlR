@@ -7,24 +7,24 @@
 \method{augment}{ggmlr_parsnip_model}(x, new_data, ...)
 }
 \arguments{
-\item{x}{A fitted \code{ggmlr_parsnip_model} (the engine object inside a parsnip
-fit; e.g. from \code{extract_fit_engine()}).}
+\item{x}{A fitted `ggmlr_parsnip_model` (the engine object inside a parsnip
+fit; e.g. from `extract_fit_engine()`).}
 
 \item{new_data}{A data frame of predictors (same columns used for fitting).}
 
 \item{...}{Unused; for generic compatibility.}
 }
 \value{
-\code{new_data} as a tibble with prediction columns appended.
+`new_data` as a tibble with prediction columns appended.
 }
 \description{
-Adds prediction columns to \code{new_data}, broom style. For classification this
-appends \code{.pred_class} plus one \code{.pred_<level>} probability column per class;
-for regression it appends \code{.pred}. Predictions are produced by the existing
-\link{predict.ggmlr_parsnip_model} path (no duplicate inference logic).
+Adds prediction columns to `new_data`, broom style. For classification this
+appends `.pred_class` plus one `.pred_<level>` probability column per class;
+for regression it appends `.pred`. Predictions are produced by the existing
+`predict()` method for ggml parsnip models (no duplicate inference logic).
 }
 \examples{
-\dontshow{if (rlang::is_installed(c("parsnip", "tibble"))) (if (getRversion() >= "3.4") withAutoprint else force)(\{ # examplesIf}
+\dontshow{if (rlang::is_installed(c("parsnip", "tibble"))) withAutoprint(\{ # examplesIf}
 spec <- parsnip::mlp(hidden_units = 8L, epochs = 3L) |>
   parsnip::set_engine("ggml", backend = "cpu") |>
   parsnip::set_mode("regression")

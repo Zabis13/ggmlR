@@ -18,6 +18,7 @@ ggmlr_parsnip_fit_classif(
   callbacks = list(),
   optimizer = "adam",
   backend = "auto",
+  seed = NULL,
   ...
 )
 }
@@ -47,6 +48,8 @@ ggmlr_parsnip_fit_classif(
 \item{optimizer}{One of `"adam"`, `"sgd"`.}
 
 \item{backend}{One of `"auto"`, `"cpu"`, `"vulkan"`.}
+
+\item{seed}{Optional integer RNG seed for reproducible weight init / training.}
 
 \item{...}{Unused.}
 }

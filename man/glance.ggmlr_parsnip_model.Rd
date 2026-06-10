@@ -7,22 +7,22 @@
 \method{glance}{ggmlr_parsnip_model}(x, ...)
 }
 \arguments{
-\item{x}{A fitted \code{ggmlr_parsnip_model} (the engine object inside a parsnip
-fit; e.g. from \code{extract_fit_engine()}).}
+\item{x}{A fitted `ggmlr_parsnip_model` (the engine object inside a parsnip
+fit; e.g. from `extract_fit_engine()`).}
 
 \item{...}{Unused; for generic compatibility.}
 }
 \value{
-A one-row tibble with columns: \code{mode}, \code{n_features}, \code{n_layers},
-\code{total_params}, \code{optimizer}, \code{loss}, \code{backend}, \code{epochs}, \code{fit_time} (wall
-seconds) and \code{final_loss} (last training loss, \code{NA} if no history).
+A one-row tibble with columns: `mode`, `n_features`, `n_layers`,
+  `total_params`, `optimizer`, `loss`, `backend`, `epochs`, `fit_time` (wall
+  seconds) and `final_loss` (last training loss, `NA` if no history).
 }
 \description{
-Returns a single-row \link[tibble:tibble]{tibble} summarising the fitted model,
-in broom \code{glance()} style.
+Returns a single-row [tibble][tibble::tibble] summarising the fitted model,
+in broom `glance()` style.
 }
 \examples{
-\dontshow{if (rlang::is_installed(c("parsnip", "tibble"))) (if (getRversion() >= "3.4") withAutoprint else force)(\{ # examplesIf}
+\dontshow{if (rlang::is_installed(c("parsnip", "tibble"))) withAutoprint(\{ # examplesIf}
 spec <- parsnip::mlp(hidden_units = 8L, epochs = 3L) |>
   parsnip::set_engine("ggml", backend = "cpu") |>
   parsnip::set_mode("regression")

@@ -877,10 +877,12 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
   usable_samples <- (n_samples %/% batch_size) * batch_size
   if (usable_samples < n_samples) {
     dropped <- n_samples - usable_samples
-    message("Note: dropping last ", dropped, " sample(s) (", n_samples,
-            " -> ", usable_samples, ") because batch_size=", batch_size,
-            " must divide evenly. Training metrics are computed on ",
-            usable_samples, " samples only.")
+    if (verbose > 0) {
+      message("Note: dropping last ", dropped, " sample(s) (", n_samples,
+              " -> ", usable_samples, ") because batch_size=", batch_size,
+              " must divide evenly. Training metrics are computed on ",
+              usable_samples, " samples only.")
+    }
     x <- slice_first_dim(x, seq_len(usable_samples))
     y <- y[seq_len(usable_samples), , drop = FALSE]
     if (use_weighted_mse) {

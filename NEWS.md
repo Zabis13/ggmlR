@@ -1,3 +1,11 @@
+# ggmlR 0.7.9
+
+* **Single-cell GPU integration (Seurat)**: new adapter layer that runs GPU-accelerated operations directly on `Seurat` objects, with no hard dependency on Seurat (it stays in `Suggests`).
+  * `RunGGML()` — Seurat-style, pipe-friendly entry point (object in, object out); mirrors `RunPCA()`. First operation is `"embed"` (PCA): the gene-by-gene covariance multiply runs on the Vulkan GPU, the eigendecomposition on the CPU.
+  * Layered architecture: `ggml_extract()` (extraction, handles Seurat v4 `GetAssayData` vs v5 `LayerData`, sparse `dgCMatrix` → dense), `ggml_run()` (dispatch, auto GPU/CPU with transparent CPU fallback), `ggml_inject()` (writes the result back as a Seurat reduction via `CreateDimReducObject`).
+  * Contract objects `ggml_task()` / `ggml_result()` and an introspectable `ggml_ops_registry()` for capability checks before dispatch.
+  * `Seurat`, `SeuratObject`, `Matrix` added to `Suggests`; package remains `R CMD check`-clean without them.
+
 # ggmlR 0.7.8
 
 * Re-enabled the `GGML_BACKEND_DEVICE_TYPE_META` device type (tensor-parallel meta backend).

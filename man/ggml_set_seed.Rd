@@ -29,13 +29,12 @@ weights, dropout masks and batch ordering across runs. It is the single point
 of control used by the \pkg{mlr3} learners (\code{seed} hyperparameter) and
 the \pkg{parsnip} \code{"ggml"} engine (\code{seed} engine argument).
 
-\strong{GPU note}: this controls the random \emph{inputs} to the computation,
-not the floating-point arithmetic itself. GPU (Vulkan) kernels are
-run-to-run stable on a given device/driver for the standard
-forward/backward paths, but ggmlR does not guarantee \emph{bit-for-bit}
-identical results across different devices, drivers or backends (CPU vs
-Vulkan). Reproducibility is at the level of training dynamics, not exact
-bits.
+\strong{GPU note}: this controls the random *inputs* to the computation, not
+the floating-point arithmetic itself. GPU (Vulkan) kernels are run-to-run
+stable on a given device/driver for the standard forward/backward paths, but
+ggmlR does not guarantee \emph{bit-for-bit} identical results across
+different devices, drivers or backends (CPU vs Vulkan). Reproducibility is at
+the level of training dynamics, not exact bits.
 }
 \examples{
 ggml_set_seed(42)
