@@ -48,6 +48,34 @@ Options can be combined:
 install.packages("ggmlR", configure.args = "--with-vulkan --with-simd")
 ```
 
+#### Windows build options
+
+> **Important:** on Windows, R **ignores** `configure.args` / `--configure-args`
+> (they are only honoured by the Unix `./configure` path). Use **environment
+> variables** instead, set in the same R session *before* installing:
+
+```r
+Sys.setenv(GGML_USE_SIMD = "1")    # enable CPU SIMD (AVX2/SSE4/FMA/F16C)
+Sys.setenv(GGML_USE_VULKAN = "1")  # force-enable Vulkan  (or "0" to disable)
+```
+
+The flags are read by `configure.win`, which only runs when the package is
+**built from source**. The CRAN binary for Windows is pre-built without them,
+so pass `type = "source"` to force a source build:
+
+```r
+# From CRAN (force a source build so the flags take effect):
+install.packages("ggmlR", type = "source")
+
+# From GitHub (always builds from source):
+remotes::install_github("Zabis13/ggmlR", force = TRUE)
+```
+
+Vulkan is still auto-detected when the Vulkan SDK is present, so
+`GGML_USE_VULKAN` is only needed to force it on/off. Accepted values:
+`1` / `yes` / `true` / `on` (and `0` / `no` / `false` / `off` for Vulkan).
+OpenMP (multi-threaded CPU executor) is detected automatically on Rtools.
+
 ## Sequential API
 
 The fastest way to get a model running — stack layers with the pipe, compile, train.
