@@ -4,19 +4,6 @@
 # Optional Vulkan GPU backend and SIMD acceleration,
 # then generates Makevars.win from Makevars.win.in
 
-# ---- TEMP DIAGNOSTIC (remove after debugging) ----
-echo "DIAG: dollar-at=[$@]"
-echo "DIAG: R_CONFIGURE_ARGS=[$R_CONFIGURE_ARGS]"
-echo "DIAG: CONFIGURE_ARGS=[$CONFIGURE_ARGS]"
-echo "DIAG: R_INSTALL_ARGS=[$R_INSTALL_ARGS]"
-echo "DIAG: MAKEFLAGS=[$MAKEFLAGS]"
-echo "DIAG: env-with-simd:"
-env | grep -i simd
-echo "DIAG: env-with-configure:"
-env | grep -i configure
-echo "DIAG: ----"
-# ---- END TEMP DIAGNOSTIC ----
-
 # Default values
 USE_VULKAN="auto"
 USE_SIMD="no"
@@ -26,11 +13,18 @@ VULKAN_OBJECTS=""
 
 # Parse arguments.
 #
-# On Windows, install.packages(configure.args=...) / remotes do NOT pass the
-# args as positional "$@" to configure.win -- they are exported in the
-# R_CONFIGURE_ARGS environment variable instead. So we scan both sources, or
-# --with-simd silently does nothing on Windows.
-for arg in $R_CONFIGURE_ARGS "$@"; do
+# IMPORTANT (Windows): R *ignores* --configure-args / configure.args on
+# Windows -- they are only honoured by the Unix ./configure path. So "$@" is
+# always empty here regardless of how the user calls install.packages() or
+# remotes::install_github(configure.args=...). Confirmed by diagnostics: $@,
+# R_CONFIGURE_ARGS, CONFIGURE_ARGS all come through empty.
+#
+# The only reliable channel on Windows is environment variables set BEFORE the
+# install. We therefore honour:
+#   Sys.setenv(GGML_USE_SIMD = "1")      -> enable SIMD
+#   Sys.setenv(GGML_USE_VULKAN = "0")    -> force-disable Vulkan
+# These also work on Unix, where "$@" additionally carries --with-simd etc.
+for arg in "$@"; do
   case "$arg" in
     --with-vulkan)
       USE_VULKAN="yes"
@@ -43,6 +37,21 @@ for arg in $R_CONFIGURE_ARGS "$@"; do
       ;;
   esac
 done
+
+# Environment-variable overrides (primary channel on Windows).
+case "$GGML_USE_SIMD" in
+  1|yes|YES|true|TRUE|on|ON)
+    USE_SIMD="yes"
+    ;;
+esac
+case "$GGML_USE_VULKAN" in
+  1|yes|YES|true|TRUE|on|ON)
+    USE_VULKAN="yes"
+    ;;
+  0|no|NO|false|FALSE|off|OFF)
+    USE_VULKAN="no"
+    ;;
+esac
 
 # --- Vulkan detection ---
 #
