@@ -4,6 +4,19 @@
 # Optional Vulkan GPU backend and SIMD acceleration,
 # then generates Makevars.win from Makevars.win.in
 
+# ---- TEMP DIAGNOSTIC (remove after debugging) ----
+echo "DIAG: dollar-at=[$@]"
+echo "DIAG: R_CONFIGURE_ARGS=[$R_CONFIGURE_ARGS]"
+echo "DIAG: CONFIGURE_ARGS=[$CONFIGURE_ARGS]"
+echo "DIAG: R_INSTALL_ARGS=[$R_INSTALL_ARGS]"
+echo "DIAG: MAKEFLAGS=[$MAKEFLAGS]"
+echo "DIAG: env-with-simd:"
+env | grep -i simd
+echo "DIAG: env-with-configure:"
+env | grep -i configure
+echo "DIAG: ----"
+# ---- END TEMP DIAGNOSTIC ----
+
 # Default values
 USE_VULKAN="auto"
 USE_SIMD="no"
