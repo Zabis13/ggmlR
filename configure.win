@@ -158,10 +158,19 @@ if [ "$USE_SIMD" = "yes" ]; then
   echo "SIMD: enabled by --with-simd, detecting supported flags..."
   CC_CMD="${CC:-gcc}"
 
+  # Use real temp files rather than stdin + "-o /dev/null". On Rtools/MinGW,
+  # gcc cannot write an executable to the /dev/null special device and the
+  # "-x c -" stdin path is also unreliable, so every probe failed silently and
+  # SIMD fell back to scalar even when the flags are supported.
+  SIMD_TEST_C="$(mktemp 2>/dev/null || echo simd_test_$$).c"
+  SIMD_TEST_OUT="${SIMD_TEST_C}.out"
+  printf 'int main(){return 0;}\n' > "$SIMD_TEST_C"
+
   check_cflag() {
-    if echo "int main(){return 0;}" | $CC_CMD $1 -x c -o /dev/null - 2>/dev/null; then
+    if $CC_CMD $1 -o "$SIMD_TEST_OUT" "$SIMD_TEST_C" 2>/dev/null; then
       SIMD_CFLAGS="$SIMD_CFLAGS $1"
       echo "  Found: $1"
+      rm -f "$SIMD_TEST_OUT"
       return 0
     fi
     return 1
@@ -183,6 +192,8 @@ if [ "$USE_SIMD" = "yes" ]; then
       echo "  Non-x86 architecture ($SIMD_ARCH), skipping x86 SIMD flags"
       ;;
   esac
+
+  rm -f "$SIMD_TEST_C" "$SIMD_TEST_OUT"
 
   if [ -z "$SIMD_CFLAGS" ]; then
     echo "  No SIMD flags detected, using scalar fallback"
