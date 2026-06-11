@@ -11,8 +11,13 @@ VULKAN_CPPFLAGS=""
 VULKAN_LIBS=""
 VULKAN_OBJECTS=""
 
-# Parse arguments
-for arg in "$@"; do
+# Parse arguments.
+#
+# On Windows, install.packages(configure.args=...) / remotes do NOT pass the
+# args as positional "$@" to configure.win -- they are exported in the
+# R_CONFIGURE_ARGS environment variable instead. So we scan both sources, or
+# --with-simd silently does nothing on Windows.
+for arg in $R_CONFIGURE_ARGS "$@"; do
   case "$arg" in
     --with-vulkan)
       USE_VULKAN="yes"
@@ -97,8 +102,21 @@ fi
 # configure and the SIMD flags below). The linker pairing is already satisfied
 # by PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS) ... (this is a C++-linked package).
 OPENMP_CFLAGS=""
-MAKECONF="${R_HOME}/etc/Makeconf"
-if [ -f "$MAKECONF" ]; then
+# R on Windows keeps Makeconf under an arch subdir (etc/x64/Makeconf), not
+# etc/Makeconf. Probe the arch-specific location first, then $R_ARCH, then the
+# plain path, so OpenMP is detected on Rtools (otherwise the CPU graph executor
+# stays single-threaded).
+MAKECONF=""
+for cand in \
+    "${R_HOME}/etc/x64/Makeconf" \
+    "${R_HOME}/etc${R_ARCH}/Makeconf" \
+    "${R_HOME}/etc/Makeconf"; do
+  if [ -f "$cand" ]; then
+    MAKECONF="$cand"
+    break
+  fi
+done
+if [ -n "$MAKECONF" ]; then
   OPENMP_CFLAGS=$(grep '^SHLIB_OPENMP_CXXFLAGS' "$MAKECONF" | sed 's/[^=]*= *//')
 fi
 if [ -n "$OPENMP_CFLAGS" ]; then
