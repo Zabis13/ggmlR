@@ -141,7 +141,28 @@ done
 if [ -n "$MAKECONF" ]; then
   OPENMP_CFLAGS=$(grep '^SHLIB_OPENMP_CXXFLAGS' "$MAKECONF" | sed 's/[^=]*= *//')
 fi
+# Guard against unexpected non-flag content (must start with '-'). On some
+# setups SHLIB_OPENMP_CXXFLAGS can arrive empty from the environment; here we
+# read it straight from Makeconf instead, so an empty environment variable can
+# no longer silently disable OpenMP.
+case "$OPENMP_CFLAGS" in
+  -*) ;;
+  *) OPENMP_CFLAGS="" ;;
+esac
+
+# Resolve the OpenMP define here too, decoupled from the make variable
+# $(SHLIB_OPENMP_CXXFLAGS). Makevars.win previously gated -DGGML_USE_OPENMP on
+# "ifneq ($(SHLIB_OPENMP_CXXFLAGS),)"; that variable can be overridden (to
+# empty) by the build environment, which silently dropped the define and left
+# the CPU backend single-threaded (OPENMP=0 in sd_get_system_info). Driving the
+# define from this Makeconf-derived value makes OpenMP immune to the
+# environment. OPENMP_CXXFLAGS carries the literal -fopenmp for C++ compilation
+# and linking (same value; gcc/g++ share the MinGW toolchain on Rtools).
+OPENMP_CPPFLAGS=""
+OPENMP_CXXFLAGS=""
 if [ -n "$OPENMP_CFLAGS" ]; then
+  OPENMP_CPPFLAGS="-DGGML_USE_OPENMP"
+  OPENMP_CXXFLAGS="$OPENMP_CFLAGS"
   echo "OpenMP: enabled for C (${OPENMP_CFLAGS})"
 else
   echo "OpenMP: not available for C (CPU graph executor will be single-threaded)"
@@ -329,6 +350,8 @@ sed \
   -e "s|@VULKAN_OBJECTS@|$VULKAN_OBJECTS|g" \
   -e "s|@SIMD_CFLAGS@|$SIMD_CFLAGS|g" \
   -e "s|@OPENMP_CFLAGS@|$OPENMP_CFLAGS|g" \
+  -e "s|@OPENMP_CXXFLAGS@|$OPENMP_CXXFLAGS|g" \
+  -e "s|@OPENMP_CPPFLAGS@|$OPENMP_CPPFLAGS|g" \
   src/Makevars.win.in > src/Makevars.win
 
 # Sync public headers from src/ to inst/include/

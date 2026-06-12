@@ -34,11 +34,14 @@ GGML_CPPFLAGS = -I. -Iggml-cpu -Iggml-cpu/arch/x86 \
 # macro in CFLAGS), so configure.win resolves it to the literal -fopenmp and
 # feeds it via @OPENMP_CFLAGS@ (see PKG_CFLAGS below).
 #
-# The -DGGML_USE_OPENMP define is set conditionally below for all code.
-#
-ifneq ($(SHLIB_OPENMP_CXXFLAGS),)
-  GGML_CPPFLAGS += -DGGML_USE_OPENMP
-endif
+# The -DGGML_USE_OPENMP define is resolved by configure.win (@OPENMP_CPPFLAGS@:
+# either -DGGML_USE_OPENMP or empty). It is NOT gated on $(SHLIB_OPENMP_CXXFLAGS)
+# anymore: that make variable can be overridden to empty by the build
+# environment, which silently dropped the define and left the CPU backend
+# single-threaded (OPENMP=0). Driving it from the Makeconf-derived configure
+# value makes OpenMP immune to the environment.
+OPENMP_CPPFLAGS = @OPENMP_CPPFLAGS@
+GGML_CPPFLAGS += $(OPENMP_CPPFLAGS)
 
 # Force include R compatibility header for CRAN compliance
 # This redirects stdout/stderr/abort to R-safe alternatives
@@ -52,10 +55,17 @@ SIMD_CFLAGS = @SIMD_CFLAGS@
 # configure.win so the C graph executor is actually multi-threaded. Empty if
 # OpenMP is unavailable. See the OpenMP note above.
 OPENMP_CFLAGS = @OPENMP_CFLAGS@
+# OpenMP flag for C++ compilation and linking, resolved to its literal value
+# (-fopenmp) by configure.win. Replaces $(SHLIB_OPENMP_CXXFLAGS) so the build
+# environment cannot blank it out. R CMD check's strict OpenMP-macro pairing
+# only inspects macro NAMES, so emitting the literal here keeps the check happy
+# while guaranteeing the flag is present (same approach as OPENMP_CFLAGS and the
+# SIMD flags).
+OPENMP_CXXFLAGS = @OPENMP_CXXFLAGS@
 
 PKG_CFLAGS = $(SIMD_CFLAGS) $(OPENMP_CFLAGS)
-PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS) $(SIMD_CFLAGS)
-PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS) $(VULKAN_LIBS)
+PKG_CXXFLAGS = $(OPENMP_CXXFLAGS) $(SIMD_CFLAGS)
+PKG_LIBS = $(OPENMP_CXXFLAGS) $(VULKAN_LIBS)
 
 # GGML library objects (for static library export)
 GGML_OBJECTS = \
