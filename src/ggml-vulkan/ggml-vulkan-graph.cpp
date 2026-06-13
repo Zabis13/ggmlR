@@ -1,4 +1,7 @@
 #include "../r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
+#ifdef _WIN32
+#include <malloc.h> /* _heapchk for crash-localization heap-integrity probe (temporary) */
+#endif
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 
@@ -827,9 +830,24 @@ static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t 
     return ctx->name.c_str();
 }
 
+#ifdef _WIN32
+/* Map _heapchk() codes to a short string (temporary crash-localization aid). */
+static inline const char * r_dbg_heapchk_str(int hs) {
+    return hs == _HEAPOK       ? "OK"       :
+           hs == _HEAPBADBEGIN ? "BADBEGIN" :
+           hs == _HEAPBADNODE  ? "BADNODE"  :
+           hs == _HEAPBADPTR   ? "BADPTR"   :
+           hs == _HEAPEMPTY    ? "EMPTY"    : "?";
+}
+#endif
+
 static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     VK_LOG_MEMORY("ggml_backend_vk_buffer_type_alloc_buffer(" << size << ")");
+#ifdef _WIN32
+    { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: ENTER heapchk=%d (%s) size=%zu", hs, r_dbg_heapchk_str(hs), size); }
+#else
     r_dbg_logf("vk_alloc_buffer: ENTER size=%zu", size);
+#endif
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
 
     vk_buffer dev_buffer = nullptr;
@@ -837,6 +855,9 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
         r_dbg_logf("vk_alloc_buffer: before create_buffer_device size=%zu", size);
         dev_buffer = ggml_vk_create_buffer_device(ctx->device, size);
         r_dbg_logf("vk_alloc_buffer: after create_buffer_device size=%zu", size);
+#ifdef _WIN32
+        { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: post-create heapchk=%d (%s)", hs, r_dbg_heapchk_str(hs)); }
+#endif
     } catch (const vk::SystemError& e) {
         r_dbg_logf("vk_alloc_buffer: vk::SystemError size=%zu: %s", size, e.what());
         return nullptr;
@@ -845,6 +866,14 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
         return nullptr;
     }
     r_dbg_logf("vk_alloc_buffer: OK size=%zu, before new bufctx", size);
+
+#ifdef _WIN32
+    /* Heap integrity probe right before operator new: with the ENTER and
+     * post-create probes above, the three points localize which interval
+     * corrupts the heap (before vk_alloc_buffer / inside create_buffer /
+     * inside new bufctx). Temporary, remove once root-caused. */
+    { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: before-new heapchk=%d (%s)", hs, r_dbg_heapchk_str(hs)); }
+#endif
 
     ggml_backend_vk_buffer_context * bufctx = nullptr;
     try {
