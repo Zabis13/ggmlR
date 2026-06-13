@@ -824,17 +824,22 @@ static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t 
 
 static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     VK_LOG_MEMORY("ggml_backend_vk_buffer_type_alloc_buffer(" << size << ")");
-    fprintf(stderr, "GGMLR_DBG vk_alloc_buffer: size=%zu\n", size); fflush(stderr);
+    r_dbg_logf("vk_alloc_buffer: ENTER size=%zu", size);
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
 
     vk_buffer dev_buffer = nullptr;
     try {
+        r_dbg_logf("vk_alloc_buffer: before create_buffer_device size=%zu", size);
         dev_buffer = ggml_vk_create_buffer_device(ctx->device, size);
+        r_dbg_logf("vk_alloc_buffer: after create_buffer_device size=%zu", size);
     } catch (const vk::SystemError& e) {
-        fprintf(stderr, "GGMLR_DBG vk_alloc_buffer: vk::SystemError for size=%zu: %s\n", size, e.what()); fflush(stderr);
+        r_dbg_logf("vk_alloc_buffer: vk::SystemError size=%zu: %s", size, e.what());
+        return nullptr;
+    } catch (const std::exception& e) {
+        r_dbg_logf("vk_alloc_buffer: std::exception size=%zu: %s", size, e.what());
         return nullptr;
     }
-    fprintf(stderr, "GGMLR_DBG vk_alloc_buffer: OK size=%zu\n", size); fflush(stderr);
+    r_dbg_logf("vk_alloc_buffer: OK size=%zu", size);
 
     ggml_backend_vk_buffer_context * bufctx = new ggml_backend_vk_buffer_context(ctx->device, std::move(dev_buffer), ctx->name);
 

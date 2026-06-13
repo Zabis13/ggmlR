@@ -1130,7 +1130,9 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
         ggml_backend_buffer_type_t buft, size_t size,
         ggml_backend_buffer_t ** buffers, size_t * n_buffers) {
 
+    r_dbg_logf("alloc_tensor_range: ENTER size=%zu, before buft_alloc_buffer", size);
     ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, size);
+    r_dbg_logf("alloc_tensor_range: buft_alloc_buffer returned %p", (void *) buffer);
     if (buffer == NULL) {
         GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(buft), size);
         free_buffers(buffers, n_buffers);

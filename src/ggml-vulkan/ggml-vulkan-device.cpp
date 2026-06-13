@@ -80,6 +80,8 @@ namespace std {
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#include "../r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
+
 #include "ggml-vulkan-shaders.hpp"
 
 // R package: re-redirect exit() after <cstdlib> undoes the r_ggml_compat.h macro
@@ -2651,11 +2653,15 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         buffer_create_info.setPNext(&external_memory_bci);
     }
 
+    r_dbg_logf("create_buffer: size=%zu bda=%d before createBuffer", size, (int) device->buffer_device_address);
     buf->buffer = device->device.createBuffer(buffer_create_info);
+    r_dbg_logf("create_buffer: after createBuffer, before getBufferMemoryRequirements");
 
     vk::MemoryRequirements mem_req = device->device.getBufferMemoryRequirements(buf->buffer);
+    r_dbg_logf("create_buffer: after getBufferMemoryRequirements, before getMemoryProperties");
 
     vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
+    r_dbg_logf("create_buffer: after getMemoryProperties");
 
     const vk::MemoryPriorityAllocateInfoEXT mem_priority_info { 1.0f };
 
@@ -2723,7 +2729,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
             for (auto mtype_it = memory_type_indices.begin(); mtype_it != memory_type_indices.end(); mtype_it++) {
                 try {
+                    r_dbg_logf("create_buffer: before allocateMemory mtype=%u size=%zu", *mtype_it, (size_t) mem_req.size);
                     buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &mem_flags_info });
+                    r_dbg_logf("create_buffer: after allocateMemory mtype=%u OK", *mtype_it);
                     done = true;
                     break;
                 } catch (const vk::SystemError& e) {
@@ -2753,21 +2761,27 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         buf->ptr = import_ptr;
     } else {
         if (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
+            r_dbg_logf("create_buffer: before mapMemory");
             buf->ptr = device->device.mapMemory(buf->device_memory, 0, VK_WHOLE_SIZE);
+            r_dbg_logf("create_buffer: after mapMemory");
         }
     }
 
+    r_dbg_logf("create_buffer: before bindBufferMemory");
     device->device.bindBufferMemory(buf->buffer, buf->device_memory, 0);
+    r_dbg_logf("create_buffer: after bindBufferMemory");
 
     buf->device = device;
     buf->size = size;
 
     if (device->buffer_device_address) {
+        r_dbg_logf("create_buffer: before getBufferAddress (bda)");
         const vk::BufferDeviceAddressInfo addressInfo(buf->buffer);
         buf->bda_addr = device->device.getBufferAddress(addressInfo);
+        r_dbg_logf("create_buffer: after getBufferAddress");
     }
 
-
+    r_dbg_logf("create_buffer: DONE size=%zu", size);
     return buf;
 }
 
