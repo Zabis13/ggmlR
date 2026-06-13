@@ -196,16 +196,22 @@ SEXP R_ggml_build_forward_expand(SEXP ctx_ptr, SEXP tensor_ptr) {
     }
     
     // Create computation graph
+    r_dbg_logf("build_forward_expand: ENTER, before ggml_new_graph");
     struct ggml_cgraph * graph = ggml_new_graph(ctx);
-    
+    r_dbg_logf("build_forward_expand: after ggml_new_graph graph=%p", (void *) graph);
+
     if (graph == NULL) {
         error("Failed to create computation graph");
     }
-    
+
     // Build forward pass by expanding from the output tensor
+    r_dbg_logf("build_forward_expand: before ggml_build_forward_expand");
     ggml_build_forward_expand(graph, tensor);
-    
-    return R_MakeExternalPtr(graph, R_NilValue, R_NilValue);
+    r_dbg_logf("build_forward_expand: after ggml_build_forward_expand");
+
+    SEXP ret = R_MakeExternalPtr(graph, R_NilValue, R_NilValue);
+    r_dbg_logf("build_forward_expand: DONE");
+    return ret;
 }
 
 // Global thread count for backend (default: use all available via OpenMP)

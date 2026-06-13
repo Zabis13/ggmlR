@@ -680,6 +680,11 @@ struct ggml_tensor * ggml_new_tensor_5d(
 
 void * ggml_new_buffer(struct ggml_context * ctx, size_t nbytes) {
     struct ggml_object * obj = ggml_new_object(ctx, GGML_OBJECT_TYPE_WORK_BUFFER, nbytes);
+    // ggml_new_object returns NULL when the context's memory pool is too small;
+    // dereferencing obj->offs here would corrupt the heap (silent abort on Windows).
+    if (obj == NULL) {
+        return NULL;
+    }
 
     return (uint8_t *)ctx->mem_buffer + obj->offs;
 }

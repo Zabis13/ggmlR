@@ -988,6 +988,13 @@ size_t ggml_graph_overhead(void) {
 struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t size, bool grads) {
     const size_t obj_size = ggml_graph_nbytes(size, grads);
     struct ggml_object * obj = ggml_new_object(ctx, GGML_OBJECT_TYPE_GRAPH, obj_size);
+    // ggml_new_object returns NULL when the context's memory pool is too small.
+    // Without this guard the next line dereferences NULL (obj->offs) and then
+    // writes the cgraph struct to a bogus address -> heap corruption -> silent
+    // abort on Windows/MinGW (glibc tends to tolerate the stray write).
+    if (obj == NULL) {
+        return NULL;
+    }
     struct ggml_cgraph * cgraph = (struct ggml_cgraph *) ((char *) ctx->mem_buffer + obj->offs);
 
     // the size of the hash table is doubled since it needs to hold both nodes and leafs
@@ -1099,6 +1106,11 @@ void ggml_graph_cpy(struct ggml_cgraph * src, struct ggml_cgraph * dst) {
 
 struct ggml_cgraph * ggml_graph_dup(struct ggml_context * ctx, struct ggml_cgraph * cgraph, bool force_grads) {
     struct ggml_cgraph * result = ggml_new_graph_custom(ctx, cgraph->size, cgraph->grads || force_grads);
+    // ggml_new_graph_custom returns NULL when the context's memory pool is too
+    // small; ggml_graph_cpy would then dereference NULL.
+    if (result == NULL) {
+        return NULL;
+    }
     ggml_graph_cpy(cgraph, result);
     return result;
 }
