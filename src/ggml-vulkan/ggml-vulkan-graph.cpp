@@ -822,14 +822,17 @@ static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t 
 
 static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     VK_LOG_MEMORY("ggml_backend_vk_buffer_type_alloc_buffer(" << size << ")");
+    fprintf(stderr, "GGMLR_DBG vk_alloc_buffer: size=%zu\n", size); fflush(stderr);
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
 
     vk_buffer dev_buffer = nullptr;
     try {
         dev_buffer = ggml_vk_create_buffer_device(ctx->device, size);
     } catch (const vk::SystemError& e) {
+        fprintf(stderr, "GGMLR_DBG vk_alloc_buffer: vk::SystemError for size=%zu: %s\n", size, e.what()); fflush(stderr);
         return nullptr;
     }
+    fprintf(stderr, "GGMLR_DBG vk_alloc_buffer: OK size=%zu\n", size); fflush(stderr);
 
     ggml_backend_vk_buffer_context * bufctx = new ggml_backend_vk_buffer_context(ctx->device, std::move(dev_buffer), ctx->name);
 
@@ -1567,6 +1570,7 @@ static uint32_t ggml_vk_fuse_multi_add(ggml_backend_vk_context * ctx, const stru
 
 static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
+    fprintf(stderr, "GGMLR_DBG vk_graph_compute: ENTER (n_nodes=%d)\n", cgraph->n_nodes); fflush(stderr);
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
     if (vk_instance.debug_utils_support) {
