@@ -171,7 +171,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
         device->pipeline_matmul_id_bf16 = std::make_shared<vk_matmul_pipeline_struct>();
     }
 
-    std::vector<std::future<void>> compiles;
     auto const &ggml_vk_create_pipeline = [&](vk_device& device, vk_pipeline& pipeline, const char *name, size_t spv_size, const void* spv_data, const char *entrypoint,
                                               uint32_t parameter_count, uint32_t push_constant_size, std::array<uint32_t, 3> wg_denoms, const std::vector<uint32_t>& specialization_constants,
                                               uint32_t align, bool disable_robustness = false, bool require_full_subgroups = false, uint32_t required_subgroup_size = 0) {
@@ -195,20 +194,17 @@ static void ggml_vk_load_shaders(vk_device& device) {
         if (!pipeline->needed || pipeline->compiled) {
             return;
         }
-        // TODO: We're no longer benefitting from the async compiles (shaders are
-        // compiled individually, as needed) and this complexity can be removed.
-        {
-            // wait until fewer than N compiles are in progress
-            uint32_t N = std::max(1u, std::thread::hardware_concurrency());
-            std::unique_lock<std::mutex> guard(compile_count_mutex);
-            while (compile_count >= N) {
-                compile_count_cond.wait(guard);
-            }
-            compile_count++;
-        }
-
-        compiles.push_back(std::async(ggml_vk_create_pipeline_func, std::ref(device), std::ref(pipeline), spv_size, spv_data, entrypoint,
-                                      parameter_count, wg_denoms, specialization_constants, disable_robustness, require_full_subgroups, required_subgroup_size));
+        // Pipelines are compiled lazily (one at a time, as needed), so the
+        // upstream async-compile fan-out no longer provides parallelism — it
+        // just wraps a single compile in a std::async. On MinGW that concurrent
+        // operator new (compile thread vs main-thread alloc) corrupts the CRT
+        // heap and crashes ~50/50 during Flux2 model load. Compile synchronously
+        // in the calling thread: same work, no worker thread, no race. The
+        // compile_count++/-- bookkeeping inside ggml_vk_create_pipeline_func is
+        // left intact (harmless when it increments and decrements back-to-back).
+        compile_count++;
+        ggml_vk_create_pipeline_func(device, pipeline, spv_size, spv_data, entrypoint,
+                                     parameter_count, wg_denoms, specialization_constants, disable_robustness, require_full_subgroups, required_subgroup_size);
     };
 
     auto const &ggml_vk_create_pipeline2 = [&](vk_device& device, vk_pipeline& pipeline, const std::string &name, size_t spv_size, const void* spv_data, const char *entrypoint,
@@ -1693,9 +1689,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
         }
     }
 
-    for (auto &c : compiles) {
-        c.wait();
-    }
+    // All pipelines are now compiled synchronously in ggml_vk_create_pipeline
+    // (no async fan-out), so there are no pending futures to wait on here.
 }
 
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch);
