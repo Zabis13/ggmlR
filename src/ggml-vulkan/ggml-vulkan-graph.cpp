@@ -885,8 +885,19 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
         return nullptr;
     }
     r_dbg_logf("vk_alloc_buffer: after new bufctx, before buffer_init");
+#ifdef _WIN32
+    /* Probe right after the bufctx constructor: if this line is missing the
+     * crash is INSIDE the constructor; if heapchk!=OK the constructor corrupts
+     * the heap; if OK here but no after-buffer_init line, the trivial new in
+     * ggml_backend_buffer_init died -> points at a race (Vulkan compile thread)
+     * rather than a deterministic bug. Temporary. */
+    { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: after-new-ctor heapchk=%d (%s) bufctx=%p", hs, r_dbg_heapchk_str(hs), (void *) bufctx); }
+#endif
 
     ggml_backend_buffer_t res = ggml_backend_buffer_init(buft, ggml_backend_vk_buffer_interface, bufctx, size);
+#ifdef _WIN32
+    { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: after-buffer_init heapchk=%d (%s) res=%p", hs, r_dbg_heapchk_str(hs), (void *) res); }
+#endif
     r_dbg_logf("vk_alloc_buffer: after buffer_init res=%p", (void *) res);
     return res;
 }
