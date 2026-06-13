@@ -844,11 +844,22 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
         r_dbg_logf("vk_alloc_buffer: std::exception size=%zu: %s", size, e.what());
         return nullptr;
     }
-    r_dbg_logf("vk_alloc_buffer: OK size=%zu", size);
+    r_dbg_logf("vk_alloc_buffer: OK size=%zu, before new bufctx", size);
 
-    ggml_backend_vk_buffer_context * bufctx = new ggml_backend_vk_buffer_context(ctx->device, std::move(dev_buffer), ctx->name);
+    ggml_backend_vk_buffer_context * bufctx = nullptr;
+    try {
+        bufctx = new ggml_backend_vk_buffer_context(ctx->device, std::move(dev_buffer), ctx->name);
+    } catch (const std::exception& e) {
+        // new can throw std::bad_alloc when host RAM is exhausted; on MinGW an
+        // exception crossing the C .Call boundary would terminate silently.
+        r_dbg_logf("vk_alloc_buffer: new bufctx threw size=%zu: %s", size, e.what());
+        return nullptr;
+    }
+    r_dbg_logf("vk_alloc_buffer: after new bufctx, before buffer_init");
 
-    return ggml_backend_buffer_init(buft, ggml_backend_vk_buffer_interface, bufctx, size);
+    ggml_backend_buffer_t res = ggml_backend_buffer_init(buft, ggml_backend_vk_buffer_interface, bufctx, size);
+    r_dbg_logf("vk_alloc_buffer: after buffer_init res=%p", (void *) res);
+    return res;
 }
 
 static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
