@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
+
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MAX_FREE_BLOCKS 256
 
@@ -1168,8 +1170,12 @@ static ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft_impl(
         struct ggml_context * ctx, ggml_backend_buffer_type_t buft, size_t * nbytes_total, bool no_alloc) {
     GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
 
+    r_dbg_logf("alloc_impl: ENTER no_alloc=%d", (int) no_alloc);
+    r_dbg_logf("alloc_impl: before get_alignment");
     size_t alignment = ggml_backend_buft_get_alignment(buft);
+    r_dbg_logf("alloc_impl: alignment=%zu, before get_max_size", alignment);
     size_t max_size = ggml_backend_buft_get_max_size(buft);
+    r_dbg_logf("alloc_impl: max_size=%zu", max_size);
 
     ggml_backend_buffer_t * buffers = NULL;
     size_t n_buffers = 0;
@@ -1180,7 +1186,9 @@ static ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft_impl(
     for (struct ggml_tensor * t = first; t != NULL; t = ggml_get_next_tensor(ctx, t)) {
         size_t this_size = 0;
         if (t->data == NULL && t->view_src == NULL) {
+            r_dbg_logf("alloc_impl: before get_alloc_size tensor=%s", t->name);
             this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
+            r_dbg_logf("alloc_impl: get_alloc_size=%zu tensor=%s", this_size, t->name);
         }
 
         if (cur_buf_size > 0 && (cur_buf_size + this_size) > max_size) {
@@ -1244,5 +1252,10 @@ ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_conte
 }
 
 ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors(struct ggml_context * ctx, ggml_backend_t backend) {
-    return ggml_backend_alloc_ctx_tensors_from_buft(ctx, ggml_backend_get_default_buffer_type(backend));
+    r_dbg_logf("alloc_ctx_tensors: ENTER, before get_default_buffer_type");
+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
+    r_dbg_logf("alloc_ctx_tensors: got buft=%p, before from_buft", (void *) buft);
+    ggml_backend_buffer_t ret = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+    r_dbg_logf("alloc_ctx_tensors: from_buft returned %p", (void *) ret);
+    return ret;
 }

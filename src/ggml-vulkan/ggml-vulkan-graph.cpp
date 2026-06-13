@@ -1,3 +1,5 @@
+#include "../r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
+
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 
     if (subctx) {
@@ -840,27 +842,39 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
 }
 
 static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+    r_dbg_logf("vk_get_alignment: ENTER buft=%p ctx=%p", (void *) buft, (void *) buft->context);
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
-    return ctx->device->properties.limits.minStorageBufferOffsetAlignment;
+    size_t a = ctx->device->properties.limits.minStorageBufferOffsetAlignment;
+    r_dbg_logf("vk_get_alignment: device=%p alignment=%zu", (void *) ctx->device.get(), a);
+    return a;
 }
 
 static size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    r_dbg_logf("vk_get_max_size: ENTER buft=%p ctx=%p", (void *) buft, (void *) buft->context);
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
-    return ctx->device->suballocation_block_size;
+    size_t m = ctx->device->suballocation_block_size;
+    r_dbg_logf("vk_get_max_size: max_size=%zu", m);
+    return m;
 }
 
 static size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    return ggml_nbytes(tensor);
+    r_dbg_logf("vk_get_alloc_size: ENTER tensor=%s", tensor->name);
+    size_t n = ggml_nbytes(tensor);
+    r_dbg_logf("vk_get_alloc_size: nbytes=%zu", n);
+    return n;
 
     UNUSED(buft);
 }
 
 ggml_backend_buffer_type_t ggml_backend_vk_buffer_type(size_t dev_num) {
+    r_dbg_logf("vk_buffer_type: ENTER dev_num=%zu, before instance_init", dev_num);
     ggml_vk_instance_init();
+    r_dbg_logf("vk_buffer_type: after instance_init, before get_device");
 
     VK_LOG_DEBUG("ggml_backend_vk_buffer_type(" << dev_num << ")");
 
     vk_device dev = ggml_vk_get_device(dev_num);
+    r_dbg_logf("vk_buffer_type: after get_device dev=%p", (void *) dev.get());
 
     return &dev->buffer_type;
 }
