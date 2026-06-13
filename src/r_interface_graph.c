@@ -7,6 +7,7 @@
 #include "ggml-cpu.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#include "r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
 
 #ifdef _OPENMP
 #undef match  // R defines 'match' macro that conflicts with OpenMP pragma
@@ -3020,7 +3021,9 @@ SEXP R_ggml_backend_graph_compute(SEXP backend_ptr, SEXP graph_ptr) {
         error("Invalid pointer");
     }
 
+    r_dbg_logf("graph_compute: ENTER n_nodes=%d", graph->n_nodes);
     enum ggml_status status = ggml_backend_graph_compute(backend, graph);
+    r_dbg_logf("graph_compute: DONE status=%d", (int) status);
 
     return ScalarInteger((int) status);
 }

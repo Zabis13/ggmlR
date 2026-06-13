@@ -1146,16 +1146,24 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
 
     for (struct ggml_tensor * t = first; t != last; t = ggml_get_next_tensor(ctx, t)) {
         enum ggml_status status = GGML_STATUS_SUCCESS;
+        r_dbg_logf("alloc_tensor_range: layout tensor=%s op=%d data=%p view_src=%p buffer=%p",
+                   t->name, (int) t->op, (void *) t->data, (void *) t->view_src, (void *) t->buffer);
         if (t->data == NULL) {
             if (t->view_src == NULL) {
+                r_dbg_logf("alloc_tensor_range: before tallocr_alloc tensor=%s", t->name);
                 status = ggml_tallocr_alloc(&tallocr, t);
+                r_dbg_logf("alloc_tensor_range: after tallocr_alloc tensor=%s status=%d", t->name, (int) status);
             } else if (t->buffer == NULL) {
+                r_dbg_logf("alloc_tensor_range: before view_init(a) tensor=%s", t->name);
                 status = ggml_backend_view_init(t);
+                r_dbg_logf("alloc_tensor_range: after view_init(a) tensor=%s status=%d", t->name, (int) status);
             }
         } else {
             if (t->view_src != NULL && t->buffer == NULL) {
                 // view of a pre-allocated tensor
+                r_dbg_logf("alloc_tensor_range: before view_init(b) tensor=%s", t->name);
                 status = ggml_backend_view_init(t);
+                r_dbg_logf("alloc_tensor_range: after view_init(b) tensor=%s status=%d", t->name, (int) status);
             }
         }
         if (status != GGML_STATUS_SUCCESS) {
@@ -1165,6 +1173,7 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
         }
     }
 
+    r_dbg_logf("alloc_tensor_range: layout DONE, return true");
     return true;
 }
 

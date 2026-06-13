@@ -561,6 +561,7 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
 
     VK_LOG_DEBUG("ggml_vk_compute_forward(" << tensor << ", name=" << tensor->name << ", op=" << ggml_op_name(tensor->op) << ", type=" << tensor->type << ", ne0=" << tensor->ne[0] << ", ne1=" << tensor->ne[1] << ", ne2=" << tensor->ne[2] << ", ne3=" << tensor->ne[3] << ", nb0=" << tensor->nb[0] << ", nb1=" << tensor->nb[1] << ", nb2=" << tensor->nb[2] << ", nb3=" << tensor->nb[3] << ", view_src=" << tensor->view_src << ", view_offs=" << tensor->view_offs << ")");
 
+    r_dbg_logf("vk_compute_forward: ENTER idx=%d op=%s", tensor_idx, ggml_op_name(tensor->op));
     vk_context subctx = ctx->tensor_ctxs[tensor_idx].lock();
 
     // Only run if ctx hasn't been submitted yet
@@ -575,12 +576,14 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
             memset(mset.dst, mset.val, mset.n);
         }
 
+        r_dbg_logf("vk_compute_forward: before ggml_vk_submit idx=%d", tensor_idx);
         if (almost_ready && !ctx->almost_ready_fence_pending) {
             ggml_vk_submit(subctx, ctx->almost_ready_fence);
             ctx->almost_ready_fence_pending = true;
         } else {
             ggml_vk_submit(subctx, {});
         }
+        r_dbg_logf("vk_compute_forward: after ggml_vk_submit idx=%d", tensor_idx);
         ctx->submit_pending = true;
 
     }
@@ -739,10 +742,12 @@ static void ggml_backend_vk_buffer_memset_tensor(ggml_backend_buffer_t buffer, g
 
 static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     VK_LOG_DEBUG("ggml_backend_vk_buffer_set_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
+    r_dbg_logf("vk_set_tensor: ENTER tensor=%s size=%zu offset=%zu", tensor->name, size, offset);
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)buffer->context;
     vk_buffer buf = buf_ctx->dev_buffer;
 
     ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, size);
+    r_dbg_logf("vk_set_tensor: DONE tensor=%s", tensor->name);
 }
 
 static void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -1093,6 +1098,7 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend, const ggml_
 
 static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
     VK_LOG_DEBUG("ggml_vk_synchronize()");
+    r_dbg_logf("vk_synchronize: ENTER submit_pending=%d", (int) ctx->submit_pending);
 
     bool do_transfer = !ctx->transfer_ctx.expired();
 
@@ -1111,11 +1117,14 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
     }
 
     if (ctx->submit_pending) {
+        r_dbg_logf("vk_synchronize: before queue.submit");
         {
             std::lock_guard<std::mutex> guard(queue_mutex);
             ctx->device->compute_queue.queue.submit({}, ctx->fence);
         }
+        r_dbg_logf("vk_synchronize: after queue.submit, before wait_for_fence");
         ggml_vk_wait_for_fence(ctx);
+        r_dbg_logf("vk_synchronize: after wait_for_fence");
         ctx->submit_pending = false;
     }
 
@@ -1125,6 +1134,7 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
         }
         ctx->transfer_ctx.reset();
     }
+    r_dbg_logf("vk_synchronize: DONE");
 }
 
 static void ggml_backend_vk_synchronize(ggml_backend_t backend) {
@@ -1589,7 +1599,7 @@ static uint32_t ggml_vk_fuse_multi_add(ggml_backend_vk_context * ctx, const stru
 
 static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
-    fprintf(stderr, "GGMLR_DBG vk_graph_compute: ENTER (n_nodes=%d)\n", cgraph->n_nodes); fflush(stderr);
+    r_dbg_logf("vk_graph_compute: ENTER n_nodes=%d", cgraph->n_nodes);
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
     if (vk_instance.debug_utils_support) {
@@ -1874,7 +1884,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                       (i + ctx->num_additional_fused_ops >= last_node) ||
                       (almost_ready && !ctx->almost_ready_fence_pending);
 
+        r_dbg_logf("vk_graph_compute: before build_graph node=%d op=%s submit=%d", i, ggml_op_name(cgraph->nodes[i]->op), (int) submit);
         bool enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, i + ctx->num_additional_fused_ops >= last_node, almost_ready, submit);
+        r_dbg_logf("vk_graph_compute: after build_graph node=%d enqueued=%d", i, (int) enqueued);
 
         if (vk_perf_logger_enabled && enqueued) {
             compute_ctx = ggml_vk_get_compute_ctx(ctx);
@@ -1958,9 +1970,11 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->perf_logger->print_timings();
     }
 
+    r_dbg_logf("vk_graph_compute: loop done, support_async=%d before final synchronize", (int) ctx->device->support_async);
     if (!ctx->device->support_async) {
         ggml_vk_synchronize(ctx);
     }
+    r_dbg_logf("vk_graph_compute: after final synchronize, returning SUCCESS");
 
     if (getenv("GGML_VKG_SUBMITS")) {
         r_ggml_fprintf(stderr, "[VKG_SUBMITS] n_nodes=%d submit_count=%d support_async=%d\n",
