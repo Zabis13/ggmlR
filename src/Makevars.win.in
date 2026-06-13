@@ -65,7 +65,18 @@ OPENMP_CXXFLAGS = @OPENMP_CXXFLAGS@
 
 PKG_CFLAGS = $(SIMD_CFLAGS) $(OPENMP_CFLAGS)
 PKG_CXXFLAGS = $(OPENMP_CXXFLAGS) $(SIMD_CFLAGS)
-PKG_LIBS = $(OPENMP_CXXFLAGS) $(VULKAN_LIBS)
+# -lpthread (= winpthreads on MinGW): the Vulkan backend uses std::thread/
+# std::async/std::mutex/std::condition_variable/std::atomic (device, shaders,
+# graph). On Linux these are linked via -lpthread explicitly; on Windows they
+# were only pulled in transitively. With -static-libstdc++/-static-libgcc that
+# transitive path changes, so winpthreads MUST be linked explicitly or the
+# threading runtime can diverge -> nondeterministic corruption (~50/50 crash in
+# ggml_backend_buffer_init). Match the Linux Makevars.in which already links it.
+#
+# -static-libstdc++ -static-libgcc: give this module ONE consistent C++ runtime
+# (Rtools/MinGW) instead of relying on a shared libstdc++-6.dll that could differ
+# between modules. sd2R must do the same.
+PKG_LIBS = $(OPENMP_CXXFLAGS) $(VULKAN_LIBS) -lpthread -static-libstdc++ -static-libgcc
 
 # GGML library objects (for static library export)
 GGML_OBJECTS = \

@@ -2193,6 +2193,8 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     GGML_ASSERT(parameter_count <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(wg_denoms[0] > 0 && wg_denoms[1] > 0 && wg_denoms[2] > 0); // NOLINT
 
+    r_dbg_logf("vk_compile_pipeline: ENTER name=%s", pipeline->name.c_str());
+
     vk::ShaderModuleCreateInfo shader_module_create_info({}, spv_size, reinterpret_cast<const uint32_t *>(spv_data));
     pipeline->shader_module = device->device.createShaderModule(shader_module_create_info);
 
@@ -2300,6 +2302,8 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     }
 
     device->all_pipelines.push_back(pipeline);
+
+    r_dbg_logf("vk_compile_pipeline: DONE name=%s", pipeline->name.c_str());
 
     {
         std::lock_guard<std::mutex> guard(compile_count_mutex);
