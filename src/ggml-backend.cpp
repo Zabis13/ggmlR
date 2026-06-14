@@ -12,6 +12,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#include "r_dbg_filelog.h"  /* temporary crash-localization markers */
 
 #include <assert.h>
 #include <limits.h>
@@ -89,6 +90,7 @@ ggml_backend_buffer_t ggml_backend_buffer_init(
         struct ggml_backend_buffer_i      iface,
                void *                     context,
                size_t                     size) {
+    r_dbg_logf("buffer_init: ENTER context=%p size=%zu", context, size);
     ggml_backend_buffer_t buffer = new ggml_backend_buffer {
         /* .interface = */ iface,
         /* .buft      = */ buft,
@@ -96,6 +98,7 @@ ggml_backend_buffer_t ggml_backend_buffer_init(
         /* .size      = */ size,
         /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
     };
+    r_dbg_logf("buffer_init: after new buffer=%p", (void *) buffer);
 
     return buffer;
 }
