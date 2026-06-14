@@ -716,7 +716,10 @@ static bool ggml_backend_buffer_is_vk(ggml_backend_buffer_t buffer) {
 static void ggml_backend_vk_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     VK_LOG_MEMORY("ggml_backend_vk_buffer_free_buffer()");
     ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
-    ggml_vk_destroy_buffer(ctx->dev_buffer);
+    // dev_buffer is destroyed by ~ggml_backend_vk_buffer_context (called from
+    // delete ctx). Calling ggml_vk_destroy_buffer here as well was a redundant
+    // double-destroy of the same shared vk_buffer; matches upstream which only
+    // does `delete ctx`.
     delete ctx;
 }
 

@@ -63,11 +63,23 @@ alloc_device_buffer <- function(nbytes, label) {
   n_f32 <- max(1L, as.integer(ceiling(nbytes / 4)))
   # no_alloc = TRUE: tensors get metadata only, real memory comes from the
   # backend buffer (mirrors how weights / compute buffers are allocated).
-  ctx <- ggml_init(mem_size = 64L * 1024L * 1024L, no_alloc = TRUE)
-  t   <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_f32)
-  ggml_set_name(t, label)
-  buf <- ggml_backend_alloc_ctx_tensors(ctx, backend)
-  list(buffer = buf, ctx = ctx, tensor = t, n_f32 = n_f32)
+  # The metadata context only holds tensor *headers* (no_alloc), so a small
+  # fixed size is enough regardless of nbytes — using 64 MB here made R's
+  # tensor-size guard reject large probes AFTER the context was created, and
+  # the resulting error() longjmp leaked the context (host-RAM leak that, on
+  # MinGW, corrupted the heap and crashed a later operator new). Keep it tiny
+  # and ALWAYS free the context on any failure path.
+  ctx <- ggml_init(mem_size = 1L * 1024L * 1024L, no_alloc = TRUE)
+  res <- tryCatch({
+    t <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_f32)
+    ggml_set_name(t, label)
+    buf <- ggml_backend_alloc_ctx_tensors(ctx, backend)
+    list(buffer = buf, ctx = ctx, tensor = t, n_f32 = n_f32)
+  }, error = function(e) {
+    ggml_free(ctx)          # never leak a half-initialized context
+    stop(e)
+  })
+  res
 }
 
 # ---------------------------------------------------------------------------
@@ -89,7 +101,18 @@ sizes <- c(
   1038094336                 # flux WEIGHTS buffer (50/50 crash #1)
 )
 
-allocs <- list()
+# Free each probe's buffer + metadata context right after measuring it. The
+# original version kept every successful alloc alive in `allocs` AND leaked a
+# context on every failed alloc; the accumulated unfreed contexts (not the
+# Vulkan buffers) corrupted the MinGW heap and crashed Phase B's operator new.
+# Releasing per-iteration keeps host memory flat and isolates each alloc.
+free_probe <- function(res) {
+  if (is.null(res)) return(invisible())
+  tryCatch(ggml_backend_buffer_free(res$buffer), error = function(e) NULL)
+  tryCatch(ggml_free(res$ctx),                   error = function(e) NULL)
+}
+
+n_ok <- 0L
 for (i in seq_along(sizes)) {
   sz <- sizes[i]
   say("[A%02d] BEFORE alloc size=%.0f bytes (%.2f MB)", i, sz, sz / 1024 / 1024)
@@ -103,9 +126,12 @@ for (i in seq_along(sizes)) {
   }
   bsz <- tryCatch(ggml_backend_buffer_size(res$buffer), error = function(e) NA)
   say("[A%02d] AFTER alloc OK  buffer_size=%s", i, format(bsz, scientific = FALSE))
-  allocs[[length(allocs) + 1L]] <- res   # keep alive so buffers coexist (fragmentation)
+  free_probe(res)                # release immediately — no accumulation
+  say("[A%02d] freed", i)
+  n_ok <- n_ok + 1L
 }
-say("PHASE A complete: %d buffers alive simultaneously", length(allocs))
+gc()
+say("PHASE A complete: %d successful allocs (all freed)", n_ok)
 
 # ---------------------------------------------------------------------------
 # PHASE B — byte-level write / readback into one device buffer
