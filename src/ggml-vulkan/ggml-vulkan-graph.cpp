@@ -899,7 +899,22 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
 
     r_dbg_logf("vk_alloc_buffer: PRE-CALL iface_ptr=%p size=%zu",
                (void *) &ggml_backend_vk_buffer_interface, (size_t) size);
-    ggml_backend_buffer_t res = ggml_backend_buffer_init(buft, ggml_backend_vk_buffer_interface, bufctx, size);
+    /* Construct ggml_backend_buffer locally instead of calling
+     * ggml_backend_buffer_init() across the extern "C" TU boundary. That
+     * function takes ggml_backend_buffer_i (11 function pointers, ~88 bytes)
+     * BY VALUE; on Windows/MinGW passing that large POD through the C linkage
+     * boundary silently crashed exactly at the call site (PRE-CALL logged,
+     * callee's ENTER never reached). The body is trivial (a single `new`), so
+     * we inline it here in the same TU — the struct is initialized in-place and
+     * never crosses a TU boundary by value. Mirrors ggml_backend_buffer_init()
+     * in ggml-backend.cpp. */
+    ggml_backend_buffer_t res = new ggml_backend_buffer {
+        /* .interface = */ ggml_backend_vk_buffer_interface,
+        /* .buft      = */ buft,
+        /* .context   = */ bufctx,
+        /* .size      = */ size,
+        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
+    };
     r_dbg_logf("vk_alloc_buffer: POST-CALL res=%p", (void *) res);
 #ifdef _WIN32
     { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: after-buffer_init heapchk=%d (%s) res=%p", hs, r_dbg_heapchk_str(hs), (void *) res); }
