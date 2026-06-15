@@ -897,7 +897,10 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
     { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: after-new-ctor heapchk=%d (%s) bufctx=%p", hs, r_dbg_heapchk_str(hs), (void *) bufctx); }
 #endif
 
+    r_dbg_logf("vk_alloc_buffer: PRE-CALL iface_ptr=%p size=%zu",
+               (void *) &ggml_backend_vk_buffer_interface, (size_t) size);
     ggml_backend_buffer_t res = ggml_backend_buffer_init(buft, ggml_backend_vk_buffer_interface, bufctx, size);
+    r_dbg_logf("vk_alloc_buffer: POST-CALL res=%p", (void *) res);
 #ifdef _WIN32
     { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: after-buffer_init heapchk=%d (%s) res=%p", hs, r_dbg_heapchk_str(hs), (void *) res); }
 #endif
