@@ -1,3 +1,37 @@
+## Submission (0.7.9)
+
+This version fixes a platform-specific silent crash on Windows/MinGW and
+preserves reverse-dependency compatibility.
+
+### Windows/MinGW silent-crash fix
+
+On Windows builds using the MinGW toolchain, GPU model loading could abort
+the R process with no error message during buffer allocation (observed when
+loading FLUX.1/FLUX.2 diffusion models through the Vulkan or meta backend).
+
+Root cause: the internal function `ggml_backend_buffer_init()` is declared
+`extern "C"` and took its `ggml_backend_buffer_i` interface argument **by
+value**. That struct holds 11 function pointers (~88 bytes). On MinGW,
+passing such a large POD by value across an `extern "C"` translation-unit
+boundary mis-marshals the argument between caller and callee, terminating
+the process at the call instruction (via `std::terminate()` -> `abort()`).
+The failure was silent because, under the R build, stdio is redirected to
+non-flushing `REprintf` wrappers, so any buffered diagnostic is lost on
+`abort()`. The same defect was not observed on Linux/GCC, where the by-value
+ABI for this struct is consistent across TUs.
+
+Fix: the parameter is now passed by pointer
+(`const ggml_backend_buffer_i *`). All in-tree call sites were updated
+accordingly: the CPU, multi-buffer, Vulkan, meta and AMX backends. Behaviour
+is otherwise unchanged (the function still constructs the same
+`ggml_backend_buffer`).
+
+`ggml_backend_buffer_init()` is an internal backend function declared only
+in `ggml-backend-impl.h`, not in the public `ggml-backend.h`. The reverse
+dependencies `llamaR` and `sd2R` do not call it directly, so their sources
+compile unchanged against this release; they pick up the fix automatically
+when rebuilt against the updated static library.
+
 ## Submission (0.7.7)
 
 This version preserves reverse-dependency compatibility. The

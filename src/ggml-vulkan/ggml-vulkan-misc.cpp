@@ -1,3 +1,5 @@
+#include "../r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
+
 static void ggml_vk_print_gpu_info(size_t idx) {
     GGML_ASSERT(idx < vk_instance.device_indices.size());
     size_t dev_num = vk_instance.device_indices[idx];
@@ -1253,7 +1255,18 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
             memcpy((uint8_t *)dst->ptr + offset + i * width, (const uint8_t *) src + i * spitch, width);
         }
     } else {
+        // [DBG-UPLOAD] temporary markers to debug the Windows deadlock when
+        // uploading encoder weights (T5-XXL) to non-host-visible GPU memory.
+        // Remove after diagnosis. Goes through r_dbg_logf (file logger) — plain
+        // fprintf(stderr) is macro-redirected to buffered REprintf under the R
+        // build and is lost on abort. tid via local-var address tells threads apart.
+        const size_t dbg_sz = width * height;
+        char dbg_tid_buf[2];  // address of a local var as a stack/thread marker
+        const void * dbg_tid = (const void *) dbg_tid_buf;
+        r_dbg_logf("[vk_w2d] tid=%p ENTER size=%zu off=%zu", dbg_tid, dbg_sz, offset);
+
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
+        r_dbg_logf("[vk_w2d] tid=%p LOCKED size=%zu", dbg_tid, dbg_sz);
 
         vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
         ggml_vk_ctx_begin(dst->device, subctx);
@@ -1269,10 +1282,14 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
             memset(mset.dst, mset.val, mset.n);
         }
 
+        r_dbg_logf("[vk_w2d] tid=%p SUBMIT size=%zu", dbg_tid, dbg_sz);
         ggml_vk_submit(subctx, dst->device->fence);
+        r_dbg_logf("[vk_w2d] tid=%p BEFORE_WAIT size=%zu", dbg_tid, dbg_sz);
         VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_buffer_write_2d waitForFences");
+        r_dbg_logf("[vk_w2d] tid=%p AFTER_WAIT size=%zu", dbg_tid, dbg_sz);
         dst->device->device.resetFences({ dst->device->fence });
         ggml_vk_queue_command_pools_cleanup(dst->device);
+        r_dbg_logf("[vk_w2d] tid=%p DONE size=%zu", dbg_tid, dbg_sz);
     }
 }
 
