@@ -831,6 +831,7 @@ static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t 
 }
 
 static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    r_dbg_logf("vk_alloc_buffer: ENTER2 size=%zu", size);  // [DBG] graph compute-buffer VRAM alloc
     VK_LOG_MEMORY("ggml_backend_vk_buffer_type_alloc_buffer(" << size << ")");
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
 
@@ -842,6 +843,7 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
     } catch (const std::exception& e) {
         return nullptr;
     }
+    r_dbg_logf("vk_alloc_buffer: after create_buffer_device size=%zu", size);
 
     ggml_backend_vk_buffer_context * bufctx = nullptr;
     try {
@@ -849,8 +851,11 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
     } catch (const std::exception& e) {
         return nullptr;
     }
+    r_dbg_logf("vk_alloc_buffer: after buffer_context, before buffer_init size=%zu", size);
 
-    return ggml_backend_buffer_init(buft, &ggml_backend_vk_buffer_interface, bufctx, size);
+    ggml_backend_buffer_t buf = ggml_backend_buffer_init(buft, &ggml_backend_vk_buffer_interface, bufctx, size);
+    r_dbg_logf("vk_alloc_buffer: DONE2 size=%zu", size);
+    return buf;
 }
 
 static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
