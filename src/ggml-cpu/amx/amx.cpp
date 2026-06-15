@@ -131,7 +131,7 @@ static ggml_backend_buffer_t ggml_backend_amx_buffer_type_alloc_buffer(ggml_back
         return NULL;
     }
 
-    return ggml_backend_buffer_init(buft, ggml_backend_amx_buffer_interface, data, size);
+    return ggml_backend_buffer_init(buft, &ggml_backend_amx_buffer_interface, data, size);
 }
 
 static size_t ggml_backend_amx_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {

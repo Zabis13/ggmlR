@@ -70,10 +70,10 @@ extern "C" {
     };
 
     GGML_API ggml_backend_buffer_t ggml_backend_buffer_init(
-                   ggml_backend_buffer_type_t buft,
-            struct ggml_backend_buffer_i      iface,
-                   void *                     context,
-                   size_t                     size);
+                         ggml_backend_buffer_type_t buft,
+            const struct ggml_backend_buffer_i *    iface,  // by pointer: passing this ~88-byte POD by value across the extern "C" TU boundary silently crashed on Windows/MinGW
+                         void *                     context,
+                         size_t                     size);
 
     // do not use directly, use ggml_backend_tensor_copy instead
     GGML_API bool ggml_backend_buffer_copy_tensor(const struct ggml_tensor * src, struct ggml_tensor * dst);

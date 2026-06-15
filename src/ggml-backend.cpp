@@ -40,7 +40,8 @@ ggml_backend_buffer_t ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t 
     GGML_ASSERT(buft);
     if (size == 0) {
         // return a dummy buffer for zero-sized allocations
-        return ggml_backend_buffer_init(buft, {}, NULL, 0);
+        static const ggml_backend_buffer_i empty_iface = {};
+        return ggml_backend_buffer_init(buft, &empty_iface, NULL, 0);
     }
     return buft->iface.alloc_buffer(buft, size);
 }
@@ -86,21 +87,17 @@ ggml_backend_dev_t ggml_backend_buft_get_device(ggml_backend_buffer_type_t buft)
 // backend buffer
 
 ggml_backend_buffer_t ggml_backend_buffer_init(
-               ggml_backend_buffer_type_t buft,
-        struct ggml_backend_buffer_i      iface,
-               void *                     context,
-               size_t                     size) {
-    r_dbg_logf("buffer_init: ENTER context=%p size=%zu", context, size);
-    ggml_backend_buffer_t buffer = new ggml_backend_buffer {
-        /* .interface = */ iface,
+                     ggml_backend_buffer_type_t buft,
+        const struct ggml_backend_buffer_i *    iface,
+                     void *                     context,
+                     size_t                     size) {
+    return new ggml_backend_buffer {
+        /* .interface = */ *iface,
         /* .buft      = */ buft,
         /* .context   = */ context,
         /* .size      = */ size,
         /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
     };
-    r_dbg_logf("buffer_init: after new buffer=%p", (void *) buffer);
-
-    return buffer;
 }
 
 const char * ggml_backend_buffer_name(ggml_backend_buffer_t buffer) {
@@ -720,7 +717,7 @@ ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer
         total_size += ggml_backend_buffer_get_size(buffers[i]);
     }
 
-    return ggml_backend_buffer_init(buffers[0]->buft, ggml_backend_multi_buffer_i, ctx, total_size);
+    return ggml_backend_buffer_init(buffers[0]->buft, &ggml_backend_multi_buffer_i, ctx, total_size);
 }
 
 bool ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer) {
@@ -2358,7 +2355,7 @@ static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_back
         return NULL;
     }
 
-    return ggml_backend_buffer_init(buft, ggml_backend_cpu_buffer_i, data, size);
+    return ggml_backend_buffer_init(buft, &ggml_backend_cpu_buffer_i, data, size);
 }
 
 static size_t ggml_backend_cpu_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
@@ -2415,5 +2412,5 @@ static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void) {
 
 ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) {
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
-    return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
+    return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), &ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
 }

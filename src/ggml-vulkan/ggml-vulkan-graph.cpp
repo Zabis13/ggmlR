@@ -1,7 +1,4 @@
 #include "../r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
-#ifdef _WIN32
-#include <malloc.h> /* _heapchk for crash-localization heap-integrity probe (temporary) */
-#endif
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 
@@ -833,94 +830,27 @@ static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t 
     return ctx->name.c_str();
 }
 
-#ifdef _WIN32
-/* Map _heapchk() codes to a short string (temporary crash-localization aid). */
-static inline const char * r_dbg_heapchk_str(int hs) {
-    return hs == _HEAPOK       ? "OK"       :
-           hs == _HEAPBADBEGIN ? "BADBEGIN" :
-           hs == _HEAPBADNODE  ? "BADNODE"  :
-           hs == _HEAPBADPTR   ? "BADPTR"   :
-           hs == _HEAPEMPTY    ? "EMPTY"    : "?";
-}
-#endif
-
 static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     VK_LOG_MEMORY("ggml_backend_vk_buffer_type_alloc_buffer(" << size << ")");
-#ifdef _WIN32
-    { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: ENTER heapchk=%d (%s) size=%zu", hs, r_dbg_heapchk_str(hs), size); }
-#else
-    r_dbg_logf("vk_alloc_buffer: ENTER size=%zu", size);
-#endif
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
 
     vk_buffer dev_buffer = nullptr;
     try {
-        r_dbg_logf("vk_alloc_buffer: before create_buffer_device size=%zu", size);
         dev_buffer = ggml_vk_create_buffer_device(ctx->device, size);
-        r_dbg_logf("vk_alloc_buffer: after create_buffer_device size=%zu", size);
-#ifdef _WIN32
-        { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: post-create heapchk=%d (%s)", hs, r_dbg_heapchk_str(hs)); }
-#endif
     } catch (const vk::SystemError& e) {
-        r_dbg_logf("vk_alloc_buffer: vk::SystemError size=%zu: %s", size, e.what());
         return nullptr;
     } catch (const std::exception& e) {
-        r_dbg_logf("vk_alloc_buffer: std::exception size=%zu: %s", size, e.what());
         return nullptr;
     }
-    r_dbg_logf("vk_alloc_buffer: OK size=%zu, before new bufctx", size);
-
-#ifdef _WIN32
-    /* Heap integrity probe right before operator new: with the ENTER and
-     * post-create probes above, the three points localize which interval
-     * corrupts the heap (before vk_alloc_buffer / inside create_buffer /
-     * inside new bufctx). Temporary, remove once root-caused. */
-    { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: before-new heapchk=%d (%s)", hs, r_dbg_heapchk_str(hs)); }
-#endif
 
     ggml_backend_vk_buffer_context * bufctx = nullptr;
     try {
         bufctx = new ggml_backend_vk_buffer_context(ctx->device, std::move(dev_buffer), ctx->name);
     } catch (const std::exception& e) {
-        // new can throw std::bad_alloc when host RAM is exhausted; on MinGW an
-        // exception crossing the C .Call boundary would terminate silently.
-        r_dbg_logf("vk_alloc_buffer: new bufctx threw size=%zu: %s", size, e.what());
         return nullptr;
     }
-    r_dbg_logf("vk_alloc_buffer: after new bufctx, before buffer_init");
-#ifdef _WIN32
-    /* Probe right after the bufctx constructor: if this line is missing the
-     * crash is INSIDE the constructor; if heapchk!=OK the constructor corrupts
-     * the heap; if OK here but no after-buffer_init line, the trivial new in
-     * ggml_backend_buffer_init died -> points at a race (Vulkan compile thread)
-     * rather than a deterministic bug. Temporary. */
-    { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: after-new-ctor heapchk=%d (%s) bufctx=%p", hs, r_dbg_heapchk_str(hs), (void *) bufctx); }
-#endif
 
-    r_dbg_logf("vk_alloc_buffer: PRE-CALL iface_ptr=%p size=%zu",
-               (void *) &ggml_backend_vk_buffer_interface, (size_t) size);
-    /* Construct ggml_backend_buffer locally instead of calling
-     * ggml_backend_buffer_init() across the extern "C" TU boundary. That
-     * function takes ggml_backend_buffer_i (11 function pointers, ~88 bytes)
-     * BY VALUE; on Windows/MinGW passing that large POD through the C linkage
-     * boundary silently crashed exactly at the call site (PRE-CALL logged,
-     * callee's ENTER never reached). The body is trivial (a single `new`), so
-     * we inline it here in the same TU — the struct is initialized in-place and
-     * never crosses a TU boundary by value. Mirrors ggml_backend_buffer_init()
-     * in ggml-backend.cpp. */
-    ggml_backend_buffer_t res = new ggml_backend_buffer {
-        /* .interface = */ ggml_backend_vk_buffer_interface,
-        /* .buft      = */ buft,
-        /* .context   = */ bufctx,
-        /* .size      = */ size,
-        /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
-    };
-    r_dbg_logf("vk_alloc_buffer: POST-CALL res=%p", (void *) res);
-#ifdef _WIN32
-    { int hs = _heapchk(); r_dbg_logf("vk_alloc_buffer: after-buffer_init heapchk=%d (%s) res=%p", hs, r_dbg_heapchk_str(hs), (void *) res); }
-#endif
-    r_dbg_logf("vk_alloc_buffer: after buffer_init res=%p", (void *) res);
-    return res;
+    return ggml_backend_buffer_init(buft, &ggml_backend_vk_buffer_interface, bufctx, size);
 }
 
 static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {

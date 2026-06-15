@@ -1460,7 +1460,7 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
         buf_ctx->buf_configs.emplace_back(ggml_init(params), simple_buf);
     }
 
-    return ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, buf_ctx, max_size);
+    return ggml_backend_buffer_init(buft, &ggml_backend_meta_buffer_iface, buf_ctx, max_size);
 }
 
 struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
@@ -1478,7 +1478,7 @@ struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struc
         meta_buf_ctx->buf_configs.emplace_back(ggml_init(params), nullptr);
     }
 
-    ggml_backend_buffer_t meta_buf = ggml_backend_buffer_init(buft, ggml_backend_meta_buffer_iface, meta_buf_ctx, 0);
+    ggml_backend_buffer_t meta_buf = ggml_backend_buffer_init(buft, &ggml_backend_meta_buffer_iface, meta_buf_ctx, 0);
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
         t->buffer = meta_buf;
         ggml_backend_meta_buffer_init_tensor(meta_buf, t);
