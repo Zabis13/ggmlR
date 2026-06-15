@@ -1600,6 +1600,7 @@ static uint32_t ggml_vk_fuse_multi_add(ggml_backend_vk_context * ctx, const stru
 }
 
 static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
+    r_dbg_logf("vk_graph_compute: ENTER2 n_nodes=%d", cgraph->n_nodes);  // [DBG] first line, before VK_LOG_DEBUG
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
     r_dbg_logf("vk_graph_compute: ENTER n_nodes=%d", cgraph->n_nodes);
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
