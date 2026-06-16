@@ -711,6 +711,10 @@ static bool ggml_backend_buffer_is_vk(ggml_backend_buffer_t buffer) {
 static uint64_t g_vk_live_buffer_bytes;
 static uint64_t g_vk_buffer_alloc_count;
 
+// Forward declaration: defined near supports_op (further down) but called from
+// graph_compute (above its definition) to summarize CPU-fallback ops.
+static void ggml_vk_log_unsupported_op_summary(const char * phase);
+
 static void ggml_backend_vk_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     VK_LOG_MEMORY("ggml_backend_vk_buffer_free_buffer()");
     ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
