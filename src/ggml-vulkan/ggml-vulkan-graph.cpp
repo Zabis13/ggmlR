@@ -1,3 +1,4 @@
+#include "../r_dbg_filelog.h" /* opt-in trace via GGMLR_DBG_LOG env (no-op when unset) */
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 
@@ -58,6 +59,12 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     }
 
     VK_LOG_DEBUG("ggml_vk_build_graph(" << node << ", " << ggml_op_name(node->op) << ")");
+    r_dbg_logf("vk_node[%d] op=%s name='%s' ne=[%lld,%lld,%lld,%lld] type=%s",
+               node_idx, ggml_op_name(node->op),
+               node->name[0] ? node->name : "<unnamed>",
+               (long long)node->ne[0], (long long)node->ne[1],
+               (long long)node->ne[2], (long long)node->ne[3],
+               ggml_type_name(node->type));
     ctx->semaphore_idx = 0;
 
     ggml_tensor * src0 = node->src[0];
@@ -761,8 +768,17 @@ static void ggml_backend_vk_buffer_memset_tensor(ggml_backend_buffer_t buffer, g
     ggml_vk_buffer_memset(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, val32, size);
 }
 
+static unsigned long long g_vk_set_tensor_calls = 0;
+static unsigned long long g_vk_set_tensor_bytes = 0;
+
 static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     VK_LOG_DEBUG("ggml_backend_vk_buffer_set_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
+    g_vk_set_tensor_calls++;
+    g_vk_set_tensor_bytes += size;
+    r_dbg_logf("vk_set_tensor: #%llu name='%s' type=%s size=%zu off=%zu cum=%llu",
+               g_vk_set_tensor_calls,
+               tensor->name[0] ? tensor->name : "<unnamed>",
+               ggml_type_name(tensor->type), size, offset, g_vk_set_tensor_bytes);
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)buffer->context;
     vk_buffer buf = buf_ctx->dev_buffer;
 
@@ -1623,6 +1639,8 @@ static uint32_t ggml_vk_fuse_multi_add(ggml_backend_vk_context * ctx, const stru
 
 static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
+    r_dbg_logf("vk_graph_compute: ENTER n_nodes=%d (set_tensor so far=%llu, %.1f MB)",
+               cgraph->n_nodes, g_vk_set_tensor_calls, g_vk_set_tensor_bytes / (1024.0 * 1024.0));
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
     if (vk_instance.debug_utils_support) {
@@ -2004,6 +2022,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                        cgraph->n_nodes, submit_count, (int) ctx->device->support_async);
     }
 
+    r_dbg_logf("vk_graph_compute: DONE n_nodes=%d", cgraph->n_nodes);
     return GGML_STATUS_SUCCESS;
 
     UNUSED(backend);
