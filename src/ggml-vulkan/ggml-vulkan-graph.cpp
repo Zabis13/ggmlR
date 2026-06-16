@@ -745,14 +745,19 @@ static void ggml_backend_vk_buffer_memset_tensor(ggml_backend_buffer_t buffer, g
     ggml_vk_buffer_memset(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, val32, size);
 }
 
+static unsigned long long g_vk_set_tensor_calls = 0;
+static unsigned long long g_vk_set_tensor_bytes = 0;
+
 static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     VK_LOG_DEBUG("ggml_backend_vk_buffer_set_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
-    r_dbg_logf("vk_set_tensor: ENTER tensor=%s size=%zu offset=%zu", tensor->name, size, offset);
+    g_vk_set_tensor_calls++;
+    g_vk_set_tensor_bytes += size;
+    r_dbg_logf("vk_set_tensor: #%llu tensor=%s size=%zu offset=%zu cum_bytes=%llu",
+               g_vk_set_tensor_calls, tensor->name, size, offset, g_vk_set_tensor_bytes);
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)buffer->context;
     vk_buffer buf = buf_ctx->dev_buffer;
 
     ggml_vk_buffer_write(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, size);
-    r_dbg_logf("vk_set_tensor: DONE tensor=%s", tensor->name);
 }
 
 static void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
