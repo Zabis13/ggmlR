@@ -164,7 +164,18 @@ ag_to_device <- function(tensor, device) {
   backend <- .ag_device_state$backend
   if (is.null(backend)) return(dtype)
   name <- tryCatch(ggml_backend_name(backend), error = function(e) "")
-  if (grepl("^Vulkan", name, ignore.case = TRUE)) "f16" else dtype
+  if (grepl("^Vulkan", name, ignore.case = TRUE)) {
+    # Industrial telemetry: surface the silent precision downgrade. Logged once
+    # per session to avoid flooding the per-op hot path.
+    if (!isTRUE(.ag_device_state$bf16_fallback_warned)) {
+      message("ggmlR: requested dtype 'bf16' is not supported on the Vulkan backend; ",
+              "falling back to 'f16' for compute.")
+      .ag_device_state$bf16_fallback_warned <- TRUE
+    }
+    "f16"
+  } else {
+    dtype
+  }
 }
 
 # Execute a ggml graph for a single result node and return its data as a matrix.
