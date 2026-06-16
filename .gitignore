@@ -37,3 +37,6 @@ CLAUDE.md
 TODO.md
 TODO.md
 structure.md
+
+# Vulkan validation layer settings (debug-only, never ship)
+vk_layer_settings.txt

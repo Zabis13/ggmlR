@@ -31,6 +31,7 @@ ggml_inject <- function(x, result, reduction_name = "ggml", key = "GGML_",
 }
 
 #' @rdname ggml_inject
+#' @importFrom methods new
 #' @export
 ggml_inject.Seurat <- function(x, result, reduction_name = "ggml", key = "GGML_",
                                assay = NULL, ...) {

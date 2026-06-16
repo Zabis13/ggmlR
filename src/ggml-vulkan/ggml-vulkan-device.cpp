@@ -2628,7 +2628,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         throw vk::OutOfDeviceMemoryError("Requested buffer size exceeds device buffer size limit");
     }
 
+    r_dbg_logf("create_buffer: ENTER size=%zu", size);
     vk_buffer buf = std::make_shared<vk_buffer_struct>();
+    r_dbg_logf("create_buffer: after make_shared buf=%p", (void*)buf.get());
 
     if (size == 0) {
         buf->size = 0;
@@ -2657,7 +2659,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         buffer_create_info.setPNext(&external_memory_bci);
     }
 
+    r_dbg_logf("create_buffer: before createBuffer");
     buf->buffer = device->device.createBuffer(buffer_create_info);
+    r_dbg_logf("create_buffer: after createBuffer");
 
     vk::MemoryRequirements mem_req = device->device.getBufferMemoryRequirements(buf->buffer);
 
@@ -2729,7 +2733,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
             for (auto mtype_it = memory_type_indices.begin(); mtype_it != memory_type_indices.end(); mtype_it++) {
                 try {
+                    r_dbg_logf("create_buffer: before allocateMemory size=%zu mtype=%u", (size_t)mem_req.size, *mtype_it);
                     buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &mem_flags_info });
+                    r_dbg_logf("create_buffer: after allocateMemory");
                     done = true;
                     break;
                 } catch (const vk::SystemError& e) {
@@ -2759,18 +2765,26 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         buf->ptr = import_ptr;
     } else {
         if (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
+            r_dbg_logf("create_buffer: before mapMemory");
             buf->ptr = device->device.mapMemory(buf->device_memory, 0, VK_WHOLE_SIZE);
+            r_dbg_logf("create_buffer: after mapMemory");
         }
     }
 
+    r_dbg_logf("create_buffer: before bindBufferMemory");
     device->device.bindBufferMemory(buf->buffer, buf->device_memory, 0);
+    r_dbg_logf("create_buffer: after bindBufferMemory");
 
     buf->device = device;
     buf->size = size;
 
     if (device->buffer_device_address) {
         const vk::BufferDeviceAddressInfo addressInfo(buf->buffer);
+        r_dbg_logf("create_buffer: before getBufferAddress");
         buf->bda_addr = device->device.getBufferAddress(addressInfo);
+        r_dbg_logf("create_buffer: after getBufferAddress (DONE)");
+    } else {
+        r_dbg_logf("create_buffer: DONE (no bda)");
     }
 
     return buf;

@@ -91,13 +91,16 @@ ggml_backend_buffer_t ggml_backend_buffer_init(
         const struct ggml_backend_buffer_i *    iface,
                      void *                     context,
                      size_t                     size) {
-    return new ggml_backend_buffer {
+    r_dbg_logf("buffer_init: ENTER buft=%p iface=%p ctx=%p size=%zu", (void*)buft, (void*)iface, context, size);
+    ggml_backend_buffer_t b = new ggml_backend_buffer {
         /* .interface = */ *iface,
         /* .buft      = */ buft,
         /* .context   = */ context,
         /* .size      = */ size,
         /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
     };
+    r_dbg_logf("buffer_init: after new b=%p", (void*)b);
+    return b;
 }
 
 const char * ggml_backend_buffer_name(ggml_backend_buffer_t buffer) {

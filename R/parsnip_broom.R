@@ -155,6 +155,7 @@ glance.ggmlr_parsnip_model <- function(x, ...) {
 #' generics::augment(parsnip::extract_fit_engine(fit_obj), mtcars)
 #'
 #' @importFrom generics augment
+#' @importFrom stats predict
 #' @method augment ggmlr_parsnip_model
 #' @export
 augment.ggmlr_parsnip_model <- function(x, new_data, ...) {

@@ -36,7 +36,9 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for machine
 Depends: R (>= 4.1.0)
 Imports:
     generics,
-    R6
+    R6,
+    methods,
+    stats
 License: MIT + file LICENSE
 URL: https://github.com/Zabis13/ggmlR
 BugReports: https://github.com/Zabis13/ggmlR/issues
