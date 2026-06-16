@@ -1,4 +1,3 @@
-#include "../r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 
@@ -561,7 +560,6 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
 
     VK_LOG_DEBUG("ggml_vk_compute_forward(" << tensor << ", name=" << tensor->name << ", op=" << ggml_op_name(tensor->op) << ", type=" << tensor->type << ", ne0=" << tensor->ne[0] << ", ne1=" << tensor->ne[1] << ", ne2=" << tensor->ne[2] << ", ne3=" << tensor->ne[3] << ", nb0=" << tensor->nb[0] << ", nb1=" << tensor->nb[1] << ", nb2=" << tensor->nb[2] << ", nb3=" << tensor->nb[3] << ", view_src=" << tensor->view_src << ", view_offs=" << tensor->view_offs << ")");
 
-    r_dbg_logf("vk_compute_forward: ENTER idx=%d op=%s", tensor_idx, ggml_op_name(tensor->op));
     vk_context subctx = ctx->tensor_ctxs[tensor_idx].lock();
 
     // Only run if ctx hasn't been submitted yet
@@ -576,14 +574,12 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
             memset(mset.dst, mset.val, mset.n);
         }
 
-        r_dbg_logf("vk_compute_forward: before ggml_vk_submit idx=%d", tensor_idx);
         if (almost_ready && !ctx->almost_ready_fence_pending) {
             ggml_vk_submit(subctx, ctx->almost_ready_fence);
             ctx->almost_ready_fence_pending = true;
         } else {
             ggml_vk_submit(subctx, {});
         }
-        r_dbg_logf("vk_compute_forward: after ggml_vk_submit idx=%d", tensor_idx);
         ctx->submit_pending = true;
 
     }
@@ -717,7 +713,6 @@ static uint64_t g_vk_buffer_alloc_count;
 
 static void ggml_backend_vk_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     VK_LOG_MEMORY("ggml_backend_vk_buffer_free_buffer()");
-    r_dbg_logf("vk_free_buffer: ENTER buffer=%p ctx=%p", (void*)buffer, (void*)buffer->context);
     ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
     size_t freed = buffer->size;
     // dev_buffer is destroyed by ~ggml_backend_vk_buffer_context (called from
@@ -737,7 +732,6 @@ static void ggml_backend_vk_buffer_free_buffer(ggml_backend_buffer_t buffer) {
                    freed / (1024.0 * 1024.0),
                    g_vk_live_buffer_bytes / (1024.0 * 1024.0),
                    (unsigned long long)g_vk_buffer_alloc_count);
-    r_dbg_logf("vk_free_buffer: DONE buffer=%p", (void*)buffer);
 }
 
 static void * ggml_backend_vk_buffer_get_base(ggml_backend_buffer_t buffer) {
@@ -763,15 +757,8 @@ static void ggml_backend_vk_buffer_memset_tensor(ggml_backend_buffer_t buffer, g
     ggml_vk_buffer_memset(buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, val32, size);
 }
 
-static unsigned long long g_vk_set_tensor_calls = 0;
-static unsigned long long g_vk_set_tensor_bytes = 0;
-
 static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     VK_LOG_DEBUG("ggml_backend_vk_buffer_set_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
-    g_vk_set_tensor_calls++;
-    g_vk_set_tensor_bytes += size;
-    r_dbg_logf("vk_set_tensor: #%llu tensor=%s size=%zu offset=%zu cum_bytes=%llu",
-               g_vk_set_tensor_calls, tensor->name, size, offset, g_vk_set_tensor_bytes);
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)buffer->context;
     vk_buffer buf = buf_ctx->dev_buffer;
 
@@ -859,7 +846,6 @@ static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t 
 // (near free_buffer). Updated on alloc/free to track live VRAM footprint.
 
 static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-    r_dbg_logf("vk_alloc_buffer: ENTER2 size=%zu", size);  // [DBG] graph compute-buffer VRAM alloc
     VK_LOG_MEMORY("ggml_backend_vk_buffer_type_alloc_buffer(" << size << ")");
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
 
@@ -881,7 +867,6 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
                       e.what());
         return nullptr;
     }
-    r_dbg_logf("vk_alloc_buffer: after create_buffer_device size=%zu", size);
     g_vk_live_buffer_bytes += size;
     g_vk_buffer_alloc_count++;
     GGML_LOG_DEBUG("ggml_vulkan: VRAM alloc %.2f MB | live=%.2f MB in %llu buffers\n",
@@ -895,47 +880,36 @@ static ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backe
     } catch (const std::exception& e) {
         return nullptr;
     }
-    r_dbg_logf("vk_alloc_buffer: after buffer_context, before buffer_init size=%zu", size);
 
     ggml_backend_buffer_t buf = ggml_backend_buffer_init(buft, &ggml_backend_vk_buffer_interface, bufctx, size);
-    r_dbg_logf("vk_alloc_buffer: DONE2 size=%zu", size);
     return buf;
 }
 
 static size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-    r_dbg_logf("vk_get_alignment: ENTER buft=%p ctx=%p", (void *) buft, (void *) buft->context);
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
     size_t a = ctx->device->properties.limits.minStorageBufferOffsetAlignment;
-    r_dbg_logf("vk_get_alignment: device=%p alignment=%zu", (void *) ctx->device.get(), a);
     return a;
 }
 
 static size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    r_dbg_logf("vk_get_max_size: ENTER buft=%p ctx=%p", (void *) buft, (void *) buft->context);
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
     size_t m = ctx->device->suballocation_block_size;
-    r_dbg_logf("vk_get_max_size: max_size=%zu", m);
     return m;
 }
 
 static size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    r_dbg_logf("vk_get_alloc_size: ENTER tensor=%s", tensor->name);
     size_t n = ggml_nbytes(tensor);
-    r_dbg_logf("vk_get_alloc_size: nbytes=%zu", n);
     return n;
 
     UNUSED(buft);
 }
 
 ggml_backend_buffer_type_t ggml_backend_vk_buffer_type(size_t dev_num) {
-    r_dbg_logf("vk_buffer_type: ENTER dev_num=%zu, before instance_init", dev_num);
     ggml_vk_instance_init();
-    r_dbg_logf("vk_buffer_type: after instance_init, before get_device");
 
     VK_LOG_DEBUG("ggml_backend_vk_buffer_type(" << dev_num << ")");
 
     vk_device dev = ggml_vk_get_device(dev_num);
-    r_dbg_logf("vk_buffer_type: after get_device dev=%p", (void *) dev.get());
 
     return &dev->buffer_type;
 }
@@ -1149,7 +1123,6 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend, const ggml_
 
 static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
     VK_LOG_DEBUG("ggml_vk_synchronize()");
-    r_dbg_logf("vk_synchronize: ENTER submit_pending=%d", (int) ctx->submit_pending);
 
     bool do_transfer = !ctx->transfer_ctx.expired();
 
@@ -1168,14 +1141,11 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
     }
 
     if (ctx->submit_pending) {
-        r_dbg_logf("vk_synchronize: before queue.submit");
         {
             std::lock_guard<std::mutex> guard(queue_mutex);
             ctx->device->compute_queue.queue.submit({}, ctx->fence);
         }
-        r_dbg_logf("vk_synchronize: after queue.submit, before wait_for_fence");
         ggml_vk_wait_for_fence(ctx);
-        r_dbg_logf("vk_synchronize: after wait_for_fence");
         ctx->submit_pending = false;
     }
 
@@ -1185,7 +1155,6 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
         }
         ctx->transfer_ctx.reset();
     }
-    r_dbg_logf("vk_synchronize: DONE");
 }
 
 static void ggml_backend_vk_synchronize(ggml_backend_t backend) {
@@ -1649,9 +1618,7 @@ static uint32_t ggml_vk_fuse_multi_add(ggml_backend_vk_context * ctx, const stru
 }
 
 static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-    r_dbg_logf("vk_graph_compute: ENTER2 n_nodes=%d", cgraph->n_nodes);  // [DBG] first line, before VK_LOG_DEBUG
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
-    r_dbg_logf("vk_graph_compute: ENTER n_nodes=%d", cgraph->n_nodes);
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
     if (vk_instance.debug_utils_support) {
@@ -1936,9 +1903,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                       (i + ctx->num_additional_fused_ops >= last_node) ||
                       (almost_ready && !ctx->almost_ready_fence_pending);
 
-        r_dbg_logf("vk_graph_compute: before build_graph node=%d op=%s submit=%d", i, ggml_op_name(cgraph->nodes[i]->op), (int) submit);
         bool enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, i + ctx->num_additional_fused_ops >= last_node, almost_ready, submit);
-        r_dbg_logf("vk_graph_compute: after build_graph node=%d enqueued=%d", i, (int) enqueued);
 
         if (vk_perf_logger_enabled && enqueued) {
             compute_ctx = ggml_vk_get_compute_ctx(ctx);
@@ -2022,11 +1987,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->perf_logger->print_timings();
     }
 
-    r_dbg_logf("vk_graph_compute: loop done, support_async=%d before final synchronize", (int) ctx->device->support_async);
     if (!ctx->device->support_async) {
         ggml_vk_synchronize(ctx);
     }
-    r_dbg_logf("vk_graph_compute: after final synchronize, returning SUCCESS");
 
     // Industrial telemetry: report any ops that the scheduler ran on CPU because
     // the Vulkan backend rejected them (silent perf cost via GPU<->CPU copies).

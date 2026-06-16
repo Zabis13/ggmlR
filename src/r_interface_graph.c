@@ -7,7 +7,6 @@
 #include "ggml-cpu.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
-#include "r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
 
 #ifdef _OPENMP
 #undef match  // R defines 'match' macro that conflicts with OpenMP pragma
@@ -196,21 +195,16 @@ SEXP R_ggml_build_forward_expand(SEXP ctx_ptr, SEXP tensor_ptr) {
     }
     
     // Create computation graph
-    r_dbg_logf("build_forward_expand: ENTER, before ggml_new_graph");
     struct ggml_cgraph * graph = ggml_new_graph(ctx);
-    r_dbg_logf("build_forward_expand: after ggml_new_graph graph=%p", (void *) graph);
 
     if (graph == NULL) {
         error("Failed to create computation graph");
     }
 
     // Build forward pass by expanding from the output tensor
-    r_dbg_logf("build_forward_expand: before ggml_build_forward_expand");
     ggml_build_forward_expand(graph, tensor);
-    r_dbg_logf("build_forward_expand: after ggml_build_forward_expand");
 
     SEXP ret = R_MakeExternalPtr(graph, R_NilValue, R_NilValue);
-    r_dbg_logf("build_forward_expand: DONE");
     return ret;
 }
 
@@ -3027,9 +3021,7 @@ SEXP R_ggml_backend_graph_compute(SEXP backend_ptr, SEXP graph_ptr) {
         error("Invalid pointer");
     }
 
-    r_dbg_logf("graph_compute: ENTER n_nodes=%d", graph->n_nodes);
     enum ggml_status status = ggml_backend_graph_compute(backend, graph);
-    r_dbg_logf("graph_compute: DONE status=%d", (int) status);
 
     return ScalarInteger((int) status);
 }

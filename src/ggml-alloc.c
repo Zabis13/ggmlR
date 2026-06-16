@@ -10,7 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "r_dbg_filelog.h" /* crash-survivable diagnostic logger (no-op unless GGMLR_DBG_LOG set) */
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define MAX_FREE_BLOCKS 256
