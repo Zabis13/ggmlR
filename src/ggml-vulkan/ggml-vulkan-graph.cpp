@@ -3137,17 +3137,24 @@ static void ggml_vk_log_unsupported_op_summary(const char * phase) {
     if (g_vk_unsupported_op_total == 0) {
         return;
     }
-    std::string detail;
-    for (const auto & kv : g_vk_unsupported_op_counts) {
-        if (!detail.empty()) {
-            detail += ", ";
+    // Gated behind GGMLR_LOG_DEVICE (same switch as the device-caps line) so it
+    // stays available for production diagnostics but does not flood test output,
+    // where training graphs routinely fall back ops like OUT_PROD /
+    // CROSS_ENTROPY_LOSS_BACK to CPU. Still reset the tally either way.
+    const char * log_dev = getenv("GGMLR_LOG_DEVICE");
+    if (log_dev != nullptr && log_dev[0] != '\0' && log_dev[0] != '0') {
+        std::string detail;
+        for (const auto & kv : g_vk_unsupported_op_counts) {
+            if (!detail.empty()) {
+                detail += ", ";
+            }
+            detail += std::string(ggml_op_name(kv.first)) + "=" + std::to_string(kv.second);
         }
-        detail += std::string(ggml_op_name(kv.first)) + "=" + std::to_string(kv.second);
+        GGML_LOG_INFO("ggml_vulkan: %llu op(s) not supported on GPU during %s, ran on CPU (per-type: %s)\n",
+                      (unsigned long long)g_vk_unsupported_op_total,
+                      phase ? phase : "graph",
+                      detail.c_str());
     }
-    GGML_LOG_INFO("ggml_vulkan: %llu op(s) not supported on GPU during %s, ran on CPU (per-type: %s)\n",
-                  (unsigned long long)g_vk_unsupported_op_total,
-                  phase ? phase : "graph",
-                  detail.c_str());
     g_vk_unsupported_op_counts.clear();
     g_vk_unsupported_op_total = 0;
 }

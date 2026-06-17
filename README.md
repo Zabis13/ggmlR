@@ -76,6 +76,33 @@ Vulkan is still auto-detected when the Vulkan SDK is present, so
 `1` / `yes` / `true` / `on` (and `0` / `no` / `false` / `off` for Vulkan).
 OpenMP (multi-threaded CPU executor) is detected automatically on Rtools.
 
+### Diagnostics
+
+`GGMLR_LOG_DEVICE` — when set to a non-empty value other than `0`, enables
+Vulkan telemetry logging. Two messages are emitted:
+
+1. The selected device and its capabilities, once a backend context is created:
+
+   ```
+   ggml_vulkan: device #0 'Vulkan0' selected | fp16=1 bf16=1 coopmat=1 coopmat2=0 bda=1 max_buffer=4095 MB suballoc_block=1024 MB sysmem_fallback=0
+   ```
+
+2. A per-graph summary of any ops the Vulkan backend could not run and fell back
+   to CPU (e.g. `OUT_PROD`, `CROSS_ENTROPY_LOSS_BACK` during training):
+
+   ```
+   ggml_vulkan: 12 op(s) not supported on GPU during graph compute, ran on CPU (per-type: OUT_PROD=12)
+   ```
+
+Both are **off by default** so they do not clutter output (notably during
+tests, where many contexts and training graphs are created). Enable them to
+diagnose which GPU was picked, which acceleration paths (fp16 / bf16 / coopmat)
+are active, and which ops are silently running on CPU:
+
+```r
+Sys.setenv(GGMLR_LOG_DEVICE = "1")
+```
+
 ## Sequential API
 
 The fastest way to get a model running — stack layers with the pipe, compile, train.
