@@ -1,0 +1,78 @@
+#version 450
+
+// Pairwise squared Euclidean distance matrix — tiled direct Vulkan dispatch.
+//
+// The naive version had each thread stream both rows i and j straight from
+// VRAM, so every X value was re-read once per output column it took part in —
+// bandwidth-bound. This version blocks the output into 32x32 tiles: a 32x32
+// workgroup cooperatively stages a TS-wide chunk of the 32 "i" rows and the 32
+// "j" rows into shared memory, accumulates the partial squared difference over
+// that chunk, then advances to the next dims chunk. Each X value is read from
+// VRAM once per tile instead of once per column, which is the whole point.
+//
+// One thread = one output cell D2[i,j] = sum_d (x[i,d] - x[j,d])^2, written to
+// BOTH D2[i,j] and D2[j,i] (the matrix is symmetric, so the off-diagonal tile
+// fills its mirror for free). The host takes sqrt(D2). This is the honest f32
+// path that sidesteps mul_mat (which accumulates in f16 on RADV).
+
+#extension GL_EXT_control_flow_attributes : enable
+
+const uint TS = 32u;          // tile side: 32 rows of i and 32 rows of j
+
+layout(local_size_x = TS, local_size_y = TS, local_size_z = 1) in;
+
+// X: n rows, dims floats each, row-major [row0_d0,row0_d1,...,row1_d0,...].
+layout (binding = 0) readonly buffer X { float x[]; };
+// D2: n*n floats, row-major [i*n + j]. Written symmetrically.
+layout (binding = 1) buffer D2 { float d2[]; };
+
+layout (push_constant) uniform parameter {
+    uint n;      // number of rows (cells)
+    uint dims;   // number of feature columns
+} p;
+
+// One TS-wide chunk of the tile's i-rows and j-rows. tile_i[r][c] = feature
+// (chunk_base + c) of the r-th i-row in this tile; tile_j likewise for j-rows.
+shared float tile_i[TS][TS];
+shared float tile_j[TS][TS];
+
+void main() {
+    const uint lx = gl_LocalInvocationID.x;     // column within tile (j offset)
+    const uint ly = gl_LocalInvocationID.y;     // row within tile    (i offset)
+
+    const uint i = gl_WorkGroupID.y * TS + ly;  // global i index
+    const uint j = gl_WorkGroupID.x * TS + lx;  // global j index
+
+    // The block of i-rows is [WG.y*TS .. +TS); the block of j-rows likewise on
+    // WG.x. Thread (lx, ly) stages tile_i[ly][lx] = feature (d0+lx) of the
+    // ly-th i-row, and tile_j[lx][ly] = feature (d0+ly) of the lx-th j-row, so
+    // that across the 32x32 group every (row, feature) of both blocks is loaded.
+    const uint i_row = gl_WorkGroupID.y * TS + ly;   // i-row this thread stages
+    const uint j_row = gl_WorkGroupID.x * TS + lx;   // j-row this thread stages
+
+    float acc = 0.0;
+
+    // Walk the feature dimension in chunks of TS, staging each chunk to shared.
+    for (uint d0 = 0u; d0 < p.dims; d0 += TS) {
+        const uint di = d0 + lx;                // i-block feature for this thread
+        const uint dj = d0 + ly;                // j-block feature for this thread
+
+        tile_i[ly][lx] = (i_row < p.n && di < p.dims) ? x[i_row * p.dims + di] : 0.0;
+        tile_j[lx][ly] = (j_row < p.n && dj < p.dims) ? x[j_row * p.dims + dj] : 0.0;
+        barrier();
+
+        // Accumulate over this chunk. tile_i[ly][c] is feature (d0+c) of row i;
+        // tile_j[lx][c] is feature (d0+c) of row j.
+        const uint dlim = min(TS, p.dims - d0);
+        for (uint c = 0u; c < dlim; ++c) {
+            float diff = tile_i[ly][c] - tile_j[lx][c];
+            acc += diff * diff;
+        }
+        barrier();
+    }
+
+    if (i < p.n && j < p.n) {
+        d2[i * p.n + j] = acc;                  // symmetric: fill the mirror too
+        d2[j * p.n + i] = acc;
+    }
+}

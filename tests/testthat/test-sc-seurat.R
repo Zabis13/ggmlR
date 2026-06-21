@@ -14,6 +14,10 @@ sc_fixture <- function(seed = 11L) {
   X
 }
 
+# engines flip the global device to "gpu"; restore it when this file ends so the
+# state does not leak into later test files (see helper-device.R).
+withr::defer(ag_device("cpu"), teardown_env())
+
 # ---------------------------------------------------------------------------
 # Contracts + registry
 # ---------------------------------------------------------------------------
@@ -166,6 +170,19 @@ seurat_fixture <- function(seed = 3L) {
   Seurat::NormalizeData(so, verbose = FALSE)
 }
 
+# Same fixture forced onto the legacy v4 Assay model (not Assay5). This drives
+# the GetAssayData extraction branch instead of LayerData. The caller is
+# responsible for restoring options(); we set it inside and reset on exit.
+seurat_fixture_v4 <- function(seed = 3L) {
+  old <- options(Seurat.object.assay.version = "v3")
+  on.exit(options(old))
+  so <- seurat_fixture(seed)
+  # guard: make sure we really got the legacy model, else the test is a no-op
+  testthat::skip_if_not(inherits(so[["RNA"]], "Assay"),
+                        "could not build a legacy v4 Assay")
+  so
+}
+
 test_that("ggml_extract.Seurat reads the data layer and subsets (v5 LayerData)", {
   skip_if_not_installed("Seurat")
   skip_if_not_installed("SeuratObject")
@@ -183,6 +200,42 @@ test_that("ggml_extract.Seurat reads the data layer and subsets (v5 LayerData)",
   # matches the layer pulled directly from the object
   ref <- as.matrix(SeuratObject::LayerData(so, assay = "RNA", layer = "data"))
   expect_equal(unname(m), unname(ref), tolerance = 1e-10)
+})
+
+test_that("ggml_extract.Seurat reads a legacy v4 Assay (GetAssayData branch)", {
+  skip_if_not_installed("Seurat")
+  skip_if_not_installed("SeuratObject")
+  so <- seurat_fixture_v4()
+
+  # this object must take the v4 branch, not the v5 LayerData one
+  expect_false(ggmlR:::.ggmlr_object_is_v5(so, "RNA"))
+
+  m <- ggml_extract(so, layer = "data")
+  expect_true(is.matrix(m))
+  expect_identical(storage.mode(m), "double")
+  expect_equal(dim(m), c(50L, 100L))          # genes x cells
+
+  # matches the layer pulled directly from the legacy assay
+  ref <- as.matrix(SeuratObject::GetAssayData(so, assay = "RNA", layer = "data"))
+  expect_equal(unname(m), unname(ref), tolerance = 1e-10)
+})
+
+test_that("RunGGML on a legacy v4 Seurat object matches prcomp end-to-end", {
+  skip_if_not_installed("Seurat")
+  skip_if_not_installed("SeuratObject")
+  so <- seurat_fixture_v4()
+
+  so2 <- RunGGML(so, op = "embed", n_components = 8L, device = "cpu",
+                 reduction_name = "ggml")
+  expect_true("ggml" %in% SeuratObject::Reductions(so2))
+  emb <- SeuratObject::Embeddings(so2, "ggml")
+  expect_equal(dim(emb), c(100L, 8L))
+
+  # cells-as-rows PCA; PCs are sign-ambiguous so compare absolute correlation
+  mat <- ggml_extract(so, layer = "data")
+  ref <- prcomp(t(mat), center = TRUE, scale. = FALSE)$x[, 1:8]
+  cors <- vapply(1:8, function(i) abs(cor(emb[, i], ref[, i])), numeric(1))
+  expect_gt(min(cors), 0.999)
 })
 
 test_that("ggml_inject.Seurat writes a reduction and provenance metadata", {
@@ -319,4 +372,85 @@ test_that("RunGGML.default on a bare matrix returns a ggml_result", {
   res <- RunGGML(X, op = "embed", n_components = 6, device = "cpu")
   expect_s3_class(res, "ggml_result")
   expect_equal(dim(res$embedding), c(150L, 6L))
+})
+
+# ---------------------------------------------------------------------------
+# Transform ops: normalize (LogNormalize) and scale (ScaleData z-score)
+# ---------------------------------------------------------------------------
+
+# raw counts fixture (transforms read counts / data, not random gaussians)
+sc_counts_fixture <- function(seed = 7L) {
+  set.seed(seed)
+  X <- matrix(rpois(40 * 60, lambda = 4), nrow = 40)
+  rownames(X) <- paste0("Gene", seq_len(40))
+  colnames(X) <- paste0("Cell", seq_len(60))
+  storage.mode(X) <- "double"
+  X
+}
+
+test_that("registry declares the normalize and scale transform ops", {
+  reg <- names(ggml_ops_registry())
+  expect_true(all(c("normalize", "scale") %in% reg))
+  # transforms take no required params
+  expect_length(ggml_ops_registry("normalize")$params, 0L)
+  expect_length(ggml_ops_registry("scale")$params, 0L)
+})
+
+test_that("CPU normalize matches LogNormalize and is tagged as a transform", {
+  X   <- sc_counts_fixture()
+  res <- ggml_run(ggml_task("normalize", X, device = "cpu"))
+  expect_s3_class(res, "ggml_result")
+  expect_identical(res$metadata$kind, "transform")
+  expect_identical(res$metadata$layer, "data")
+  expect_equal(dim(res$embedding), dim(X))
+
+  ref <- log1p(sweep(X, 2L, colSums(X), `/`) * 1e4)
+  expect_equal(unname(res$embedding), unname(ref), tolerance = 1e-10)
+})
+
+test_that("CPU scale matches per-gene z-score with clamp", {
+  X   <- log1p(sc_counts_fixture())          # pretend this is the data layer
+  res <- ggml_run(ggml_task("scale", X, device = "cpu"))
+  expect_identical(res$metadata$layer, "scale.data")
+  expect_equal(dim(res$embedding), dim(X))
+
+  mu  <- rowMeans(X)
+  sdv <- apply(X, 1L, stats::sd); sdv[sdv == 0] <- 1
+  ref <- pmin((X - mu) / sdv, 10)
+  expect_equal(unname(res$embedding), unname(ref), tolerance = 1e-10)
+  expect_true(all(res$embedding <= 10 + 1e-9))     # clamp respected
+  expect_lt(max(abs(rowMeans(res$embedding))), 1e-9)  # centered
+})
+
+test_that("RunGGML normalize then scale write the assay layers (CPU)", {
+  skip_if_not_installed("Seurat")
+  skip_if_not_installed("SeuratObject")
+  so <- seurat_fixture()        # has counts + data
+
+  so <- RunGGML(so, op = "normalize", device = "cpu")
+  gpu_data <- as.matrix(SeuratObject::LayerData(so, layer = "data"))
+  raw      <- as.matrix(SeuratObject::LayerData(so, layer = "counts"))
+  ref_data <- log1p(sweep(raw, 2L, colSums(raw), `/`) * 1e4)
+  expect_equal(unname(gpu_data), unname(ref_data), tolerance = 1e-8)
+  expect_equal(SeuratObject::Misc(so, "data_ggml")$backend, "cpu")
+
+  so <- RunGGML(so, op = "scale", device = "cpu")
+  sd_mat <- as.matrix(SeuratObject::LayerData(so, layer = "scale.data"))
+  expect_equal(dim(sd_mat), dim(gpu_data))
+  expect_lt(max(abs(rowMeans(sd_mat))), 1e-6)
+  expect_equal(SeuratObject::Misc(so, "scale.data_ggml")$backend, "cpu")
+})
+
+test_that("Vulkan normalize and scale agree with the CPU path", {
+  skip_no_seurat_gpu()
+  X <- sc_counts_fixture()
+
+  n_gpu <- ggml_run(ggml_task("normalize", X, device = "vulkan"))$embedding
+  n_cpu <- ggml_run(ggml_task("normalize", X, device = "cpu"))$embedding
+  expect_equal(unname(n_gpu), unname(n_cpu), tolerance = 1e-3)
+
+  D <- log1p(X)
+  s_gpu <- ggml_run(ggml_task("scale", D, device = "vulkan"))$embedding
+  s_cpu <- ggml_run(ggml_task("scale", D, device = "cpu"))$embedding
+  expect_equal(unname(s_gpu), unname(s_cpu), tolerance = 1e-3)
 })

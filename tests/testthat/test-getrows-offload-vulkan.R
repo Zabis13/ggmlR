@@ -70,6 +70,19 @@ test_that("get_rows Vulkan == CPU across offload-threshold batch sizes", {
   # mimicking the token_embd.weight that triggered the per-step copy.
   n_embd  <- 2048L
   n_vocab <- 32000L
+
+  # The embedding table is ~262 MB (2048 x 32000 x f32). Allocating one
+  # contiguous block on a fragmented / busy device fails *silently* in
+  # ggml-alloc (the backend buffer comes back without a device buffer), and the
+  # only later signal is a raw GGML_ASSERT(buffer != nullptr) at compute time.
+  # Skip up front when the device cannot comfortably fit it (table + headroom
+  # for fragmentation), so a low-VRAM run reports a clean skip, not a crash.
+  tbl_bytes <- as.double(n_embd) * n_vocab * 4
+  free <- tryCatch(ggml_vulkan_device_memory(0)$free, error = function(e) NA_real_)
+  skip_if(!is.na(free) && free < tbl_bytes * 1.5,
+          sprintf("insufficient VRAM: need ~%.0f MB free, have %.0f MB",
+                  tbl_bytes * 1.5 / 1e6, free / 1e6))
+
   set.seed(11)
 
   # Single Vulkan backend reused for all batch sizes, freed deterministically.

@@ -1,0 +1,255 @@
+---
+title: "Single-cell GPU Acceleration with Seurat"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{11. Single-cell GPU Acceleration with Seurat}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>",
+  # Executed locally (NOT_CRAN=true) only when Seurat is available; skipped on
+  # CRAN to avoid the "CPU time > elapsed" vignette NOTE from the CPU fallback.
+  eval     = identical(Sys.getenv("NOT_CRAN"), "true") &&
+             requireNamespace("Seurat", quietly = TRUE) &&
+             requireNamespace("SeuratObject", quietly = TRUE)
+)
+library(ggmlR)
+if (requireNamespace("Seurat", quietly = TRUE)) {
+  suppressMessages(library(Seurat))
+  suppressMessages(library(SeuratObject))
+}
+```
+
+ggmlR can accelerate the heavy steps of a single-cell RNA-seq pipeline on the
+GPU, working **directly on `Seurat` objects**. There is no conversion on your
+side and no hard dependency: `Seurat` / `SeuratObject` live in `Suggests`, so
+ggmlR installs fine without them and the adapter only activates when they are
+present. Vulkan is used automatically when a GPU is available, with a
+transparent CPU fallback.
+
+The adapter leans on two more `Suggests` packages for the neighbour-graph path:
+`Matrix` (the sparse graphs) and `FNN` (kd-tree kNN search). Install everything
+once alongside ggmlR, then just load `Seurat` — the S3 methods activate on their
+own:
+
+```r
+install.packages(c("Seurat", "Matrix", "FNN"))
+library(ggmlR)
+library(Seurat)
+```
+
+## The one call: `RunGGML()`
+
+`RunGGML()` mirrors Seurat's own `RunPCA()` / `NormalizeData()` style — object
+in, object out, pipe-friendly. The supported operations map onto the expensive
+matrix steps of a standard workflow:
+
+| `op` | Replaces | What runs on the GPU |
+|------|----------|----------------------|
+| `"normalize"` | `NormalizeData()` (LogNormalize) | per-cell library-size scaling + `log1p`, elementwise |
+| `"scale"` | `ScaleData()` | per-gene z-score `(x − mean) / sd` + clamp, over the full dense matrix |
+| `"embed"` | `RunPCA()` | gene-by-gene covariance multiply (the eigendecomposition stays on the CPU — ggml has no eigensolver) |
+| `"umap"` | `RunUMAP()` | two custom compute shaders — a tiled f32 pairwise-distance kernel and an SGD layout kernel |
+| `"neighbors"` | `FindNeighbors()` | kNN distances on the GPU feeding a shared-nearest-neighbour (SNN/Jaccard) graph |
+
+`"normalize"` and `"scale"` are **transforms**: they write the result back into
+the assay (the `data` and `scale.data` layers), so the rest of the Seurat
+pipeline picks them up unchanged. `"embed"` and `"umap"` add a dimensionality
+reduction. `"neighbors"` writes the `<assay>_nn` / `<assay>_snn` graphs into
+`@graphs`, exactly where `FindClusters()` looks.
+
+## A worked example
+
+We build a small synthetic object here so the vignette is self-contained; in
+practice you would load your own data with `Read10X()`.
+
+```{r}
+set.seed(1)
+ng <- 400L; nc <- 200L
+counts <- matrix(rpois(ng * nc, lambda = 5), nrow = ng, ncol = nc)
+rownames(counts) <- paste0("gene", seq_len(ng))
+colnames(counts) <- paste0("cell", seq_len(nc))
+counts <- methods::as(counts, "dgCMatrix")
+
+pbmc <- CreateSeuratObject(counts = counts)
+pbmc
+```
+
+### Normalize and scale on the GPU
+
+```{r}
+pbmc <- RunGGML(pbmc, op = "normalize")   # -> assay "data" layer
+pbmc <- RunGGML(pbmc, op = "scale")       # -> assay "scale.data" layer
+```
+
+These behave like `NormalizeData()` and `ScaleData()` — the transformed matrices
+now live in the standard assay layers:
+
+```{r}
+dim(LayerData(pbmc, layer = "data"))
+dim(LayerData(pbmc, layer = "scale.data"))
+```
+
+The GPU `"normalize"` result matches Seurat's `NormalizeData()` to floating-point
+tolerance:
+
+```{r}
+gpu_data <- as.matrix(LayerData(pbmc, layer = "data"))
+ref_data <- as.matrix(LayerData(
+  NormalizeData(pbmc, verbose = FALSE), layer = "data"))
+max(abs(gpu_data - ref_data))
+```
+
+### PCA (embed)
+
+```{r}
+pbmc <- RunGGML(pbmc, op = "embed", n_components = 20, reduction_name = "ggml")
+Embeddings(pbmc, "ggml")[1:3, 1:4]
+```
+
+The reduction is an ordinary `DimReduc`, so every downstream step — Seurat's own
+or ggmlR's — uses it directly.
+
+### UMAP (umap)
+
+`op = "umap"` lays the cells out in 2-D on the GPU. Both heavy phases are custom
+Vulkan compute shaders: a tiled f32 **pairwise-distance** kernel that builds the
+kNN graph (it sidesteps `mul_mat`, whose f16 accumulation would reorder nearest
+neighbours and corrupt the graph), and an **SGD layout** kernel that runs one
+dispatch per epoch with lock-free Hogwild updates. With a kd-tree kNN search and
+a sparse fuzzy graph in between, the whole UMAP runs an order of magnitude faster
+than a naive reference while matching its layout to float32 precision.
+
+```{r}
+pbmc <- RunGGML(pbmc, op = "umap", reduction = "ggml", dims = 1:20,
+                reduction_name = "umap")
+Embeddings(pbmc, "umap")[1:3, ]
+```
+
+### Neighbour graphs (neighbors)
+
+`op = "neighbors"` is the GPU equivalent of `FindNeighbors()`: it builds the
+binary kNN graph and the shared-nearest-neighbour (SNN) graph whose weights are
+the Jaccard overlap of each pair's neighbourhoods. The graphs land in `@graphs`
+under Seurat's naming convention, so `FindClusters()` consumes them unchanged.
+
+```{r}
+pbmc <- RunGGML(pbmc, op = "neighbors", reduction = "ggml", dims = 1:20)
+Graphs(pbmc)                                   # <assay>_nn and <assay>_snn
+
+pbmc <- FindClusters(pbmc, graph.name = paste0(DefaultAssay(pbmc), "_snn"),
+                     verbose = FALSE)
+table(pbmc$seurat_clusters)
+```
+
+```{r, eval=FALSE}
+DimPlot(pbmc, reduction = "umap", group.by = "seurat_clusters", label = TRUE)
+```
+
+The SNN weights are numerically identical to `FindNeighbors()` when both use the
+same exact kNN (Seurat's default `Annoy` is approximate, so an exact match needs
+`nn.method = "rann"`).
+
+## Provenance
+
+Each operation records which backend it used (and timings) in the object's
+`Misc` slot, keyed by the layer / reduction it produced:
+
+```{r}
+Misc(pbmc, "data_ggml")$backend          # normalize
+Misc(pbmc, "scale.data_ggml")$backend    # scale
+Misc(pbmc, "ggml_ggml")$backend          # embed (and neighbors)
+Misc(pbmc, "umap_ggml")$backend_sgd      # umap: layout phase backend
+```
+
+For `"umap"` the per-phase backends are reported separately
+(`backend_dist` for the kNN distances, `backend_sgd` for the layout), since each
+falls back to the CPU independently; the summary `backend` is `"vulkan"` only
+when both ran on the GPU.
+
+## The layers underneath
+
+`RunGGML()` is a thin wrapper over three public generics you can also call on
+their own — handy for a bare matrix with no Seurat object, or to inspect
+capabilities before dispatch:
+
+```{r}
+# What can the adapter do?
+names(ggml_ops_registry())
+ggml_ops_registry("embed")
+
+# Compose the layers manually on a plain matrix:
+mat  <- ggml_extract(gpu_data)                       # genes x cells, dense
+task <- ggml_task("embed", mat, params = list(n_components = 10))
+res  <- ggml_run(task)                               # ggml_result
+dim(res$embedding)                                   # cells x components
+```
+
+- `ggml_extract()` pulls a feature × cell matrix out of a `Seurat` /
+  `dgCMatrix` / `matrix`, handling Seurat v4 (`GetAssayData`) vs v5
+  (`LayerData`) and sparse → dense.
+- `ggml_run()` validates against `ggml_ops_registry()` and routes to the Vulkan
+  GPU or the CPU (`device = "auto"`, with fallback).
+- `ggml_inject()` writes the result back — a reduction for `"embed"` / `"umap"`,
+  an assay layer for the `"normalize"` / `"scale"` transforms, or the
+  `<assay>_nn` / `<assay>_snn` graphs for `"neighbors"`.
+
+## Bioconductor: `SingleCellExperiment`
+
+The same `RunGGML()` works on a `SingleCellExperiment` (SCE) — the adapter has
+methods for both object models. On an SCE the default assay read is
+`logcounts`, results land in `reducedDim()`, transforms overwrite the named
+assay, and the neighbour graphs and provenance go into `metadata()`.
+
+```{r, eval=identical(Sys.getenv("NOT_CRAN"), "true") && requireNamespace("SingleCellExperiment", quietly = TRUE) && requireNamespace("S4Vectors", quietly = TRUE)}
+library(SingleCellExperiment)
+
+# a self-contained SCE (genes x cells), so this section does not depend on the
+# Seurat object built earlier
+set.seed(1)
+ng <- 200L; nc <- 120L
+sce_counts <- matrix(stats::rpois(ng * nc, lambda = 5), ng, nc)
+rownames(sce_counts) <- paste0("gene", seq_len(ng))
+colnames(sce_counts) <- paste0("cell", seq_len(nc))
+sce <- SingleCellExperiment(assays = list(
+  counts    = sce_counts,
+  logcounts = log1p(sce_counts)))
+
+sce <- RunGGML(sce, op = "embed", n_components = 20)         # -> reducedDim "ggml"
+sce <- RunGGML(sce, op = "neighbors", reduction = "ggml", dims = 1:20)
+
+reducedDimNames(sce)                                         # "ggml"
+names(S4Vectors::metadata(sce))                              # ggml_nn / ggml_snn / ggml_ggml
+```
+
+Install the Bioconductor pieces alongside ggmlR if you work with SCE objects:
+
+```r
+BiocManager::install(c("SingleCellExperiment", "SummarizedExperiment", "S4Vectors"))
+```
+
+## What is and isn't accelerated
+
+Five steps of a standard workflow move to the GPU; only the final community
+detection stays on the CPU:
+
+| Standard step | ggmlR | Runs on |
+|---------------|-------|---------|
+| `NormalizeData()` | `RunGGML(op = "normalize")` | **GPU** |
+| `ScaleData()` | `RunGGML(op = "scale")` | **GPU** |
+| `RunPCA()` | `RunGGML(op = "embed")` | **GPU** matrix multiply (eigensolve on CPU) |
+| `RunUMAP()` | `RunGGML(op = "umap")` | **GPU** (distance + SGD shaders) |
+| `FindNeighbors()` | `RunGGML(op = "neighbors")` | **GPU** distances → CPU sparse SNN |
+| `FindClusters()` | — (use Seurat's) | CPU — iterative graph Louvain/Leiden |
+
+So a typical run is `normalize → scale → embed → umap` for visualisation and
+`embed → neighbors → FindClusters` for clustering. `FindClusters` is left to
+Seurat because community detection is iterative and graph-structured — a poor fit
+for the GPU and already well optimised on the CPU. The PCA eigendecomposition
+likewise stays on the CPU, as ggml has no eigensolver. The same operations are
+available on `SingleCellExperiment` objects (see above), so the adapter covers
+both the Seurat and Bioconductor ecosystems.

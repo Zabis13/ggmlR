@@ -76,6 +76,14 @@ Other changes in 0.7.0:
 * **compilation flags used**: `-mno-omit-leaf-frame-pointer` is added by
   the system compiler/R configuration, not by the package itself.
 
+* **valgrind "possibly lost: 352 bytes in 1 block"**: false positive. The
+  block is thread-local storage allocated by glibc (`_dl_allocate_tls`)
+  for an OpenMP worker thread that libgomp creates on the first parallel
+  `ggml_graph_compute` and keeps alive in its persistent thread pool until
+  process exit. `definitely lost` and `indirectly lost` are both 0 bytes.
+  This does not occur on the CRAN check machines, which use the
+  single-threaded reference BLAS.
+
 ## Test environments
 
 * Windows Server 2022 x64 (win-builder), R-devel, GCC 14.3.0

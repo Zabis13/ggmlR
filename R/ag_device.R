@@ -182,10 +182,22 @@ ag_to_device <- function(tensor, device) {
 # op_fn(ctx, ptrs) builds the ggml node; inputs is a list of numeric matrices.
 # dtype controls the precision of input tensors ("f32", "f16", "bf16").
 .ag_run_op <- function(op_fn, inputs, out_shape, mem_mb = 32L,
-                       dtype = .ag_device_state$dtype) {
+                       dtype = .ag_device_state$dtype, node_hook = NULL) {
   backend   <- .ag_device_state$backend
   ggml_type <- .ag_dtype_to_ggml(.ag_compute_dtype(dtype))
-  mem_size  <- as.integer(mem_mb) * 1024L * 1024L
+
+  # Context size: even with no_alloc = TRUE, ggml reserves data-sized memory per
+  # tensor in the context, not just the descriptor. A fixed budget overflows once
+  # an input or the output exceeds it ("Not enough memory in context"). Size the
+  # context from the actual tensors (inputs + output) plus per-tensor overhead,
+  # with mem_mb as a floor for small ops.
+  tsize     <- ggml_type_size(ggml_type)
+  overhead  <- ggml_tensor_overhead() + 256L            # + alignment padding
+  bytes_of  <- function(ne) prod(as.double(ne)) * tsize + overhead
+  needed    <- sum(vapply(inputs, function(m) bytes_of(dim(m)), numeric(1))) +
+               bytes_of(out_shape)
+  needed    <- needed * 1.5                             # headroom for op nodes
+  mem_size  <- max(as.double(mem_mb) * 1024 * 1024, needed)
   ctx       <- ggml_init(mem_size, no_alloc = TRUE)
   on.exit(ggml_free(ctx), add = TRUE)
 
@@ -196,6 +208,10 @@ ag_to_device <- function(tensor, device) {
 
   # Build the op node
   node <- op_fn(ctx, ptrs)
+
+  # Optional post-build node tweak (e.g. forcing f32 accumulation precision on a
+  # mul_mat node). Runs before allocation/compute so it affects the kernel pick.
+  if (!is.null(node_hook)) node_hook(node)
 
   # Allocate all tensors (inputs + node) on the backend in one shot
   buf <- ggml_backend_alloc_ctx_tensors(ctx, backend)
@@ -230,6 +246,24 @@ ag_to_device <- function(tensor, device) {
     op_fn    = function(ctx, ptrs) ggml_mul_mat(ctx, ptrs[[1L]], ptrs[[2L]]),
     inputs   = list(at_data, b_data),
     out_shape = c(nr_a, nc_b)
+  )
+}
+
+# A %*% B with f32 accumulation forced on the matmul node. The Vulkan backend
+# accumulates mul_mat in f16 by default (~2.7e-4 relative error), which is fine
+# for neural-net layers but corrupts precision-sensitive downstream maths — e.g.
+# a Gram matrix whose ||x_i||^2 + ||x_j||^2 - 2 G[i,j] distances feed kNN, where
+# the f16 noise reorders nearest neighbours. GGML_PREC_F32 selects the f32 kernel.
+GGML_PREC_F32 <- 10L
+.ag_gpu_matmul_f32 <- function(a_data, b_data) {
+  nr_a <- nrow(a_data); nc_b <- ncol(b_data)
+  at_data <- t(a_data)
+  .ag_run_op(
+    op_fn     = function(ctx, ptrs) ggml_mul_mat(ctx, ptrs[[1L]], ptrs[[2L]]),
+    inputs    = list(at_data, b_data),
+    out_shape = c(nr_a, nc_b),
+    node_hook = function(node)
+      .Call("R_ggml_mul_mat_set_prec", node, GGML_PREC_F32, PACKAGE = "ggmlR")
   )
 }
 

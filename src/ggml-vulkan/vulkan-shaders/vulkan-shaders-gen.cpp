@@ -999,6 +999,13 @@ void process_shaders() {
     string_to_spv("argsort_f32", "argsort.comp", {{"A_TYPE", "float"}});
     string_to_spv("argsort_large_f32", "argsort_large.comp", {{"A_TYPE", "float"}});
 
+    // UMAP SGD layout step: types are fixed (float coords / uint edges) inside
+    // the shader, so no A_TYPE/D_TYPE variants are needed.
+    string_to_spv("umap_sgd", "umap_sgd.comp", {});
+
+    // Pairwise squared-distance matrix: fixed f32 types, no variants.
+    string_to_spv("pairwise_dist", "pairwise_dist.comp", {});
+
     string_to_spv("topk_argsort_f32", "topk_argsort.comp", {{"A_TYPE", "float"}});
     string_to_spv("topk_nary_search_f32", "topk_nary_search.comp", {{"A_TYPE", "float"}});
 

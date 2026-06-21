@@ -3,9 +3,12 @@
 * **Industrial logging**: the Vulkan backend now reports operating-mode changes through the standard `ggml` log — selected device and its capabilities (fp16/bf16/coopmat/BDA), a summary of ops that fell back to CPU, live VRAM buffer footprint, and the silent BF16→F16 downgrade on Vulkan.
 * **Single-cell GPU integration (Seurat)**: new adapter layer that runs GPU-accelerated operations directly on `Seurat` objects, with no hard dependency on Seurat (it stays in `Suggests`).
   * `RunGGML()` — Seurat-style, pipe-friendly entry point (object in, object out); mirrors `RunPCA()`. First operation is `"embed"` (PCA): the gene-by-gene covariance multiply runs on the Vulkan GPU, the eigendecomposition on the CPU.
-  * Layered architecture: `ggml_extract()` (extraction, handles Seurat v4 `GetAssayData` vs v5 `LayerData`, sparse `dgCMatrix` → dense), `ggml_run()` (dispatch, auto GPU/CPU with transparent CPU fallback), `ggml_inject()` (writes the result back as a Seurat reduction via `CreateDimReducObject`).
+  * `"normalize"` and `"scale"` preprocessing operations — GPU-accelerated `LogNormalize` and feature scaling/centring, matching Seurat's `NormalizeData()` / `ScaleData()`.
+  * **`"umap"` operation** — 2-D UMAP embedding whose SGD layout step runs on a **new Vulkan compute shader** (`umap_sgd.comp`). The kNN graph and fuzzy simplicial set are built on the CPU; the per-edge SGD optimisation (attraction + negative-sampling repulsion, Hogwild-style lock-free writes) is dispatched directly on the GPU, one dispatch per epoch. The negative-sample RNG (PCG hash) is mirrored exactly by the CPU reference, so the shader is verified bit-exact on a conflict-free graph. Use via `RunGGML(obj, op = "umap", reduction = "pca")`.
+  * PCA eigendecomposition now uses a truncated symmetric solver (`RSpectra::eigs_sym`, top-k) when available, falling back to full `eigen()` — `O(genes² · k)` instead of `O(genes³)`, with identical results.
+  * Layered architecture: `ggml_extract()` (extraction, handles Seurat v4 `GetAssayData` vs v5 `LayerData`, sparse `dgCMatrix` → dense), `ggml_run()` (dispatch, auto GPU/CPU with transparent CPU fallback), `ggml_inject()` (writes the result back as a Seurat reduction via `CreateDimReducObject`; run provenance — backend, timings, op parameters — is stashed in the object's `Misc` slot).
   * Contract objects `ggml_task()` / `ggml_result()` and an introspectable `ggml_ops_registry()` for capability checks before dispatch.
-  * `Seurat`, `SeuratObject`, `Matrix` added to `Suggests`; package remains `R CMD check`-clean without them.
+  * `Seurat`, `SeuratObject`, `Matrix`, `RSpectra`, `irlba` added to `Suggests`; package remains `R CMD check`-clean without them.
 
 # ggmlR 0.7.8
 

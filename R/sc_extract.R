@@ -9,13 +9,14 @@
 #' Extract a feature-by-cell matrix from a single-cell container
 #'
 #' Pulls an expression matrix out of a Seurat object, a
-#' \code{SingleCellExperiment} (added in a later release), a sparse
-#' \code{dgCMatrix} or a plain \code{matrix}, returning a dense numeric matrix
-#' with features in rows and cells in columns — the layout the GPU engine
-#' expects. Optional \code{genes}/\code{cells} subsetting happens before any
-#' sparse-to-dense materialisation.
+#' \code{SingleCellExperiment}, a sparse \code{dgCMatrix} or a plain
+#' \code{matrix}, returning a dense numeric matrix with features in rows and
+#' cells in columns — the layout the GPU engine expects. Optional
+#' \code{genes}/\code{cells} subsetting happens before any sparse-to-dense
+#' materialisation.
 #'
-#' @param x A \code{Seurat} object, \code{dgCMatrix} or \code{matrix}.
+#' @param x A \code{Seurat}, \code{SingleCellExperiment}, \code{dgCMatrix} or
+#'   \code{matrix} object.
 #' @param assay Assay to read from. Seurat: defaults to the object's default
 #'   assay. Ignored for bare matrices.
 #' @param layer Layer / slot to read. Seurat v5: a layer name (default
@@ -61,8 +62,9 @@ ggml_extract.Seurat <- function(x, assay = NULL, layer = "data",
     # Seurat v5: Assay5 layer model
     mat <- SeuratObject::LayerData(x, assay = assay, layer = layer)
   } else {
-    # Seurat v4 and earlier: single-slot Assay; `layer` names the slot
-    mat <- SeuratObject::GetAssayData(x, assay = assay, slot = layer)
+    # Seurat v4 / legacy Assay: single-slot. SeuratObject >= 5 made the
+    # `slot` argument of GetAssayData() defunct, so address it via `layer`.
+    mat <- SeuratObject::GetAssayData(x, assay = assay, layer = layer)
   }
 
   # mat is genes x cells (Seurat convention), possibly sparse -> reuse methods

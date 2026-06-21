@@ -59,7 +59,19 @@ Suggests:
     rmarkdown,
     Matrix,
     Seurat,
-    SeuratObject
+    SeuratObject,
+    RSpectra,
+    irlba,
+    uwot,
+    FNN,
+    SingleCellExperiment,
+    SummarizedExperiment,
+    S4Vectors,
+    withr,
+    hardhat,
+    rsample,
+    tune,
+    workflows
 VignetteBuilder: knitr, rmarkdown
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3

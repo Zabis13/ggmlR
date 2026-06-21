@@ -167,9 +167,23 @@ ggml_ops_registry <- function(op = NULL) {
   }
   t_mm <- proc.time()[["elapsed"]] - t_mm0
 
-  # Eigendecomposition on CPU (features x features is small relative to cells).
-  ev   <- eigen(cov, symmetric = TRUE)
+  # Eigendecomposition on CPU (ggml has no eigensolver). A full eigen() computes
+  # all `nrow(cov)` eigenpairs, but PCA only needs the top n_components. A
+  # truncated symmetric solver (RSpectra::eigs_sym, "LA" = largest algebraic)
+  # returns just those, which is far cheaper when components << features. Fall
+  # back to eigen() when RSpectra is absent or the truncation is not worthwhile
+  # (k close to the matrix size, where the Lanczos solver loses its edge and may
+  # not converge).
   keep <- seq_len(n_components)
+  use_truncated <- requireNamespace("RSpectra", quietly = TRUE) &&
+                   n_components <= nrow(cov) %/% 2L
+  ev <- if (use_truncated) {
+    tryCatch(
+      RSpectra::eigs_sym(cov, k = n_components, which = "LA"),
+      error = function(e) eigen(cov, symmetric = TRUE))
+  } else {
+    eigen(cov, symmetric = TRUE)
+  }
   loadings <- ev$vectors[, keep, drop = FALSE]              # features x comps
   vals     <- pmax(ev$values[keep], 0)                      # guard tiny < 0
 
@@ -193,9 +207,122 @@ ggml_ops_registry <- function(op = NULL) {
   )
 }
 
+# ============================================================================
+# 3b. Transform engines (op = "normalize", op = "scale")
+# ============================================================================
+# Unlike "embed" (which returns a reduction), these return a *transformed*
+# feature-by-cell matrix that is written back into an assay layer. They carry
+# metadata$kind = "transform" so the injection layer knows to put the matrix in
+# a layer (data / scale.data) rather than a DimReduc slot.
+
+#' GPU-accelerated LogNormalize (op = "normalize")
+#'
+#' Library-size normalisation followed by log1p, matching Seurat's
+#' \code{NormalizeData(method = "LogNormalize")}:
+#' \code{log1p(x / colSums(x) * scale_factor)}. The per-cell scaling and the
+#' \code{log1p} run elementwise on the GPU (broadcast a per-cell factor across
+#' genes); the column sums are a cheap reduction.
+#'
+#' @param mat Dense numeric matrix, features x cells (raw/counts).
+#' @param scale_factor Library size to scale each cell to (default 1e4).
+#' @param backend \code{"vulkan"} or \code{"cpu"} (dispatch resolves "auto").
+#' @return A \code{\link{ggml_result}} whose \code{embedding} is the normalised
+#'   features x cells matrix; \code{metadata$kind = "transform"},
+#'   \code{metadata$layer = "data"}.
+#' @keywords internal
+.ggmlr_normalize_gpu <- function(mat, scale_factor = 1e4,
+                                 backend = c("vulkan", "cpu")) {
+  backend <- match.arg(backend)
+  storage.mode(mat) <- "double"
+  t0 <- proc.time()[["elapsed"]]
+
+  cs  <- colSums(mat)
+  cs[cs == 0] <- 1                              # guard empty cells
+  fac <- matrix(scale_factor / cs, nrow = 1L)   # [1, cells] per-cell factor
+
+  if (backend == "vulkan") {
+    ag_device("gpu")
+    scaled <- .ag_gpu_mul(mat, fac)             # broadcast across genes
+    out    <- .ag_gpu_log(.ag_gpu_add(scaled, matrix(1, 1L, 1L)))  # log1p
+  } else {
+    out <- log1p(sweep(mat, 2L, as.vector(fac), `*`))
+  }
+
+  dimnames(out) <- dimnames(mat)
+  ggml_result(
+    embedding = out,
+    metadata  = list(kind = "transform", layer = "data", backend = backend,
+                     scale_factor = scale_factor),
+    timings   = c(total = proc.time()[["elapsed"]] - t0)
+  )
+}
+
+#' GPU-accelerated ScaleData / z-score (op = "scale")
+#'
+#' Per-gene centering and scaling to unit variance, matching Seurat's
+#' \code{ScaleData}: \code{(x - rowMeans) / rowSds}, then clamp to
+#' \code{[-Inf, max_value]} (Seurat clips at +10 by default). The dominant cost
+#' — elementwise subtract/divide/clamp over the full dense matrix — runs on the
+#' GPU; the per-gene mean and sd are cheap row reductions.
+#'
+#' @param mat Dense numeric matrix, features x cells (log-normalised data).
+#' @param max_value Upper clip after scaling (default 10; Seurat's default).
+#' @param backend \code{"vulkan"} or \code{"cpu"} (dispatch resolves "auto").
+#' @return A \code{\link{ggml_result}} whose \code{embedding} is the scaled
+#'   features x cells matrix; \code{metadata$kind = "transform"},
+#'   \code{metadata$layer = "scale.data"}.
+#' @keywords internal
+.ggmlr_scale_gpu <- function(mat, max_value = 10, backend = c("vulkan", "cpu")) {
+  backend <- match.arg(backend)
+  storage.mode(mat) <- "double"
+  n_cell <- ncol(mat)
+  t0 <- proc.time()[["elapsed"]]
+
+  mu <- matrix(rowMeans(mat), ncol = 1L)        # [features, 1] per-gene mean
+
+  if (backend == "vulkan") {
+    ag_device("gpu")
+    xc  <- .ag_gpu_sub(mat, mu)                 # centre (broadcast across cells)
+    # population-style sd over cells: Seurat uses sd() (n-1 divisor)
+    ss  <- rowSums(xc * xc)
+    sd  <- sqrt(ss / max(n_cell - 1L, 1L))
+    sd[sd == 0] <- 1
+    inv <- matrix(1 / sd, ncol = 1L)            # [features, 1]
+    xs  <- .ag_gpu_mul(xc, inv)                 # divide (broadcast across cells)
+    out <- .ag_gpu_clamp(xs, -Inf, max_value)
+  } else {
+    xc  <- mat - as.vector(mu)
+    sd  <- sqrt(rowSums(xc * xc) / max(n_cell - 1L, 1L))
+    sd[sd == 0] <- 1
+    out <- pmin((xc / sd), max_value)
+  }
+
+  dimnames(out) <- dimnames(mat)
+  ggml_result(
+    embedding = out,
+    metadata  = list(kind = "transform", layer = "scale.data", backend = backend,
+                     max_value = max_value),
+    timings   = c(total = proc.time()[["elapsed"]] - t0)
+  )
+}
+
 # register op = "embed" -> PCA engine
 .ggmlr_register_op(
   "embed", engine = .ggmlr_pca_gpu,
   params = "n_components",
   desc   = "PCA dimensionality reduction (covariance multiply on GPU, eigen on CPU)"
+)
+
+# register op = "normalize" -> LogNormalize engine
+.ggmlr_register_op(
+  "normalize", engine = .ggmlr_normalize_gpu,
+  params = character(0),
+  desc   = "LogNormalize: per-cell library-size scaling + log1p (elementwise on GPU)"
+)
+
+# register op = "scale" -> z-score engine
+.ggmlr_register_op(
+  "scale", engine = .ggmlr_scale_gpu,
+  params = character(0),
+  desc   = "ScaleData z-score per gene + clamp (elementwise on GPU)"
 )

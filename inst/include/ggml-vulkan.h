@@ -25,6 +25,25 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type(voi
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_vk_reg(void);
 
+// UMAP SGD layout optimisation, dispatched directly (not via the ggml graph).
+// coords is n*2 floats updated in place. Returns false if backend is not Vulkan.
+GGML_BACKEND_API bool ggml_vk_umap_sgd_run(
+    ggml_backend_t backend,
+    float * coords, const unsigned int * edges, const float * weights,
+    unsigned int n, unsigned int ne,
+    unsigned int n_epochs, unsigned int n_neg,
+    float a, float b, float alpha0, float gamma,
+    unsigned int base_seed);
+
+// Pairwise squared Euclidean distance matrix, dispatched directly. X is n rows
+// of `dims` floats (row-major); d2 receives n*n floats (row-major, D2[i*n+j]).
+// The caller takes sqrt() where it wants Euclidean distance. Returns false if
+// the backend is not Vulkan.
+GGML_BACKEND_API bool ggml_vk_pairwise_dist_run(
+    ggml_backend_t backend,
+    const float * x, float * d2,
+    unsigned int n, unsigned int dims);
+
 #ifdef  __cplusplus
 }
 #endif

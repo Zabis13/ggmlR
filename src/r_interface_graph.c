@@ -2087,7 +2087,21 @@ SEXP R_ggml_backend_alloc_ctx_tensors(SEXP ctx_ptr, SEXP backend_ptr) {
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
 
     if (buffer == NULL) {
-        error("Failed to allocate context tensors");
+        error("Failed to allocate context tensors (out of device memory?)");
+    }
+
+    // ggml-alloc can return a non-NULL buffer yet leave a tensor without a
+    // backend buffer if a later sub-allocation ran out of device memory. That
+    // tensor then has no device buffer, and the only downstream signal is a raw
+    // GGML_ASSERT(buffer != nullptr) deep in the Vulkan backend at compute time.
+    // Surface it here as a clean R error instead.
+    for (struct ggml_tensor * t = ggml_get_first_tensor(ctx);
+         t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->view_src == NULL && t->buffer == NULL) {
+            error("Failed to allocate device buffer for tensor '%s' "
+                  "(out of device memory or fragmentation?)",
+                  t->name[0] ? t->name : "<unnamed>");
+        }
     }
 
     // Keep the backend reachable via the tag so its finalizer cannot fire
@@ -4374,6 +4388,19 @@ SEXP R_ggml_flash_attn_ext_set_prec(SEXP tensor_ptr, SEXP prec) {
         error("Invalid tensor pointer");
     }
     ggml_flash_attn_ext_set_prec(tensor, (enum ggml_prec) asInteger(prec));
+    return R_NilValue;
+}
+
+// Force the accumulation precision of a mul_mat result node. The Vulkan backend
+// defaults to f16 accumulation; GGML_PREC_F32 (10) selects the f32 kernel, which
+// matters when the matmul output feeds a precision-sensitive step (e.g. the
+// Gram matrix behind kNN distances, where f16 reorders nearest neighbours).
+SEXP R_ggml_mul_mat_set_prec(SEXP tensor_ptr, SEXP prec) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (tensor == NULL) {
+        error("Invalid tensor pointer");
+    }
+    ggml_mul_mat_set_prec(tensor, (enum ggml_prec) asInteger(prec));
     return R_NilValue;
 }
 

@@ -15,6 +15,10 @@ extern SEXP R_ggml_vulkan_is_backend(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_backend_name(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_list_devices(void);
 extern SEXP R_ggml_vulkan_device_caps(SEXP device_idx);
+extern SEXP R_ggml_umap_sgd(SEXP backend_ptr, SEXP coords, SEXP edges, SEXP weights,
+                            SEXP n_, SEXP ne_, SEXP n_epochs_, SEXP n_neg_,
+                            SEXP a_, SEXP b_, SEXP alpha0_, SEXP gamma_, SEXP seed_);
+extern SEXP R_ggml_dist_f32(SEXP backend_ptr, SEXP x_, SEXP n_, SEXP dims_);
 
 // Backend scheduler functions (defined in r_interface_scheduler.c)
 extern SEXP R_ggml_backend_sched_new(SEXP backends_list, SEXP parallel, SEXP graph_size);
@@ -230,6 +234,7 @@ extern SEXP R_ggml_cross_entropy_loss(SEXP, SEXP, SEXP);
 extern SEXP R_ggml_cross_entropy_loss_back(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_cumsum(SEXP, SEXP);
 extern SEXP R_ggml_flash_attn_ext_set_prec(SEXP, SEXP);
+extern SEXP R_ggml_mul_mat_set_prec(SEXP, SEXP);
 extern SEXP R_ggml_flash_attn_ext_get_prec(SEXP);
 extern SEXP R_ggml_flash_attn_ext_add_sinks(SEXP, SEXP);
 extern SEXP R_ggml_soft_max_add_sinks(SEXP, SEXP);
@@ -1566,6 +1571,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_vulkan_backend_name",      (DL_FUNC) &R_ggml_vulkan_backend_name,      1},
     {"R_ggml_vulkan_list_devices",      (DL_FUNC) &R_ggml_vulkan_list_devices,      0},
     {"R_ggml_vulkan_device_caps",       (DL_FUNC) &R_ggml_vulkan_device_caps,       1},
+    {"R_ggml_umap_sgd",                 (DL_FUNC) &R_ggml_umap_sgd,                 13},
+    {"R_ggml_dist_f32",                 (DL_FUNC) &R_ggml_dist_f32,                  4},
 
     // Backend scheduler functions
     {"R_ggml_backend_sched_new",                (DL_FUNC) &R_ggml_backend_sched_new,                3},
@@ -1752,6 +1759,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_cross_entropy_loss_back",          (DL_FUNC) &R_ggml_cross_entropy_loss_back,           4},
     {"R_ggml_cumsum",                           (DL_FUNC) &R_ggml_cumsum,                            2},
     {"R_ggml_flash_attn_ext_set_prec",          (DL_FUNC) &R_ggml_flash_attn_ext_set_prec,           2},
+    {"R_ggml_mul_mat_set_prec",                 (DL_FUNC) &R_ggml_mul_mat_set_prec,                  2},
     {"R_ggml_flash_attn_ext_get_prec",          (DL_FUNC) &R_ggml_flash_attn_ext_get_prec,           1},
     {"R_ggml_flash_attn_ext_add_sinks",         (DL_FUNC) &R_ggml_flash_attn_ext_add_sinks,          2},
     {"R_ggml_soft_max_add_sinks",               (DL_FUNC) &R_ggml_soft_max_add_sinks,                2},

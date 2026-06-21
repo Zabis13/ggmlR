@@ -1,0 +1,109 @@
+#version 450
+
+// UMAP SGD layout optimisation — one epoch per dispatch.
+//
+// One thread = one positive edge. Each thread:
+//   1. reads the two endpoint vertices and their current 2-D coordinates,
+//   2. applies an attraction step pulling them together,
+//   3. draws n_neg random negative vertices (PCG hash RNG, seeded per
+//      edge/epoch) and applies a repulsion step pushing them apart.
+//
+// Writes are Hogwild-style: coords are updated in place without atomics, which
+// is the standard UMAP-SGD behaviour (the CPU reference in R/sc_umap.R does the
+// same). The numerics here mirror .ggmlr_umap_sgd() exactly.
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// coords: n vertices, 2 floats each, laid out [x0,y0,x1,y1,...]. Read + write.
+layout (binding = 0) buffer Coords { float coords[]; };
+// edges: ne positive edges, 2 uints each [from0,to0,from1,to1,...].
+layout (binding = 1) readonly buffer Edges { uint edges[]; };
+// per-edge fuzzy weight (reserved for weighted sampling; not used in the step).
+layout (binding = 2) readonly buffer Weights { float weights[]; };
+
+layout (push_constant) uniform parameter {
+    uint  n;        // number of vertices
+    uint  ne;       // number of positive edges
+    uint  n_neg;    // negative samples per edge
+    uint  seed;     // base RNG seed (varies per epoch on the host)
+    float alpha;    // current learning rate (decayed per epoch on the host)
+    float a;        // UMAP curve parameter a
+    float b;        // UMAP curve parameter b
+    float gamma;    // repulsion strength
+} p;
+
+const float EPS  = 1e-3;
+const float GCLAMP = 4.0;
+
+// PCG hash -> uint, then scaled to [0, n). Deterministic given (state).
+uint pcg_hash(uint x) {
+    uint state = x * 747796405u + 2891336453u;
+    uint word  = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float clampg(float g) {
+    return g < -GCLAMP ? -GCLAMP : (g > GCLAMP ? GCLAMP : g);
+}
+
+void main() {
+    const uint e = gl_GlobalInvocationID.x;
+    if (e >= p.ne) {
+        return;
+    }
+
+    const uint i = edges[2u * e];
+    const uint j = edges[2u * e + 1u];
+
+    // ---- attraction between the two endpoints ----
+    float yix = coords[2u * i];     float yiy = coords[2u * i + 1u];
+    float yjx = coords[2u * j];     float yjy = coords[2u * j + 1u];
+
+    float dx = yix - yjx;
+    float dy = yiy - yjy;
+    float d2 = dx * dx + dy * dy;
+
+    if (d2 > 0.0) {
+        // coef = -2ab d2^(b-1) / (1 + a d2^b)
+        float pb   = pow(d2, p.b);
+        float coef = (-2.0 * p.a * p.b * pb / d2) / (1.0 + p.a * pb);
+        float gx = clampg(coef * dx) * p.alpha;
+        float gy = clampg(coef * dy) * p.alpha;
+        yix += gx; yiy += gy;
+        yjx -= gx; yjy -= gy;
+        coords[2u * j]      = yjx;
+        coords[2u * j + 1u] = yjy;
+    }
+
+    // ---- repulsion against n_neg random negatives ----
+    uint rng = p.seed ^ (e * 0x9e3779b9u);
+    for (uint k = 0u; k < p.n_neg; ++k) {
+        rng = pcg_hash(rng);
+        uint c = rng % p.n;
+        if (c == i) { continue; }
+
+        float ycx = coords[2u * c];
+        float ycy = coords[2u * c + 1u];
+        float rdx = yix - ycx;
+        float rdy = yiy - ycy;
+        float rd2 = rdx * rdx + rdy * rdy;
+
+        float gx, gy;
+        if (rd2 > 0.0) {
+            // coef = 2 gamma b / ((eps + d2)(1 + a d2^b))
+            float pb   = pow(rd2, p.b);
+            float coef = (2.0 * p.gamma * p.b) / ((EPS + rd2) * (1.0 + p.a * pb));
+            gx = clampg(coef * rdx) * p.alpha;
+            gy = clampg(coef * rdy) * p.alpha;
+        } else {
+            gx = GCLAMP * p.alpha;
+            gy = GCLAMP * p.alpha;
+        }
+        yix += gx; yiy += gy;
+    }
+
+    coords[2u * i]      = yix;
+    coords[2u * i + 1u] = yiy;
+}

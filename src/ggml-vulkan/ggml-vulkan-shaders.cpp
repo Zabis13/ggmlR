@@ -1324,6 +1324,15 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_rel_pos_bias_f32, "rel_pos_bias_f32", rel_pos_bias_f32_len, rel_pos_bias_f32_data, "main", 3, sizeof(vk_op_rel_pos_bias_push_constants), {8, 8, 4}, {}, 1);
 
+    // UMAP SGD layout step: 3 buffers (coords rw, edges, weights), one thread
+    // per edge. wg_denoms.x = local_size_x in umap_sgd.comp (256).
+    ggml_vk_create_pipeline(device, device->pipeline_umap_sgd, "umap_sgd", umap_sgd_len, umap_sgd_data, "main", 3, sizeof(vk_op_umap_sgd_push_constants), {256, 1, 1}, {}, 1);
+
+    // Pairwise squared-distance matrix: 2 buffers (X in, D2 out), one thread per
+    // output cell, tiled 32x32 with shared-memory staging. wg_denoms = local_size
+    // (32, 32) = the tile side TS in pairwise_dist.comp.
+    ggml_vk_create_pipeline(device, device->pipeline_pairwise_dist, "pairwise_dist", pairwise_dist_len, pairwise_dist_data, "main", 2, sizeof(vk_op_pairwise_dist_push_constants), {32, 32, 1}, {}, 1);
+
     ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_fill_f16, "fill_f16", fill_f16_len, fill_f16_data, "main", 1, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 

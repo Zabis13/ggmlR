@@ -11,6 +11,14 @@ if (!requireNamespace("mlr3",    quietly = TRUE) ||
 library(mlr3)
 ggmlR:::.register_mlr3()
 
+# These tests train tiny MLPs and assert on the result, so they must run on a
+# fixed backend. An earlier test file may have left the global device on "gpu"
+# (the single-cell engines flip it), and GPU f16 accumulation can diverge to NaN
+# on un-scaled data; pin the device to CPU for the whole file and restore it on
+# exit so the autograd numerics are deterministic and not order-dependent.
+ag_device("cpu")
+withr::defer(ag_device("cpu"), teardown_env())
+
 skip_if_no_mlr3 <- function() {
   skip_if_not_installed("mlr3")
   skip_if_not_installed("paradox")
@@ -41,11 +49,13 @@ ag_regr_builder <- function(task, n_features, n_out, pars) {
 
 test_that("LearnerClassifGGML trains an ag_sequential via autograd tradepath", {
   skip_if_no_mlr3()
+  # 40 epochs keep the accuracy assertion comfortably off the convergence edge
+  # (the device is pinned to CPU at the top of the file for determinism).
   set.seed(1)
   task <- mlr3::tsk("iris")
 
   learner <- mlr3::lrn("classif.ggml")
-  learner$param_set$values$epochs        <- 20L
+  learner$param_set$values$epochs        <- 40L
   learner$param_set$values$batch_size    <- 16L
   learner$param_set$values$learning_rate <- 0.05
   learner$model_fn     <- ag_classif_builder
@@ -116,7 +126,7 @@ test_that("max_grad_norm clipping does not break training", {
   task <- mlr3::tsk("iris")
 
   learner <- mlr3::lrn("classif.ggml")
-  learner$param_set$values$epochs        <- 20L
+  learner$param_set$values$epochs        <- 40L
   learner$param_set$values$batch_size    <- 16L
   learner$param_set$values$learning_rate <- 0.05
   learner$param_set$values$max_grad_norm <- 1.0

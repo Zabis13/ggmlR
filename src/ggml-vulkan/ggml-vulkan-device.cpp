@@ -852,6 +852,9 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_rel_pos_bias_f32;
 
+    vk_pipeline pipeline_umap_sgd;
+    vk_pipeline pipeline_pairwise_dist;
+
     vk_pipeline pipeline_fill_f32;
     vk_pipeline pipeline_fill_f16;
 
@@ -1349,6 +1352,28 @@ struct vk_op_rel_pos_bias_push_constants {
     uint32_t rel_w;
 };
 static_assert(sizeof(vk_op_rel_pos_bias_push_constants) <= 256, "sizeof(vk_op_rel_pos_bias_push_constants) must be <= 256");
+
+// UMAP SGD layout step push constants. Layout MUST match the `parameter` block
+// in vulkan-shaders/umap_sgd.comp exactly (4 uints then 4 floats).
+struct vk_op_umap_sgd_push_constants {
+    uint32_t n;
+    uint32_t ne;
+    uint32_t n_neg;
+    uint32_t seed;
+    float    alpha;
+    float    a;
+    float    b;
+    float    gamma;
+};
+static_assert(sizeof(vk_op_umap_sgd_push_constants) <= 256, "sizeof(vk_op_umap_sgd_push_constants) must be <= 256");
+
+// Pairwise squared-distance push constants. Must match the `parameter` block in
+// vulkan-shaders/pairwise_dist.comp exactly (two uints).
+struct vk_op_pairwise_dist_push_constants {
+    uint32_t n;
+    uint32_t dims;
+};
+static_assert(sizeof(vk_op_pairwise_dist_push_constants) <= 256, "sizeof(vk_op_pairwise_dist_push_constants) must be <= 256");
 
 static vk_op_binary_push_constants vk_op_binary_push_constants_init(
     const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst,

@@ -1,6 +1,7 @@
 // Vulkan backend R interface
 // Only compiled when GGML_USE_VULKAN is defined
 
+#include <math.h>
 #include <R.h>
 #include <Rinternals.h>
 #include "ggml.h"
@@ -272,6 +273,124 @@ SEXP R_ggml_vulkan_device_caps(SEXP device_idx) {
     setAttrib(result, R_NamesSymbol, names);
     UNPROTECT(2);
     return result;
+#else
+    error("Vulkan support not compiled");
+    return R_NilValue;
+#endif
+}
+
+// ============================================================================
+// UMAP SGD layout optimisation (direct Vulkan dispatch)
+// ============================================================================
+
+// Args:
+//   backend_ptr : Vulkan backend external pointer
+//   coords      : numeric, length n*2, [x0,y0,x1,y1,...] (modified -> returned)
+//   edges       : integer, length ne*2, [from0,to0,...], 0-based vertex indices
+//   weights     : numeric, length ne
+//   n, ne, n_epochs, n_neg : integer scalars
+//   a, b, alpha0, gamma    : numeric scalars
+//   base_seed              : integer scalar
+// Returns a numeric vector of length n*2 (the optimised coordinates).
+SEXP R_ggml_umap_sgd(SEXP backend_ptr, SEXP coords, SEXP edges, SEXP weights,
+                     SEXP n_, SEXP ne_, SEXP n_epochs_, SEXP n_neg_,
+                     SEXP a_, SEXP b_, SEXP alpha0_, SEXP gamma_, SEXP seed_) {
+#ifdef GGML_USE_VULKAN
+    ggml_backend_t backend = (ggml_backend_t)R_ExternalPtrAddr(backend_ptr);
+    if (backend == NULL || !ggml_backend_is_vk(backend)) {
+        error("R_ggml_umap_sgd: backend is not a valid Vulkan backend");
+    }
+
+    unsigned int n        = (unsigned int)asInteger(n_);
+    unsigned int ne       = (unsigned int)asInteger(ne_);
+    unsigned int n_epochs = (unsigned int)asInteger(n_epochs_);
+    unsigned int n_neg    = (unsigned int)asInteger(n_neg_);
+    unsigned int seed     = (unsigned int)asInteger(seed_);
+    float a      = (float)asReal(a_);
+    float b      = (float)asReal(b_);
+    float alpha0 = (float)asReal(alpha0_);
+    float gamma  = (float)asReal(gamma_);
+
+    if ((R_xlen_t)XLENGTH(coords) != (R_xlen_t)n * 2)
+        error("R_ggml_umap_sgd: coords length != n*2");
+    if ((R_xlen_t)XLENGTH(edges) != (R_xlen_t)ne * 2)
+        error("R_ggml_umap_sgd: edges length != ne*2");
+
+    // R doubles/ints -> float/uint32 working buffers
+    float *c = (float*)R_alloc((size_t)n * 2, sizeof(float));
+    unsigned int *e = (unsigned int*)R_alloc((size_t)ne * 2, sizeof(unsigned int));
+    float *w = (float*)R_alloc((size_t)ne, sizeof(float));
+
+    double *cd = REAL(coords);
+    for (R_xlen_t i = 0; i < (R_xlen_t)n * 2; i++) c[i] = (float)cd[i];
+    int *ei = INTEGER(edges);
+    for (R_xlen_t i = 0; i < (R_xlen_t)ne * 2; i++) e[i] = (unsigned int)ei[i];
+    double *wd = REAL(weights);
+    for (R_xlen_t i = 0; i < (R_xlen_t)ne; i++) w[i] = (float)wd[i];
+
+    bool ok = ggml_vk_umap_sgd_run(backend, c, e, w, n, ne, n_epochs, n_neg,
+                                   a, b, alpha0, gamma, seed);
+    if (!ok) error("R_ggml_umap_sgd: GPU dispatch failed");
+
+    SEXP out = PROTECT(allocVector(REALSXP, (R_xlen_t)n * 2));
+    double *od = REAL(out);
+    for (R_xlen_t i = 0; i < (R_xlen_t)n * 2; i++) od[i] = (double)c[i];
+    UNPROTECT(1);
+    return out;
+#else
+    error("Vulkan support not compiled");
+    return R_NilValue;
+#endif
+}
+
+// ============================================================================
+// Pairwise squared-distance matrix (direct Vulkan dispatch, f32-accurate)
+// ============================================================================
+
+// Args:
+//   backend_ptr : Vulkan backend external pointer
+//   x_          : numeric, length n*dims, row-major [row0_d0,row0_d1,...]
+//   n_, dims_   : integer scalars
+// Returns a numeric vector of length n*n: the Euclidean distance matrix in
+// (symmetric) order D[i*n+j]. The shader returns squared distances; we take the
+// sqrt here, in the same pass that converts float->double, so the R side needs
+// no further work. The matrix is symmetric, so row-major and column-major
+// orderings coincide and the caller can read it as either.
+SEXP R_ggml_dist_f32(SEXP backend_ptr, SEXP x_, SEXP n_, SEXP dims_) {
+#ifdef GGML_USE_VULKAN
+    ggml_backend_t backend = (ggml_backend_t)R_ExternalPtrAddr(backend_ptr);
+    if (backend == NULL || !ggml_backend_is_vk(backend)) {
+        error("R_ggml_dist_f32: backend is not a valid Vulkan backend");
+    }
+
+    unsigned int n    = (unsigned int)asInteger(n_);
+    unsigned int dims = (unsigned int)asInteger(dims_);
+
+    if ((R_xlen_t)XLENGTH(x_) != (R_xlen_t)n * dims)
+        error("R_ggml_dist_f32: x length != n*dims");
+
+    // R doubles -> float working buffers
+    float *x  = (float*)R_alloc((size_t)n * dims, sizeof(float));
+    float *d2 = (float*)R_alloc((size_t)n * n,    sizeof(float));
+
+    double *xd = REAL(x_);
+    for (R_xlen_t i = 0; i < (R_xlen_t)n * dims; i++) x[i] = (float)xd[i];
+
+    bool ok = ggml_vk_pairwise_dist_run(backend, x, d2, n, dims);
+    if (!ok) error("R_ggml_dist_f32: GPU dispatch failed");
+
+    // float->double + sqrt(max(0, .)) in one pass. The clamp guards tiny
+    // negative round-off from f32 accumulation; doing it here saves the R side a
+    // full extra sweep over n*n elements (matrix/sqrt/clamp), which dominated the
+    // wrapper cost at scale.
+    SEXP out = PROTECT(allocVector(REALSXP, (R_xlen_t)n * n));
+    double *od = REAL(out);
+    for (R_xlen_t i = 0; i < (R_xlen_t)n * n; i++) {
+        float v = d2[i];
+        od[i] = (v > 0.0f) ? sqrt((double)v) : 0.0;
+    }
+    UNPROTECT(1);
+    return out;
 #else
     error("Vulkan support not compiled");
     return R_NilValue;

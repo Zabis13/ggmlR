@@ -7,12 +7,16 @@
 
 #' Inject a single-cell result back into its container
 #'
-#' Writes the embedding from a \code{\link{ggml_result}} into the standard
-#' dimensionality-reduction slot of a Seurat object (a
-#' \code{SingleCellExperiment} method is added in a later release), returning the
-#' updated object. Component standard deviations and the backend used are
-#' recorded alongside so downstream tools and the user can see how the
-#' reduction was produced.
+#' Writes a \code{\link{ggml_result}} back into the appropriate slot of a Seurat
+#' or \code{SingleCellExperiment} object, returning the updated object. The
+#' destination depends on
+#' \code{result$metadata$kind}: a dimensionality reduction (the default) goes into
+#' a \code{DimReduc}; a \code{"transform"} (normalize / scale) overwrites an assay
+#' layer; a \code{"graph"} (neighbors) writes \code{<assay>_nn} and
+#' \code{<assay>_snn} \code{Graph} objects into \code{@graphs}, exactly where
+#' Seurat's \code{FindNeighbors} puts them so \code{FindClusters} can consume them.
+#' Component standard deviations and the backend used are recorded alongside so
+#' downstream tools and the user can see how the result was produced.
 #'
 #' @param x A \code{Seurat} object (the one the data was extracted from).
 #' @param result A \code{\link{ggml_result}}.
@@ -31,7 +35,7 @@ ggml_inject <- function(x, result, reduction_name = "ggml", key = "GGML_",
 }
 
 #' @rdname ggml_inject
-#' @importFrom methods new
+#' @importFrom methods new as
 #' @export
 ggml_inject.Seurat <- function(x, result, reduction_name = "ggml", key = "GGML_",
                                assay = NULL, ...) {
@@ -40,6 +44,53 @@ ggml_inject.Seurat <- function(x, result, reduction_name = "ggml", key = "GGML_"
     stop("`result` must be a ggml_result.", call. = FALSE)
 
   assay <- assay %||% SeuratObject::DefaultAssay(x)
+
+  # provenance kept in Misc: backend + timings, plus any op-specific metadata
+  # (e.g. UMAP a/b curve params and n_edges). The bulky DimReduc payload
+  # (loadings/stdev) already lives in the reduction object, so drop it here.
+  .ggmlr_misc_provenance <- function(meta, timings) {
+    bulky <- c("backend", "loadings", "stdev", "nn", "snn")
+    extra <- meta[setdiff(names(meta), bulky)]
+    c(list(backend = meta$backend, timings = timings), extra)
+  }
+
+  # graph ops (neighbors) write two Graph objects into the @graphs slot, exactly
+  # as Seurat's FindNeighbors does: <assay>_nn (binary kNN) and <assay>_snn
+  # (weighted shared-NN). Downstream FindClusters reads <assay>_snn.
+  if (identical(result$metadata$kind, "graph")) {
+    nn  <- result$metadata$nn
+    snn <- result$metadata$snn
+
+    to_graph <- function(m) {
+      g <- SeuratObject::as.Graph(methods::as(m, "CsparseMatrix"))
+      SeuratObject::DefaultAssay(g) <- assay
+      g
+    }
+    nn_name  <- paste0(assay, "_nn")
+    snn_name <- paste0(assay, "_snn")
+    x[[nn_name]]  <- to_graph(nn)
+    x[[snn_name]] <- to_graph(snn)
+
+    SeuratObject::Misc(x, slot = paste0(reduction_name, "_ggml")) <-
+      .ggmlr_misc_provenance(result$metadata, result$timings)
+    return(x)
+  }
+
+  # transform ops (normalize / scale) write a feature-by-cell matrix back into
+  # an assay layer rather than creating a DimReduc.
+  if (identical(result$metadata$kind, "transform")) {
+    layer <- result$metadata$layer %||% "data"
+    mat   <- result$embedding
+    if (.ggmlr_object_is_v5(x, assay)) {
+      SeuratObject::LayerData(x, assay = assay, layer = layer) <- mat
+    } else {
+      x <- SeuratObject::SetAssayData(x, assay = assay, layer = layer,
+                                      new.data = mat)
+    }
+    SeuratObject::Misc(x, slot = paste0(layer, "_ggml")) <-
+      .ggmlr_misc_provenance(result$metadata, result$timings)
+    return(x)
+  }
 
   emb <- result$embedding
   colnames(emb) <- paste0(key, seq_len(ncol(emb)))
@@ -53,10 +104,8 @@ ggml_inject.Seurat <- function(x, result, reduction_name = "ggml", key = "GGML_"
   )
   x[[reduction_name]] <- dr
 
-  # provenance: record backend + timings in the object's misc slot
-  SeuratObject::Misc(x, slot = paste0(reduction_name, "_ggml")) <- list(
-    backend = result$metadata$backend,
-    timings = result$timings
-  )
+  # provenance: backend + timings + op-specific metadata in the misc slot
+  SeuratObject::Misc(x, slot = paste0(reduction_name, "_ggml")) <-
+    .ggmlr_misc_provenance(result$metadata, result$timings)
   x
 }

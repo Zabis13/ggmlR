@@ -44,4 +44,16 @@
 ^CLAUDE\.md$
 ^LICENSE\.md$
 ^structure\.md$
+\.o$
+\.a$
+\.so$
+\.dll$
+\.dylib$
+\.d$
+^src/ggml-vulkan/generated$
+^src/ggml-vulkan/generated/
+^src/ggml-vulkan/.*\.spv$
+^src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen$
+^src/Makevars$
+^src/Makevars\.win$
 
