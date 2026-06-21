@@ -753,6 +753,7 @@ nn_build_graph <- function(model, batch_size, training = TRUE) {
 #' @seealso \code{\link{ggml_fit_opt}}, \code{\link{ggml_compile}}
 #' @examples
 #' \donttest{
+#' ggml_set_n_threads(1L)  # deterministic, single OpenMP pool
 #' n <- 128
 #' x <- matrix(runif(n * 4), nrow = n, ncol = 4)
 #' y <- matrix(0, nrow = n, ncol = 2)
@@ -1004,6 +1005,7 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
 #' @return Named list with \code{loss} and \code{accuracy}.
 #' @examples
 #' \donttest{
+#' ggml_set_n_threads(1L)  # deterministic, single OpenMP pool
 #' n <- 128
 #' x <- matrix(runif(n * 4), nrow = n, ncol = 4)
 #' y <- matrix(0, nrow = n, ncol = 2)

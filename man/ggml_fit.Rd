@@ -88,6 +88,7 @@ delegates to the low-level optimizer loop (\code{ggml_fit_opt}).
 }
 \examples{
 \donttest{
+ggml_set_n_threads(1L)  # deterministic, single OpenMP pool
 n <- 128
 x <- matrix(runif(n * 4), nrow = n, ncol = 4)
 y <- matrix(0, nrow = n, ncol = 2)

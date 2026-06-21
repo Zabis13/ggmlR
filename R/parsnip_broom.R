@@ -33,6 +33,7 @@
 #'   `trainable` (logical).
 #'
 #' @examplesIf rlang::is_installed(c("parsnip", "tibble"))
+#' ggml_set_n_threads(1L)  # deterministic, single OpenMP pool
 #' spec <- parsnip::mlp(hidden_units = 8L, epochs = 3L) |>
 #'   parsnip::set_engine("ggml", backend = "cpu") |>
 #'   parsnip::set_mode("regression")
@@ -100,6 +101,7 @@ tidy.ggmlr_parsnip_model <- function(x, ...) {
 #'   seconds) and `final_loss` (last training loss, `NA` if no history).
 #'
 #' @examplesIf rlang::is_installed(c("parsnip", "tibble"))
+#' ggml_set_n_threads(1L)  # deterministic, single OpenMP pool
 #' spec <- parsnip::mlp(hidden_units = 8L, epochs = 3L) |>
 #'   parsnip::set_engine("ggml", backend = "cpu") |>
 #'   parsnip::set_mode("regression")
@@ -148,6 +150,7 @@ glance.ggmlr_parsnip_model <- function(x, ...) {
 #' @return `new_data` as a tibble with prediction columns appended.
 #'
 #' @examplesIf rlang::is_installed(c("parsnip", "tibble"))
+#' ggml_set_n_threads(1L)  # deterministic, single OpenMP pool
 #' spec <- parsnip::mlp(hidden_units = 8L, epochs = 3L) |>
 #'   parsnip::set_engine("ggml", backend = "cpu") |>
 #'   parsnip::set_mode("regression")

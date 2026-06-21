@@ -25,6 +25,7 @@ for regression it appends `.pred`. Predictions are produced by the existing
 }
 \examples{
 \dontshow{if (rlang::is_installed(c("parsnip", "tibble"))) withAutoprint(\{ # examplesIf}
+ggml_set_n_threads(1L)  # deterministic, single OpenMP pool
 spec <- parsnip::mlp(hidden_units = 8L, epochs = 3L) |>
   parsnip::set_engine("ggml", backend = "cpu") |>
   parsnip::set_mode("regression")
