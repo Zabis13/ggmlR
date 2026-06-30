@@ -48,6 +48,57 @@ Options can be combined:
 install.packages("ggmlR", configure.args = "--with-vulkan --with-simd")
 ```
 
+### Linux (detailed)
+
+Full step-by-step setup on Ubuntu/Debian, from a clean system to a working
+GPU build.
+
+**1. R and the Vulkan loader/tools:**
+
+```bash
+sudo apt install -y r-base
+
+sudo apt install vulkan-tools libvulkan-dev
+```
+
+**2. The `glslc` shader compiler** (needed to build ggmlR's Vulkan backend):
+
+```bash
+# Ubuntu 24.04 (Noble)
+sudo add-apt-repository universe
+sudo apt update
+sudo apt install glslc
+
+# Ubuntu 22.04 (Jammy) — install the LunarG Vulkan SDK instead
+wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | \
+  sudo tee /etc/apt/trusted.gpg.d/lunarg.asc
+
+sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list \
+  https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+
+sudo apt update
+sudo apt install -y vulkan-sdk
+```
+
+**3. Verify the GPU is visible to Vulkan:**
+
+```bash
+vulkaninfo --summary
+```
+
+**4. Install ggmlR with CPU SIMD acceleration:**
+
+```bash
+sudo Rscript -e 'install.packages("ggmlR", configure.args = "--with-simd")'
+```
+
+**5. Confirm GPU support from R:**
+
+```bash
+Rscript -e 'library(ggmlR)
+ggml_vulkan_status()'
+```
+
 #### Windows build options
 
 > **Important:** on Windows, R **ignores** `configure.args` / `--configure-args`
