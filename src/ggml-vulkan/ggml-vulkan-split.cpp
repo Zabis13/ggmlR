@@ -393,8 +393,16 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
         if (memcmp(readback.data(), pattern.data(), bytes) != 0) {
             size_t first = 0;
             while (first < bytes && readback[first] == pattern[first]) first++;
+            size_t diff = 0, nonzero = 0;
+            for (size_t i = 0; i < bytes; i++) {
+                if (readback[i] != pattern[i]) diff++;
+                if (readback[i] != 0)          nonzero++;
+            }
             say("  FAIL: data mismatch at byte %zu (got %u, want %u)\n",
                 first, readback[first], pattern[first]);
+            say("        %zu/%zu bytes differ; %zu bytes non-zero "
+                "(all-zero readback => import bound to wrong memory)\n",
+                diff, bytes, nonzero);
             return -6;
         }
         say("  OK: %zu bytes verified across the fd-imported buffer\n", bytes);

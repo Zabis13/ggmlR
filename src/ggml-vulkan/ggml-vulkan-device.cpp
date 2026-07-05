@@ -2742,6 +2742,33 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         // ggmlR Tensor Parallelism (P2P): import device memory from an opaque fd
         // exported by the owning device. Ownership of the fd transfers to the
         // Vulkan driver on a successful import (do not close it here).
+        //
+        // CRITICAL for cross-device P2P: the memory type index used for the
+        // import MUST be one the driver reports as valid for THIS fd, via
+        // vkGetMemoryFdPropertiesKHR. Reusing the buffer's generic
+        // memoryTypeBits picks an index that happens to match on loopback
+        // (same physical device) but is wrong on another GPU — NVIDIA then
+        // "succeeds" the import yet binds unrelated/empty memory (reads back as
+        // zeros). Narrow mem_req.memoryTypeBits to the fd-allowed set first.
+        // (getMemoryFdPropertiesKHR does NOT consume the fd.)
+        vk::MemoryFdPropertiesKHR fd_props;
+        try {
+            fd_props = device->device.getMemoryFdPropertiesKHR(
+                vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd, import_fd);
+        } catch (const vk::SystemError& e) {
+            device->device.destroyBuffer(buf->buffer);
+            GGML_LOG_WARN("ggml_vulkan: getMemoryFdPropertiesKHR failed (%s)\n", e.what());
+            throw e;
+        }
+        const uint32_t orig_type_bits = mem_req.memoryTypeBits;
+        mem_req.memoryTypeBits &= fd_props.memoryTypeBits;
+        GGML_LOG_INFO("ggml_vulkan[TP]: fd-import memoryTypeBits buffer=0x%x fd=0x%x -> usable=0x%x\n",
+                      orig_type_bits, (unsigned) fd_props.memoryTypeBits, mem_req.memoryTypeBits);
+        if (mem_req.memoryTypeBits == 0) {
+            device->device.destroyBuffer(buf->buffer);
+            GGML_LOG_WARN("ggml_vulkan: no memory type valid for both buffer and imported fd\n");
+            throw vk::OutOfDeviceMemoryError("fd-import: no compatible memory type");
+        }
         for (auto it = req_flags_list.begin(); it != req_flags_list.end(); it++) {
             const auto & req_flags = *it;
             const std::vector<uint32_t> memory_type_indices = ggml_vk_find_memory_properties(&mem_props, &mem_req, req_flags);
