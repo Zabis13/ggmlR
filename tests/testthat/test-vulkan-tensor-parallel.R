@@ -98,10 +98,11 @@ test_that("n_devices must be positive", {
 # when there are too few real GPUs for a cross-device transfer.
 # ---------------------------------------------------------------------------
 
-# Small helper: how many Vulkan devices does the backend see?
+# How many Vulkan devices does the backend see? Uses the same counter
+# (ggml_backend_vk_get_device_count) that the self-test validates indices
+# against, so the skip logic and the C side always agree.
 vk_n_devices <- function() {
-  s <- tryCatch(ggml_vulkan_status(), error = function(e) NULL)
-  if (is.null(s) || is.null(s$n_devices)) 0L else as.integer(s$n_devices)
+  as.integer(tryCatch(ggml_vulkan_device_count(), error = function(e) 0L))
 }
 
 test_that("fd loopback self-test verifies data on a single device", {

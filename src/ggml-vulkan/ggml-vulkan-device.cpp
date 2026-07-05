@@ -2712,14 +2712,27 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         mem_flags_info.setPNext(&mem_priority_info);
     }
 
+    // ggmlR Tensor Parallelism (P2P): NVIDIA (and some other drivers) require a
+    // DEDICATED allocation for opaque-fd memory shared across physical devices —
+    // otherwise the import on the consumer device silently binds to unrelated
+    // memory (reads back as zeros). Tie the allocation to this specific buffer on
+    // BOTH the export and import sides. dedicated_info.buffer must be the buffer
+    // handle just created above (buf->buffer). Not upstream ggml.
+    vk::MemoryDedicatedAllocateInfo dedicated_info;
+    const bool want_dedicated = export_fd || import_fd >= 0;
+    if (want_dedicated) {
+        dedicated_info.buffer = buf->buffer;
+        dedicated_info.setPNext(&mem_flags_info);
+    }
+
     // ggmlR Tensor Parallelism (P2P): when exporting, chain a
     // VkExportMemoryAllocateInfo onto the allocation so the resulting device
     // memory can later be shared as an opaque fd via getMemoryFdKHR(). Placed at
-    // the head of the pNext chain (before mem_flags_info). Not upstream ggml.
+    // the head of the pNext chain (before dedicated_info). Not upstream ggml.
     vk::ExportMemoryAllocateInfo export_mem_info;
     if (export_fd) {
         export_mem_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
-        export_mem_info.setPNext(&mem_flags_info);
+        export_mem_info.setPNext(&dedicated_info);
     }
     vk::MemoryAllocateFlagsInfo * alloc_pnext = export_fd
         ? reinterpret_cast<vk::MemoryAllocateFlagsInfo *>(&export_mem_info)
@@ -2742,7 +2755,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
                     vk::ImportMemoryFdInfoKHR import_fd_info;
                     import_fd_info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
                     import_fd_info.fd = import_fd;
-                    import_fd_info.setPNext(&mem_flags_info);
+                    // ggmlR TP: chain through the dedicated-allocation info so the
+                    // imported memory binds to this dst buffer (see export side).
+                    import_fd_info.setPNext(&dedicated_info);
                     buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &import_fd_info });
                     done = true;
                     break;
