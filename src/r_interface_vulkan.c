@@ -172,6 +172,47 @@ SEXP R_ggml_vk_split_row_ranges(SEXP r_nrows, SEXP r_weights, SEXP r_n_devices) 
 #endif
 }
 
+// ggmlR Tensor Parallelism (P2P), not upstream.
+// Opaque-fd P2P self-test: exports an fd on src_dev, imports it on dst_dev, copies
+// `bytes` and verifies the data; for src_dev != dst_dev also times `iters`
+// device->device copies and measures bandwidth. Returns a named list:
+//   status  : integer, 0 on success (data verified), <0 on failure
+//   gbps    : numeric, measured cross-device bandwidth (0 for loopback/failure)
+//   report  : character, human-readable diagnostic incl. NVLink-vs-PCIe inference
+// A measured rate > ~16 GB/s empirically indicates a faster link (e.g. NVLink)
+// carried the bytes; the physical route is inferred, not queried from Vulkan.
+SEXP R_ggml_vk_p2p_selftest(SEXP r_src_dev, SEXP r_dst_dev, SEXP r_bytes, SEXP r_iters) {
+#ifdef GGML_USE_VULKAN
+    int    src_dev = asInteger(r_src_dev);
+    int    dst_dev = asInteger(r_dst_dev);
+    size_t bytes   = (size_t) asReal(r_bytes);
+    int    iters   = asInteger(r_iters);
+
+    char   report[4096];
+    report[0] = '\0';
+    double gbps = 0.0;
+
+    int status = ggml_backend_vk_p2p_selftest(src_dev, dst_dev, bytes, iters,
+                                              &gbps, report, sizeof(report));
+
+    SEXP result = PROTECT(allocVector(VECSXP, 3));
+    SEXP names  = PROTECT(allocVector(STRSXP, 3));
+    SET_VECTOR_ELT(result, 0, ScalarInteger(status));
+    SET_VECTOR_ELT(result, 1, ScalarReal(gbps));
+    SET_VECTOR_ELT(result, 2, mkString(report));
+    SET_STRING_ELT(names, 0, mkChar("status"));
+    SET_STRING_ELT(names, 1, mkChar("gbps"));
+    SET_STRING_ELT(names, 2, mkChar("report"));
+    setAttrib(result, R_NamesSymbol, names);
+    UNPROTECT(2);
+    return result;
+#else
+    (void) r_src_dev; (void) r_dst_dev; (void) r_bytes; (void) r_iters;
+    error("Vulkan support not compiled. Reinstall with --configure-args=\"--with-vulkan\"");
+    return R_NilValue;
+#endif
+}
+
 #ifdef GGML_USE_VULKAN
 // Finalizer: free the Vulkan backend when its external pointer is GC'd.
 // Cleared on manual R_ggml_backend_free, so this never double-frees.

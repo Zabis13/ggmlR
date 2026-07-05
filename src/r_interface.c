@@ -11,6 +11,7 @@ extern SEXP R_ggml_vulkan_device_description(SEXP device_idx);
 extern SEXP R_ggml_vulkan_device_memory(SEXP device_idx);
 extern SEXP R_ggml_vulkan_device_groups(void);  // ggmlR TP (P2P), not upstream
 extern SEXP R_ggml_vk_split_row_ranges(SEXP nrows, SEXP weights, SEXP n_devices);  // ggmlR TP
+extern SEXP R_ggml_vk_p2p_selftest(SEXP src_dev, SEXP dst_dev, SEXP bytes, SEXP iters);  // ggmlR TP
 extern SEXP R_ggml_vulkan_init(SEXP device_idx);
 extern SEXP R_ggml_vulkan_free(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_is_backend(SEXP backend_ptr);
@@ -1569,6 +1570,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_vulkan_device_memory",     (DL_FUNC) &R_ggml_vulkan_device_memory,     1},
     {"R_ggml_vulkan_device_groups",     (DL_FUNC) &R_ggml_vulkan_device_groups,     0},
     {"R_ggml_vk_split_row_ranges",      (DL_FUNC) &R_ggml_vk_split_row_ranges,      3},
+    {"R_ggml_vk_p2p_selftest",          (DL_FUNC) &R_ggml_vk_p2p_selftest,          4},
     {"R_ggml_vulkan_init",              (DL_FUNC) &R_ggml_vulkan_init,              1},
     {"R_ggml_vulkan_free",              (DL_FUNC) &R_ggml_vulkan_free,              1},
     {"R_ggml_vulkan_is_backend",        (DL_FUNC) &R_ggml_vulkan_is_backend,        1},

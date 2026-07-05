@@ -150,6 +150,55 @@ ggml_vulkan_split_row_ranges <- function(nrows, n_devices, weights = NULL) {
         as.integer(n_devices), PACKAGE = "ggmlR")
 }
 
+#' Opaque-fd device-to-device P2P self-test
+#'
+#' Exercises the \code{VK_KHR_external_memory_fd} transport used by Vulkan tensor
+#' parallelism to move data between GPUs. A byte pattern is written on the source
+#' device, its memory is exported as an opaque fd and imported on the destination
+#' device, copied into a local buffer there, then read back and compared.
+#'
+#' When \code{src_device == dst_device} the test runs in \emph{loopback} mode
+#' (export and import on the same GPU) — a sanity check of the fd mechanism that
+#' touches no inter-device link. When the devices differ it runs
+#' \emph{cross-device}: after verifying correctness it times \code{iters}
+#' device-to-device copies and reports the achieved bandwidth.
+#'
+#' Interpreting bandwidth: a measured rate above the PCIe 3.0 x16 ceiling
+#' (~16 GB/s) is \emph{empirical} evidence that a faster physical link (e.g.
+#' NVLink) carried the bytes. It is \strong{not} a claim that Vulkan used an
+#' NVLink API — Vulkan exposes no call to query the route, so the conclusion is
+#' inferred from the rate alone, never asserted from the API.
+#'
+#' @param src_device Source GPU index (0-based).
+#' @param dst_device Destination GPU index (0-based). Equal to \code{src_device}
+#'   for a loopback sanity check.
+#' @param bytes Transfer size in bytes (default 64 MiB).
+#' @param iters Number of copies to time for the bandwidth measurement (default 50).
+#' @return A named list: \code{status} (integer, 0 = data verified, <0 = failure),
+#'   \code{gbps} (numeric, measured cross-device bandwidth; 0 for loopback or on
+#'   failure) and \code{report} (character diagnostic, incl. the NVLink-vs-PCIe
+#'   inference).
+#' @export
+#' @examples
+#' \donttest{
+#' if (ggml_vulkan_available()) {
+#'   # loopback sanity check on device 0
+#'   r <- ggml_vulkan_p2p_selftest(0L, 0L)
+#'   cat(r$report)
+#'   # cross-device P2P (requires >= 2 GPUs)
+#'   if (ggml_vulkan_status()$n_devices >= 2) {
+#'     r <- ggml_vulkan_p2p_selftest(0L, 1L)
+#'     cat(r$report)
+#'   }
+#' }
+#' }
+ggml_vulkan_p2p_selftest <- function(src_device, dst_device,
+                                     bytes = 64L * 1024L * 1024L, iters = 50L) {
+  .Call("R_ggml_vk_p2p_selftest",
+        as.integer(src_device), as.integer(dst_device),
+        as.numeric(bytes), as.integer(iters), PACKAGE = "ggmlR")
+}
+
 #' Initialize Vulkan backend
 #'
 #' Creates a Vulkan backend for the specified device.

@@ -28,6 +28,16 @@ GGML_BACKEND_API int  ggml_backend_vk_get_device_groups(char * report, size_t re
 GGML_BACKEND_API int  ggml_backend_vk_split_row_ranges(int64_t nrows, const float * weights,
                                                        int n_devices,
                                                        int64_t * row_low, int64_t * row_high);
+// ggmlR Tensor Parallelism (P2P), not upstream: opaque-fd P2P self-test. Exports
+// an fd on src_dev, imports it on dst_dev, copies `bytes` and verifies the data;
+// when src_dev != dst_dev also times `iters` device->device copies and reports the
+// achieved bandwidth (GB/s) in *out_gbps. Returns 0 on success, <0 on failure.
+// A rate above ~16 GB/s (PCIe 3.0 x16) is empirical evidence a faster link (e.g.
+// NVLink) carried the bytes — the route is inferred, not queried from Vulkan.
+GGML_BACKEND_API int  ggml_backend_vk_p2p_selftest(int src_dev, int dst_dev,
+                                                   size_t bytes, int iters,
+                                                   double * out_gbps,
+                                                   char * report, size_t report_size);
 GGML_BACKEND_API void ggml_backend_vk_get_device_caps(int device, bool * coopmat_support, bool * coopmat1_fa_support, bool * fp16, uint32_t * subgroup_size, bool * subgroup_no_shmem, uint32_t * subgroup_min_size, uint32_t * subgroup_max_size, uint32_t * wavefronts_per_simd, bool * bf16, bool * integer_dot_product, const char ** arch_name, uint32_t * coopmat_m, uint32_t * coopmat_n, uint32_t * coopmat_k, bool * supports_256_push_constants, uint32_t * max_push_constants_size);
 
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_vk_buffer_type(size_t dev_num);

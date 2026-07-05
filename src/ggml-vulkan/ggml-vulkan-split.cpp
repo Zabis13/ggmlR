@@ -16,6 +16,14 @@
 // iface, init/set/get_tensor) is present but its multi-device allocation path
 // cannot be exercised without >=2 GPUs — see TODO.md / memory.
 
+// Extra headers for the P2P self-test (chrono for timing, cstring for memcmp/
+// snprintf, unistd for close()). This file is part of the ggml-vulkan.cpp
+// translation unit; these are additive and idempotent if already pulled in.
+#include <chrono>
+#include <cstdarg>
+#include <cstring>
+#include <unistd.h>
+
 // ---------------------------------------------------------------------------
 // Transport abstraction (architectural hook, per NVLink discussion).
 // The way result slices are gathered across devices is deliberately abstracted
@@ -251,6 +259,209 @@ static const ggml_backend_buffer_i ggml_backend_vk_split_buffer_interface = {
     /* .clear           = */ ggml_backend_vk_split_buffer_clear,
     /* .reset           = */ NULL,
 };
+
+// ---------------------------------------------------------------------------
+// P2P self-test (ggmlR TP, not upstream).
+//
+// Exercises the opaque-fd export/import transport that Stage E3 will use to move
+// weight/activation slices between Vulkan devices. Two modes, selected by whether
+// src_dev == dst_dev:
+//
+//   loopback (src == dst): export an fd on a device and import it back on the
+//     SAME device. Sanity-checks that the fd mechanism itself works (allocation
+//     is exportable, getMemoryFdKHR succeeds, ImportMemoryFdInfoKHR binds). Does
+//     NOT exercise any device<->device link.
+//
+//   cross-device (src != dst): export on src, import on dst, then vkCmdCopyBuffer
+//     from the imported (remote) buffer into a local dst buffer on the dst queue.
+//     This is the path whose routing (NVLink vs PCIe) the driver decides; we can
+//     only MEASURE the achieved bandwidth, we cannot query the route from Vulkan.
+//
+// Correctness: a byte pattern written on src is read back from the dst-local copy
+// and compared. Bandwidth: the copy is repeated `iters` times under a fence and
+// timed; GB/s = bytes * iters / seconds (1 GB = 1e9 bytes, to match nvidia-smi).
+//
+// IMPORTANT (reporting): a measured bandwidth above the PCIe 3.0 x16 ceiling
+// (~16 GB/s) is EMPIRICAL evidence that a faster link (e.g. NVLink) carried the
+// bytes — it is NOT a claim that Vulkan used an NVLink API. There is no Vulkan
+// call that reports the physical route; the conclusion is inferred from the rate.
+//
+// Returns 0 on success (data verified), <0 on failure. `out_gbps` receives the
+// measured cross-device bandwidth (0 for loopback / on failure). `report` gets a
+// human-readable summary.
+// Append a printf-style line to a fixed-size report buffer (bounded, never
+// overflows). Marked with the printf format attribute so -Wformat-security is
+// satisfied even for calls with no variadic arguments.
+static void ggml_vk_report_append(char * report, size_t report_size, const char * fmt, ...)
+    __attribute__((format(printf, 3, 4)));
+static void ggml_vk_report_append(char * report, size_t report_size, const char * fmt, ...) {
+    size_t len = strlen(report);
+    if (len >= report_size) {
+        return;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(report + len, report_size - len, fmt, ap);
+    va_end(ap);
+}
+
+static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int iters,
+                                     double * out_gbps, char * report, size_t report_size) {
+    if (out_gbps) *out_gbps = 0.0;
+    #define say(...) ggml_vk_report_append(report, report_size, __VA_ARGS__)
+
+    const int n_dev = ggml_vk_get_device_count();
+    if (src_dev < 0 || dst_dev < 0 || src_dev >= n_dev || dst_dev >= n_dev) {
+        say("p2p_selftest: device index out of range (have %d device(s))\n", n_dev);
+        return -1;
+    }
+    if (bytes == 0 || iters <= 0) {
+        say("p2p_selftest: bytes and iters must be > 0\n");
+        return -1;
+    }
+
+    const bool loopback = (src_dev == dst_dev);
+    vk_device src = ggml_vk_get_device((size_t) src_dev);
+    vk_device dst = ggml_vk_get_device((size_t) dst_dev);
+
+    say("p2p_selftest: %s  src=dev%d (%s)  dst=dev%d (%s)  %zu bytes x%d\n",
+        loopback ? "LOOPBACK" : "CROSS-DEVICE",
+        src_dev, src->name.c_str(), dst_dev, dst->name.c_str(), bytes, iters);
+
+    if (!src->external_memory_fd) {
+        say("  FAIL: src device does not support VK_KHR_external_memory_fd\n");
+        return -2;
+    }
+    if (!dst->external_memory_fd) {
+        say("  FAIL: dst device does not support VK_KHR_external_memory_fd\n");
+        return -2;
+    }
+
+    const auto dev_local = vk::MemoryPropertyFlagBits::eDeviceLocal;
+
+    vk_buffer src_buf, imported, dst_local;
+    int fd = -1;
+    int rc = 0;
+    try {
+        // 1) Exportable source buffer on src device, filled with a known pattern.
+        src_buf = ggml_vk_create_buffer(src, bytes, { dev_local }, nullptr, /*export_fd=*/true);
+        if (!src_buf || !src_buf->exportable) {
+            say("  FAIL: could not allocate exportable src buffer\n");
+            return -3;
+        }
+        std::vector<uint8_t> pattern(bytes);
+        for (size_t i = 0; i < bytes; i++) pattern[i] = (uint8_t)((i * 131u + 7u) & 0xFF);
+        ggml_vk_buffer_write(src_buf, 0, pattern.data(), bytes);
+
+        // 2) Export an opaque fd for the src allocation.
+        fd = ggml_vk_buffer_export_fd(src_buf);
+        if (fd < 0) {
+            say("  FAIL: getMemoryFdKHR returned no fd\n");
+            return -4;
+        }
+
+        // 3) Import that fd on the dst device. The driver takes ownership of the
+        //    fd on success; do not close it afterwards.
+        imported = ggml_vk_create_buffer(dst, bytes, { dev_local }, nullptr,
+                                         /*export_fd=*/false, /*import_fd=*/fd);
+        if (!imported) {
+            say("  FAIL: ImportMemoryFdInfoKHR failed on dst device\n");
+            return -5;
+        }
+        fd = -1;  // consumed by the driver
+
+        // 4) Local destination buffer on dst; copy imported -> dst_local on the
+        //    dst transfer queue. This is the transfer whose route the driver picks.
+        dst_local = ggml_vk_create_buffer(dst, bytes, { dev_local });
+
+        // Warm-up copy (first submit pays one-off costs) + correctness copy.
+        {
+            std::lock_guard<std::recursive_mutex> guard(dst->mutex);
+            vk_context subctx = ggml_vk_create_temporary_context(dst->transfer_queue.cmd_pool);
+            ggml_vk_ctx_begin(dst, subctx);
+            ggml_vk_buffer_copy_async(subctx, dst_local, 0, imported, 0, bytes);
+            ggml_vk_ctx_end(subctx);
+            ggml_vk_submit(subctx, dst->fence);
+            VK_CHECK(dst->device.waitForFences({ dst->fence }, true, UINT64_MAX), "p2p_selftest warmup");
+            dst->device.resetFences({ dst->fence });
+            ggml_vk_queue_command_pools_cleanup(dst);
+        }
+
+        // 5) Correctness: read dst_local back and compare to the source pattern.
+        std::vector<uint8_t> readback(bytes);
+        ggml_vk_buffer_read(dst_local, 0, readback.data(), bytes);
+        if (memcmp(readback.data(), pattern.data(), bytes) != 0) {
+            size_t first = 0;
+            while (first < bytes && readback[first] == pattern[first]) first++;
+            say("  FAIL: data mismatch at byte %zu (got %u, want %u)\n",
+                first, readback[first], pattern[first]);
+            return -6;
+        }
+        say("  OK: %zu bytes verified across the fd-imported buffer\n", bytes);
+
+        // 6) Bandwidth: time `iters` device->device copies under a single fence.
+        double gbps = 0.0;
+        if (!loopback) {
+            std::lock_guard<std::recursive_mutex> guard(dst->mutex);
+            vk_context subctx = ggml_vk_create_temporary_context(dst->transfer_queue.cmd_pool);
+            ggml_vk_ctx_begin(dst, subctx);
+            for (int i = 0; i < iters; i++) {
+                ggml_vk_buffer_copy_async(subctx, dst_local, 0, imported, 0, bytes);
+            }
+            ggml_vk_ctx_end(subctx);
+
+            auto t0 = std::chrono::high_resolution_clock::now();
+            ggml_vk_submit(subctx, dst->fence);
+            VK_CHECK(dst->device.waitForFences({ dst->fence }, true, UINT64_MAX), "p2p_selftest bench");
+            auto t1 = std::chrono::high_resolution_clock::now();
+            dst->device.resetFences({ dst->fence });
+            ggml_vk_queue_command_pools_cleanup(dst);
+
+            double secs = std::chrono::duration<double>(t1 - t0).count();
+            if (secs > 0.0) {
+                gbps = (double) bytes * (double) iters / secs / 1e9;
+            }
+            if (out_gbps) *out_gbps = gbps;
+
+            const double PCIE3_X16_GBPS = 16.0;
+            say("  bandwidth: %.2f GB/s (%d x %zu bytes)\n", gbps, iters, bytes);
+            if (gbps > PCIE3_X16_GBPS) {
+                say("  => exceeds PCIe 3.0 x16 ceiling (~16 GB/s): empirically a faster\n");
+                say("     link (e.g. NVLink) carried the bytes. NOT a Vulkan NVLink-API claim;\n");
+                say("     the route is inferred from the measured rate, not queried.\n");
+            } else {
+                say("  => at/below PCIe 3.0 x16 ceiling: consistent with a PCIe route\n");
+                say("     (NVLink present in topology may still exist but was not used here).\n");
+            }
+        } else {
+            say("  loopback: bandwidth not meaningful (same-device import)\n");
+        }
+    } catch (const vk::SystemError & e) {
+        say("  FAIL: Vulkan exception: %s\n", e.what());
+        rc = -7;
+    }
+
+    // Buffers are shared_ptr (vk_buffer); they free on scope exit. An un-consumed
+    // fd (only on an early failure path) must be closed to avoid a leak.
+    if (fd >= 0) {
+        close(fd);
+    }
+    return rc;
+    #undef say
+}
+
+// ---------------------------------------------------------------------------
+// Public C entry point (not upstream): opaque-fd P2P self-test (correctness +
+// cross-device bandwidth). See ggml_vk_p2p_selftest_impl for semantics.
+// ---------------------------------------------------------------------------
+extern "C" int ggml_backend_vk_p2p_selftest(int src_dev, int dst_dev,
+                                            size_t bytes, int iters,
+                                            double * out_gbps,
+                                            char * report, size_t report_size) {
+    if (report && report_size) report[0] = '\0';
+    return ggml_vk_p2p_selftest_impl(src_dev, dst_dev, bytes, iters,
+                                     out_gbps, report, report_size);
+}
 
 // ---------------------------------------------------------------------------
 // Public C entry point (not upstream): pure row-split math for unit tests.
