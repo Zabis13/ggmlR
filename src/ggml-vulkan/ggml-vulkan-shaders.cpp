@@ -1803,6 +1803,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 push_descriptor_ext = true;
             } else if (strcmp("VK_EXT_external_memory_host", properties.extensionName) == 0) {
                 device->external_memory_host = true;
+            } else if (strcmp("VK_KHR_external_memory_fd", properties.extensionName) == 0) {
+                // ggmlR Tensor Parallelism (P2P): opaque-fd export/import.
+                device->external_memory_fd = true;
 #if defined(VK_EXT_shader_64bit_indexing)
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
@@ -2125,6 +2128,14 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (device->external_memory_host) {
             device_extensions.push_back("VK_EXT_external_memory_host");
+        }
+
+        // ggmlR Tensor Parallelism (P2P): enable opaque-fd external memory so
+        // weight-split buffers can be exported on the owning device and imported
+        // on the consumer device (device<->device transfer). Not in upstream ggml.
+        if (device->external_memory_fd) {
+            device_extensions.push_back("VK_KHR_external_memory");
+            device_extensions.push_back("VK_KHR_external_memory_fd");
         }
 
 #if defined(VK_EXT_shader_64bit_indexing)

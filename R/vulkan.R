@@ -82,6 +82,74 @@ ggml_vulkan_device_memory <- function(device = 0L) {
   .Call("R_ggml_vulkan_device_memory", as.integer(device), PACKAGE = "ggmlR")
 }
 
+#' Probe Vulkan device groups (NVLink / multi-GPU peer access)
+#'
+#' Enumerates Vulkan device groups (\code{VK_KHR_device_group}, also known as
+#' Linked Device Adapter / LDA) and probes whether the driver reports direct
+#' peer memory access between the physical GPUs in each group.
+#'
+#' A device group with more than one device \emph{and} peer copy/generic memory
+#' features is the prerequisite for true GPU-to-GPU transfers routed over NVLink
+#' (or PCIe peer-to-peer) through a single device-group logical device — as
+#' opposed to sharing memory as an opaque fd between independent devices, which
+#' the driver may route through host memory.
+#'
+#' This is a diagnostic only: it does not create any long-lived device group.
+#' On a machine with a single GPU it reports zero multi-device groups. Device
+#' groups for compute are effectively an NVIDIA feature; AMD/RADV typically
+#' reports only single-device groups.
+#'
+#' @return A named list with \code{n_groups} (integer, number of device groups
+#'   reported by the driver) and \code{report} (character, a human-readable
+#'   per-group diagnostic including peer memory features). Use \code{cat()} on
+#'   \code{report} to read it.
+#' @export
+#' @examples
+#' \donttest{
+#' if (ggml_vulkan_available()) {
+#'   g <- ggml_vulkan_device_groups()
+#'   cat(g$report)
+#' }
+#' }
+ggml_vulkan_device_groups <- function() {
+  .Call("R_ggml_vulkan_device_groups", PACKAGE = "ggmlR")
+}
+
+#' Compute tensor-parallel row-split ranges
+#'
+#' Pure arithmetic helper for the Vulkan tensor-parallel split buffer type: given
+#' a number of tensor rows and a per-device weight vector, returns the half-open
+#' row range \code{[row_low, row_high)} owned by each device. Row boundaries are
+#' rounded down to a fixed granularity, and the last device always covers up to
+#' \code{nrows}, so the ranges are contiguous, non-overlapping and cover every
+#' row exactly once.
+#'
+#' This touches no GPU and is exposed mainly to verify the split logic. It is the
+#' math behind row-split tensor parallelism (a weight matrix distributed across
+#' several GPUs), independent of any actual multi-GPU allocation.
+#'
+#' @param nrows Number of rows in the tensor (integer).
+#' @param n_devices Number of devices to split across (integer, >= 1).
+#' @param weights Optional numeric vector of length \code{n_devices} giving the
+#'   relative share of rows per device. \code{NULL} (default) splits evenly.
+#' @return A named list with \code{row_low} and \code{row_high}: numeric vectors
+#'   of length \code{n_devices} holding 0-based, half-open row ranges.
+#' @export
+#' @examples
+#' \donttest{
+#' if (ggml_vulkan_available()) {
+#'   # 4096 rows across 2 devices, evenly
+#'   ggml_vulkan_split_row_ranges(4096L, 2L)
+#'   # weighted 3:1
+#'   ggml_vulkan_split_row_ranges(4096L, 2L, weights = c(3, 1))
+#' }
+#' }
+ggml_vulkan_split_row_ranges <- function(nrows, n_devices, weights = NULL) {
+  w <- if (is.null(weights)) NULL else as.numeric(weights)
+  .Call("R_ggml_vk_split_row_ranges", as.numeric(nrows), w,
+        as.integer(n_devices), PACKAGE = "ggmlR")
+}
+
 #' Initialize Vulkan backend
 #'
 #' Creates a Vulkan backend for the specified device.

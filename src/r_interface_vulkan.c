@@ -86,6 +86,92 @@ SEXP R_ggml_vulkan_device_memory(SEXP device_idx) {
 #endif
 }
 
+// ggmlR Tensor Parallelism (P2P), not upstream.
+// Enumerate Vulkan device groups (VK_KHR_device_group / LDA) and probe peer
+// memory access between physical devices in each group. Returns a named list:
+//   n_groups : integer, number of device groups reported by the driver
+//   report   : character, human-readable diagnostic (per-group peer features)
+// A group with >1 device and peer Copy/Generic features is the prerequisite for
+// NVLink-routed transfers via a device-group logical device.
+SEXP R_ggml_vulkan_device_groups(void) {
+#ifdef GGML_USE_VULKAN
+    char report[8192];
+    report[0] = '\0';
+    int n_groups = ggml_backend_vk_get_device_groups(report, sizeof(report));
+
+    SEXP result = PROTECT(allocVector(VECSXP, 2));
+    SEXP names  = PROTECT(allocVector(STRSXP, 2));
+    SET_VECTOR_ELT(result, 0, ScalarInteger(n_groups));
+    SET_VECTOR_ELT(result, 1, mkString(report));
+    SET_STRING_ELT(names, 0, mkChar("n_groups"));
+    SET_STRING_ELT(names, 1, mkChar("report"));
+    setAttrib(result, R_NamesSymbol, names);
+    UNPROTECT(2);
+    return result;
+#else
+    error("Vulkan support not compiled. Reinstall with --configure-args=\"--with-vulkan\"");
+    return R_NilValue;
+#endif
+}
+
+// ggmlR Tensor Parallelism (P2P), not upstream.
+// Pure row-split math for the Vulkan split buffer type — no GPU touched.
+// Args: nrows (numeric scalar), weights (numeric vector length n_devices, or
+//       NULL for an even split), n_devices (integer).
+// Returns a named list with numeric vectors row_low, row_high (0-based,
+// half-open [low, high)), each of length n_devices.
+SEXP R_ggml_vk_split_row_ranges(SEXP r_nrows, SEXP r_weights, SEXP r_n_devices) {
+#ifdef GGML_USE_VULKAN
+    int64_t nrows     = (int64_t) asReal(r_nrows);
+    int     n_devices = asInteger(r_n_devices);
+    if (n_devices <= 0) {
+        error("n_devices must be >= 1");
+    }
+    if (n_devices > GGML_VK_MAX_DEVICES) {
+        error("n_devices (%d) exceeds GGML_VK_MAX_DEVICES (%d)", n_devices, GGML_VK_MAX_DEVICES);
+    }
+
+    float * weights = NULL;
+    float   wbuf[GGML_VK_MAX_DEVICES];
+    if (!isNull(r_weights) && LENGTH(r_weights) > 0) {
+        if (LENGTH(r_weights) != n_devices) {
+            error("weights length (%d) must equal n_devices (%d)", LENGTH(r_weights), n_devices);
+        }
+        for (int i = 0; i < n_devices; i++) {
+            wbuf[i] = (float) REAL(r_weights)[i];
+        }
+        weights = wbuf;
+    }
+
+    int64_t low[GGML_VK_MAX_DEVICES], high[GGML_VK_MAX_DEVICES];
+    int rc = ggml_backend_vk_split_row_ranges(nrows, weights, n_devices, low, high);
+    if (rc != 0) {
+        error("ggml_backend_vk_split_row_ranges failed (bad arguments)");
+    }
+
+    SEXP r_low  = PROTECT(allocVector(REALSXP, n_devices));
+    SEXP r_high = PROTECT(allocVector(REALSXP, n_devices));
+    for (int i = 0; i < n_devices; i++) {
+        REAL(r_low)[i]  = (double) low[i];
+        REAL(r_high)[i] = (double) high[i];
+    }
+
+    SEXP result = PROTECT(allocVector(VECSXP, 2));
+    SEXP names  = PROTECT(allocVector(STRSXP, 2));
+    SET_VECTOR_ELT(result, 0, r_low);
+    SET_VECTOR_ELT(result, 1, r_high);
+    SET_STRING_ELT(names, 0, mkChar("row_low"));
+    SET_STRING_ELT(names, 1, mkChar("row_high"));
+    setAttrib(result, R_NamesSymbol, names);
+    UNPROTECT(4);
+    return result;
+#else
+    (void) r_nrows; (void) r_weights; (void) r_n_devices;
+    error("Vulkan support not compiled. Reinstall with --configure-args=\"--with-vulkan\"");
+    return R_NilValue;
+#endif
+}
+
 #ifdef GGML_USE_VULKAN
 // Finalizer: free the Vulkan backend when its external pointer is GC'd.
 // Cleared on manual R_ggml_backend_free, so this never double-frees.

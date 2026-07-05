@@ -2373,6 +2373,106 @@ void ggml_backend_vk_get_device_description(int device, char * description, size
     ggml_vk_get_device_description(dev_idx, description, description_size);
 }
 
+// ggmlR Tensor Parallelism (P2P), not upstream ggml.
+// Enumerate Vulkan device groups (VK_KHR_device_group / LDA) and probe whether
+// the driver reports direct peer memory access between the physical devices in
+// each group. A group with >1 device AND peer Copy/Generic features is the
+// prerequisite for NVLink-routed (or PCIe-P2P) transfers via a device-group
+// logical device — as opposed to opaque-fd between independent VkDevices, which
+// the driver may route through host. Writes a human-readable report into
+// `report` (truncated to report_size) and returns the number of device groups.
+int ggml_backend_vk_get_device_groups(char * report, size_t report_size) {
+    // Ensure the Vulkan instance (and dynamic dispatcher) is initialized before
+    // touching vk_instance.instance — otherwise enumeratePhysicalDeviceGroups()
+    // dereferences a null handle. Mirrors the other entry points here.
+    ggml_vk_instance_init();
+
+    size_t off = 0;
+    auto emit = [&](const char * fmt, ...) {
+        if (!report || off + 1 >= report_size) return;
+        va_list ap;
+        va_start(ap, fmt);
+        int n = vsnprintf(report + off, report_size - off, fmt, ap);
+        va_end(ap);
+        if (n > 0) off += (size_t) n;
+    };
+
+    std::vector<vk::PhysicalDeviceGroupProperties> groups;
+    try {
+        groups = vk_instance.instance.enumeratePhysicalDeviceGroups();
+    } catch (const vk::SystemError& e) {
+        emit("device-group enumeration failed: %s\n", e.what());
+        return 0;
+    }
+
+    emit("Vulkan device groups: %zu\n", groups.size());
+    for (size_t g = 0; g < groups.size(); g++) {
+        const auto & grp = groups[g];
+        emit("  group %zu: %u device(s), subsetAllocation=%d\n",
+             g, grp.physicalDeviceCount, (int) grp.subsetAllocation);
+        for (uint32_t d = 0; d < grp.physicalDeviceCount; d++) {
+            vk::PhysicalDeviceProperties props = grp.physicalDevices[d].getProperties();
+            emit("    dev[%u]: %s\n", d, props.deviceName.data());
+        }
+
+        // A single-device group cannot do peer transfer; skip the probe.
+        if (grp.physicalDeviceCount < 2) {
+            emit("    peer: n/a (single-device group — no NVLink/P2P path)\n");
+            continue;
+        }
+
+        // Build a temporary logical device over the group to query peer memory
+        // features. Heap 0 is used as a representative device-local heap.
+        vk::DeviceGroupDeviceCreateInfo grp_ci;
+        grp_ci.physicalDeviceCount = grp.physicalDeviceCount;
+        grp_ci.pPhysicalDevices    = grp.physicalDevices.data();
+
+        // Minimal queue on device 0 of the group.
+        float prio = 1.0f;
+        vk::DeviceQueueCreateInfo qci({}, 0, 1, &prio);
+        vk::DeviceCreateInfo dci({}, 1, &qci);
+        dci.setPNext(&grp_ci);
+
+        vk::Device tmp_dev;
+        try {
+            tmp_dev = grp.physicalDevices[0].createDevice(dci);
+        } catch (const vk::SystemError& e) {
+            emit("    peer: device-group logical device creation failed: %s\n", e.what());
+            continue;
+        }
+
+        // With the dynamic dispatcher, resolve device-level function pointers
+        // (getGroupPeerMemoryFeatures) against this temporary device before use.
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(tmp_dev);
+
+        bool any_peer = false;
+        for (uint32_t a = 0; a < grp.physicalDeviceCount; a++) {
+            for (uint32_t b = 0; b < grp.physicalDeviceCount; b++) {
+                if (a == b) continue;
+                vk::PeerMemoryFeatureFlags feat =
+                    tmp_dev.getGroupPeerMemoryFeatures(0 /*heap*/, a, b);
+                bool copy_src = (bool) (feat & vk::PeerMemoryFeatureFlagBits::eCopySrc);
+                bool copy_dst = (bool) (feat & vk::PeerMemoryFeatureFlagBits::eCopyDst);
+                bool gen_src  = (bool) (feat & vk::PeerMemoryFeatureFlagBits::eGenericSrc);
+                bool gen_dst  = (bool) (feat & vk::PeerMemoryFeatureFlagBits::eGenericDst);
+                if (copy_src || copy_dst || gen_src || gen_dst) any_peer = true;
+                emit("    peer %u->%u: CopySrc=%d CopyDst=%d GenericSrc=%d GenericDst=%d\n",
+                     a, b, copy_src, copy_dst, gen_src, gen_dst);
+            }
+        }
+        emit("    => direct peer access: %s\n",
+             any_peer ? "YES (device-group P2P path available)"
+                      : "NO (would fall back to host staging)");
+        tmp_dev.destroy();
+        // Re-point the dynamic dispatcher back to the instance level: the
+        // device-level pointers we just loaded belong to the now-destroyed
+        // temporary device and must not be used by later Vulkan calls.
+        VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_instance.instance);
+    }
+
+    return (int) groups.size();
+}
+
 void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total) {
     GGML_ASSERT(device < (int) vk_instance.device_indices.size());
     GGML_ASSERT(device < (int) vk_instance.device_supports_membudget.size());

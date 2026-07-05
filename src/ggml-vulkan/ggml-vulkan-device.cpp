@@ -19,6 +19,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 
 #include <algorithm>
 #include <cmath>
+#include <cstdarg>  // ggmlR TP: va_list/vsnprintf for device-group diagnostic report
 #include <iomanip>
 #include <iostream>
 
@@ -650,6 +651,9 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    // ggmlR Tensor Parallelism (P2P): opaque-fd export/import for device<->device
+    // weight-split buffers. Not in upstream ggml — see TODO.md "Vulkan Tensor Parallelism".
+    bool external_memory_fd {};
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -990,6 +994,11 @@ struct vk_buffer_struct {
     void * ptr;
     size_t size = 0;
     vk::DeviceAddress bda_addr {};
+
+    // ggmlR Tensor Parallelism (P2P): true when this buffer's memory was
+    // allocated with opaque-fd export capability (VkExportMemoryAllocateInfo),
+    // so its device memory can be shared to another Vulkan device. Not upstream.
+    bool exportable = false;
 
     vk_device device;
 
@@ -2644,7 +2653,12 @@ static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDe
 }
 
 static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std::initializer_list<vk::MemoryPropertyFlags> & req_flags_list,
-                                       void *import_ptr = nullptr) {
+                                       void *import_ptr = nullptr,
+                                       // ggmlR Tensor Parallelism (P2P), not upstream:
+                                       //   export_fd  — allocate memory exportable as an opaque fd (owner side)
+                                       //   import_fd  — import device memory from an opaque fd (consumer side); -1 = none
+                                       bool export_fd = false,
+                                       int import_fd = -1) {
     VK_LOG_DEBUG("ggml_vk_create_buffer(" << device->name << ", " << size << ", " << to_string(req_flags_list.begin()[0]) << ", " << to_string(req_flags_list.begin()[req_flags_list.size()-1]) << ")");
     if (size > device->max_buffer_size) {
         throw vk::OutOfDeviceMemoryError("Requested buffer size exceeds device buffer size limit");
@@ -2677,6 +2691,11 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
     if (import_ptr) {
         external_memory_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT;
         buffer_create_info.setPNext(&external_memory_bci);
+    } else if (export_fd || import_fd >= 0) {
+        // ggmlR Tensor Parallelism (P2P): mark the buffer as backed by opaque-fd
+        // external memory so it can be exported/imported across Vulkan devices.
+        external_memory_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+        buffer_create_info.setPNext(&external_memory_bci);
     }
 
     buf->buffer = device->device.createBuffer(buffer_create_info);
@@ -2693,7 +2712,52 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         mem_flags_info.setPNext(&mem_priority_info);
     }
 
-    if (import_ptr) {
+    // ggmlR Tensor Parallelism (P2P): when exporting, chain a
+    // VkExportMemoryAllocateInfo onto the allocation so the resulting device
+    // memory can later be shared as an opaque fd via getMemoryFdKHR(). Placed at
+    // the head of the pNext chain (before mem_flags_info). Not upstream ggml.
+    vk::ExportMemoryAllocateInfo export_mem_info;
+    if (export_fd) {
+        export_mem_info.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+        export_mem_info.setPNext(&mem_flags_info);
+    }
+    vk::MemoryAllocateFlagsInfo * alloc_pnext = export_fd
+        ? reinterpret_cast<vk::MemoryAllocateFlagsInfo *>(&export_mem_info)
+        : &mem_flags_info;
+
+    if (import_fd >= 0) {
+        // ggmlR Tensor Parallelism (P2P): import device memory from an opaque fd
+        // exported by the owning device. Ownership of the fd transfers to the
+        // Vulkan driver on a successful import (do not close it here).
+        for (auto it = req_flags_list.begin(); it != req_flags_list.end(); it++) {
+            const auto & req_flags = *it;
+            const std::vector<uint32_t> memory_type_indices = ggml_vk_find_memory_properties(&mem_props, &mem_req, req_flags);
+            if (memory_type_indices.empty()) {
+                continue;
+            }
+            buf->memory_property_flags = req_flags;
+            bool done = false;
+            for (auto mtype_it = memory_type_indices.begin(); mtype_it != memory_type_indices.end(); mtype_it++) {
+                try {
+                    vk::ImportMemoryFdInfoKHR import_fd_info;
+                    import_fd_info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+                    import_fd_info.fd = import_fd;
+                    import_fd_info.setPNext(&mem_flags_info);
+                    buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &import_fd_info });
+                    done = true;
+                    break;
+                } catch (const vk::SystemError& e) {
+                    if (it + 1 == req_flags_list.end() && mtype_it + 1 == memory_type_indices.end()) {
+                        device->device.destroyBuffer(buf->buffer);
+                        throw e;
+                    }
+                }
+            }
+            if (done) {
+                break;
+            }
+        }
+    } else if (import_ptr) {
         vk::MemoryHostPointerPropertiesEXT host_pointer_props;
         try {
             host_pointer_props = device->device.getMemoryHostPointerPropertiesEXT(vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT, import_ptr);
@@ -2751,7 +2815,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
             for (auto mtype_it = memory_type_indices.begin(); mtype_it != memory_type_indices.end(); mtype_it++) {
                 try {
-                    buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, &mem_flags_info });
+                    // alloc_pnext == &mem_flags_info normally, or the export-info
+                    // head when export_fd is set (ggmlR TP, not upstream).
+                    buf->device_memory = device->device.allocateMemory({ mem_req.size, *mtype_it, alloc_pnext });
                     done = true;
                     break;
                 } catch (const vk::SystemError& e) {
@@ -2779,7 +2845,9 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
     if (import_ptr) {
         buf->ptr = import_ptr;
-    } else {
+    } else if (import_fd < 0) {
+        // Do not host-map fd-imported memory (ggmlR TP): it is remote device
+        // memory shared for compute, not intended for CPU access here.
         if (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
             buf->ptr = device->device.mapMemory(buf->device_memory, 0, VK_WHOLE_SIZE);
         }
@@ -2789,6 +2857,7 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
 
     buf->device = device;
     buf->size = size;
+    buf->exportable = export_fd;  // ggmlR TP: eligible for getMemoryFdKHR()
 
     if (device->buffer_device_address) {
         const vk::BufferDeviceAddressInfo addressInfo(buf->buffer);
@@ -2797,6 +2866,28 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
     }
 
     return buf;
+}
+
+// ggmlR Tensor Parallelism (P2P), not upstream ggml. Export an opaque fd for a
+// buffer allocated with export_fd=true. The returned fd is owned by the caller;
+// it must be passed to ggml_vk_create_buffer(import_fd=...) on the consumer
+// device (which takes ownership) or closed. Returns -1 on failure.
+static int ggml_vk_buffer_export_fd(vk_buffer& buf) {
+    if (!buf || buf->size == 0 || !buf->exportable) {
+        return -1;
+    }
+    if (!buf->device->external_memory_fd) {
+        return -1;
+    }
+    try {
+        vk::MemoryGetFdInfoKHR get_fd_info;
+        get_fd_info.memory     = buf->device_memory;
+        get_fd_info.handleType = vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd;
+        return buf->device->device.getMemoryFdKHR(get_fd_info);
+    } catch (const vk::SystemError& e) {
+        GGML_LOG_WARN("ggml_vulkan: getMemoryFdKHR failed (%s)\n", e.what());
+        return -1;
+    }
 }
 
 static vk_buffer ggml_vk_create_buffer_check(vk_device& device, size_t size, vk::MemoryPropertyFlags req_flags, vk::MemoryPropertyFlags fallback_flags = vk::MemoryPropertyFlags(0)) {
