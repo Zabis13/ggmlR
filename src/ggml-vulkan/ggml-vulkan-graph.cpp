@@ -3442,34 +3442,28 @@ ggml_backend_reg_t ggml_backend_vk_reg() {
 // live backend that copied it has been freed — never prematurely. waitIdle first
 // drains any in-flight driver work so the loader threads are quiescent.
 extern "C" void ggml_backend_vk_shutdown(void) {
-    r_tp_tracef("vk_shutdown: enter (initialized=%d)", (int) vk_instance_initialized);
     if (!vk_instance_initialized) {
-        r_tp_tracef("vk_shutdown: already down, no-op");
         return;   // idempotent: guards double-shutdown and use-after-shutdown init
     }
     // Mark torn-down up front so a re-entrant call (or a device destructor that
     // touches instance state) sees the shutdown in progress and bails early.
     vk_instance_initialized = false;
 
-    int idx = 0;
     for (auto & dev : vk_instance.devices) {
+        // Drain in-flight work on THIS device immediately before releasing it, so
+        // a later device in the loop can't still have work queued when we reset it
+        // (per-device waitIdle, not one shared drain up front).
         if (dev && dev->device) {
-            r_tp_tracef("vk_shutdown: dev[%d] waitIdle...", idx);
             try { dev->device.waitIdle(); } catch (...) {}
-            r_tp_tracef("vk_shutdown: dev[%d] waitIdle done", idx);
         }
-        r_tp_tracef("vk_shutdown: dev[%d] reset...", idx);
+        // Each reset() may run ~vk_device_struct (loader calls); isolate it so one
+        // device throwing does not abort teardown of the rest / of the instance.
         try { dev.reset(); } catch (...) {}
-        r_tp_tracef("vk_shutdown: dev[%d] reset done", idx);
-        idx++;
     }
     if (vk_instance.instance) {
-        r_tp_tracef("vk_shutdown: instance.destroy...");
         try { vk_instance.instance.destroy(); } catch (...) {}
         vk_instance.instance = nullptr;
-        r_tp_tracef("vk_shutdown: instance.destroy done");
     }
-    r_tp_tracef("vk_shutdown: exit clean");
 }
 
 // Extension availability

@@ -508,6 +508,8 @@ y <- ggml_pp_forward(list(mk(0L, W1), mk(1L, W2)), x = as.numeric(X), out_shape 
 
 See `inst/examples/tp_dp_hybrid.R` and `inst/examples/pp_pipeline.R` for complete runnable demos.
 
+> **Clean shutdown**: when a script uses several GPUs, call `ggml_vulkan_shutdown()` before it exits. This tears down Vulkan while the loader is still mapped, avoiding a harmless-but-noisy segfault that can otherwise occur at process exit (your results are already computed by then).
+
 ### Autograd op reference
 
 | Category | Functions |

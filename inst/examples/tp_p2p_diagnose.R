@@ -85,3 +85,8 @@ if (trace_dst != "-" && trace_dst != "stderr") {
 # Note: we deliberately do NOT read the trace file here — the interesting
 # teardown lines are written after this script's last statement, during exit.
 
+# Explicit Vulkan teardown while the loader is still mapped: this is the clean way
+# to exit without the flaky exit-time segfault. (Comment it out to observe the
+# crash and inspect the trace file's teardown lines instead.)
+ggml_vulkan_shutdown()
+

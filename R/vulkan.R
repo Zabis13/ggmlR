@@ -298,13 +298,32 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
 #' Explicitly tear down the Vulkan instance and devices
 #'
 #' Waits for all Vulkan devices to go idle, then destroys the devices and the
-#' Vulkan instance. Call this from a long-running script \emph{before} the process
-#' exits to run the teardown while the Vulkan loader / ICD libraries are still
-#' mapped. Idempotent and a no-op if Vulkan was never initialized. After this,
-#' the next Vulkan operation re-initializes the instance from scratch.
+#' Vulkan instance. Call this at the end of a script that used multiple GPUs
+#' (tensor / pipeline parallelism), \emph{before} the process exits.
+#'
+#' Why this exists: with several Vulkan devices active, R's own teardown at
+#' process exit can run \emph{after} the Vulkan loader / Mesa ICD libraries have
+#' been unmapped, so the device destructors call into unmapped memory and the
+#' process crashes with a segfault \emph{after} your results were already printed.
+#' Calling \code{ggml_vulkan_shutdown()} while the process is still alive runs the
+#' teardown while the loader is still mapped, avoiding that crash. It is only
+#' needed for exit cleanliness — your computed results are unaffected either way.
+#'
+#' Idempotent and a no-op if Vulkan was never initialized. After this call the
+#' next Vulkan operation transparently re-initializes the instance from scratch,
+#' so it is safe to call mid-session too.
 #'
 #' @return Invisibly \code{NULL}.
 #' @export
+#' @examples
+#' \donttest{
+#' if (ggml_vulkan_available() && ggml_vulkan_device_count() >= 2) {
+#'   W <- matrix(rnorm(2048 * 64), nrow = 2048)
+#'   X <- matrix(rnorm(4 * 64), nrow = 4)
+#'   Y <- ggml_vulkan_split_mul_mat(W, X, n_devices = 2)
+#'   ggml_vulkan_shutdown()   # clean up before the script exits
+#' }
+#' }
 ggml_vulkan_shutdown <- function() {
   invisible(.Call("R_ggml_vk_shutdown", PACKAGE = "ggmlR"))
 }

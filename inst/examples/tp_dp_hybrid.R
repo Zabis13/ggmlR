@@ -65,3 +65,8 @@ max_err <- max(abs(Y - ref))
 cat(sprintf("\nTPxDP forward: Y = %d x %d in %.3fs\n", nrow(Y), ncol(Y), dt))
 cat(sprintf("max |Y - X %%*%% t(W)| = %.3e  (%s)\n",
             max_err, if (max_err < 5e-2) "OK" else "MISMATCH"))
+
+# Tear down Vulkan explicitly, while the process (and the Vulkan loader) are still
+# alive. Doing it here avoids a flaky segfault that otherwise happens at process
+# exit, when R's teardown runs after the loader/ICD libraries are unmapped.
+ggml_vulkan_shutdown()
