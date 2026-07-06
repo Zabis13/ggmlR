@@ -213,8 +213,20 @@ ggml_backend_dev_t ggml_backend_meta_device(
         ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud) {
     GGML_ASSERT(n_devs <= GGML_BACKEND_META_MAX_DEVICES);
     // TODO: this is not thread-safe - needs to be fixed
-    static std::vector<std::unique_ptr<ggml_backend_meta_device_context>>         ctxs;
-    static std::map<ggml_backend_meta_device_context, struct ggml_backend_device> meta_devs;
+    //
+    // NEVER-DESTROYED SINGLETONS (ggmlR): both caches live on the heap via a
+    // leaked static pointer, so C++ does NOT run their destructors at process
+    // exit. Same rationale as meta_bufts_map() below — on a multi-GPU run these
+    // hold per-device Vulkan-backed contexts, and destroying them during
+    // __run_exit_handlers (in an order undefined relative to the Vulkan/driver
+    // teardown) faulted. The OS reclaims the memory at exit. Explicit cleanup on
+    // package unload is handled elsewhere; these are process-lifetime.
+    static auto * ctxs_ptr =
+        new std::vector<std::unique_ptr<ggml_backend_meta_device_context>>();
+    static auto * meta_devs_ptr =
+        new std::map<ggml_backend_meta_device_context, struct ggml_backend_device>();
+    auto & ctxs      = *ctxs_ptr;
+    auto & meta_devs = *meta_devs_ptr;
 
     std::vector<ggml_backend_dev_t> simple_devs;
     simple_devs.reserve(n_devs);
