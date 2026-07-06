@@ -295,6 +295,20 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
   Y
 }
 
+#' Explicitly tear down the Vulkan instance and devices
+#'
+#' Waits for all Vulkan devices to go idle, then destroys the devices and the
+#' Vulkan instance. Call this from a long-running script \emph{before} the process
+#' exits to run the teardown while the Vulkan loader / ICD libraries are still
+#' mapped. Idempotent and a no-op if Vulkan was never initialized. After this,
+#' the next Vulkan operation re-initializes the instance from scratch.
+#'
+#' @return Invisibly \code{NULL}.
+#' @export
+ggml_vulkan_shutdown <- function() {
+  invisible(.Call("R_ggml_vk_shutdown", PACKAGE = "ggmlR"))
+}
+
 #' Create a Vulkan tensor-split buffer type
 #'
 #' Builds (or fetches from a cache) a \code{ggml} buffer type that row-splits a

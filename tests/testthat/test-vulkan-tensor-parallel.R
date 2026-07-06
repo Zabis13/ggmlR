@@ -413,3 +413,63 @@ test_that("single-stage pipeline is just a plain forward", {
   Y <- matrix(y, nrow = K, ncol = M)
   expect_lt(max(abs(Y - t(W1) %*% X)), TP_TOL)
 })
+
+# ---------------------------------------------------------------------------
+# Stage E7.2: PP x DP hybrid (ggml_pp_dp_forward). Batch split across replicas,
+# each replica running the full model as a device-by-layer pipeline. On 1 GPU
+# both replicas' pipelines run on device 0, still exercising the DP-over-PP
+# orchestration; a real PP=2 x DP=2 layout needs 4 GPUs.
+# ---------------------------------------------------------------------------
+
+# make_stages factory for a 2-layer MLP: relu(t(W1) %*% .) then t(W2) %*% .
+.ppdp_make_stages_factory <- function(K, W1, W2) {
+  function(devices, m) {
+    mk <- function(dev, Wt, relu) list(
+      device = dev, in_shape = c(K, m),
+      build = function(ctx, input) {
+        w <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, K)
+        z <- ggml_mul_mat(ctx, w, input)
+        list(output = if (relu) ggml_relu(ctx, z) else z,
+             set_weights = function() ggml_backend_tensor_set_data(w, as.numeric(Wt)))
+      })
+    list(mk(devices[1], W1, TRUE), mk(devices[2], W2, FALSE))
+  }
+}
+
+test_that("PPxDP over 2 pipeline replicas on one device equals the reference", {
+  skip_if_not(vk_n_devices() >= 1, "no Vulkan device")
+  set.seed(11L)
+  K <- 64L; M <- 8L
+  W1 <- matrix(rnorm(K * K), K); W2 <- matrix(rnorm(K * K), K)
+  X  <- matrix(rnorm(M * K), nrow = M)   # M x K (samples x features)
+
+  make_stages <- .ppdp_make_stages_factory(K, W1, W2)
+  # 2 replicas, both pipelines on device 0 (c(0,0)): batch 8 split 4/4.
+  Y <- ggml_pp_dp_forward(make_stages, X,
+                          replicas = list(c(0L, 0L), c(0L, 0L)), out_ncol = K)
+
+  # Reference: per sample, y = t(W2) %*% relu(t(W1) %*% x). X rows are samples;
+  # the pipeline works in ggml ne = c(K, m) so t(X) gives features x samples.
+  Y_ref <- t(t(W2) %*% pmax(t(W1) %*% t(X), 0))
+  expect_equal(dim(Y), c(M, K))
+  expect_lt(max(abs(Y - Y_ref)), TP_TOL)
+})
+
+test_that("PPxDP = 2 x 2 on four GPUs equals the reference", {
+  skip_if_not(vk_n_devices() >= 4, "need >= 4 devices for PP=2 x DP=2")
+  set.seed(12L)
+  K <- 128L; M <- 8L
+  W1 <- matrix(rnorm(K * K), K); W2 <- matrix(rnorm(K * K), K)
+  X  <- matrix(rnorm(M * K), nrow = M)
+
+  make_stages <- .ppdp_make_stages_factory(K, W1, W2)
+  # replica A pipelines on GPUs {0,1}, replica B on {2,3}.
+  Y <- ggml_pp_dp_forward(make_stages, X,
+                          replicas = list(c(0L, 1L), c(2L, 3L)), out_ncol = K)
+
+  Y_ref <- t(t(W2) %*% pmax(t(W1) %*% t(X), 0))
+  expect_equal(dim(Y), c(M, K))
+  expect_lt(max(abs(Y - Y_ref)), TP_TOL)
+  cat(sprintf("\n[E7.2] PP=2 x DP=2 on 4 GPUs (batch %d): max|Y-ref| = %.2e\n",
+              M, max(abs(Y - Y_ref))))
+})

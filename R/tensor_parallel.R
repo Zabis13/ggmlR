@@ -248,3 +248,90 @@ ggml_pp_forward <- function(stages, x, out_shape, mem_per_stage = 16L * 1024L * 
   n_out <- prod(as.integer(out_shape))
   ggml_backend_tensor_get_data(prev_output, n_elements = n_out)
 }
+
+#' Pipeline + data parallel forward pass (PP x DP)
+#'
+#' Runs data parallelism over the batch across replicas of a pipeline-parallel
+#' model: the batch is split into contiguous shards, one per replica, and each
+#' replica runs the whole model as a device-by-layer \strong{pipeline} on its own
+#' set of GPUs (via \code{\link{ggml_pp_forward}}). This is the pipeline
+#' counterpart of \code{\link{ggml_tp_dp_forward}} — use it when the model is too
+#' large for one card (split it by layers) and you also want to raise throughput
+#' by replicating the pipeline across independent GPU sets.
+#'
+#' On a 4-GPU box the natural layout is \strong{PP=2 x DP=2}: replica A pipelines
+#' its layers across GPUs \code{c(0, 1)}, replica B across \code{c(2, 3)}, and the
+#' two replicas each handle half the batch with no cross-replica traffic.
+#'
+#' @param make_stages A function \code{function(devices, m_shard)} returning the
+#'   list of pipeline stage descriptors (see \code{\link{ggml_pp_forward}}) for a
+#'   replica whose pipeline runs on \code{devices} (an integer GPU-index vector)
+#'   and whose batch shard has \code{m_shard} samples. The stages' \code{in_shape}
+#'   / weight setup must be built for that \code{m_shard}.
+#' @param x Input activation matrix, \code{M x K} (M samples, K features). Its rows
+#'   (the batch) are split across the replicas.
+#' @param replicas A list of integer vectors, each the GPU-index pipeline for one
+#'   replica, e.g. \code{list(c(0, 1), c(2, 3))} for PP=2 x DP=2.
+#' @param out_ncol Number of columns \code{N} of the per-sample output (the final
+#'   stage produces an \code{N x m_shard} result per replica; the gathered result
+#'   is \code{M x N}).
+#' @param mem_per_stage Bytes of ggml context metadata per stage (see
+#'   \code{\link{ggml_pp_forward}}).
+#' @return The \code{M x N} result matrix, the batch-concatenation of each
+#'   replica's pipeline output.
+#' @seealso \code{\link{ggml_pp_forward}}, \code{\link{ggml_tp_dp_forward}}.
+#' @export
+#' @examples
+#' \donttest{
+#' if (ggml_vulkan_available() && ggml_vulkan_device_count() >= 4) {
+#'   K <- 64L
+#'   W1 <- matrix(rnorm(K * K), K); W2 <- matrix(rnorm(K * K), K)
+#'   make_stages <- function(devices, m) {
+#'     mk <- function(dev, Wt, relu) list(
+#'       device = dev, in_shape = c(K, m),
+#'       build = function(ctx, input) {
+#'         w <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, K)
+#'         z <- ggml_mul_mat(ctx, w, input)
+#'         list(output = if (relu) ggml_relu(ctx, z) else z,
+#'              set_weights = function() ggml_backend_tensor_set_data(w, as.numeric(Wt)))
+#'       })
+#'     list(mk(devices[1], W1, TRUE), mk(devices[2], W2, FALSE))
+#'   }
+#'   X <- matrix(rnorm(8 * K), nrow = 8)   # batch of 8
+#'   Y <- ggml_pp_dp_forward(make_stages, X, replicas = list(c(0, 1), c(2, 3)),
+#'                           out_ncol = K)
+#' }
+#' }
+ggml_pp_dp_forward <- function(make_stages, x, replicas, out_ncol,
+                               mem_per_stage = 16L * 1024L * 1024L) {
+  if (!is.function(make_stages)) {
+    stop("make_stages must be a function(devices, m_shard) returning stage list")
+  }
+  if (!is.list(replicas) || length(replicas) < 1L) {
+    stop("replicas must be a non-empty list of GPU-index pipeline vectors")
+  }
+  x <- as.matrix(x)
+  M <- nrow(x); K <- ncol(x)
+  N <- as.integer(out_ncol)
+
+  n_rep  <- length(replicas)
+  shards <- .ggmlr_batch_shards(M, n_rep)
+
+  Y <- matrix(0.0, nrow = M, ncol = N)
+  for (i in seq_along(shards)) {
+    idx     <- shards[[i]]
+    m_shard <- length(idx)
+    devices <- as.integer(replicas[[i]])
+
+    # This replica's batch shard, in ggml (column-major) layout: ne = c(K, m).
+    # x[idx, ] is m_shard x K; ggml wants column m = sample m -> transpose+flatten.
+    x_shard <- as.numeric(t(x[idx, , drop = FALSE]))
+
+    stages <- make_stages(devices, m_shard)
+    y <- ggml_pp_forward(stages, x = x_shard, out_shape = c(N, m_shard),
+                         mem_per_stage = mem_per_stage)
+    # y is N x m_shard column-major (y[s*N + n]); place into Y[idx, ] (m_shard x N).
+    Y[idx, ] <- t(matrix(y, nrow = N, ncol = m_shard))
+  }
+  Y
+}
