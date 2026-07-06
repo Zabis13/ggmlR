@@ -75,6 +75,11 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type(voi
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_vk_reg(void);
 
+// ggmlR, not upstream: explicitly tear down the Vulkan instance + devices while
+// the loader/ICD .so files are still mapped (called from R's .onUnload). Prevents
+// a flaky exit-time segfault from the loader's static-destruction order. Idempotent.
+GGML_BACKEND_API void ggml_backend_vk_shutdown(void);
+
 // UMAP SGD layout optimisation, dispatched directly (not via the ggml graph).
 // coords is n*2 floats updated in place. Returns false if backend is not Vulkan.
 GGML_BACKEND_API bool ggml_vk_umap_sgd_run(

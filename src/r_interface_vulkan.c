@@ -430,6 +430,16 @@ SEXP R_ggml_vk_stage_handoff(SEXP r_src, SEXP r_dst) {
 #endif
 }
 
+// ggmlR, not upstream: explicit Vulkan teardown (instance + devices) for
+// R's .onUnload, run while the loader/ICD .so files are still mapped. Idempotent
+// and a no-op when Vulkan was never initialized or not compiled in.
+SEXP R_ggml_vk_shutdown(void) {
+#ifdef GGML_USE_VULKAN
+    ggml_backend_vk_shutdown();
+#endif
+    return R_NilValue;
+}
+
 #ifdef GGML_USE_VULKAN
 // Finalizer: free the Vulkan backend when its external pointer is GC'd.
 // Cleared on manual R_ggml_backend_free, so this never double-frees.
