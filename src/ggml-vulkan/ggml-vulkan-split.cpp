@@ -27,14 +27,48 @@
 // ---------------------------------------------------------------------------
 // Transport abstraction (architectural hook, per NVLink discussion).
 // The way result slices are gathered across devices is deliberately abstracted
-// so a device-group (VK_KHR_device_group / LDA, NVLink-capable) transport can be
-// added later as a second implementation without touching the row-split math.
-// opaque-fd is the portable default (AMD/RADV + any PCIe topology).
+// so alternative cross-device transports can be swapped in without touching the
+// row-split math. All cross-device copies go through ggml_vk_p2p_copy() below.
+//
+// Empirically determined on 4x Tesla P100 (NVIDIA proprietary driver, 2026-07):
+//   * OPAQUE_FD works for loopback (same device) but does NOT share memory
+//     cross-device — an imported fd reads back as all zeros even with a dedicated
+//     allocation bound to the exporter's exact memory type. NVIDIA opaque-fd does
+//     not alias VRAM between two separate VkDevices here.
+//   * DEVICE_GROUP is unavailable: the driver reports every P100 in its own
+//     single-device group (no LDA / NVLink peer path via Vulkan).
+// Therefore HOST_STAGING (device -> host -> device) is the portable default: it
+// is correct everywhere (NVIDIA and AMD/RADV), needs no external dependency, and
+// is bandwidth-limited by PCIe + one RAM round-trip. OPAQUE_FD is kept for AMD,
+// where cross-device dma-buf sharing may actually alias. See memory / TODO.
 // ---------------------------------------------------------------------------
 enum vk_split_transport {
-    VK_SPLIT_TRANSPORT_OPAQUE_FD = 0,  // default: portable, PCIe P2P via external_memory_fd
-    VK_SPLIT_TRANSPORT_DEVICE_GROUP,   // experimental: NVIDIA LDA, may route over NVLink
+    VK_SPLIT_TRANSPORT_HOST_STAGING = 0,  // default: portable, correct everywhere (device->host->device)
+    VK_SPLIT_TRANSPORT_OPAQUE_FD,         // PCIe P2P via external_memory_fd (AMD/RADV; broken cross-device on NVIDIA)
+    VK_SPLIT_TRANSPORT_DEVICE_GROUP,      // experimental: NVIDIA LDA, may route over NVLink (unavailable on P100)
 };
+
+// ggmlR TP: single point for a cross-device buffer copy of `bytes` from
+// `src_buf` (on its device) into `dst_buf` (on its device), starting at the given
+// offsets. This is the transport Stage E3's result-gather (and activation
+// broadcast) routes through. Only HOST_STAGING is wired up today; the other
+// transports fall back to it until they are verified on their target hardware.
+//
+// HOST_STAGING: read src slice into a host bounce buffer, then write it into dst.
+// ggml_vk_buffer_read / ggml_vk_buffer_write are each internally synchronous
+// (they submit and wait on their device's fence), so no cross-device semaphore is
+// needed — the read has fully completed on src before the write begins on dst.
+static void ggml_vk_p2p_copy(vk_buffer & dst_buf, size_t dst_offset,
+                             vk_buffer & src_buf, size_t src_offset,
+                             size_t bytes, vk_split_transport transport) {
+    GGML_UNUSED(transport);  // only HOST_STAGING implemented; others fall back here
+    if (bytes == 0 || !src_buf || !dst_buf) {
+        return;
+    }
+    std::vector<uint8_t> bounce(bytes);
+    ggml_vk_buffer_read(src_buf, src_offset, bounce.data(), bytes);
+    ggml_vk_buffer_write(dst_buf, dst_offset, bounce.data(), bytes);
+}
 
 // Pad each device's row slice so the last row is a multiple of this many
 // elements, matching the CUDA split buffer (avoids out-of-bounds in matmul).
@@ -306,6 +340,7 @@ static void ggml_vk_report_append(char * report, size_t report_size, const char 
 }
 
 static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int iters,
+                                     vk_split_transport transport,
                                      double * out_gbps, char * report, size_t report_size) {
     if (out_gbps) *out_gbps = 0.0;
     #define say(...) ggml_vk_report_append(report, report_size, __VA_ARGS__)
@@ -324,10 +359,72 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
     vk_device src = ggml_vk_get_device((size_t) src_dev);
     vk_device dst = ggml_vk_get_device((size_t) dst_dev);
 
-    say("p2p_selftest: %s  src=dev%d (%s)  dst=dev%d (%s)  %zu bytes x%d\n",
+    say("p2p_selftest: %s  src=dev%d (%s)  dst=dev%d (%s)  %zu bytes x%d  transport=%s\n",
         loopback ? "LOOPBACK" : "CROSS-DEVICE",
-        src_dev, src->name.c_str(), dst_dev, dst->name.c_str(), bytes, iters);
+        src_dev, src->name.c_str(), dst_dev, dst->name.c_str(), bytes, iters,
+        transport == VK_SPLIT_TRANSPORT_HOST_STAGING ? "host-staging"
+        : transport == VK_SPLIT_TRANSPORT_OPAQUE_FD  ? "opaque-fd" : "device-group");
 
+    // ---------------------------------------------------------------------
+    // HOST_STAGING path (ggmlR TP): the portable, correct-everywhere transport.
+    // No fd export/import — just device-local buffers on each side and a
+    // device->host->device copy via ggml_vk_p2p_copy. This is exactly the
+    // transport Stage E3 uses, so a green result here validates the real path.
+    // ---------------------------------------------------------------------
+    if (transport == VK_SPLIT_TRANSPORT_HOST_STAGING) {
+        const auto dev_local = vk::MemoryPropertyFlagBits::eDeviceLocal;
+        vk_buffer src_buf, dst_buf;
+        int rc = 0;
+        try {
+            src_buf = ggml_vk_create_buffer(src, bytes, { dev_local });
+            dst_buf = ggml_vk_create_buffer(dst, bytes, { dev_local });
+            if (!src_buf || !dst_buf) {
+                say("  FAIL: could not allocate device-local buffers\n");
+                return -3;
+            }
+            std::vector<uint8_t> pattern(bytes);
+            for (size_t i = 0; i < bytes; i++) pattern[i] = (uint8_t)((i * 131u + 7u) & 0xFF);
+            ggml_vk_buffer_write(src_buf, 0, pattern.data(), bytes);
+
+            // Correctness: one staged copy, then read back and compare.
+            ggml_vk_p2p_copy(dst_buf, 0, src_buf, 0, bytes, transport);
+            std::vector<uint8_t> readback(bytes);
+            ggml_vk_buffer_read(dst_buf, 0, readback.data(), bytes);
+            if (memcmp(readback.data(), pattern.data(), bytes) != 0) {
+                size_t first = 0;
+                while (first < bytes && readback[first] == pattern[first]) first++;
+                say("  FAIL: data mismatch at byte %zu (got %u, want %u)\n",
+                    first, readback[first], pattern[first]);
+                return -6;
+            }
+            say("  OK: %zu bytes verified via host-staging (device->host->device)\n", bytes);
+
+            // Bandwidth: `iters` staged copies, timed as one batch. GB/s counts the
+            // bytes moved device-to-device (the host round-trip is the cost).
+            if (!loopback) {
+                auto t0 = std::chrono::high_resolution_clock::now();
+                for (int i = 0; i < iters; i++) {
+                    ggml_vk_p2p_copy(dst_buf, 0, src_buf, 0, bytes, transport);
+                }
+                auto t1 = std::chrono::high_resolution_clock::now();
+                double secs = std::chrono::duration<double>(t1 - t0).count();
+                double gbps = secs > 0.0 ? (double) bytes * (double) iters / secs / 1e9 : 0.0;
+                if (out_gbps) *out_gbps = gbps;
+                say("  bandwidth: %.2f GB/s (%d x %zu bytes, host-staged)\n", gbps, iters, bytes);
+                say("  => host-staging is PCIe + RAM bounded by design; NVLink is not used.\n");
+            } else {
+                say("  loopback: bandwidth not meaningful (same-device staging)\n");
+            }
+        } catch (const vk::SystemError & e) {
+            say("  FAIL: Vulkan exception: %s\n", e.what());
+            rc = -7;
+        }
+        return rc;
+    }
+
+    // ---------------------------------------------------------------------
+    // OPAQUE_FD path (below): requires external_memory_fd on both devices.
+    // ---------------------------------------------------------------------
     if (!src->external_memory_fd) {
         say("  FAIL: src device does not support VK_KHR_external_memory_fd\n");
         return -2;
@@ -467,12 +564,16 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
 // Public C entry point (not upstream): opaque-fd P2P self-test (correctness +
 // cross-device bandwidth). See ggml_vk_p2p_selftest_impl for semantics.
 // ---------------------------------------------------------------------------
+// `transport`: 0 = host-staging (default, portable), 1 = opaque-fd, 2 = device-group.
 extern "C" int ggml_backend_vk_p2p_selftest(int src_dev, int dst_dev,
-                                            size_t bytes, int iters,
+                                            size_t bytes, int iters, int transport,
                                             double * out_gbps,
                                             char * report, size_t report_size) {
     if (report && report_size) report[0] = '\0';
-    return ggml_vk_p2p_selftest_impl(src_dev, dst_dev, bytes, iters,
+    vk_split_transport t = VK_SPLIT_TRANSPORT_HOST_STAGING;
+    if (transport == 1) t = VK_SPLIT_TRANSPORT_OPAQUE_FD;
+    else if (transport == 2) t = VK_SPLIT_TRANSPORT_DEVICE_GROUP;
+    return ggml_vk_p2p_selftest_impl(src_dev, dst_dev, bytes, iters, t,
                                      out_gbps, report, report_size);
 }
 

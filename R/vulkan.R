@@ -174,6 +174,12 @@ ggml_vulkan_split_row_ranges <- function(nrows, n_devices, weights = NULL) {
 #'   for a loopback sanity check.
 #' @param bytes Transfer size in bytes (default 64 MiB).
 #' @param iters Number of copies to time for the bandwidth measurement (default 50).
+#' @param transport Cross-device transport to exercise: \code{"host-staging"}
+#'   (default, portable device->host->device copy — correct on every driver,
+#'   PCIe + RAM bounded), \code{"opaque-fd"} (\code{VK_KHR_external_memory_fd} P2P;
+#'   works on AMD/RADV but does NOT alias memory cross-device on the NVIDIA
+#'   proprietary driver — reads back as zeros), or \code{"device-group"}
+#'   (experimental NVIDIA LDA). \code{host-staging} is the transport Stage E3 uses.
 #' @return A named list: \code{status} (integer, 0 = data verified, <0 = failure),
 #'   \code{gbps} (numeric, measured cross-device bandwidth; 0 for loopback or on
 #'   failure) and \code{report} (character diagnostic, incl. the NVLink-vs-PCIe
@@ -193,10 +199,16 @@ ggml_vulkan_split_row_ranges <- function(nrows, n_devices, weights = NULL) {
 #' }
 #' }
 ggml_vulkan_p2p_selftest <- function(src_device, dst_device,
-                                     bytes = 64L * 1024L * 1024L, iters = 50L) {
+                                     bytes = 64L * 1024L * 1024L, iters = 50L,
+                                     transport = c("host-staging", "opaque-fd", "device-group")) {
+  transport <- match.arg(transport)
+  t_code <- switch(transport,
+                   "host-staging" = 0L,
+                   "opaque-fd"    = 1L,
+                   "device-group" = 2L)
   .Call("R_ggml_vk_p2p_selftest",
         as.integer(src_device), as.integer(dst_device),
-        as.numeric(bytes), as.integer(iters), PACKAGE = "ggmlR")
+        as.numeric(bytes), as.integer(iters), t_code, PACKAGE = "ggmlR")
 }
 
 #' Initialize Vulkan backend

@@ -34,8 +34,9 @@ GGML_BACKEND_API int  ggml_backend_vk_split_row_ranges(int64_t nrows, const floa
 // achieved bandwidth (GB/s) in *out_gbps. Returns 0 on success, <0 on failure.
 // A rate above ~16 GB/s (PCIe 3.0 x16) is empirical evidence a faster link (e.g.
 // NVLink) carried the bytes — the route is inferred, not queried from Vulkan.
+// `transport`: 0 = host-staging (default, portable), 1 = opaque-fd, 2 = device-group.
 GGML_BACKEND_API int  ggml_backend_vk_p2p_selftest(int src_dev, int dst_dev,
-                                                   size_t bytes, int iters,
+                                                   size_t bytes, int iters, int transport,
                                                    double * out_gbps,
                                                    char * report, size_t report_size);
 GGML_BACKEND_API void ggml_backend_vk_get_device_caps(int device, bool * coopmat_support, bool * coopmat1_fa_support, bool * fp16, uint32_t * subgroup_size, bool * subgroup_no_shmem, uint32_t * subgroup_min_size, uint32_t * subgroup_max_size, uint32_t * wavefronts_per_simd, bool * bf16, bool * integer_dot_product, const char ** arch_name, uint32_t * coopmat_m, uint32_t * coopmat_n, uint32_t * coopmat_k, bool * supports_256_push_constants, uint32_t * max_push_constants_size);

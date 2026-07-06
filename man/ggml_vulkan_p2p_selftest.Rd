@@ -8,7 +8,8 @@ ggml_vulkan_p2p_selftest(
   src_device,
   dst_device,
   bytes = 64L * 1024L * 1024L,
-  iters = 50L
+  iters = 50L,
+  transport = c("host-staging", "opaque-fd", "device-group")
 )
 }
 \arguments{
@@ -20,6 +21,13 @@ for a loopback sanity check.}
 \item{bytes}{Transfer size in bytes (default 64 MiB).}
 
 \item{iters}{Number of copies to time for the bandwidth measurement (default 50).}
+
+\item{transport}{Cross-device transport to exercise: \code{"host-staging"}
+(default, portable device->host->device copy — correct on every driver,
+PCIe + RAM bounded), \code{"opaque-fd"} (\code{VK_KHR_external_memory_fd} P2P;
+works on AMD/RADV but does NOT alias memory cross-device on the NVIDIA
+proprietary driver — reads back as zeros), or \code{"device-group"}
+(experimental NVIDIA LDA). \code{host-staging} is the transport Stage E3 uses.}
 }
 \value{
 A named list: \code{status} (integer, 0 = data verified, <0 = failure),
