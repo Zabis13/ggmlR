@@ -361,9 +361,14 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
         }
 
         // 3) Import that fd on the dst device. The driver takes ownership of the
-        //    fd on success; do not close it afterwards.
+        //    fd on success; do not close it afterwards. Hand over the exporter's
+        //    memory type index: getMemoryFdPropertiesKHR is unreliable on NVIDIA,
+        //    and the import must bind to the SAME type the exporter used or it
+        //    silently reads back as zeros. All devices here are the same model,
+        //    so the index is valid on the dst device too. (ggmlR TP)
         imported = ggml_vk_create_buffer(dst, bytes, { dev_local }, nullptr,
-                                         /*export_fd=*/false, /*import_fd=*/fd);
+                                         /*export_fd=*/false, /*import_fd=*/fd,
+                                         /*import_type_index=*/(int) src_buf->memory_type_index);
         if (!imported) {
             say("  FAIL: ImportMemoryFdInfoKHR failed on dst device\n");
             return -5;
