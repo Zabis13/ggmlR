@@ -2743,31 +2743,31 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
         // exported by the owning device. Ownership of the fd transfers to the
         // Vulkan driver on a successful import (do not close it here).
         //
-        // CRITICAL for cross-device P2P: the memory type index used for the
-        // import MUST be one the driver reports as valid for THIS fd, via
-        // vkGetMemoryFdPropertiesKHR. Reusing the buffer's generic
-        // memoryTypeBits picks an index that happens to match on loopback
-        // (same physical device) but is wrong on another GPU — NVIDIA then
-        // "succeeds" the import yet binds unrelated/empty memory (reads back as
-        // zeros). Narrow mem_req.memoryTypeBits to the fd-allowed set first.
+        // For cross-device P2P the import should use a memory type the driver
+        // reports as valid for THIS fd, via vkGetMemoryFdPropertiesKHR. Reusing
+        // the buffer's generic memoryTypeBits picks an index that matches on
+        // loopback (same physical device) but may be wrong on another GPU.
+        //
+        // BEST-EFFORT: this query returns ErrorUnknown on some NVIDIA drivers
+        // (it does not dispatch for opaque fd the way we call it). Treat it as
+        // advisory only: narrow memoryTypeBits ONLY when the query succeeds and
+        // yields a non-empty intersection; otherwise keep the full mask and let
+        // allocateMemory below try each candidate. Never fail the import here.
         // (getMemoryFdPropertiesKHR does NOT consume the fd.)
-        vk::MemoryFdPropertiesKHR fd_props;
-        try {
-            fd_props = device->device.getMemoryFdPropertiesKHR(
-                vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd, import_fd);
-        } catch (const vk::SystemError& e) {
-            device->device.destroyBuffer(buf->buffer);
-            GGML_LOG_WARN("ggml_vulkan: getMemoryFdPropertiesKHR failed (%s)\n", e.what());
-            throw e;
-        }
         const uint32_t orig_type_bits = mem_req.memoryTypeBits;
-        mem_req.memoryTypeBits &= fd_props.memoryTypeBits;
-        GGML_LOG_INFO("ggml_vulkan[TP]: fd-import memoryTypeBits buffer=0x%x fd=0x%x -> usable=0x%x\n",
-                      orig_type_bits, (unsigned) fd_props.memoryTypeBits, mem_req.memoryTypeBits);
-        if (mem_req.memoryTypeBits == 0) {
-            device->device.destroyBuffer(buf->buffer);
-            GGML_LOG_WARN("ggml_vulkan: no memory type valid for both buffer and imported fd\n");
-            throw vk::OutOfDeviceMemoryError("fd-import: no compatible memory type");
+        try {
+            vk::MemoryFdPropertiesKHR fd_props = device->device.getMemoryFdPropertiesKHR(
+                vk::ExternalMemoryHandleTypeFlagBits::eOpaqueFd, import_fd);
+            const uint32_t narrowed = orig_type_bits & fd_props.memoryTypeBits;
+            if (narrowed != 0) {
+                mem_req.memoryTypeBits = narrowed;
+            }
+            GGML_LOG_INFO("ggml_vulkan[TP]: fd-import memoryTypeBits buffer=0x%x fd=0x%x -> usable=0x%x%s\n",
+                          orig_type_bits, (unsigned) fd_props.memoryTypeBits, mem_req.memoryTypeBits,
+                          narrowed == 0 ? " (empty intersection; kept full mask)" : "");
+        } catch (const vk::SystemError& e) {
+            GGML_LOG_INFO("ggml_vulkan[TP]: getMemoryFdPropertiesKHR unavailable (%s); keeping full memoryTypeBits=0x%x\n",
+                          e.what(), orig_type_bits);
         }
         for (auto it = req_flags_list.begin(); it != req_flags_list.end(); it++) {
             const auto & req_flags = *it;
