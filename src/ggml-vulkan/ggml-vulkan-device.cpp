@@ -81,6 +81,12 @@ namespace std {
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+// ggmlR TP: crash-survivable diagnostic logger (GGMLR_TP_TRACE=path). Uses
+// fopen/fwrite/fclose (NOT macro-redirected in this TU), so lines survive a
+// segfault/abort during teardown. No-op when the env var is unset. See
+// r_dbg_filelog.h. Used to localize P2P/teardown crashes; keep the trace points
+// but they stay silent in normal use.
+#include "../r_dbg_filelog.h"
 
 #include "ggml-vulkan-shaders.hpp"
 
@@ -951,13 +957,24 @@ struct vk_device_struct {
     ~vk_device_struct() {
         VK_LOG_DEBUG("destroy device " << name);
 
+        // ggmlR TP trace (silent unless GGMLR_TP_TRACE set): step-by-step device
+        // teardown so a segfault here names the exact failing step. sync_staging is
+        // of particular interest — the P2P self-test is the first code to allocate
+        // it on a non-main device.
+        r_tp_tracef("~vk_device_struct enter name=%s staging=%s",
+                    name.c_str(), sync_staging ? "present" : "null");
+
+        r_tp_tracef("  destroyFence...");
         device.destroyFence(fence);
 
+        r_tp_tracef("  destroy sync_staging...");
         ggml_vk_destroy_buffer(sync_staging);
 
+        r_tp_tracef("  destroy cmd_pools...");
         compute_queue.cmd_pool.destroy(device);
         transfer_queue.cmd_pool.destroy(device);
 
+        r_tp_tracef("  destroy pipelines...");
         for (auto& pipeline : all_pipelines) {
             if (pipeline.expired()) {
                 continue;
@@ -968,9 +985,12 @@ struct vk_device_struct {
         }
         all_pipelines.clear();
 
+        r_tp_tracef("  destroyDescriptorSetLayout...");
         device.destroyDescriptorSetLayout(dsl);
 
+        r_tp_tracef("  device.destroy()...");
         device.destroy();
+        r_tp_tracef("~vk_device_struct done name=%s", name.c_str());
     }
 };
 
@@ -1016,15 +1036,24 @@ struct vk_buffer_struct {
         }
         VK_LOG_DEBUG("~vk_buffer_struct(" << buffer << ", " << size << ")");
 
+        // ggmlR TP trace (silent unless GGMLR_TP_TRACE set): localizes teardown
+        // crashes — the last line written before a segfault names the failing step.
+        r_tp_tracef("~vk_buffer_struct enter size=%zu dev=%p mem_type=%u",
+                    size, (void *) device.get(), memory_type_index);
+
         // ggmlR TP: guard teardown. A P2P import that bound to an unusable memory
         // type (e.g. a failed cross-device self-test) can leave device_memory in a
         // state where freeMemory faults. Swallow driver errors here so a diagnostic
         // FAIL path unwinds cleanly instead of taking the process down. Not upstream.
         try {
+            r_tp_tracef("  freeMemory...");
             device->device.freeMemory(device_memory);
+            r_tp_tracef("  destroyBuffer...");
             device->device.destroyBuffer(buffer);
+            r_tp_tracef("~vk_buffer_struct done");
         } catch (const vk::SystemError &) {
             // best-effort release; nothing actionable at destruction time
+            r_tp_tracef("~vk_buffer_struct caught vk::SystemError");
         }
     }
 };

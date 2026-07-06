@@ -25,28 +25,60 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-static inline void r_dbg_logf(const char * fmt, ...) {
-    const char * path = getenv("GGMLR_DBG_LOG");
+/* Core: append one line to `path` (open+write+close each call so it survives a
+ * subsequent abort/segfault). If path is "-" or "stderr", write to stderr via a
+ * real (non-redirected) fd. Cheap no-op when path is NULL/empty. */
+static inline void r_dbg_logf_to(const char * path, const char * fmt, va_list ap) {
     if (path == NULL || path[0] == '\0') {
+        return;
+    }
+    char buf[512];
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    if (strcmp(path, "-") == 0 || strcmp(path, "stderr") == 0) {
+        /* fileno(stderr)=2; write(2,...) is not macro-redirected and is unbuffered. */
+        FILE * f = fopen("/dev/stderr", "a");
+        if (f) { fwrite(buf, 1, strlen(buf), f); fwrite("\n", 1, 1, f); fclose(f); }
         return;
     }
     FILE * f = fopen(path, "a");
     if (f == NULL) {
         return;
     }
-    char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
     fwrite(buf, 1, strlen(buf), f);
     fwrite("\n", 1, 1, f);
     fclose(f); /* close == flush to disk; survives a subsequent abort() */
+}
+
+static inline void r_dbg_logf(const char * fmt, ...) {
+    const char * path = getenv("GGMLR_DBG_LOG");
+    if (path == NULL || path[0] == '\0') {
+        return;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    r_dbg_logf_to(path, fmt, ap);
+    va_end(ap);
+}
+
+/* ggmlR TP: separate channel for tensor-parallel / P2P / teardown tracing.
+ * Enable with GGMLR_TP_TRACE=<path> (or GGMLR_TP_TRACE=- for stderr). Silent
+ * when unset. Kept in the tree at key P2P/destructor points for crash
+ * localization; normal runs pay only one getenv per call. */
+static inline void r_tp_tracef(const char * fmt, ...) {
+    const char * path = getenv("GGMLR_TP_TRACE");
+    if (path == NULL || path[0] == '\0') {
+        return;
+    }
+    va_list ap;
+    va_start(ap, fmt);
+    r_dbg_logf_to(path, fmt, ap);
+    va_end(ap);
 }
 
 #ifdef __cplusplus

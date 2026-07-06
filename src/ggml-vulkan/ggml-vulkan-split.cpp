@@ -65,9 +65,14 @@ static void ggml_vk_p2p_copy(vk_buffer & dst_buf, size_t dst_offset,
     if (bytes == 0 || !src_buf || !dst_buf) {
         return;
     }
+    r_tp_tracef("p2p_copy: bounce alloc %zu bytes  src_dev=%p dst_dev=%p",
+                bytes, (void *) src_buf->device.get(), (void *) dst_buf->device.get());
     std::vector<uint8_t> bounce(bytes);
+    r_tp_tracef("p2p_copy: read src...");
     ggml_vk_buffer_read(src_buf, src_offset, bounce.data(), bytes);
+    r_tp_tracef("p2p_copy: write dst...");
     ggml_vk_buffer_write(dst_buf, dst_offset, bounce.data(), bytes);
+    r_tp_tracef("p2p_copy: done");
 }
 
 // Pad each device's row slice so the last row is a multiple of this many
@@ -376,7 +381,9 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
         vk_buffer src_buf, dst_buf;
         int rc = 0;
         try {
+            r_tp_tracef("selftest[host-staging]: alloc src on dev%d...", src_dev);
             src_buf = ggml_vk_create_buffer(src, bytes, { dev_local });
+            r_tp_tracef("selftest[host-staging]: alloc dst on dev%d...", dst_dev);
             dst_buf = ggml_vk_create_buffer(dst, bytes, { dev_local });
             if (!src_buf || !dst_buf) {
                 say("  FAIL: could not allocate device-local buffers\n");
@@ -419,6 +426,15 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
             say("  FAIL: Vulkan exception: %s\n", e.what());
             rc = -7;
         }
+        // Release the device-local buffers now, while both devices are still fully
+        // alive, rather than letting the shared_ptrs unwind at some later point.
+        // (ggmlR TP: on multi-GPU this test is the first code to touch a non-main
+        // device's sync_staging; freeing here keeps teardown ordering well-defined.)
+        r_tp_tracef("selftest[host-staging]: reset src_buf...");
+        src_buf.reset();
+        r_tp_tracef("selftest[host-staging]: reset dst_buf...");
+        dst_buf.reset();
+        r_tp_tracef("selftest[host-staging]: returning rc=%d (device teardown happens later, at process exit)", rc);
         return rc;
     }
 
