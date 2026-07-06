@@ -12,7 +12,8 @@ extern SEXP R_ggml_vulkan_device_memory(SEXP device_idx);
 extern SEXP R_ggml_vulkan_device_groups(void);  // ggmlR TP (P2P), not upstream
 extern SEXP R_ggml_vk_split_row_ranges(SEXP nrows, SEXP weights, SEXP n_devices);  // ggmlR TP
 extern SEXP R_ggml_vk_p2p_selftest(SEXP src_dev, SEXP dst_dev, SEXP bytes, SEXP iters, SEXP transport);  // ggmlR TP
-extern SEXP R_ggml_vk_split_mul_mat(SEXP w, SEXP x, SEXP N, SEXP K, SEXP M, SEXP weights, SEXP n_devices, SEXP transport);  // ggmlR TP
+extern SEXP R_ggml_vk_split_mul_mat(SEXP w, SEXP x, SEXP N, SEXP K, SEXP M, SEXP weights, SEXP n_devices, SEXP device_ids, SEXP transport);  // ggmlR TP
+extern SEXP R_ggml_vk_split_buffer_type(SEXP main_device, SEXP weights, SEXP n_devices, SEXP device_ids, SEXP transport, SEXP probe_N, SEXP probe_K);  // ggmlR TP
 extern SEXP R_ggml_vulkan_init(SEXP device_idx);
 extern SEXP R_ggml_vulkan_free(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_is_backend(SEXP backend_ptr);
@@ -1572,7 +1573,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_vulkan_device_groups",     (DL_FUNC) &R_ggml_vulkan_device_groups,     0},
     {"R_ggml_vk_split_row_ranges",      (DL_FUNC) &R_ggml_vk_split_row_ranges,      3},
     {"R_ggml_vk_p2p_selftest",          (DL_FUNC) &R_ggml_vk_p2p_selftest,          5},
-    {"R_ggml_vk_split_mul_mat",         (DL_FUNC) &R_ggml_vk_split_mul_mat,         8},
+    {"R_ggml_vk_split_mul_mat",         (DL_FUNC) &R_ggml_vk_split_mul_mat,         9},
+    {"R_ggml_vk_split_buffer_type",     (DL_FUNC) &R_ggml_vk_split_buffer_type,     7},
     {"R_ggml_vulkan_init",              (DL_FUNC) &R_ggml_vulkan_init,              1},
     {"R_ggml_vulkan_free",              (DL_FUNC) &R_ggml_vulkan_free,              1},
     {"R_ggml_vulkan_is_backend",        (DL_FUNC) &R_ggml_vulkan_is_backend,        1},

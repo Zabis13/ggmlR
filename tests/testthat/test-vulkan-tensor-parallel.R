@@ -193,3 +193,151 @@ test_that("split mul_mat validates shapes", {
   expect_error(ggml_vulkan_split_mul_mat(W, X, n_devices = 1L),
                "input dimension")
 })
+
+# ---------------------------------------------------------------------------
+# Stage E4: split buffer type factory (ggml_vulkan_split_buffer_type).
+# The factory + its get_alloc_size math touch no cross-device path, so they are
+# testable on a single GPU. alloc_size must equal the sum of the padded per-device
+# slice sizes, which we cross-check against the row-split math (E2) directly.
+# ---------------------------------------------------------------------------
+
+test_that("split buffer type factory returns a named config", {
+  skip_if_not(vk_n_devices() >= 1, "no Vulkan device")
+  bt <- ggml_vulkan_split_buffer_type(n_devices = 1L)
+  expect_named(bt, c("ptr", "name", "alloc_size"))
+  expect_true(is.character(bt$name) && nzchar(bt$name))
+  expect_match(bt$name, "vk_split")
+  expect_false(is.null(bt$ptr))
+})
+
+# Per-device slice size = nrows_split*K*4 + (K_pad - K)*4, i.e. the slice's own
+# bytes plus ONE trailing pad row-remainder (matching the C get_alloc_size, which
+# pads the row size once, not per row). Total over the active devices:
+#   N*K*4 + n_active*(K_pad - K)*4
+split_alloc_bytes <- function(N, K, n_devices, weights = NULL) {
+  r <- ggml_vulkan_split_row_ranges(N, n_devices, weights = weights)
+  rows <- r$row_high - r$row_low
+  active <- sum(rows > 0)
+  K_pad <- ceiling(K / ROUNDING) * ROUNDING
+  N * K * 4 + active * (K_pad - K) * 4
+}
+
+test_that("even-split alloc size matches the padded-tail formula", {
+  skip_if_not(vk_n_devices() >= 1, "no Vulkan device")
+  N <- 2048L; K <- 64L                       # K not a multiple of 512 -> tail pad
+  bt <- ggml_vulkan_split_buffer_type(n_devices = 1L, probe = c(N, K))
+  expect_equal(bt$alloc_size, split_alloc_bytes(N, K, 1L))
+})
+
+test_that("split alloc size equals the sum of per-device slice bytes", {
+  skip_if_not(vk_n_devices() >= 2, "need >= 2 devices to exercise a real split")
+  N <- 4096L; K <- 128L
+  bt <- ggml_vulkan_split_buffer_type(n_devices = 2L, probe = c(N, K))
+  expect_equal(bt$alloc_size, split_alloc_bytes(N, K, 2L))
+})
+
+test_that("buffer type is cached: same config returns the same pointer", {
+  skip_if_not(vk_n_devices() >= 1, "no Vulkan device")
+  a <- ggml_vulkan_split_buffer_type(n_devices = 1L)
+  b <- ggml_vulkan_split_buffer_type(n_devices = 1L)
+  # identical external pointer address => same cached buffer_type
+  expect_identical(
+    utils::capture.output(print(a$ptr)),
+    utils::capture.output(print(b$ptr))
+  )
+})
+
+test_that("weighted split total matches the padded-tail formula", {
+  skip_if_not(vk_n_devices() >= 2, "need >= 2 devices")
+  N <- 4096L; K <- 64L
+  bt <- ggml_vulkan_split_buffer_type(n_devices = 2L, weights = c(3, 1), probe = c(N, K))
+  # The row weighting shifts which device owns which rows, but as long as both
+  # devices own a non-empty slice the total is the same padded-tail sum.
+  expect_equal(bt$alloc_size, split_alloc_bytes(N, K, 2L, weights = c(3, 1)))
+})
+
+# ---------------------------------------------------------------------------
+# Stage E6.1: split across an explicit device subset (device_ids).
+# On a single GPU we can still check that device_ids = 0 behaves like the
+# default; a real subset like c(2,3) needs >= 4 devices.
+# ---------------------------------------------------------------------------
+
+test_that("device_ids = single device matches the default path", {
+  skip_if_not(vk_n_devices() >= 1, "no Vulkan device")
+  set.seed(4L)
+  N <- 32L; K <- 8L; M <- 4L
+  W <- matrix(rnorm(N * K), nrow = N)
+  X <- matrix(rnorm(M * K), nrow = M)
+  Y <- ggml_vulkan_split_mul_mat(W, X, device_ids = 0L)
+  expect_lt(max(abs(Y - X %*% t(W))), TP_TOL)
+})
+
+test_that("split buffer type distinguishes device subsets in its name/cache", {
+  skip_if_not(vk_n_devices() >= 4, "need >= 4 devices for distinct subsets")
+  a <- ggml_vulkan_split_buffer_type(device_ids = c(0L, 1L), probe = c(2048, 64))
+  b <- ggml_vulkan_split_buffer_type(device_ids = c(2L, 3L), probe = c(2048, 64))
+  # Different subsets => different cache entries (different names & pointers).
+  expect_false(identical(a$name, b$name))
+  # Same total alloc size (same shape, same even split).
+  expect_equal(a$alloc_size, b$alloc_size)
+})
+
+test_that("split mul_mat on the second GPU group {2,3} equals the reference", {
+  skip_if_not(vk_n_devices() >= 4, "need >= 4 devices for a {2,3} group")
+  set.seed(5L)
+  N <- 2048L; K <- 64L; M <- 4L
+  W <- matrix(rnorm(N * K), nrow = N)
+  X <- matrix(rnorm(M * K), nrow = M)
+  Y <- ggml_vulkan_split_mul_mat(W, X, device_ids = c(2L, 3L))
+  expect_lt(max(abs(Y - X %*% t(W))), TP_TOL)
+  cat(sprintf("\n[E6.1] TP on GPUs {2,3}: max|Y-ref| = %.2e\n", max(abs(Y - X %*% t(W)))))
+})
+
+# ---------------------------------------------------------------------------
+# Stage E6.2: TPxDP hybrid orchestration. The batch-shard helper is pure R and
+# runs anywhere; the full 2-replica x TP=2 forward needs 4 GPUs.
+# ---------------------------------------------------------------------------
+
+test_that("batch shards are contiguous, complete and near-even", {
+  # 8 rows over 2 replicas -> 4 + 4
+  s <- ggmlR:::.ggmlr_batch_shards(8L, 2L)
+  expect_length(s, 2L)
+  expect_equal(unlist(s), 1:8)
+  expect_equal(lengths(s), c(4L, 4L))
+
+  # 7 rows over 2 -> 4 + 3 (earlier shard gets the remainder)
+  s <- ggmlR:::.ggmlr_batch_shards(7L, 2L)
+  expect_equal(lengths(s), c(4L, 3L))
+  expect_equal(unlist(s), 1:7)
+
+  # more replicas than rows -> empty shards dropped
+  s <- ggmlR:::.ggmlr_batch_shards(2L, 4L)
+  expect_equal(unlist(s), 1:2)
+  expect_true(all(lengths(s) >= 1L))
+})
+
+test_that("TPxDP forward equals X %*% t(W) across 2 replicas x TP=2", {
+  skip_if_not(vk_n_devices() >= 4, "need >= 4 devices for 2 replicas x TP=2")
+  set.seed(6L)
+  N <- 2048L; K <- 64L; M <- 8L
+  W <- matrix(rnorm(N * K), nrow = N)
+  X <- matrix(rnorm(M * K), nrow = M)
+
+  ref <- X %*% t(W)
+  Y   <- ggml_tp_dp_forward(W, X, replicas = list(c(0L, 1L), c(2L, 3L)))
+
+  expect_equal(dim(Y), c(M, N))
+  expect_lt(max(abs(Y - ref)), TP_TOL)
+  cat(sprintf("\n[E6.2] TPxDP 2 replicas x TP=2 (batch %d): max|Y-ref| = %.2e\n",
+              M, max(abs(Y - ref))))
+})
+
+test_that("TPxDP with a single replica reduces to plain TP", {
+  skip_if_not(vk_n_devices() >= 2, "need >= 2 devices")
+  set.seed(7L)
+  N <- 2048L; K <- 32L; M <- 5L
+  W <- matrix(rnorm(N * K), nrow = N)
+  X <- matrix(rnorm(M * K), nrow = M)
+  Y <- ggml_tp_dp_forward(W, X, replicas = list(c(0L, 1L)))
+  expect_lt(max(abs(Y - X %*% t(W))), TP_TOL)
+})

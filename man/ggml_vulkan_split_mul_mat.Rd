@@ -9,6 +9,7 @@ ggml_vulkan_split_mul_mat(
   X,
   n_devices = ggml_vulkan_device_count(),
   weights = NULL,
+  device_ids = NULL,
   transport = c("host-staging", "opaque-fd", "device-group")
 )
 }
@@ -19,11 +20,17 @@ Its rows are split across the devices.}
 \item{X}{Activation matrix, \code{M x K} (M samples, K input features),
 broadcast to every device.}
 
-\item{n_devices}{Number of GPUs to split across (default: all available).}
+\item{n_devices}{Number of GPUs to split across (default: all available).
+Ignored if \code{device_ids} is given (its length is used instead).}
 
 \item{weights}{Optional numeric vector of length \code{n_devices} giving the
 relative share of \code{W}'s rows per device (e.g. \code{c(3, 1)} for a 3:1
 split). \code{NULL} (default) splits the rows evenly.}
+
+\item{device_ids}{Optional integer vector of physical GPU indices (0-based) to
+split across, e.g. \code{c(2, 3)} for the second replica of a TPxDP layout.
+\code{NULL} (default) uses devices \code{0..n_devices-1}. When supplied,
+\code{n_devices} is taken from its length.}
 
 \item{transport}{Cross-device gather transport: \code{"host-staging"} (default,
 portable and correct on every driver), \code{"opaque-fd"} or

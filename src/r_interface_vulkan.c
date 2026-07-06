@@ -224,7 +224,8 @@ SEXP R_ggml_vk_p2p_selftest(SEXP r_src_dev, SEXP r_dst_dev, SEXP r_bytes, SEXP r
 //   y      : numeric M*N result (y[m*N+n]), or NULL on failure
 //   report : character diagnostic
 SEXP R_ggml_vk_split_mul_mat(SEXP r_w, SEXP r_x, SEXP r_N, SEXP r_K, SEXP r_M,
-                             SEXP r_weights, SEXP r_n_devices, SEXP r_transport) {
+                             SEXP r_weights, SEXP r_n_devices, SEXP r_device_ids,
+                             SEXP r_transport) {
 #ifdef GGML_USE_VULKAN
     int64_t N = (int64_t) asReal(r_N);
     int64_t K = (int64_t) asReal(r_K);
@@ -260,6 +261,18 @@ SEXP R_ggml_vk_split_mul_mat(SEXP r_w, SEXP r_x, SEXP r_N, SEXP r_K, SEXP r_M,
         weights = wbuf;
     }
 
+    int * device_ids = NULL;
+    int   dbuf[GGML_VK_MAX_DEVICES];
+    if (!isNull(r_device_ids) && LENGTH(r_device_ids) > 0) {
+        if (LENGTH(r_device_ids) != n_devices) {
+            error("device_ids length (%d) must equal n_devices (%d)", LENGTH(r_device_ids), n_devices);
+        }
+        for (int i = 0; i < n_devices; i++) {
+            dbuf[i] = INTEGER(r_device_ids)[i];
+        }
+        device_ids = dbuf;
+    }
+
     // Copy R doubles into flat float buffers for the C API.
     R_xlen_t wlen = (R_xlen_t) N * K;
     R_xlen_t xlen = (R_xlen_t) M * K;
@@ -274,7 +287,7 @@ SEXP R_ggml_vk_split_mul_mat(SEXP r_w, SEXP r_x, SEXP r_N, SEXP r_K, SEXP r_M,
     report[0] = '\0';
 
     int status = ggml_backend_vk_split_mul_mat(w, x, y, N, K, M, weights, n_devices,
-                                               transport, report, sizeof(report));
+                                               device_ids, transport, report, sizeof(report));
 
     SEXP r_y = R_NilValue;
     if (status == 0) {
@@ -297,7 +310,97 @@ SEXP R_ggml_vk_split_mul_mat(SEXP r_w, SEXP r_x, SEXP r_N, SEXP r_K, SEXP r_M,
     return result;
 #else
     (void) r_w; (void) r_x; (void) r_N; (void) r_K; (void) r_M;
-    (void) r_weights; (void) r_n_devices; (void) r_transport;
+    (void) r_weights; (void) r_n_devices; (void) r_device_ids; (void) r_transport;
+    error("Vulkan support not compiled. Reinstall with --configure-args=\"--with-vulkan\"");
+    return R_NilValue;
+#endif
+}
+
+// ggmlR Tensor Parallelism (P2P), not upstream: Stage E4 split buffer type.
+// Args: main_device (int), weights (numeric length n_devices or NULL for even),
+//   n_devices (int), transport (int 0/1/2), and probe_N, probe_K (dims of a probe
+//   weight tensor [K cols, N rows] used to report the split alloc size; pass 0 to
+//   skip). Returns a named list:
+//   ptr        : external pointer to the cached ggml_backend_buffer_type_t
+//   name       : character, the buffer type's config-derived name
+//   alloc_size : numeric, sum of padded per-device slice bytes for the probe
+//                tensor (0 if no probe requested)
+SEXP R_ggml_vk_split_buffer_type(SEXP r_main_device, SEXP r_weights, SEXP r_n_devices,
+                                 SEXP r_device_ids, SEXP r_transport,
+                                 SEXP r_probe_N, SEXP r_probe_K) {
+#ifdef GGML_USE_VULKAN
+    int main_device = asInteger(r_main_device);
+    int n_devices   = asInteger(r_n_devices);
+    int transport   = asInteger(r_transport);
+    int64_t probe_N = (int64_t) asReal(r_probe_N);
+    int64_t probe_K = (int64_t) asReal(r_probe_K);
+
+    if (n_devices <= 0) {
+        error("n_devices must be >= 1");
+    }
+    if (n_devices > GGML_VK_MAX_DEVICES) {
+        error("n_devices (%d) exceeds GGML_VK_MAX_DEVICES (%d)", n_devices, GGML_VK_MAX_DEVICES);
+    }
+
+    float * weights = NULL;
+    float   wbuf[GGML_VK_MAX_DEVICES];
+    if (!isNull(r_weights) && LENGTH(r_weights) > 0) {
+        if (LENGTH(r_weights) != n_devices) {
+            error("weights length (%d) must equal n_devices (%d)", LENGTH(r_weights), n_devices);
+        }
+        for (int i = 0; i < n_devices; i++) {
+            wbuf[i] = (float) REAL(r_weights)[i];
+        }
+        weights = wbuf;
+    }
+
+    int * device_ids = NULL;
+    int   dbuf[GGML_VK_MAX_DEVICES];
+    if (!isNull(r_device_ids) && LENGTH(r_device_ids) > 0) {
+        if (LENGTH(r_device_ids) != n_devices) {
+            error("device_ids length (%d) must equal n_devices (%d)", LENGTH(r_device_ids), n_devices);
+        }
+        for (int i = 0; i < n_devices; i++) {
+            dbuf[i] = INTEGER(r_device_ids)[i];
+        }
+        device_ids = dbuf;
+    }
+
+    ggml_backend_buffer_type_t buft =
+        ggml_backend_vk_split_buffer_type(main_device, weights, n_devices, device_ids, transport);
+    if (buft == NULL) {
+        error("ggml_backend_vk_split_buffer_type failed (bad main_device/n_devices?)");
+    }
+
+    double alloc_size = 0.0;
+    if (probe_N > 0 && probe_K > 0) {
+        // Build a throwaway [K, N] f32 tensor (no backend allocation) just to
+        // query the split alloc size (sum of padded per-device slices).
+        struct ggml_init_params ip = { ggml_tensor_overhead() + 64, NULL, /*no_alloc=*/1 };
+        struct ggml_context * gctx = ggml_init(ip);
+        struct ggml_tensor * probe = ggml_new_tensor_2d(gctx, GGML_TYPE_F32, probe_K, probe_N);
+        alloc_size = (double) ggml_backend_buft_get_alloc_size(buft, probe);
+        ggml_free(gctx);
+    }
+
+    // The buffer_type is cached in C (never freed by us): wrap it in an external
+    // pointer with NO finalizer so R GC does not touch the cached object.
+    SEXP ptr = PROTECT(R_MakeExternalPtr((void *) buft, R_NilValue, R_NilValue));
+
+    SEXP result = PROTECT(allocVector(VECSXP, 3));
+    SEXP names  = PROTECT(allocVector(STRSXP, 3));
+    SET_VECTOR_ELT(result, 0, ptr);
+    SET_VECTOR_ELT(result, 1, mkString(ggml_backend_buft_name(buft)));
+    SET_VECTOR_ELT(result, 2, ScalarReal(alloc_size));
+    SET_STRING_ELT(names, 0, mkChar("ptr"));
+    SET_STRING_ELT(names, 1, mkChar("name"));
+    SET_STRING_ELT(names, 2, mkChar("alloc_size"));
+    setAttrib(result, R_NamesSymbol, names);
+    UNPROTECT(3);
+    return result;
+#else
+    (void) r_main_device; (void) r_weights; (void) r_n_devices; (void) r_device_ids;
+    (void) r_transport; (void) r_probe_N; (void) r_probe_K;
     error("Vulkan support not compiled. Reinstall with --configure-args=\"--with-vulkan\"");
     return R_NilValue;
 #endif

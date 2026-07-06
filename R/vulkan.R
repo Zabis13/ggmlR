@@ -232,9 +232,14 @@ ggml_vulkan_p2p_selftest <- function(src_device, dst_device,
 #' @param X Activation matrix, \code{M x K} (M samples, K input features),
 #'   broadcast to every device.
 #' @param n_devices Number of GPUs to split across (default: all available).
+#'   Ignored if \code{device_ids} is given (its length is used instead).
 #' @param weights Optional numeric vector of length \code{n_devices} giving the
 #'   relative share of \code{W}'s rows per device (e.g. \code{c(3, 1)} for a 3:1
 #'   split). \code{NULL} (default) splits the rows evenly.
+#' @param device_ids Optional integer vector of physical GPU indices (0-based) to
+#'   split across, e.g. \code{c(2, 3)} for the second replica of a TPxDP layout.
+#'   \code{NULL} (default) uses devices \code{0..n_devices-1}. When supplied,
+#'   \code{n_devices} is taken from its length.
 #' @param transport Cross-device gather transport: \code{"host-staging"} (default,
 #'   portable and correct on every driver), \code{"opaque-fd"} or
 #'   \code{"device-group"} (see \code{\link{ggml_vulkan_p2p_selftest}}).
@@ -252,13 +257,17 @@ ggml_vulkan_p2p_selftest <- function(src_device, dst_device,
 #' }
 #' }
 ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count(),
-                                      weights = NULL,
+                                      weights = NULL, device_ids = NULL,
                                       transport = c("host-staging", "opaque-fd", "device-group")) {
   transport <- match.arg(transport)
   t_code <- switch(transport,
                    "host-staging" = 0L,
                    "opaque-fd"    = 1L,
                    "device-group" = 2L)
+  if (!is.null(device_ids)) {
+    device_ids <- as.integer(device_ids)
+    n_devices  <- length(device_ids)
+  }
   W <- as.matrix(W)
   X <- as.matrix(X)
   N <- nrow(W); K <- ncol(W)
@@ -275,7 +284,7 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
   res <- .Call("R_ggml_vk_split_mul_mat",
                as.numeric(t(W)), as.numeric(t(X)),
                as.numeric(N), as.numeric(K), as.numeric(M),
-               w, as.integer(n_devices), t_code, PACKAGE = "ggmlR")
+               w, as.integer(n_devices), device_ids, t_code, PACKAGE = "ggmlR")
 
   if (res$status != 0L || is.null(res$y)) {
     stop("ggml_vulkan_split_mul_mat failed:\n", res$report)
@@ -284,6 +293,67 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
   Y <- t(matrix(res$y, nrow = N, ncol = M))
   attr(Y, "report") <- res$report
   Y
+}
+
+#' Create a Vulkan tensor-split buffer type
+#'
+#' Builds (or fetches from a cache) a \code{ggml} buffer type that row-splits a
+#' weight tensor across \code{n_devices} GPUs for tensor parallelism. This is the
+#' factory the graph allocator talks to (Stage E4): a weight placed in this buffer
+#' type has its rows distributed across the devices, each holding a contiguous
+#' band (see \code{\link{ggml_vulkan_split_row_ranges}}). Non-split tensors fall
+#' back to \code{main_device}.
+#'
+#' The buffer type is cached in C and lives for the rest of the session; the
+#' returned external pointer has no finalizer and must not be freed.
+#'
+#' @param n_devices Number of GPUs to split across (default: all available).
+#'   Ignored if \code{device_ids} is given (its length is used instead).
+#' @param main_device Device index (0-based) holding non-split fallbacks (default 0).
+#' @param weights Optional numeric vector of length \code{n_devices} giving the
+#'   relative row share per device (e.g. \code{c(3, 1)}). \code{NULL} (default)
+#'   splits evenly.
+#' @param device_ids Optional integer vector of physical GPU indices (0-based) the
+#'   split slots map onto, e.g. \code{c(2, 3)}. \code{NULL} (default) uses
+#'   \code{0..n_devices-1}. When supplied, \code{n_devices} is its length.
+#' @param transport Cross-device gather transport for the eventual compute:
+#'   \code{"host-staging"} (default), \code{"opaque-fd"} or \code{"device-group"}.
+#' @param probe A numeric vector \code{c(N, K)} describing a probe weight tensor
+#'   (\code{N} rows, \code{K} columns) whose split allocation size to report, or
+#'   \code{NULL} (default) to skip. Useful for inspecting how much total VRAM a
+#'   given weight would occupy across the split.
+#' @return A named list: \code{ptr} (external pointer to the cached buffer type),
+#'   \code{name} (its config-derived name) and \code{alloc_size} (sum of the
+#'   padded per-device slice sizes for \code{probe}, in bytes; 0 if no probe).
+#' @export
+#' @examples
+#' \donttest{
+#' if (ggml_vulkan_available() && ggml_vulkan_device_count() >= 2) {
+#'   bt <- ggml_vulkan_split_buffer_type(n_devices = 2, probe = c(2048, 64))
+#'   bt$name
+#'   bt$alloc_size   # total bytes for a 2048x64 f32 weight across 2 devices
+#' }
+#' }
+ggml_vulkan_split_buffer_type <- function(n_devices = ggml_vulkan_device_count(),
+                                          main_device = 0L, weights = NULL,
+                                          device_ids = NULL,
+                                          transport = c("host-staging", "opaque-fd", "device-group"),
+                                          probe = NULL) {
+  transport <- match.arg(transport)
+  t_code <- switch(transport,
+                   "host-staging" = 0L,
+                   "opaque-fd"    = 1L,
+                   "device-group" = 2L)
+  if (!is.null(device_ids)) {
+    device_ids <- as.integer(device_ids)
+    n_devices  <- length(device_ids)
+  }
+  w <- if (is.null(weights)) NULL else as.numeric(weights)
+  probe_N <- if (is.null(probe)) 0 else as.numeric(probe[1])
+  probe_K <- if (is.null(probe)) 0 else as.numeric(probe[2])
+  .Call("R_ggml_vk_split_buffer_type",
+        as.integer(main_device), w, as.integer(n_devices), device_ids, t_code,
+        probe_N, probe_K, PACKAGE = "ggmlR")
 }
 
 #' Initialize Vulkan backend

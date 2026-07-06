@@ -21,7 +21,9 @@
 // translation unit; these are additive and idempotent if already pulled in.
 #include <chrono>
 #include <cstdarg>
+#include <cstdint>
 #include <cstring>
+#include <map>
 #include <unistd.h>
 
 // ---------------------------------------------------------------------------
@@ -154,6 +156,10 @@ struct ggml_backend_vk_split_buffer_type_context {
     int                              main_device;
     int                              n_devices;
     std::vector<float>               tensor_split;   // cumulative fractions, size n_devices
+    // Physical Vulkan device index that owns split slot `id` (size n_devices).
+    // Lets a TP group live on an arbitrary device subset, e.g. {2,3}, so the
+    // 0-based split slots map onto GPUs 2 and 3 rather than always 0..n-1.
+    std::vector<int>                 device_ids;
     vk_split_transport               transport;
     std::string                      name;
 };
@@ -211,9 +217,10 @@ static enum ggml_status ggml_backend_vk_split_buffer_init_tensor(ggml_backend_bu
             size += ggml_row_size(tensor->type, VK_SPLIT_MATRIX_ROW_PADDING - ne0 % VK_SPLIT_MATRIX_ROW_PADDING);
         }
 
-        // Allocate the slice on device `id`. Exportable via opaque-fd so the
-        // matmul result-gather transport can share it across devices.
-        vk_device slice_dev = ggml_vk_get_device((size_t) id);
+        // Allocate the slice on the physical device that owns split slot `id`.
+        // Exportable via opaque-fd so the matmul result-gather transport can
+        // share it across devices.
+        vk_device slice_dev = ggml_vk_get_device((size_t) buft_ctx->device_ids[id]);
         const bool want_export = (buft_ctx->transport == VK_SPLIT_TRANSPORT_OPAQUE_FD)
                                  && slice_dev->external_memory_fd;
         extra->slices[id] = ggml_vk_create_buffer(
@@ -298,6 +305,162 @@ static const ggml_backend_buffer_i ggml_backend_vk_split_buffer_interface = {
     /* .clear           = */ ggml_backend_vk_split_buffer_clear,
     /* .reset           = */ NULL,
 };
+
+// ---------------------------------------------------------------------------
+// Stage E4: split buffer TYPE (the factory the graph allocator talks to).
+// Mirrors upstream CUDA ggml_backend_cuda_split_buffer_type: the buffer_type
+// carries the (main_device, tensor_split) config; alloc_buffer hands back an
+// empty split-buffer context (per-device slices are allocated lazily in
+// init_tensor), and get_alloc_size reports the SUM of the padded per-device
+// slice sizes so the allocator reserves the right total for a split weight.
+// ---------------------------------------------------------------------------
+
+static const char * ggml_backend_vk_split_buffer_type_name(ggml_backend_buffer_type_t buft) {
+    auto * ctx = (ggml_backend_vk_split_buffer_type_context *) buft->context;
+    return ctx->name.c_str();
+}
+
+static ggml_backend_buffer_t ggml_backend_vk_split_buffer_type_alloc_buffer(
+        ggml_backend_buffer_type_t buft, size_t size) {
+    // A split buffer holds no monolithic device allocation; the real per-device
+    // slices are created in init_tensor. We hand back an empty container whose
+    // size is the caller's requested total (used only for bookkeeping).
+    auto * bufctx = new ggml_backend_vk_split_buffer_context{};
+    return ggml_backend_buffer_init(buft, &ggml_backend_vk_split_buffer_interface, bufctx, size);
+}
+
+static size_t ggml_backend_vk_split_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+    auto * ctx = (ggml_backend_vk_split_buffer_type_context *) buft->context;
+    vk_device dev = ggml_vk_get_device((size_t) ctx->main_device);
+    return dev->properties.limits.minStorageBufferOffsetAlignment;
+}
+
+static size_t ggml_backend_vk_split_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(buft);
+    return SIZE_MAX;  // a split tensor is never a single allocation
+}
+
+// Sum of the padded per-device slice sizes — the total VRAM a split weight
+// occupies across all devices. Matches CUDA's split get_alloc_size so the graph
+// allocator reserves the correct amount.
+static size_t ggml_backend_vk_split_buffer_type_get_alloc_size(
+        ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
+    auto * ctx = (ggml_backend_vk_split_buffer_type_context *) buft->context;
+
+    const int64_t nrows = ggml_nrows(tensor);
+    const int64_t ne0   = tensor->ne[0];
+
+    size_t total = 0;
+    for (int id = 0; id < ctx->n_devices; id++) {
+        int64_t row_low, row_high;
+        ggml_vk_split_row_range(nrows, ctx->tensor_split.data(), ctx->n_devices, id,
+                                &row_low, &row_high);
+        const int64_t nrows_split = row_high - row_low;
+        if (nrows_split == 0) {
+            continue;
+        }
+        size_t size = ggml_vk_split_nbytes(tensor, nrows_split);
+        if (ne0 % VK_SPLIT_MATRIX_ROW_PADDING != 0) {
+            size += ggml_row_size(tensor->type, VK_SPLIT_MATRIX_ROW_PADDING - ne0 % VK_SPLIT_MATRIX_ROW_PADDING);
+        }
+        total += size;
+    }
+    return total;
+}
+
+static const ggml_backend_buffer_type_i ggml_backend_vk_split_buffer_type_interface = {
+    /* .get_name         = */ ggml_backend_vk_split_buffer_type_name,
+    /* .alloc_buffer     = */ ggml_backend_vk_split_buffer_type_alloc_buffer,
+    /* .get_alignment    = */ ggml_backend_vk_split_buffer_type_get_alignment,
+    /* .get_max_size     = */ ggml_backend_vk_split_buffer_type_get_max_size,
+    /* .get_alloc_size   = */ ggml_backend_vk_split_buffer_type_get_alloc_size,
+    /* .is_host          = */ NULL,
+};
+
+// Cache of split buffer types, keyed by (main_device, n_devices, tensor_split).
+// Held in a never-destroyed heap map (leaked static pointer) so the graph can
+// hold buffer_type pointers for its whole lifetime and the C runtime does not
+// run ~map at process exit — same static-destruction-order safety as the meta
+// buffer-type cache (see memory: g_meta_bufts fix).
+static std::map<std::string, ggml_backend_buffer_type> & vk_split_bufts_map() {
+    static auto * m = new std::map<std::string, ggml_backend_buffer_type>();
+    return *m;
+}
+
+// Public C entry point (not upstream): create/fetch a Vulkan tensor-split buffer
+// type. `tensor_split` is a per-device weight vector of length n_devices (may be
+// NULL for an even split); `main_device` is where non-split fallbacks live.
+// `device_ids` (length n_devices, may be NULL) maps split slot i to a physical
+// Vulkan device index — NULL means the identity 0..n_devices-1. This lets a TP
+// group occupy an arbitrary GPU subset, e.g. device_ids={2,3} for the second
+// replica in a TPxDP layout. `transport` selects the cross-device gather
+// transport (0=host-staging default). Returns NULL on bad arguments. The returned
+// buffer_type is cached and must not be freed by the caller.
+extern "C" ggml_backend_buffer_type_t ggml_backend_vk_split_buffer_type(
+        int main_device, const float * tensor_split, int n_devices,
+        const int * device_ids, int transport) {
+    ggml_vk_instance_init();
+
+    const int n_avail = ggml_vk_get_device_count();
+    if (n_devices <= 0 || n_devices > n_avail || main_device < 0 || main_device >= n_avail) {
+        return nullptr;
+    }
+
+    vk_split_transport t = VK_SPLIT_TRANSPORT_HOST_STAGING;
+    if (transport == 1) t = VK_SPLIT_TRANSPORT_OPAQUE_FD;
+    else if (transport == 2) t = VK_SPLIT_TRANSPORT_DEVICE_GROUP;
+
+    // Resolve the physical device for each split slot (identity if NULL). Every
+    // id must be a valid device index.
+    std::vector<int> dev_ids(n_devices);
+    for (int i = 0; i < n_devices; i++) {
+        int d = device_ids ? device_ids[i] : i;
+        if (d < 0 || d >= n_avail) {
+            return nullptr;
+        }
+        dev_ids[i] = d;
+    }
+
+    // Normalize the weight vector into cumulative fractions (the key & the config).
+    std::vector<float> split(n_devices);
+    ggml_vk_split_normalize(tensor_split, n_devices, split.data());
+
+    // Build a stable cache key from the config (device_ids included so groups on
+    // different GPU subsets are distinct cache entries).
+    char key[320];
+    int off = snprintf(key, sizeof(key), "vk_split(main=%d,nd=%d,t=%d,dev=", main_device, n_devices, (int) t);
+    for (int i = 0; i < n_devices && off < (int) sizeof(key); i++) {
+        off += snprintf(key + off, sizeof(key) - off, "%d.", dev_ids[i]);
+    }
+    if (off < (int) sizeof(key)) off += snprintf(key + off, sizeof(key) - off, ",split=");
+    for (int i = 0; i < n_devices && off < (int) sizeof(key); i++) {
+        off += snprintf(key + off, sizeof(key) - off, "%.6f,", split[i]);
+    }
+    if (off < (int) sizeof(key)) snprintf(key + off, sizeof(key) - off, ")");
+
+    auto & cache = vk_split_bufts_map();
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+        return &it->second;
+    }
+
+    // First request for this config: build and cache the buffer_type.
+    auto * ctx = new ggml_backend_vk_split_buffer_type_context{};
+    ctx->main_device  = main_device;
+    ctx->n_devices    = n_devices;
+    ctx->tensor_split = split;
+    ctx->device_ids   = dev_ids;
+    ctx->transport    = t;
+    ctx->name         = key;
+
+    ggml_backend_buffer_type buft{};
+    buft.iface   = ggml_backend_vk_split_buffer_type_interface;
+    buft.device  = ggml_backend_reg_dev_get(ggml_backend_vk_reg(), (size_t) main_device);
+    buft.context = ctx;
+
+    auto res = cache.emplace(std::string(key), buft);
+    return &res.first->second;
+}
 
 // ---------------------------------------------------------------------------
 // P2P self-test (ggmlR TP, not upstream).
@@ -611,6 +774,7 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
 static int ggml_vk_split_mul_mat_impl(const float * w, const float * x, float * y,
                                       int64_t N, int64_t K, int64_t M,
                                       const float * weights, int n_devices,
+                                      const int * device_ids,
                                       vk_split_transport transport,
                                       char * report, size_t report_size) {
     #define saym(...) ggml_vk_report_append(report, report_size, __VA_ARGS__)
@@ -624,6 +788,17 @@ static int ggml_vk_split_mul_mat_impl(const float * w, const float * x, float * 
     if (n_devices <= 0 || n_devices > n_dev_avail) {
         saym("split_mul_mat: n_devices=%d out of range (have %d)\n", n_devices, n_dev_avail);
         return -1;
+    }
+
+    // Resolve split slot -> physical device (identity if NULL); validate indices.
+    std::vector<int> dev_ids(n_devices);
+    for (int i = 0; i < n_devices; i++) {
+        int d = device_ids ? device_ids[i] : i;
+        if (d < 0 || d >= n_dev_avail) {
+            saym("split_mul_mat: device_ids[%d]=%d out of range (have %d)\n", i, d, n_dev_avail);
+            return -1;
+        }
+        dev_ids[i] = d;
     }
 
     // Cumulative row-split fractions (out[0]==0), same as the buffer type.
@@ -649,7 +824,7 @@ static int ggml_vk_split_mul_mat_impl(const float * w, const float * x, float * 
                 continue;   // this device owns no rows of W
             }
 
-            ggml_backend_t backend = ggml_backend_vk_init((size_t) id);
+            ggml_backend_t backend = ggml_backend_vk_init((size_t) dev_ids[id]);
             backends[id] = backend;
 
             // Tiny context holding this device's slice of W, the full X, and the
@@ -721,16 +896,18 @@ static int ggml_vk_split_mul_mat_impl(const float * w, const float * x, float * 
 }
 
 // Public C entry point (not upstream): tensor-parallel mul_mat. See impl above.
+// `device_ids` (length n_devices, may be NULL for identity 0..n-1) picks the
+// physical GPU subset — e.g. {2,3} for the second replica of a TPxDP layout.
 // `transport`: 0 = host-staging (default, portable), 1 = opaque-fd, 2 = device-group.
 extern "C" int ggml_backend_vk_split_mul_mat(const float * w, const float * x, float * y,
                                              int64_t N, int64_t K, int64_t M,
                                              const float * weights, int n_devices,
-                                             int transport,
+                                             const int * device_ids, int transport,
                                              char * report, size_t report_size) {
     vk_split_transport t = VK_SPLIT_TRANSPORT_HOST_STAGING;
     if (transport == 1) t = VK_SPLIT_TRANSPORT_OPAQUE_FD;
     else if (transport == 2) t = VK_SPLIT_TRANSPORT_DEVICE_GROUP;
-    return ggml_vk_split_mul_mat_impl(w, x, y, N, K, M, weights, n_devices, t, report, report_size);
+    return ggml_vk_split_mul_mat_impl(w, x, y, N, K, M, weights, n_devices, device_ids, t, report, report_size);
 }
 
 // ---------------------------------------------------------------------------
