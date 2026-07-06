@@ -131,3 +131,65 @@ test_that("cross-device fd P2P transfers data correctly and reports bandwidth", 
   # route — the rate is an inference, printed for the operator to read.
   cat(sprintf("\n[E4a] dev0->dev1 P2P: %.2f GB/s\n%s\n", r$gbps, r$report))
 })
+
+# ---------------------------------------------------------------------------
+# Stage E3: tensor-parallel mul_mat (ggml_vulkan_split_mul_mat).
+# Y = X %*% t(W) with W's rows split across devices and the result gathered.
+# The n_devices == 1 case still exercises the full orchestration (backend init,
+# per-device graph, gather) so correctness is testable on a single-GPU machine;
+# the multi-device cases skip gracefully when there are < 2 real GPUs.
+# Tolerance is loose because the Vulkan matmul accumulates in f16 on some drivers.
+# ---------------------------------------------------------------------------
+
+TP_TOL <- 5e-2  # f16 accumulation slack for the GPU matmul
+
+test_that("split mul_mat on a single device equals X %*% t(W)", {
+  skip_if_not(vk_n_devices() >= 1, "no Vulkan device")
+
+  set.seed(1L)
+  N <- 16L; K <- 8L; M <- 5L
+  W <- matrix(rnorm(N * K), nrow = N)
+  X <- matrix(rnorm(M * K), nrow = M)
+
+  Y <- ggml_vulkan_split_mul_mat(W, X, n_devices = 1L)
+  expect_equal(dim(Y), c(M, N))
+  expect_lt(max(abs(Y - X %*% t(W))), TP_TOL)
+})
+
+test_that("split mul_mat across 2 devices equals the single-device result", {
+  skip_if_not(vk_n_devices() >= 2, "need >= 2 Vulkan devices for a real split")
+
+  set.seed(2L)
+  N <- 2048L; K <- 64L; M <- 4L    # N large enough to give each device real rows
+  W <- matrix(rnorm(N * K), nrow = N)
+  X <- matrix(rnorm(M * K), nrow = M)
+
+  ref <- X %*% t(W)
+  Y   <- ggml_vulkan_split_mul_mat(W, X, n_devices = 2L)
+
+  expect_equal(dim(Y), c(M, N))
+  expect_lt(max(abs(Y - ref)), TP_TOL)
+  cat(sprintf("\n[E3] 2-device split mul_mat: max|Y-ref| = %.2e\n%s\n",
+              max(abs(Y - ref)), attr(Y, "report")))
+})
+
+test_that("weighted split still computes the correct product", {
+  skip_if_not(vk_n_devices() >= 2, "need >= 2 Vulkan devices")
+
+  set.seed(3L)
+  N <- 2048L; K <- 32L; M <- 3L
+  W <- matrix(rnorm(N * K), nrow = N)
+  X <- matrix(rnorm(M * K), nrow = M)
+
+  # 3:1 row split changes which device owns which rows but not the gathered result.
+  Y <- ggml_vulkan_split_mul_mat(W, X, n_devices = 2L, weights = c(3, 1))
+  expect_lt(max(abs(Y - X %*% t(W))), TP_TOL)
+})
+
+test_that("split mul_mat validates shapes", {
+  skip_if_not(vk_n_devices() >= 1, "no Vulkan device")
+  W <- matrix(rnorm(16 * 8), nrow = 16)   # K = 8
+  X <- matrix(rnorm(5 * 7),  nrow = 5)    # K = 7 (mismatch)
+  expect_error(ggml_vulkan_split_mul_mat(W, X, n_devices = 1L),
+               "input dimension")
+})

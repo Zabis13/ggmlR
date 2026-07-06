@@ -577,6 +577,163 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
 }
 
 // ---------------------------------------------------------------------------
+// Stage E3: tensor-parallel mul_mat across N Vulkan devices (ggmlR TP).
+//
+// Computes Y = W * X where W ([K cols, N rows]) is row-split across the devices
+// and X ([K cols, M rows]) is broadcast to all of them. Each device owns a row
+// slice [row_low, row_high) of W (via the same ggml_vk_split_row_range math the
+// buffer type uses) and produces the matching column slice of Y (ggml_mul_mat's
+// result is [N cols, M rows], so W's rows map to Y's ne[0] = columns). The slices
+// are gathered back into a single host Y through ggml_vk_p2p_copy's transport
+// (host-staging by default).
+//
+// Orchestration lives ABOVE a single device's subctx on purpose: ggml_vk_mul_mat
+// runs inside one ctx->device with an open command buffer owned by the scheduler,
+// so a genuine multi-device split cannot be a branch inside it. Instead we stand
+// up one public ggml_backend_t per device, run a tiny mul_mat graph on each, and
+// concatenate. This reuses the whole proven per-device compute path (prealloc,
+// descriptors, fences) without touching the scheduler contract.
+//
+// This is a flat-buffer contract (all f32, row-major from R's point of view) so
+// it is unit-testable against a plain R `W %*% X`. It is NOT a hot inference path
+// (a per-call backend init + host round-trip); Stage E6 wires the split buffer
+// type into a real graph. This entry validates the split+gather arithmetic and
+// the cross-device transport end to end on >=2 GPUs.
+//
+// Layout (column-major ggml, which is what ggml_backend_tensor_set/get expect):
+//   w      : N*K floats, w[n*K + k]  (N rows of K, row n contiguous)   == A
+//   x      : M*K floats, x[m*K + k]  (M rows of K, row m contiguous)   == B
+//   y (out): M*N floats, y[m*N + n]  (M rows of N, row m contiguous)   == result
+// This matches ggml's ne[0]=fastest convention: A->ne={K,N}, B->ne={K,M},
+// result->ne={N,M}. A device owning W-rows [lo,hi) fills y[m*N + n] for n in [lo,hi).
+//
+// Returns 0 on success, <0 on failure; `report` (optional) gets a short summary.
+static int ggml_vk_split_mul_mat_impl(const float * w, const float * x, float * y,
+                                      int64_t N, int64_t K, int64_t M,
+                                      const float * weights, int n_devices,
+                                      vk_split_transport transport,
+                                      char * report, size_t report_size) {
+    #define saym(...) ggml_vk_report_append(report, report_size, __VA_ARGS__)
+    if (report && report_size) report[0] = '\0';
+
+    const int n_dev_avail = ggml_vk_get_device_count();
+    if (N <= 0 || K <= 0 || M <= 0 || !w || !x || !y) {
+        saym("split_mul_mat: bad arguments\n");
+        return -1;
+    }
+    if (n_devices <= 0 || n_devices > n_dev_avail) {
+        saym("split_mul_mat: n_devices=%d out of range (have %d)\n", n_devices, n_dev_avail);
+        return -1;
+    }
+
+    // Cumulative row-split fractions (out[0]==0), same as the buffer type.
+    std::vector<float> split(n_devices);
+    ggml_vk_split_normalize(weights, n_devices, split.data());
+
+    saym("split_mul_mat: Y[%lld x %lld] = W[%lld x %lld] * X[%lld x %lld] over %d device(s), transport=%s\n",
+         (long long) M, (long long) N, (long long) N, (long long) K, (long long) M, (long long) K, n_devices,
+         transport == VK_SPLIT_TRANSPORT_HOST_STAGING ? "host-staging"
+         : transport == VK_SPLIT_TRANSPORT_OPAQUE_FD  ? "opaque-fd" : "device-group");
+
+    int rc = 0;
+    // One backend per participating device; torn down at the end. Kept in a vector
+    // so an early failure can free whatever was created so far.
+    std::vector<ggml_backend_t> backends(n_devices, nullptr);
+
+    try {
+        for (int id = 0; id < n_devices; id++) {
+            int64_t row_low, row_high;
+            ggml_vk_split_row_range(N, split.data(), n_devices, id, &row_low, &row_high);
+            const int64_t nrows = row_high - row_low;
+            if (nrows <= 0) {
+                continue;   // this device owns no rows of W
+            }
+
+            ggml_backend_t backend = ggml_backend_vk_init((size_t) id);
+            backends[id] = backend;
+
+            // Tiny context holding this device's slice of W, the full X, and the
+            // result slice. no_alloc: tensors are placed in the backend buffer.
+            ggml_init_params ip{};
+            ip.mem_size   = 3 * ggml_tensor_overhead() + ggml_graph_overhead();
+            ip.mem_buffer = nullptr;
+            ip.no_alloc   = true;
+            ggml_context * gctx = ggml_init(ip);
+
+            ggml_tensor * a = ggml_new_tensor_2d(gctx, GGML_TYPE_F32, K, nrows); // W slice [K, nrows]
+            ggml_tensor * b = ggml_new_tensor_2d(gctx, GGML_TYPE_F32, K, M);     // X       [K, M]
+            ggml_tensor * c = ggml_mul_mat(gctx, a, b);                          // -> [nrows, M]
+
+            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(gctx, backend);
+            if (!buf) {
+                saym("  FAIL: alloc on device %d (out of VRAM?)\n", id);
+                ggml_free(gctx);
+                rc = -3;
+                break;
+            }
+
+            // Upload this device's W rows [row_low, row_high) and the full X. W is
+            // row-contiguous (row n at w + n*K), so the slice is one contiguous run.
+            ggml_backend_tensor_set(a, w + row_low * K, 0, (size_t) nrows * K * sizeof(float));
+            ggml_backend_tensor_set(b, x,               0, (size_t) M * K * sizeof(float));
+
+            ggml_cgraph * gf = ggml_new_graph(gctx);
+            ggml_build_forward_expand(gf, c);
+            enum ggml_status st = ggml_backend_graph_compute(backend, gf);
+            if (st != GGML_STATUS_SUCCESS) {
+                saym("  FAIL: compute on device %d (status %d)\n", id, (int) st);
+                ggml_free(gctx);
+                rc = -4;
+                break;
+            }
+
+            // Gather: c is [nrows, M] column-major (c[m*nrows + n_local]); scatter
+            // into y[m*N + (row_low + n_local)]. Pull the whole slice to host once,
+            // then place each of its M rows into the right N-column band of y. This
+            // host copy IS the transport for host-staging; kept explicit (rather
+            // than via ggml_vk_p2p_copy) because dst is host memory, not a device
+            // buffer — the p2p_copy helper is device->device. Same round-trip cost.
+            std::vector<float> slice((size_t) nrows * M);
+            ggml_backend_tensor_get(c, slice.data(), 0, slice.size() * sizeof(float));
+            for (int64_t m = 0; m < M; m++) {
+                std::memcpy(y + m * N + row_low,
+                            slice.data() + (size_t) m * nrows,
+                            (size_t) nrows * sizeof(float));
+            }
+
+            ggml_free(gctx);
+        }
+    } catch (const vk::SystemError & e) {
+        saym("  FAIL: Vulkan exception: %s\n", e.what());
+        rc = -7;
+    }
+
+    for (int id = 0; id < n_devices; id++) {
+        if (backends[id]) {
+            ggml_backend_free(backends[id]);
+        }
+    }
+    if (rc == 0) {
+        saym("  OK: split mul_mat gathered across %d device(s)\n", n_devices);
+    }
+    return rc;
+    #undef saym
+}
+
+// Public C entry point (not upstream): tensor-parallel mul_mat. See impl above.
+// `transport`: 0 = host-staging (default, portable), 1 = opaque-fd, 2 = device-group.
+extern "C" int ggml_backend_vk_split_mul_mat(const float * w, const float * x, float * y,
+                                             int64_t N, int64_t K, int64_t M,
+                                             const float * weights, int n_devices,
+                                             int transport,
+                                             char * report, size_t report_size) {
+    vk_split_transport t = VK_SPLIT_TRANSPORT_HOST_STAGING;
+    if (transport == 1) t = VK_SPLIT_TRANSPORT_OPAQUE_FD;
+    else if (transport == 2) t = VK_SPLIT_TRANSPORT_DEVICE_GROUP;
+    return ggml_vk_split_mul_mat_impl(w, x, y, N, K, M, weights, n_devices, t, report, report_size);
+}
+
+// ---------------------------------------------------------------------------
 // Public C entry point (not upstream): opaque-fd P2P self-test (correctness +
 // cross-device bandwidth). See ggml_vk_p2p_selftest_impl for semantics.
 // ---------------------------------------------------------------------------

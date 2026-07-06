@@ -39,6 +39,18 @@ GGML_BACKEND_API int  ggml_backend_vk_p2p_selftest(int src_dev, int dst_dev,
                                                    size_t bytes, int iters, int transport,
                                                    double * out_gbps,
                                                    char * report, size_t report_size);
+// ggmlR Tensor Parallelism (P2P), not upstream: Stage E3 tensor-parallel mul_mat.
+// Computes Y = W * X with W ([K cols, N rows]) row-split across n_devices devices
+// and X ([K cols, M rows]) broadcast. Flat f32 column-major buffers:
+//   w: N*K (w[n*K+k]), x: M*K (x[m*K+k]), y: M*N out (y[m*N+n]).
+// `weights` (may be NULL for an even split) is the per-device row weighting.
+// `transport`: 0 = host-staging (default), 1 = opaque-fd, 2 = device-group.
+// Returns 0 on success, <0 on failure; `report` (optional) gets a short summary.
+GGML_BACKEND_API int  ggml_backend_vk_split_mul_mat(const float * w, const float * x, float * y,
+                                                    int64_t N, int64_t K, int64_t M,
+                                                    const float * weights, int n_devices,
+                                                    int transport,
+                                                    char * report, size_t report_size);
 GGML_BACKEND_API void ggml_backend_vk_get_device_caps(int device, bool * coopmat_support, bool * coopmat1_fa_support, bool * fp16, uint32_t * subgroup_size, bool * subgroup_no_shmem, uint32_t * subgroup_min_size, uint32_t * subgroup_max_size, uint32_t * wavefronts_per_simd, bool * bf16, bool * integer_dot_product, const char ** arch_name, uint32_t * coopmat_m, uint32_t * coopmat_n, uint32_t * coopmat_k, bool * supports_256_push_constants, uint32_t * max_push_constants_size);
 
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_vk_buffer_type(size_t dev_num);

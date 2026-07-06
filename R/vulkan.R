@@ -211,6 +211,81 @@ ggml_vulkan_p2p_selftest <- function(src_device, dst_device,
         as.numeric(bytes), as.integer(iters), t_code, PACKAGE = "ggmlR")
 }
 
+#' Tensor-parallel matrix multiply across Vulkan devices
+#'
+#' Computes \code{Y = X \%*\% t(W)} with the rows of the weight matrix \code{W}
+#' split across \code{n_devices} GPUs (true tensor parallelism), the activations
+#' \code{X} broadcast to every device, and the resulting column slices gathered
+#' back into a single matrix. This is Stage E3 of the Vulkan tensor-parallelism
+#' work: it exercises the row-split + per-device compute + cross-device gather
+#' path end to end on real hardware.
+#'
+#' Each device owns a contiguous band of \code{W}'s rows (via the same row-split
+#' math as \code{\link{ggml_vulkan_split_row_ranges}}) and produces the matching
+#' band of \code{Y}'s columns; the bands are gathered through the transport (host
+#' staging by default). This is a validation / correctness entry point, not a hot
+#' inference path — it stands up one backend per device per call and round-trips
+#' through host memory.
+#'
+#' @param W Weight matrix, \code{N x K} (N output features, K input features).
+#'   Its rows are split across the devices.
+#' @param X Activation matrix, \code{M x K} (M samples, K input features),
+#'   broadcast to every device.
+#' @param n_devices Number of GPUs to split across (default: all available).
+#' @param weights Optional numeric vector of length \code{n_devices} giving the
+#'   relative share of \code{W}'s rows per device (e.g. \code{c(3, 1)} for a 3:1
+#'   split). \code{NULL} (default) splits the rows evenly.
+#' @param transport Cross-device gather transport: \code{"host-staging"} (default,
+#'   portable and correct on every driver), \code{"opaque-fd"} or
+#'   \code{"device-group"} (see \code{\link{ggml_vulkan_p2p_selftest}}).
+#' @return The \code{M x N} result matrix, equal to \code{X \%*\% t(W)} up to the
+#'   GPU's floating-point accumulation. Errors if the split compute fails; the
+#'   C-level diagnostic is attached as attribute \code{"report"}.
+#' @export
+#' @examples
+#' \donttest{
+#' if (ggml_vulkan_available() && ggml_vulkan_device_count() >= 2) {
+#'   W <- matrix(rnorm(8 * 4), nrow = 8)   # 8 output features x 4 inputs
+#'   X <- matrix(rnorm(3 * 4), nrow = 3)   # 3 samples x 4 inputs
+#'   Y <- ggml_vulkan_split_mul_mat(W, X, n_devices = 2)
+#'   max(abs(Y - X %*% t(W)))              # ~1e-3 (GPU f16 accumulation)
+#' }
+#' }
+ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count(),
+                                      weights = NULL,
+                                      transport = c("host-staging", "opaque-fd", "device-group")) {
+  transport <- match.arg(transport)
+  t_code <- switch(transport,
+                   "host-staging" = 0L,
+                   "opaque-fd"    = 1L,
+                   "device-group" = 2L)
+  W <- as.matrix(W)
+  X <- as.matrix(X)
+  N <- nrow(W); K <- ncol(W)
+  M <- nrow(X)
+  if (ncol(X) != K) {
+    stop(sprintf("X has %d columns but W has %d (both are the K/input dimension)",
+                 ncol(X), K))
+  }
+  w <- if (is.null(weights)) NULL else as.numeric(weights)
+
+  # Pack into the column-major flat layout the C API expects:
+  #   w[n*K + k] = W[n, k]  ->  as.numeric(t(W))  (row n contiguous)
+  #   x[m*K + k] = X[m, k]  ->  as.numeric(t(X))
+  res <- .Call("R_ggml_vk_split_mul_mat",
+               as.numeric(t(W)), as.numeric(t(X)),
+               as.numeric(N), as.numeric(K), as.numeric(M),
+               w, as.integer(n_devices), t_code, PACKAGE = "ggmlR")
+
+  if (res$status != 0L || is.null(res$y)) {
+    stop("ggml_vulkan_split_mul_mat failed:\n", res$report)
+  }
+  # y[m*N + n] = Y[m, n]; a column-major fill of an N x M matrix, transposed -> M x N.
+  Y <- t(matrix(res$y, nrow = N, ncol = M))
+  attr(Y, "report") <- res$report
+  Y
+}
+
 #' Initialize Vulkan backend
 #'
 #' Creates a Vulkan backend for the specified device.

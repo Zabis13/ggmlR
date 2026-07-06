@@ -215,6 +215,94 @@ SEXP R_ggml_vk_p2p_selftest(SEXP r_src_dev, SEXP r_dst_dev, SEXP r_bytes, SEXP r
 #endif
 }
 
+// ggmlR Tensor Parallelism (P2P), not upstream: Stage E3 tensor-parallel mul_mat.
+// Args: w (numeric N*K, column-major w[n*K+k]), x (numeric M*K, x[m*K+k]),
+//   N, K, M (dims), weights (numeric length n_devices or NULL for even split),
+//   n_devices (integer), transport (0=host-staging,1=opaque-fd,2=device-group).
+// Returns a named list:
+//   status : integer, 0 on success, <0 on failure
+//   y      : numeric M*N result (y[m*N+n]), or NULL on failure
+//   report : character diagnostic
+SEXP R_ggml_vk_split_mul_mat(SEXP r_w, SEXP r_x, SEXP r_N, SEXP r_K, SEXP r_M,
+                             SEXP r_weights, SEXP r_n_devices, SEXP r_transport) {
+#ifdef GGML_USE_VULKAN
+    int64_t N = (int64_t) asReal(r_N);
+    int64_t K = (int64_t) asReal(r_K);
+    int64_t M = (int64_t) asReal(r_M);
+    int     n_devices = asInteger(r_n_devices);
+    int     transport = asInteger(r_transport);
+
+    if (N <= 0 || K <= 0 || M <= 0) {
+        error("N, K, M must all be >= 1");
+    }
+    if (n_devices <= 0) {
+        error("n_devices must be >= 1");
+    }
+    if (n_devices > GGML_VK_MAX_DEVICES) {
+        error("n_devices (%d) exceeds GGML_VK_MAX_DEVICES (%d)", n_devices, GGML_VK_MAX_DEVICES);
+    }
+    if ((int64_t) LENGTH(r_w) != N * K) {
+        error("w length (%d) must equal N*K (%lld)", LENGTH(r_w), (long long) (N * K));
+    }
+    if ((int64_t) LENGTH(r_x) != M * K) {
+        error("x length (%d) must equal M*K (%lld)", LENGTH(r_x), (long long) (M * K));
+    }
+
+    float * weights = NULL;
+    float   wbuf[GGML_VK_MAX_DEVICES];
+    if (!isNull(r_weights) && LENGTH(r_weights) > 0) {
+        if (LENGTH(r_weights) != n_devices) {
+            error("weights length (%d) must equal n_devices (%d)", LENGTH(r_weights), n_devices);
+        }
+        for (int i = 0; i < n_devices; i++) {
+            wbuf[i] = (float) REAL(r_weights)[i];
+        }
+        weights = wbuf;
+    }
+
+    // Copy R doubles into flat float buffers for the C API.
+    R_xlen_t wlen = (R_xlen_t) N * K;
+    R_xlen_t xlen = (R_xlen_t) M * K;
+    R_xlen_t ylen = (R_xlen_t) M * N;
+    float * w = (float *) R_alloc(wlen, sizeof(float));
+    float * x = (float *) R_alloc(xlen, sizeof(float));
+    float * y = (float *) R_alloc(ylen, sizeof(float));
+    for (R_xlen_t i = 0; i < wlen; i++) w[i] = (float) REAL(r_w)[i];
+    for (R_xlen_t i = 0; i < xlen; i++) x[i] = (float) REAL(r_x)[i];
+
+    char   report[4096];
+    report[0] = '\0';
+
+    int status = ggml_backend_vk_split_mul_mat(w, x, y, N, K, M, weights, n_devices,
+                                               transport, report, sizeof(report));
+
+    SEXP r_y = R_NilValue;
+    if (status == 0) {
+        r_y = PROTECT(allocVector(REALSXP, ylen));
+        for (R_xlen_t i = 0; i < ylen; i++) REAL(r_y)[i] = (double) y[i];
+    } else {
+        PROTECT(r_y);  // protect R_NilValue placeholder to keep UNPROTECT count uniform
+    }
+
+    SEXP result = PROTECT(allocVector(VECSXP, 3));
+    SEXP names  = PROTECT(allocVector(STRSXP, 3));
+    SET_VECTOR_ELT(result, 0, ScalarInteger(status));
+    SET_VECTOR_ELT(result, 1, r_y);
+    SET_VECTOR_ELT(result, 2, mkString(report));
+    SET_STRING_ELT(names, 0, mkChar("status"));
+    SET_STRING_ELT(names, 1, mkChar("y"));
+    SET_STRING_ELT(names, 2, mkChar("report"));
+    setAttrib(result, R_NamesSymbol, names);
+    UNPROTECT(3);
+    return result;
+#else
+    (void) r_w; (void) r_x; (void) r_N; (void) r_K; (void) r_M;
+    (void) r_weights; (void) r_n_devices; (void) r_transport;
+    error("Vulkan support not compiled. Reinstall with --configure-args=\"--with-vulkan\"");
+    return R_NilValue;
+#endif
+}
+
 #ifdef GGML_USE_VULKAN
 // Finalizer: free the Vulkan backend when its external pointer is GC'd.
 // Cleared on manual R_ggml_backend_free, so this never double-frees.
