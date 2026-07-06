@@ -406,6 +406,30 @@ SEXP R_ggml_vk_split_buffer_type(SEXP r_main_device, SEXP r_weights, SEXP r_n_de
 #endif
 }
 
+// ggmlR Tensor Parallelism (P2P), not upstream: Stage E7 pipeline handoff.
+// Copies the activation tensor `src` (stage N output) into `dst` (stage N+1
+// input) across devices via host staging. Both args are ggml_tensor external
+// pointers. Returns integer status (0 = ok, <0 = shape/buffer mismatch).
+SEXP R_ggml_vk_stage_handoff(SEXP r_src, SEXP r_dst) {
+#ifdef GGML_USE_VULKAN
+    struct ggml_tensor * src = (struct ggml_tensor *) R_ExternalPtrAddr(r_src);
+    struct ggml_tensor * dst = (struct ggml_tensor *) R_ExternalPtrAddr(r_dst);
+    if (src == NULL || dst == NULL) {
+        error("stage_handoff: src/dst tensor pointer is NULL");
+    }
+    int rc = ggml_backend_vk_stage_handoff(src, dst);
+    if (rc != 0) {
+        error("ggml_backend_vk_stage_handoff failed (rc=%d): "
+              "src/dst must be Vulkan-backed and have equal size", rc);
+    }
+    return ScalarInteger(rc);
+#else
+    (void) r_src; (void) r_dst;
+    error("Vulkan support not compiled. Reinstall with --configure-args=\"--with-vulkan\"");
+    return R_NilValue;
+#endif
+}
+
 #ifdef GGML_USE_VULKAN
 // Finalizer: free the Vulkan backend when its external pointer is GC'd.
 // Cleared on manual R_ggml_backend_free, so this never double-frees.

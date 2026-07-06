@@ -341,3 +341,75 @@ test_that("TPxDP with a single replica reduces to plain TP", {
   Y <- ggml_tp_dp_forward(W, X, replicas = list(c(0L, 1L)))
   expect_lt(max(abs(Y - X %*% t(W))), TP_TOL)
 })
+
+# ---------------------------------------------------------------------------
+# Stage E7: pipeline parallelism (ggml_pp_forward + stage handoff).
+# A 2-stage MLP split by layers. On a single GPU both stages run on device 0,
+# which still exercises the full pipeline + handoff (loopback copy); a real
+# cross-device handoff needs >= 2 GPUs.
+# ---------------------------------------------------------------------------
+
+# Build a 2-stage pipeline: stage1 = relu(t(W1) %*% x), stage2 = t(W2) %*% h.
+.pp_build_stages <- function(K, M, W1, W2, dev1, dev2) {
+  mk <- function(dev, Wt, relu) list(
+    device = dev, in_shape = c(K, M),
+    build = function(ctx, input) {
+      w <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, K)
+      z <- ggml_mul_mat(ctx, w, input)
+      out <- if (relu) ggml_relu(ctx, z) else z
+      list(output = out,
+           set_weights = function() ggml_backend_tensor_set_data(w, as.numeric(Wt)))
+    })
+  list(mk(dev1, W1, TRUE), mk(dev2, W2, FALSE))
+}
+
+test_that("2-stage pipeline on one device equals the composed reference", {
+  skip_if_not(vk_n_devices() >= 1, "no Vulkan device")
+  set.seed(8L)
+  K <- 64L; M <- 8L
+  W1 <- matrix(rnorm(K * K), K); W2 <- matrix(rnorm(K * K), K)
+  X  <- matrix(rnorm(K * M), K)
+
+  stages <- .pp_build_stages(K, M, W1, W2, dev1 = 0L, dev2 = 0L)  # loopback handoff
+  y <- ggml_pp_forward(stages, x = as.numeric(X), out_shape = c(K, M))
+  Y <- matrix(y, nrow = K, ncol = M)
+
+  h_ref <- pmax(t(W1) %*% X, 0)
+  Y_ref <- t(W2) %*% h_ref
+  expect_equal(dim(Y), c(K, M))
+  expect_lt(max(abs(Y - Y_ref)), TP_TOL)
+})
+
+test_that("pipeline handoff really crosses devices (stage2 on GPU 1)", {
+  skip_if_not(vk_n_devices() >= 2, "need >= 2 devices for a cross-device handoff")
+  set.seed(9L)
+  K <- 128L; M <- 4L
+  W1 <- matrix(rnorm(K * K), K); W2 <- matrix(rnorm(K * K), K)
+  X  <- matrix(rnorm(K * M), K)
+
+  stages <- .pp_build_stages(K, M, W1, W2, dev1 = 0L, dev2 = 1L)  # GPU0 -> GPU1
+  y <- ggml_pp_forward(stages, x = as.numeric(X), out_shape = c(K, M))
+  Y <- matrix(y, nrow = K, ncol = M)
+
+  Y_ref <- t(W2) %*% pmax(t(W1) %*% X, 0)
+  expect_lt(max(abs(Y - Y_ref)), TP_TOL)
+  cat(sprintf("\n[E7] pipeline GPU0->GPU1: max|Y-ref| = %.2e\n", max(abs(Y - Y_ref))))
+})
+
+test_that("single-stage pipeline is just a plain forward", {
+  skip_if_not(vk_n_devices() >= 1, "no Vulkan device")
+  set.seed(10L)
+  K <- 32L; M <- 3L
+  W1 <- matrix(rnorm(K * K), K)
+  X  <- matrix(rnorm(K * M), K)
+  stages <- list(list(
+    device = 0L, in_shape = c(K, M),
+    build = function(ctx, input) {
+      w <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, K)
+      list(output = ggml_mul_mat(ctx, w, input),
+           set_weights = function() ggml_backend_tensor_set_data(w, as.numeric(W1)))
+    }))
+  y <- ggml_pp_forward(stages, x = as.numeric(X), out_shape = c(K, M))
+  Y <- matrix(y, nrow = K, ncol = M)
+  expect_lt(max(abs(Y - t(W1) %*% X)), TP_TOL)
+})

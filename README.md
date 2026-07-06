@@ -471,6 +471,43 @@ result$loss_history   # numeric vector, one value per iteration
 result$model          # trained replica 0
 ```
 
+### Multi-GPU: tensor & pipeline parallelism
+
+For machines with several Vulkan GPUs, ggmlR ships a native **tensor-parallel** and **pipeline-parallel** path (not in upstream ggml, which does tensor-split only for CUDA/SYCL). The cross-device transport defaults to portable **host staging** (device→host→device), correct on every driver.
+
+**Tensor parallelism** — split a weight matrix's rows across GPUs, compute each slice on its own device, gather the result:
+
+```r
+W <- matrix(rnorm(4096 * 256), nrow = 4096)   # 4096 outputs x 256 inputs
+X <- matrix(rnorm(8 * 256),    nrow = 8)       # batch of 8
+
+Y <- ggml_vulkan_split_mul_mat(W, X, n_devices = 2)   # == X %*% t(W)
+```
+
+**TP × DP hybrid** — data-parallel over the batch across replicas of tensor-parallel device groups (e.g. 2 replicas × TP=2 on a 4-GPU box):
+
+```r
+# replica A = GPUs {0,1}, replica B = GPUs {2,3}; batch split across replicas,
+# weights tensor-split within each pair. No cross-replica traffic at inference.
+Y <- ggml_tp_dp_forward(W, X, replicas = list(c(0, 1), c(2, 3)))
+```
+
+**Pipeline parallelism** — split a model *by layers* across GPUs; the activation tensor is handed between stages just once per pass (a single cross-device copy). Suits models too large for one card:
+
+```r
+# stage 1 (layers 1..k) on GPU 0  ->  stage 2 (layers k+1..n) on GPU 1
+mk <- function(dev, Wt) list(
+  device = dev, in_shape = c(K, M),
+  build  = function(ctx, input) {
+    w <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, K)
+    list(output      = ggml_relu(ctx, ggml_mul_mat(ctx, w, input)),
+         set_weights = function() ggml_backend_tensor_set_data(w, as.numeric(Wt)))
+  })
+y <- ggml_pp_forward(list(mk(0L, W1), mk(1L, W2)), x = as.numeric(X), out_shape = c(K, M))
+```
+
+See `inst/examples/tp_dp_hybrid.R` and `inst/examples/pp_pipeline.R` for complete runnable demos.
+
 ### Autograd op reference
 
 | Category | Functions |

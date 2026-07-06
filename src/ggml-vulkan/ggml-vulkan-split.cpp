@@ -77,6 +77,43 @@ static void ggml_vk_p2p_copy(vk_buffer & dst_buf, size_t dst_offset,
     r_tp_tracef("p2p_copy: done");
 }
 
+// Stage E7 (Pipeline Parallelism): hand an activation tensor from one pipeline
+// stage (on device N) to the next stage's input tensor (on device N+1). Both are
+// ordinary Vulkan-backed ggml tensors; this copies src's bytes into dst through
+// the same cross-device transport as the TP gather (host-staging by default).
+//
+// This is the ONE cross-device transfer per full forward pass that pipeline
+// parallelism needs — a single activation handoff between adjacent stages, versus
+// TP's per-layer gather. Returns 0 on success, <0 on a shape/buffer mismatch.
+extern "C" int ggml_backend_vk_stage_handoff(const ggml_tensor * src, ggml_tensor * dst) {
+    if (!src || !dst || !src->buffer || !dst->buffer) {
+        return -1;
+    }
+    const size_t nbytes = ggml_nbytes(src);
+    if (nbytes != ggml_nbytes(dst)) {
+        return -2;   // stage output and next-stage input must have the same size
+    }
+
+    // Pull the vk_buffer + byte offset out of each tensor's backend buffer.
+    auto * src_ctx = (ggml_backend_vk_buffer_context *) src->buffer->context;
+    auto * dst_ctx = (ggml_backend_vk_buffer_context *) dst->buffer->context;
+    if (!src_ctx || !dst_ctx) {
+        return -3;
+    }
+    vk_buffer src_buf = src_ctx->dev_buffer;
+    vk_buffer dst_buf = dst_ctx->dev_buffer;
+    if (!src_buf || !dst_buf) {
+        return -3;
+    }
+    const size_t src_off = vk_tensor_offset(src) + src->view_offs;
+    const size_t dst_off = vk_tensor_offset(dst) + dst->view_offs;
+
+    // Host-staging device->host->device copy (correct across any two devices).
+    ggml_vk_p2p_copy(dst_buf, dst_off, src_buf, src_off, nbytes,
+                     VK_SPLIT_TRANSPORT_HOST_STAGING);
+    return 0;
+}
+
 // Pad each device's row slice so the last row is a multiple of this many
 // elements, matching the CUDA split buffer (avoids out-of-bounds in matmul).
 #define VK_SPLIT_MATRIX_ROW_PADDING 512
