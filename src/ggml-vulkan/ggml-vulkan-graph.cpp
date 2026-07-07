@@ -3433,37 +3433,53 @@ ggml_backend_reg_t ggml_backend_vk_reg() {
 // coordinate with the loader's own static destructors, so the loader can be
 // unmapped before our device destructors run their loader calls
 // (destroyFence/destroyDescriptorSetLayout/device.destroy), giving a flaky
-// segfault in unmapped memory after results are already returned. Doing the
-// teardown here removes that race: by the time atexit runs there is nothing left
-// to destroy.
+// segfault in unmapped memory after results are already returned. Draining and
+// releasing the instance's device refs here, while the loader is still mapped,
+// gases idle driver threads early and shrinks that race.
+//
+// We release the instance's DEVICE references but leave the instance handle
+// itself alive (see the note at the end): late R XPtr finalizers may still need
+// a valid instance to run vkFreeMemory against.
 //
 // Safe w.r.t. downstream (llamaR/sd2R): `vk_device` is a shared_ptr, so
 // resetting the instance's reference only actually destroys a device once every
 // live backend that copied it has been freed — never prematurely. waitIdle first
 // drains any in-flight driver work so the loader threads are quiescent.
 extern "C" void ggml_backend_vk_shutdown(void) {
+    r_tp_tracef("vk_shutdown: enter (initialized=%d)", (int) vk_instance_initialized);
     if (!vk_instance_initialized) {
+        r_tp_tracef("vk_shutdown: already down, no-op");
         return;   // idempotent: guards double-shutdown and use-after-shutdown init
     }
-    // Mark torn-down up front so a re-entrant call (or a device destructor that
-    // touches instance state) sees the shutdown in progress and bails early.
     vk_instance_initialized = false;
 
+    int idx = 0;
     for (auto & dev : vk_instance.devices) {
-        // Drain in-flight work on THIS device immediately before releasing it, so
-        // a later device in the loop can't still have work queued when we reset it
-        // (per-device waitIdle, not one shared drain up front).
+        if (dev) {
+            // use_count > 1 means a live backend (e.g. from split_mul_mat/pp_forward,
+            // or held by llamaR/sd2R) still references this device — resetting the
+            // instance's ref will NOT destroy it now; ~vk_device_struct runs later,
+            // when that backend is freed, possibly after we destroy the instance.
+            r_tp_tracef("vk_shutdown: dev[%d] use_count=%ld", idx, (long) dev.use_count());
+        }
         if (dev && dev->device) {
             try { dev->device.waitIdle(); } catch (...) {}
         }
-        // Each reset() may run ~vk_device_struct (loader calls); isolate it so one
-        // device throwing does not abort teardown of the rest / of the instance.
         try { dev.reset(); } catch (...) {}
+        idx++;
     }
-    if (vk_instance.instance) {
-        try { vk_instance.instance.destroy(); } catch (...) {}
-        vk_instance.instance = nullptr;
-    }
+    // Deliberately DO NOT destroy vk_instance.instance here.
+    //
+    // A backend created inside pp_forward/split_mul_mat is wrapped in an R XPtr
+    // whose finalizer (r_ggml_vk_backend_finalizer, onexit=TRUE) may not have run
+    // yet when this explicit shutdown fires. That finalizer -> ggml_backend_free ->
+    // last shared_ptr ref -> ~vk_device_struct -> device.destroy()/vkFreeMemory,
+    // which needs a LIVE instance. If we destroy the instance now, that late
+    // vkFreeMemory hits a dead instance => "[Vulkan Loader] vkFreeMemory: Invalid
+    // device" -> Aborted. So we drain+release the instance's own device refs (kills
+    // idle driver threads) but leave the instance handle valid; the OS reclaims it
+    // at process exit after every late device finalizer has run against it.
+    r_tp_tracef("vk_shutdown: devices reset, instance left LIVE for late finalizers");
 }
 
 // Extension availability
