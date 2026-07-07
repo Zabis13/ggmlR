@@ -433,9 +433,12 @@ SEXP R_ggml_vk_stage_handoff(SEXP r_src, SEXP r_dst) {
 // ggmlR, not upstream: explicit Vulkan teardown (instance + devices) for
 // R's .onUnload, run while the loader/ICD .so files are still mapped. Idempotent
 // and a no-op when Vulkan was never initialized or not compiled in.
-SEXP R_ggml_vk_shutdown(void) {
+SEXP R_ggml_vk_shutdown(SEXP r_hard) {
 #ifdef GGML_USE_VULKAN
-    ggml_backend_vk_shutdown();
+    // hard != 0 => _exit(0) after teardown (never returns); see ggml-vulkan.h.
+    ggml_backend_vk_shutdown(asLogical(r_hard) == TRUE ? 1 : 0);
+#else
+    (void) r_hard;
 #endif
     return R_NilValue;
 }

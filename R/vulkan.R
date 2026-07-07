@@ -313,7 +313,22 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
 #' next Vulkan operation transparently re-initializes the instance from scratch,
 #' so it is safe to call mid-session too.
 #'
-#' @return Invisibly \code{NULL}.
+#' The plain teardown alone does not always win the exit-time race: with backends
+#' created inside pipeline / tensor-parallel forwards, the loader-static-destruction
+#' segfault (address ending \code{f1ba0}) can still fire flakily \emph{after} your
+#' results are printed, because no R exit hook runs before R unmaps the loader.
+#' For a guaranteed-clean exit, pass \code{hard = TRUE} as the \strong{last}
+#' statement of a standalone script: after teardown it calls \code{_exit(0)},
+#' terminating the process immediately without running R's / the C runtime's exit
+#' handlers or unmapping any shared library — so there is no loader teardown phase
+#' left to crash. Because it bypasses R's normal shutdown, only use
+#' \code{hard = TRUE} at the very end of a script, never mid-session or in a
+#' package/interactive context.
+#'
+#' @param hard Logical. If \code{TRUE}, call \code{_exit(0)} after teardown to skip
+#'   all exit handlers and guarantee no exit-time segfault. Never returns. Default
+#'   \code{FALSE} (normal return; safe to call mid-session).
+#' @return Invisibly \code{NULL} (does not return when \code{hard = TRUE}).
 #' @export
 #' @examples
 #' \donttest{
@@ -324,8 +339,8 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
 #'   ggml_vulkan_shutdown()   # clean up before the script exits
 #' }
 #' }
-ggml_vulkan_shutdown <- function() {
-  invisible(.Call("R_ggml_vk_shutdown", PACKAGE = "ggmlR"))
+ggml_vulkan_shutdown <- function(hard = FALSE) {
+  invisible(.Call("R_ggml_vk_shutdown", isTRUE(hard), PACKAGE = "ggmlR"))
 }
 
 #' Create a Vulkan tensor-split buffer type

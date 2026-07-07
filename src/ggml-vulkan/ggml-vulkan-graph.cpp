@@ -1,4 +1,5 @@
 #include "../r_dbg_filelog.h" /* opt-in trace via GGMLR_DBG_LOG env (no-op when unset) */
+#include <unistd.h>           /* _exit() for ggml_backend_vk_shutdown(hard=1) */
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 
@@ -3445,10 +3446,17 @@ ggml_backend_reg_t ggml_backend_vk_reg() {
 // resetting the instance's reference only actually destroys a device once every
 // live backend that copied it has been freed — never prematurely. waitIdle first
 // drains any in-flight driver work so the loader threads are quiescent.
-extern "C" void ggml_backend_vk_shutdown(void) {
-    r_tp_tracef("vk_shutdown: enter (initialized=%d)", (int) vk_instance_initialized);
+extern "C" void ggml_backend_vk_shutdown(int hard) {
+    r_tp_tracef("vk_shutdown: enter (initialized=%d hard=%d)",
+                (int) vk_instance_initialized, hard);
     if (!vk_instance_initialized) {
         r_tp_tracef("vk_shutdown: already down, no-op");
+        if (hard) {
+            // Still honour the hard request: skip the process teardown that races
+            // the Vulkan loader's static destructors even when we own no devices.
+            r_tp_tracef("vk_shutdown: hard exit (nothing to tear down)");
+            _exit(0);
+        }
         return;   // idempotent: guards double-shutdown and use-after-shutdown init
     }
     vk_instance_initialized = false;
@@ -3480,6 +3488,22 @@ extern "C" void ggml_backend_vk_shutdown(void) {
     // idle driver threads) but leave the instance handle valid; the OS reclaims it
     // at process exit after every late device finalizer has run against it.
     r_tp_tracef("vk_shutdown: devices reset, instance left LIVE for late finalizers");
+
+    if (hard) {
+        // The f1ba0 segfault is a flaky race between NVIDIA/Mesa driver worker
+        // threads still winding down and the dynamic loader unmapping the Vulkan
+        // ICD .so files during the C runtime's atexit/static-destruction phase.
+        // No R exit hook can win that race (R unmaps the loader before any hook).
+        // Since all results have already been produced and printed by this point,
+        // the only reliable fix is to leave via _exit(), which terminates the
+        // process immediately WITHOUT running atexit handlers, C++ static
+        // destructors, or unmapping shared objects — so there is no loader
+        // static-destruction phase for the driver threads to fault against.
+        // Callers opt in (hard=TRUE) as the last statement of a script/example.
+        r_tp_tracef("vk_shutdown: hard exit(0) — skipping atexit/loader teardown");
+        fflush(NULL);
+        _exit(0);
+    }
 }
 
 // Extension availability

@@ -67,6 +67,7 @@ cat(sprintf("max |Y - X %%*%% t(W)| = %.3e  (%s)\n",
             max_err, if (max_err < 5e-2) "OK" else "MISMATCH"))
 
 # Tear down Vulkan explicitly, while the process (and the Vulkan loader) are still
-# alive. Doing it here avoids a flaky segfault that otherwise happens at process
-# exit, when R's teardown runs after the loader/ICD libraries are unmapped.
-ggml_vulkan_shutdown()
+# alive, then exit hard (_exit(0)) to skip the atexit/loader-static-destruction
+# phase that otherwise flakily segfaults after results are printed. Must be the
+# LAST statement — hard exit does not return. Results above are already final.
+ggml_vulkan_shutdown(hard = TRUE)

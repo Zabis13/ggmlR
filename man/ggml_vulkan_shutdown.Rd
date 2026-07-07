@@ -4,10 +4,15 @@
 \alias{ggml_vulkan_shutdown}
 \title{Explicitly tear down the Vulkan instance and devices}
 \usage{
-ggml_vulkan_shutdown()
+ggml_vulkan_shutdown(hard = FALSE)
+}
+\arguments{
+\item{hard}{Logical. If \code{TRUE}, call \code{_exit(0)} after teardown to skip
+all exit handlers and guarantee no exit-time segfault. Never returns. Default
+\code{FALSE} (normal return; safe to call mid-session).}
 }
 \value{
-Invisibly \code{NULL}.
+Invisibly \code{NULL} (does not return when \code{hard = TRUE}).
 }
 \description{
 Waits for all Vulkan devices to go idle, then destroys the devices and the
@@ -26,6 +31,18 @@ needed for exit cleanliness — your computed results are unaffected either way.
 Idempotent and a no-op if Vulkan was never initialized. After this call the
 next Vulkan operation transparently re-initializes the instance from scratch,
 so it is safe to call mid-session too.
+
+The plain teardown alone does not always win the exit-time race: with backends
+created inside pipeline / tensor-parallel forwards, the loader-static-destruction
+segfault (address ending \code{f1ba0}) can still fire flakily \emph{after} your
+results are printed, because no R exit hook runs before R unmaps the loader.
+For a guaranteed-clean exit, pass \code{hard = TRUE} as the \strong{last}
+statement of a standalone script: after teardown it calls \code{_exit(0)},
+terminating the process immediately without running R's / the C runtime's exit
+handlers or unmapping any shared library — so there is no loader teardown phase
+left to crash. Because it bypasses R's normal shutdown, only use
+\code{hard = TRUE} at the very end of a script, never mid-session or in a
+package/interactive context.
 }
 \examples{
 \donttest{

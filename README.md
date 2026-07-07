@@ -508,7 +508,7 @@ y <- ggml_pp_forward(list(mk(0L, W1), mk(1L, W2)), x = as.numeric(X), out_shape 
 
 See `inst/examples/tp_dp_hybrid.R` and `inst/examples/pp_pipeline.R` for complete runnable demos.
 
-> **Clean shutdown**: when a script uses several GPUs, call `ggml_vulkan_shutdown()` before it exits. This tears down Vulkan while the loader is still mapped, avoiding a harmless-but-noisy segfault that can otherwise occur at process exit (your results are already computed by then).
+> **Clean shutdown**: when a standalone script uses several GPUs, make `ggml_vulkan_shutdown(hard = TRUE)` its **last** statement. This tears down Vulkan and then calls `_exit(0)`, skipping the exit-time loader-static-destruction phase that can otherwise flakily segfault *after* your results are printed (the results are already computed by then, so the crash is harmless-but-noisy). Use plain `ggml_vulkan_shutdown()` (no `hard`) mid-session — it releases the devices and is safe to call repeatedly, but does not guarantee a clean process exit on its own.
 
 ### Autograd op reference
 

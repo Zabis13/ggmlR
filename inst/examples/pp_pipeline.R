@@ -79,6 +79,7 @@ cat(sprintf("\nPipeline forward: y = %d x %d in %.3fs\n", nrow(Y), ncol(Y), dt))
 cat(sprintf("max |Y - reference| = %.3e  (%s)\n",
             max_err, if (max_err < 5e-2) "OK" else "MISMATCH"))
 
-# Tear down Vulkan explicitly while the loader is still mapped, to avoid a flaky
-# segfault at process exit (R's teardown otherwise runs after the loader unmaps).
-ggml_vulkan_shutdown()
+# Tear down Vulkan and exit hard (_exit(0)) as the LAST statement, so the process
+# skips the atexit/loader-static-destruction phase that otherwise flakily segfaults
+# after results are printed. Results above are already final at this point.
+ggml_vulkan_shutdown(hard = TRUE)
