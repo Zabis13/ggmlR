@@ -508,6 +508,22 @@ y <- ggml_pp_forward(list(mk(0L, W1), mk(1L, W2)), x = as.numeric(X), out_shape 
 
 See `inst/examples/tp_dp_hybrid.R` and `inst/examples/pp_pipeline.R` for complete runnable demos.
 
+#### Benchmark: which split strategy to use
+
+Measured with `llamaR` (which links `libggml.a` statically) driving Qwen2.5-1.5B-Instruct Q4_K_M on **4× Tesla P100-SXM2-16GB** (Vulkan, host-staging cross-device transport), decode throughput, median of 3 runs of 128 tokens:
+
+| Strategy | GPUs | Split | Decode t/s | Notes |
+|---|---|---|---:|---|
+| Baseline | 1 | none | **419.7** | model fits in one card — fastest |
+| Pipeline (PP) | 2 | layer | 150.4 | layers spread across 2 GPUs |
+| Tensor (TP) | 2 | row | 150.4 | rows split, all-reduce per layer |
+| Pipeline (PP) | 4 | layer | 133.3 | more hops → slower |
+| Tensor (TP) | 4 | row | 130.0 | more hops → slower |
+| **TP=2 × DP=2** | 4 | row + replicas | **306** | 2 replicas × TP=2, run concurrently (152.9 + 153.2) |
+| **DP=4** | 4 | replicas | **975** | 4 single-GPU replicas, run concurrently (470 + 168×3) |
+
+**Takeaway:** when a model **fits in one GPU**, data parallelism (DP — independent replicas) wins by a wide margin: DP=4 delivers ~2.3× the single-card throughput and ~7.5× any split mode. Splitting such a model across cards (PP/TP) only adds cross-device overhead — the ~1 GB/s host-staging transport dominates. **PP and TP earn their keep only when the model does not fit in one card** (e.g. a 30B+ model on 16 GB cards): there a split is the *only* way to run it at all, and PP minimizes cross-device hops (one activation copy per pass) while TP maximizes per-token parallelism at the cost of a per-layer all-reduce. Reproduce with `llamaR`'s `inst/examples/bench_pp_tp_dp.sh`.
+
 > **Clean shutdown**: when a standalone script uses several GPUs, make `ggml_vulkan_shutdown(hard = TRUE)` its **last** statement. This tears down Vulkan and then calls `_exit(0)`, skipping the exit-time loader-static-destruction phase that can otherwise flakily segfault *after* your results are printed (the results are already computed by then, so the crash is harmless-but-noisy). Use plain `ggml_vulkan_shutdown()` (no `hard`) mid-session — it releases the devices and is safe to call repeatedly, but does not guarantee a clean process exit on its own.
 
 ### Autograd op reference
