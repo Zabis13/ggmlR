@@ -89,5 +89,5 @@ if (trace_dst != "-" && trace_dst != "stderr") {
 # to exit without the flaky exit-time segfault: hard = TRUE calls _exit(0) after
 # teardown, skipping the loader-static-destruction phase entirely. Must be the LAST
 # statement (does not return). Drop `hard = TRUE` to observe the crash / trace.
-ggml_vulkan_shutdown(hard = TRUE)
+ggml_vulkan_shutdown(hard = TRUE, status = 0L)
 

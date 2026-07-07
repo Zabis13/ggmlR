@@ -70,4 +70,4 @@ cat(sprintf("max |Y - X %%*%% t(W)| = %.3e  (%s)\n",
 # alive, then exit hard (_exit(0)) to skip the atexit/loader-static-destruction
 # phase that otherwise flakily segfaults after results are printed. Must be the
 # LAST statement — hard exit does not return. Results above are already final.
-ggml_vulkan_shutdown(hard = TRUE)
+ggml_vulkan_shutdown(hard = TRUE, status = 0L)

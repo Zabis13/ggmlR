@@ -4,12 +4,18 @@
 \alias{ggml_vulkan_shutdown}
 \title{Explicitly tear down the Vulkan instance and devices}
 \usage{
-ggml_vulkan_shutdown(hard = FALSE)
+ggml_vulkan_shutdown(hard = FALSE, status = 0L)
 }
 \arguments{
-\item{hard}{Logical. If \code{TRUE}, call \code{_exit(0)} after teardown to skip
-all exit handlers and guarantee no exit-time segfault. Never returns. Default
-\code{FALSE} (normal return; safe to call mid-session).}
+\item{hard}{Logical. If \code{TRUE}, call \code{_exit(status)} after teardown to
+skip all exit handlers and guarantee no exit-time segfault. Never returns.
+Default \code{FALSE} (normal return; safe to call mid-session).}
+
+\item{status}{Integer process exit code used only when \code{hard = TRUE}
+(passed to \code{_exit()}). Defaults to \code{0L} (success). If you call this
+from an error path (e.g. a \code{tryCatch} handler after a stage failed),
+pass a non-zero \code{status} so the failed run does not exit \code{0} and
+mask the failure. Ignored when \code{hard = FALSE}.}
 }
 \value{
 Invisibly \code{NULL} (does not return when \code{hard = TRUE}).

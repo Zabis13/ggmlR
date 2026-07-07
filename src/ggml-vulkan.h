@@ -76,12 +76,14 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type(voi
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_vk_reg(void);
 
 // ggmlR, not upstream: explicitly release the Vulkan devices while the loader/ICD
-// .so files are still mapped. Idempotent. If hard != 0, calls _exit(0) after
+// .so files are still mapped. Idempotent. If hard != 0, calls _exit(status) after
 // teardown to skip the atexit/static-destruction phase entirely — the only
 // reliable way to avoid the flaky exit-time loader-race segfault (f1ba0), since
 // no R exit hook runs before R unmaps the loader. Use hard=1 as the last
-// statement of a script/example, after all results are produced.
-GGML_BACKEND_API void ggml_backend_vk_shutdown(int hard);
+// statement of a script/example, after all results are produced. `status` is the
+// process exit code passed to _exit(); pass non-zero from an error path so a
+// failed run does not exit 0. `status` is ignored when hard == 0.
+GGML_BACKEND_API void ggml_backend_vk_shutdown(int hard, int status);
 
 // UMAP SGD layout optimisation, dispatched directly (not via the ggml graph).
 // coords is n*2 floats updated in place. Returns false if backend is not Vulkan.

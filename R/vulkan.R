@@ -325,9 +325,14 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
 #' \code{hard = TRUE} at the very end of a script, never mid-session or in a
 #' package/interactive context.
 #'
-#' @param hard Logical. If \code{TRUE}, call \code{_exit(0)} after teardown to skip
-#'   all exit handlers and guarantee no exit-time segfault. Never returns. Default
-#'   \code{FALSE} (normal return; safe to call mid-session).
+#' @param hard Logical. If \code{TRUE}, call \code{_exit(status)} after teardown to
+#'   skip all exit handlers and guarantee no exit-time segfault. Never returns.
+#'   Default \code{FALSE} (normal return; safe to call mid-session).
+#' @param status Integer process exit code used only when \code{hard = TRUE}
+#'   (passed to \code{_exit()}). Defaults to \code{0L} (success). If you call this
+#'   from an error path (e.g. a \code{tryCatch} handler after a stage failed),
+#'   pass a non-zero \code{status} so the failed run does not exit \code{0} and
+#'   mask the failure. Ignored when \code{hard = FALSE}.
 #' @return Invisibly \code{NULL} (does not return when \code{hard = TRUE}).
 #' @export
 #' @examples
@@ -339,8 +344,9 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
 #'   ggml_vulkan_shutdown()   # clean up before the script exits
 #' }
 #' }
-ggml_vulkan_shutdown <- function(hard = FALSE) {
-  invisible(.Call("R_ggml_vk_shutdown", isTRUE(hard), PACKAGE = "ggmlR"))
+ggml_vulkan_shutdown <- function(hard = FALSE, status = 0L) {
+  invisible(.Call("R_ggml_vk_shutdown", isTRUE(hard), as.integer(status),
+                  PACKAGE = "ggmlR"))
 }
 
 #' Create a Vulkan tensor-split buffer type

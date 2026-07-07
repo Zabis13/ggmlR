@@ -82,4 +82,4 @@ cat(sprintf("max |Y - reference| = %.3e  (%s)\n",
 # Tear down Vulkan and exit hard (_exit(0)) as the LAST statement, so the process
 # skips the atexit/loader-static-destruction phase that otherwise flakily segfaults
 # after results are printed. Results above are already final at this point.
-ggml_vulkan_shutdown(hard = TRUE)
+ggml_vulkan_shutdown(hard = TRUE, status = 0L)

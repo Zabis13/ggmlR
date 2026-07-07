@@ -1,5 +1,5 @@
 #include "../r_dbg_filelog.h" /* opt-in trace via GGMLR_DBG_LOG env (no-op when unset) */
-#include <unistd.h>           /* _exit() for ggml_backend_vk_shutdown(hard=1) */
+#include <unistd.h>           /* _exit() for ggml_backend_vk_shutdown(hard=1, status) */
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 
@@ -3446,16 +3446,17 @@ ggml_backend_reg_t ggml_backend_vk_reg() {
 // resetting the instance's reference only actually destroys a device once every
 // live backend that copied it has been freed — never prematurely. waitIdle first
 // drains any in-flight driver work so the loader threads are quiescent.
-extern "C" void ggml_backend_vk_shutdown(int hard) {
-    r_tp_tracef("vk_shutdown: enter (initialized=%d hard=%d)",
-                (int) vk_instance_initialized, hard);
+extern "C" void ggml_backend_vk_shutdown(int hard, int status) {
+    r_tp_tracef("vk_shutdown: enter (initialized=%d hard=%d status=%d)",
+                (int) vk_instance_initialized, hard, status);
     if (!vk_instance_initialized) {
         r_tp_tracef("vk_shutdown: already down, no-op");
         if (hard) {
             // Still honour the hard request: skip the process teardown that races
             // the Vulkan loader's static destructors even when we own no devices.
-            r_tp_tracef("vk_shutdown: hard exit (nothing to tear down)");
-            _exit(0);
+            r_tp_tracef("vk_shutdown: hard exit(%d) (nothing to tear down)", status);
+            fflush(NULL);
+            _exit(status);
         }
         return;   // idempotent: guards double-shutdown and use-after-shutdown init
     }
@@ -3500,9 +3501,11 @@ extern "C" void ggml_backend_vk_shutdown(int hard) {
         // destructors, or unmapping shared objects — so there is no loader
         // static-destruction phase for the driver threads to fault against.
         // Callers opt in (hard=TRUE) as the last statement of a script/example.
-        r_tp_tracef("vk_shutdown: hard exit(0) — skipping atexit/loader teardown");
+        // `status` is the process exit code — pass non-zero from an error path so
+        // a failed run does not masquerade as success.
+        r_tp_tracef("vk_shutdown: hard exit(%d) — skipping atexit/loader teardown", status);
         fflush(NULL);
-        _exit(0);
+        _exit(status);
     }
 }
 
