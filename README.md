@@ -525,6 +525,20 @@ Measured with `llamaR` (which links `libggml.a` statically) driving Qwen2.5-1.5B
 | **TP=2 × DP=2** | 4 | row + replicas | **306** | **446** | 2 replicas × TP=2, run concurrently |
 | **DP=4** | 4 | replicas | **975** | **1300** | 4 single-GPU replicas, run concurrently |
 
+Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM), showing how the pattern holds as GPU count doubles:
+
+| Strategy | GPUs | Split | Decode t/s | Notes |
+|---|---|---|---:|---|
+| Baseline | 1 | none | **684.9** | model fits in one card — fastest |
+| Pipeline (PP) | 2 | layer | 229.7 | layers spread across 2 GPUs |
+| Tensor (TP) | 2 | row | 231.3 | rows split, all-reduce per layer |
+| Pipeline (PP) | 4 | layer | 187.5 | more hops → slower |
+| Tensor (TP) | 4 | row | 191.0 | more hops → slower |
+| Pipeline (PP) | 8 | layer | 142.8 | 8-way split — slowest single-context |
+| Tensor (TP) | 8 | row | 137.1 | per-layer all-reduce across 8 cards |
+| **TP=2 × DP=4** | 8 | row + replicas | **897** | 4 replicas × TP=2, run concurrently |
+| **DP=8** | 8 | replicas | **2290** | 8 single-GPU replicas, run concurrently |
+
 **Takeaway:** when a model **fits in one GPU**, data parallelism (DP — independent replicas) wins by a wide margin: DP=4 delivers ~2.3× the single-card throughput and ~7.5× any split mode. Splitting such a model across cards (PP/TP) only adds cross-device overhead — the ~1 GB/s host-staging transport dominates. **PP and TP earn their keep only when the model does not fit in one card** (e.g. a 30B+ model on 16 GB cards): there a split is the *only* way to run it at all, and PP minimizes cross-device hops (one activation copy per pass) while TP maximizes per-token parallelism at the cost of a per-layer all-reduce. Reproduce with `llamaR`'s `inst/examples/bench_pp_tp_dp.sh`.
 
 > **Clean shutdown**: when a standalone script uses several GPUs, make `ggml_vulkan_shutdown(hard = TRUE)` its **last** statement. This tears down Vulkan and then calls `_exit(0)`, skipping the exit-time loader-static-destruction phase that can otherwise flakily segfault *after* your results are printed (the results are already computed by then, so the crash is harmless-but-noisy). Use plain `ggml_vulkan_shutdown()` (no `hard`) mid-session — it releases the devices and is safe to call repeatedly, but does not guarantee a clean process exit on its own.
