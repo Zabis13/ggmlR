@@ -1270,8 +1270,12 @@ static void ggml_vk_glu(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const float alpha = op_params_f[2];
     const float limit = op_params_f[3];
 
-    GGML_ASSERT(ggml_is_contiguous(src0));
-
+    // NOTE: no full-contiguity assert here (matches upstream). The GLU push
+    // constants carry per-row strides (nb01/02/03, nb11/12/13), so the shader
+    // handles a row-contiguous but not fully-contiguous src (e.g. a permuted
+    // FFN view). Asserting ggml_is_contiguous here — together with the matching
+    // over-strict supports_op check — used to force GLU to CPU and shatter the
+    // graph on GPUs without Flash Attention.
     if (!split) {
         GGML_ASSERT(src0->ne[0] / 2 == dst->ne[0]);
     } else {

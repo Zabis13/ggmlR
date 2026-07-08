@@ -1976,6 +1976,17 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->subgroup_vote = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                 (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eVote);
 
+        // Debug/diagnostic overrides: force-disable individual subgroup features to
+        // emulate weaker GPUs (e.g. Tesla P100) on a more capable card, so that
+        // device-specific fallbacks (Flash Attention -> CPU, graph-split explosion)
+        // can be reproduced locally. All default OFF (no effect) unless the env is set.
+        if (getenv("GGML_VK_DISABLE_SUBGROUP_SHUFFLE"))    device->subgroup_shuffle    = false;
+        if (getenv("GGML_VK_DISABLE_SUBGROUP_VOTE"))       device->subgroup_vote       = false;
+        if (getenv("GGML_VK_DISABLE_SUBGROUP_ARITHMETIC")) device->subgroup_arithmetic = false;
+        if (getenv("GGML_VK_DISABLE_SUBGROUP_BALLOT"))     device->subgroup_ballot     = false;
+        if (getenv("GGML_VK_DISABLE_SUBGROUP_CLUSTERED"))  device->subgroup_clustered  = false;
+        if (getenv("GGML_VK_DISABLE_SUBGROUP_BASIC"))      device->subgroup_basic      = false;
+
         const bool force_disable_f16 = getenv("GGML_VK_DISABLE_F16") != nullptr;
 
         device->fp16 = !force_disable_f16 && fp16_storage && fp16_compute;

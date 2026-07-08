@@ -2701,8 +2701,10 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                 case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
-                    return ggml_is_contiguous(op->src[0]) &&
-                           (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                    // Match upstream: no full-contiguity requirement (the shader
+                    // takes per-row strides). Requiring ggml_is_contiguous forced
+                    // GLU to CPU for permuted views, splitting the graph.
+                    return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                            (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
                            (op->src[0]->type == op->type);
                 default:
@@ -2974,8 +2976,16 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
             return true;
         case GGML_OP_NORM:
         case GGML_OP_GROUP_NORM:
-        case GGML_OP_L2_NORM:
             return ggml_is_contiguous(op->src[0]);
+        case GGML_OP_L2_NORM:
+            // Match upstream: L2_NORM only needs contiguous *rows*, not a fully
+            // contiguous tensor. Requiring full contiguity (as this case used to,
+            // sharing the NORM/GROUP_NORM branch) rejected the per-head Q/K L2 norm
+            // in Qwen3.5-style models (src is a permuted view), forcing it to CPU
+            // and shattering the graph into ~1 split per layer on GPUs without
+            // Flash Attention (e.g. Tesla P100).
+            return ggml_is_contiguous_rows(op->src[0]) &&
+                   op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_ADD:
         case GGML_OP_SUB:
         case GGML_OP_MUL:

@@ -1902,6 +1902,16 @@ SEXP R_ggml_backend_tensor_set(SEXP tensor_ptr, SEXP data_sexp, SEXP offset_sexp
         error("Invalid tensor pointer");
     }
 
+    // A tensor whose device buffer failed to allocate (out-of-VRAM /
+    // fragmentation) reaches here with tensor->buffer == NULL. ggml_backend_tensor_set
+    // then dereferences buffer->iface.set_tensor and segfaults at a small address.
+    // Surface it as a clean R error instead of crashing the whole R session.
+    if (tensor->buffer == NULL) {
+        error("Tensor '%s' has no backend buffer (out of device memory or "
+              "fragmentation?); cannot set data",
+              tensor->name[0] ? tensor->name : "<unnamed>");
+    }
+
     size_t offset = (size_t) asReal(offset_sexp);
 
     // Determine the data type and size
@@ -1979,6 +1989,14 @@ SEXP R_ggml_backend_tensor_get(SEXP tensor_ptr, SEXP offset_sexp, SEXP size_sexp
 
     if (tensor == NULL) {
         error("Invalid tensor pointer");
+    }
+
+    // See R_ggml_backend_tensor_set: a tensor with no device buffer would
+    // segfault inside ggml_backend_tensor_get. Fail cleanly instead.
+    if (tensor->buffer == NULL) {
+        error("Tensor '%s' has no backend buffer (out of device memory or "
+              "fragmentation?); cannot get data",
+              tensor->name[0] ? tensor->name : "<unnamed>");
     }
 
     size_t offset = (size_t) asReal(offset_sexp);
