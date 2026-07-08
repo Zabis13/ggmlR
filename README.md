@@ -510,17 +510,20 @@ See `inst/examples/tp_dp_hybrid.R` and `inst/examples/pp_pipeline.R` for complet
 
 #### Benchmark: which split strategy to use
 
-Measured with `llamaR` (which links `libggml.a` statically) driving Qwen2.5-1.5B-Instruct Q4_K_M on **4× Tesla P100-SXM2-16GB** (Vulkan, host-staging cross-device transport), decode throughput, median of 3 runs of 128 tokens:
+Measured with `llamaR` (which links `libggml.a` statically) driving Qwen2.5-1.5B-Instruct Q4_K_M (Vulkan, host-staging cross-device transport) on two 4-GPU hosts, decode throughput, median of 3 runs of 128 tokens:
 
-| Strategy | GPUs | Split | Decode t/s | Notes |
-|---|---|---|---:|---|
-| Baseline | 1 | none | **419.7** | model fits in one card — fastest |
-| Pipeline (PP) | 2 | layer | 150.4 | layers spread across 2 GPUs |
-| Tensor (TP) | 2 | row | 150.4 | rows split, all-reduce per layer |
-| Pipeline (PP) | 4 | layer | 133.3 | more hops → slower |
-| Tensor (TP) | 4 | row | 130.0 | more hops → slower |
-| **TP=2 × DP=2** | 4 | row + replicas | **306** | 2 replicas × TP=2, run concurrently (152.9 + 153.2) |
-| **DP=4** | 4 | replicas | **975** | 4 single-GPU replicas, run concurrently (470 + 168×3) |
+- **P100** — 4× Tesla P100-SXM2-16GB
+- **V100** — 4× Tesla V100-32GB, 2× Xeon E5-2698 v4, 256 GB RAM
+
+| Strategy | GPUs | Split | Decode t/s (P100) | Decode t/s (V100) | Notes |
+|---|---|---|---:|---:|---|
+| Baseline | 1 | none | **419.7** | **516.9** | model fits in one card — fastest |
+| Pipeline (PP) | 2 | layer | 150.4 | 221.5 | layers spread across 2 GPUs |
+| Tensor (TP) | 2 | row | 150.4 | 223.2 | rows split, all-reduce per layer |
+| Pipeline (PP) | 4 | layer | 133.3 | 176.3 | more hops → slower |
+| Tensor (TP) | 4 | row | 130.0 | 176.6 | more hops → slower |
+| **TP=2 × DP=2** | 4 | row + replicas | **306** | **446** | 2 replicas × TP=2, run concurrently |
+| **DP=4** | 4 | replicas | **975** | **1300** | 4 single-GPU replicas, run concurrently |
 
 **Takeaway:** when a model **fits in one GPU**, data parallelism (DP — independent replicas) wins by a wide margin: DP=4 delivers ~2.3× the single-card throughput and ~7.5× any split mode. Splitting such a model across cards (PP/TP) only adds cross-device overhead — the ~1 GB/s host-staging transport dominates. **PP and TP earn their keep only when the model does not fit in one card** (e.g. a 30B+ model on 16 GB cards): there a split is the *only* way to run it at all, and PP minimizes cross-device hops (one activation copy per pass) while TP maximizes per-token parallelism at the cost of a per-layer all-reduce. Reproduce with `llamaR`'s `inst/examples/bench_pp_tp_dp.sh`.
 
