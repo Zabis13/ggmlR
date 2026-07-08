@@ -12,7 +12,8 @@ test_that("ggml_vulkan_device_caps returns expected fields", {
                         "subgroup_size", "subgroup_min_size", "subgroup_max_size",
                         "subgroup_no_shmem", "wavefronts_per_simd", "arch",
                         "coopmat_m", "coopmat_n", "coopmat_k",
-                        "supports_256_push_constants", "max_push_constants_size"))
+                        "supports_256_push_constants", "max_push_constants_size",
+                        "subgroup_shuffle", "subgroup_vote"))
 
   expect_type(caps$coopmat_support,     "logical")
   expect_type(caps$coopmat1_fa_support, "logical")
@@ -30,6 +31,8 @@ test_that("ggml_vulkan_device_caps returns expected fields", {
   expect_type(caps$coopmat_k,                    "integer")
   expect_type(caps$supports_256_push_constants,  "logical")
   expect_type(caps$max_push_constants_size,      "integer")
+  expect_type(caps$subgroup_shuffle,             "logical")
+  expect_type(caps$subgroup_vote,                "logical")
 })
 
 test_that("RX 9070 (RDNA4) has coopmat1_fa and subgroup_no_shmem enabled", {

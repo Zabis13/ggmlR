@@ -2513,7 +2513,8 @@ void ggml_backend_vk_get_device_caps(int device_idx, bool * coopmat_support, boo
                                       uint32_t * wavefronts_per_simd, bool * bf16, bool * integer_dot_product,
                                       const char ** arch_name,
                                       uint32_t * coopmat_m, uint32_t * coopmat_n, uint32_t * coopmat_k,
-                                      bool * supports_256_push_constants, uint32_t * max_push_constants_size) {
+                                      bool * supports_256_push_constants, uint32_t * max_push_constants_size,
+                                      bool * subgroup_shuffle, bool * subgroup_vote) {
     ggml_vk_instance_init();
     GGML_ASSERT(device_idx >= 0 && device_idx < (int) vk_instance.device_indices.size());
     vk_device dev = ggml_vk_get_device((size_t)device_idx);
@@ -2521,6 +2522,10 @@ void ggml_backend_vk_get_device_caps(int device_idx, bool * coopmat_support, boo
     if (coopmat1_fa_support)*coopmat1_fa_support = dev->coopmat1_fa_support;
     if (fp16)               *fp16               = dev->fp16;
     if (subgroup_size)      *subgroup_size       = dev->subgroup_size;
+    // Flash Attention scalar/coopmat1 path needs both of these (see FA gate in
+    // supports_op); exposed so callers can tell why FA falls back to CPU.
+    if (subgroup_shuffle)   *subgroup_shuffle   = dev->subgroup_shuffle;
+    if (subgroup_vote)      *subgroup_vote      = dev->subgroup_vote;
     // subgroup_no_shmem is active when subgroup_arithmetic is enabled and not AMD GCN
     if (subgroup_no_shmem)  *subgroup_no_shmem  = dev->subgroup_arithmetic &&
                                                    dev->architecture != vk_device_architecture::AMD_GCN;

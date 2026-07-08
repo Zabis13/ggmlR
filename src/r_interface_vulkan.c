@@ -592,6 +592,7 @@ SEXP R_ggml_vulkan_device_caps(SEXP device_idx) {
 #ifdef GGML_USE_VULKAN
     bool coopmat_support = false, coopmat1_fa_support = false, fp16 = false, subgroup_no_shmem = false;
     bool bf16 = false, integer_dot_product = false, supports_256_push_constants = false;
+    bool subgroup_shuffle = false, subgroup_vote = false;
     uint32_t subgroup_size = 0, subgroup_min_size = 0, subgroup_max_size = 0, wavefronts_per_simd = 0;
     uint32_t coopmat_m = 0, coopmat_n = 0, coopmat_k = 0, max_push_constants_size = 0;
     const char *arch_name = "OTHER";
@@ -600,16 +601,18 @@ SEXP R_ggml_vulkan_device_caps(SEXP device_idx) {
                                      &subgroup_min_size, &subgroup_max_size,
                                      &wavefronts_per_simd, &bf16, &integer_dot_product, &arch_name,
                                      &coopmat_m, &coopmat_n, &coopmat_k,
-                                     &supports_256_push_constants, &max_push_constants_size);
+                                     &supports_256_push_constants, &max_push_constants_size,
+                                     &subgroup_shuffle, &subgroup_vote);
 
     const char *nms[] = {"coopmat_support", "coopmat1_fa_support", "fp16", "bf16",
                          "integer_dot_product",
                          "subgroup_size", "subgroup_min_size", "subgroup_max_size",
                          "subgroup_no_shmem", "wavefronts_per_simd", "arch",
                          "coopmat_m", "coopmat_n", "coopmat_k",
-                         "supports_256_push_constants", "max_push_constants_size"};
-    SEXP result = PROTECT(allocVector(VECSXP, 16));
-    SEXP names  = PROTECT(allocVector(STRSXP, 16));
+                         "supports_256_push_constants", "max_push_constants_size",
+                         "subgroup_shuffle", "subgroup_vote"};
+    SEXP result = PROTECT(allocVector(VECSXP, 18));
+    SEXP names  = PROTECT(allocVector(STRSXP, 18));
     SET_VECTOR_ELT(result, 0,  ScalarLogical(coopmat_support));
     SET_VECTOR_ELT(result, 1,  ScalarLogical(coopmat1_fa_support));
     SET_VECTOR_ELT(result, 2,  ScalarLogical(fp16));
@@ -626,7 +629,9 @@ SEXP R_ggml_vulkan_device_caps(SEXP device_idx) {
     SET_VECTOR_ELT(result, 13, ScalarInteger((int)coopmat_k));
     SET_VECTOR_ELT(result, 14, ScalarLogical(supports_256_push_constants));
     SET_VECTOR_ELT(result, 15, ScalarInteger((int)max_push_constants_size));
-    for (int i = 0; i < 16; i++) SET_STRING_ELT(names, i, mkChar(nms[i]));
+    SET_VECTOR_ELT(result, 16, ScalarLogical(subgroup_shuffle));
+    SET_VECTOR_ELT(result, 17, ScalarLogical(subgroup_vote));
+    for (int i = 0; i < 18; i++) SET_STRING_ELT(names, i, mkChar(nms[i]));
     setAttrib(result, R_NamesSymbol, names);
     UNPROTECT(2);
     return result;
