@@ -1,7 +1,7 @@
 # ggmlR — Neural Networks for R
 
 [![R-hub check on the R Consortium cluster](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml/badge.svg)](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml)
-[![License](https://img.shields.io/github/license/Zabis13/ggmlR)](https://github.com/Zabis13/ggmlR/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/Zabis13/ggmlR)](https://github.com/Zabis13/ggmlR/blob/main/LICENSE.md)
 
 A native R package for building, training, and deploying neural networks. Backed by the [ggml](https://github.com/ggml-org/ggml) C library, designed primarily for **Vulkan GPU acceleration** with full CPU fallback — no Python, no TensorFlow, everything runs inside your R session.
 
