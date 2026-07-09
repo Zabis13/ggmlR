@@ -1997,6 +1997,46 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->integer_dot_product = device->integer_dot_product && shader_integer_dot_product_props.integerDotProduct4x8BitPackedSignedAccelerated;
 
+        // ggmlR fork fix (properties-primary + architecture exclusion): the gate
+        // above trusts integerDotProduct4x8BitPackedSignedAccelerated. On NVIDIA
+        // pre-Turing GPUs (Maxwell / Pascal, detected by lack of
+        // VK_KHR_cooperative_matrix) this properties flag is a false positive:
+        // the driver reports it TRUE, but there is no hardware DP4A instruction
+        // (DP4A became a real HW instruction only with Turing), so the
+        // integer-dot (MMQ) matmul path is *emulated* and ~10-13x slower than
+        // the plain f16 dequant path. Measured on Tesla P100 (GP100): isolated
+        // MUL_MAT q6_K 322 -> 3487 GFLOP/s, q8_0 329 -> 4370 GFLOP/s when
+        // integer-dot is disabled; Qwen3.5-9B prefill 58 -> 118 tok/s. The
+        // properties flag stays the primary gate for every other device; this
+        // only excludes the one architecture class where it is documented to
+        // lie. Broader than strictly GP100 (P40/GTX1080 on GP10x do have HW
+        // DP4A) but those are also pre-Turing with a competitive f16 path, so
+        // the simple architecture exclusion is the safe choice. Override with
+        // GGML_VK_FORCE_INTEGER_DOT_PRODUCT=1 if a pre-Turing card really wants it.
+        if (device->integer_dot_product &&
+            device->architecture == vk_device_architecture::NVIDIA_PRE_TURING &&
+            getenv("GGML_VK_FORCE_INTEGER_DOT_PRODUCT") == nullptr) {
+            device->integer_dot_product = false;
+        }
+
+        // Diagnostic dump of the raw *Accelerated properties, gated behind an
+        // env var. Lets us later narrow the exclusion to a precise
+        // properties-only check (find a flag that is honestly false on GP100)
+        // without another round of on-device reconnaissance.
+        if (getenv("GGMLR_DUMP_INTDOT_PROPS") != nullptr) {
+            const auto & p = shader_integer_dot_product_props;
+            std::cerr << "[intdot] dev='" << device->properties.deviceName.data()
+                      << "' arch=" << (int)device->architecture
+                      << " 8BitSignedAccel="   << (int)p.integerDotProduct8BitSignedAccelerated
+                      << " 8BitUnsignedAccel="  << (int)p.integerDotProduct8BitUnsignedAccelerated
+                      << " 4x8PackedSignedAccel="   << (int)p.integerDotProduct4x8BitPackedSignedAccelerated
+                      << " 4x8PackedUnsignedAccel=" << (int)p.integerDotProduct4x8BitPackedUnsignedAccelerated
+                      << " 4x8PackedMixedAccel="    << (int)p.integerDotProduct4x8BitPackedMixedSignednessAccelerated
+                      << " 16BitSignedAccel="   << (int)p.integerDotProduct16BitSignedAccelerated
+                      << " 32BitSignedAccel="   << (int)p.integerDotProduct32BitSignedAccelerated
+                      << std::endl;
+        }
+
         device->min_imported_host_pointer_alignment = external_memory_host_props.minImportedHostPointerAlignment;
 
         device->max_workgroup_size_log2 = uint32_t(log2f(float(device->properties.limits.maxComputeWorkGroupInvocations)));
