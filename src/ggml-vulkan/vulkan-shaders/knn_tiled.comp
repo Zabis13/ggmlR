@@ -1,0 +1,179 @@
+#version 450
+
+// Fused k-nearest-neighbours — one workgroup per query row, top-k kept in
+// registers, the full n x n distance matrix NEVER materialised.
+//
+// op = "neighbors" needs, for every cell i, the k nearest other cells in the
+// (small, ~10-D PCA) feature space. The naive route builds the whole n x n
+// distance matrix and sorts each row — but at single-cell scale n x n is tens to
+// hundreds of GB (165069^2 * 4 = 109 GB), which does not fit in VRAM. This
+// shader fuses distance and selection: it computes each squared distance on the
+// fly and keeps only the running top-k per row, so the sole output is n x k
+// indices + n x k distances (~13 MB at n = 165069, k = 20), not n x n.
+//
+// Honest f32: distances accumulate in f32 (like pairwise_dist.comp), sidestepping
+// the RADV mul_mat f16 accumulation that reorders near neighbours. This is an
+// EXACT k-NN — identical neighbour sets to a CPU kd-tree (order may differ only
+// on exact-distance ties).
+//
+// Layout:
+//   * One workgroup owns one query row i = gl_WorkGroupID.x.
+//   * Its WG threads (local_size_x) sweep the candidate rows j in a grid stride,
+//     each thread maintaining a PRIVATE sorted top-k over the candidates it saw.
+//   * The query row's features are staged once into shared memory (read by every
+//     thread against every candidate), so row i is fetched from VRAM once.
+//   * A final merge combines the WG's private top-k lists (written to shared)
+//     into the global top-k for row i, emitted sorted ascending by distance.
+//
+// Per-thread cost is ~O(n_cand/WG * k) worst case, but an early reject (skip the
+// insertion when a candidate is already farther than the current k-th distance)
+// makes it closer to O(n_cand/WG) once the private list has warmed up.
+
+#extension GL_EXT_control_flow_attributes : enable
+
+// Specialization constants, set at pipeline creation. Constant id 0 is the
+// workgroup size and drives local_size_x (the project convention, cf.
+// argmax.comp); the create_pipeline call passes them positionally by id:
+// { WG, K, MAXD }.
+//
+// K is the top-k CAPACITY the pipeline is built for (array sizes), NOT the
+// requested neighbour count: the actual k comes at dispatch time in p.k (k <= K),
+// so one pipeline serves every k up to K. Only p.k entries are ever touched or
+// written, and the k-th-best reject boundary sits at index p.k - 1.
+layout(constant_id = 0) const uint WG   = 64u;   // workgroup size (subgroup-friendly)
+layout(constant_id = 1) const uint K    = 32u;   // top-k capacity (>= any requested k)
+layout(constant_id = 2) const uint MAXD = 64u;   // max feature dims staged to shared
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+// X: n rows, dims floats each, row-major [row0_d0, row0_d1, ..., row1_d0, ...].
+layout (binding = 0) readonly buffer X { float x[]; };
+// KNN_IDX: n * k uints, row-major [i*k + r] = the r-th nearest 0-based row of i.
+layout (binding = 1) writeonly buffer KnnIdx { uint knn_idx[]; };
+// KNN_DIST: n * k floats, row-major [i*k + r] = Euclidean distance to that row.
+layout (binding = 2) writeonly buffer KnnDist { float knn_dist[]; };
+
+layout (push_constant) uniform parameter {
+    uint n;       // number of rows (cells)
+    uint dims;    // number of feature columns
+    uint k;       // requested neighbours per row (k <= K capacity)
+} p;
+
+// The query row's features, staged once per workgroup.
+shared float q_row[MAXD];
+// Scratch for the final merge: every thread dumps its private top-k here. Sized
+// to the capacity K; only the first p.k of each thread's block carry entries.
+shared float merge_d[WG * K];
+shared uint  merge_i[WG * K];
+
+void main() {
+    const uint i  = gl_WorkGroupID.x;          // this workgroup's query row
+    const uint lx = gl_LocalInvocationID.x;    // thread within the workgroup
+    if (i >= p.n) {
+        return;
+    }
+
+    // --- stage the query row into shared memory (cooperative load) ---
+    [[unroll]] for (uint d = lx; d < p.dims; d += WG) {
+        q_row[d] = x[i * p.dims + d];
+    }
+    barrier();
+
+    const uint kk = p.k;                       // requested neighbours (<= K)
+
+    // --- private sorted top-k for this thread (ascending by distance) ---
+    // best_d[0..kk-1] holds the smallest kk distances this thread has seen,
+    // sorted ascending; best_i the matching row indices. Arrays are sized to the
+    // capacity K; only the first kk entries are used. Unseen slots hold +inf.
+    float best_d[32];                          // K <= 32 capacity by construction
+    uint  best_i[32];
+    for (uint r = 0u; r < kk; ++r) {
+        best_d[r] = 1.0 / 0.0;                 // +inf
+        best_i[r] = 0xffffffffu;
+    }
+
+    // --- sweep candidate rows j in a grid stride over the workgroup ---
+    for (uint j = lx; j < p.n; j += WG) {
+        if (j == i) {
+            continue;                          // exclude self
+        }
+        // squared Euclidean distance in f32
+        float acc = 0.0;
+        const uint base = j * p.dims;
+        for (uint d = 0u; d < p.dims; ++d) {
+            float diff = q_row[d] - x[base + d];
+            acc += diff * diff;
+        }
+
+        // early reject: farther than the current kk-th best -> cannot enter top-k
+        if (acc >= best_d[kk - 1u]) {
+            continue;
+        }
+
+        // insertion into the sorted list: shift larger entries right, drop the
+        // last, place (acc, j) at its ordered position. kk is tiny (<=32).
+        uint pos = kk - 1u;
+        for (uint s = kk - 1u; s > 0u; --s) {
+            if (best_d[s - 1u] > acc) {
+                best_d[s] = best_d[s - 1u];
+                best_i[s] = best_i[s - 1u];
+                pos = s - 1u;
+            } else {
+                break;
+            }
+        }
+        best_d[pos] = acc;
+        best_i[pos] = j;
+    }
+
+    // --- publish this thread's private top-k to shared for the merge ---
+    // Block stride is the capacity K, so thread lx owns merge_[lx*K .. lx*K+kk).
+    for (uint r = 0u; r < kk; ++r) {
+        merge_d[lx * K + r] = best_d[r];
+        merge_i[lx * K + r] = best_i[r];
+    }
+    barrier();
+
+    // --- thread 0 merges the WG private lists into the row's global top-k ---
+    // A single linear scan keeping a sorted top-k is fine: WG*kk candidates is
+    // small (e.g. 64*20 = 1280) and this runs once per row. Only thread 0 writes.
+    if (lx == 0u) {
+        float out_d[32];
+        uint  out_i[32];
+        for (uint r = 0u; r < kk; ++r) {
+            out_d[r] = 1.0 / 0.0;
+            out_i[r] = 0xffffffffu;
+        }
+
+        for (uint w = 0u; w < WG; ++w) {
+            for (uint r = 0u; r < kk; ++r) {
+                float cand_d = merge_d[w * K + r];
+                if (cand_d >= out_d[kk - 1u]) {
+                    break;                     // block is sorted; rest are larger
+                }
+                uint cand_i = merge_i[w * K + r];
+                uint pos = kk - 1u;
+                for (uint s = kk - 1u; s > 0u; --s) {
+                    if (out_d[s - 1u] > cand_d) {
+                        out_d[s] = out_d[s - 1u];
+                        out_i[s] = out_i[s - 1u];
+                        pos = s - 1u;
+                    } else {
+                        break;
+                    }
+                }
+                out_d[pos] = cand_d;
+                out_i[pos] = cand_i;
+            }
+        }
+
+        // emit sorted ascending; store Euclidean distance (sqrt of the squared
+        // accumulator). The output stride is the requested kk (not the capacity
+        // K), so KNN_IDX / KNN_DIST are tight n*kk buffers. Unfilled slots (fewer
+        // than kk candidates available) stay as index 0xffffffff / distance inf.
+        for (uint r = 0u; r < kk; ++r) {
+            knn_idx[i * kk + r]  = out_i[r];
+            knn_dist[i * kk + r] = sqrt(out_d[r]);
+        }
+    }
+}

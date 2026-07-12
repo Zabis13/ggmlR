@@ -4,8 +4,8 @@
 # Reproduces the hot prefill shapes from the perf log (q6_K / q8_0, m=k=4096, n=488)
 # and reports GFLOPS/s. Run twice to A/B the integer-dot (MMQ int8) path:
 #
-#   Rscript scratch_mulmat_p100_bench.R                                # MMQ int8 ON
-#   GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1 Rscript scratch_mulmat_p100_bench.R   # OFF (f16 dequant)
+#   Rscript bench_mulmat_p100.R                                # MMQ int8 ON
+#   GGML_VK_DISABLE_INTEGER_DOT_PRODUCT=1 Rscript bench_mulmat_p100.R   # OFF (f16 dequant)
 #
 # Pair it with GGML_VK_PERF_LOGGER=1 to see the per-op GFLOPS from ggml itself.
 # ---------------------------------------------------------------------------

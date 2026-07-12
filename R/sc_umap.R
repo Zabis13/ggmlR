@@ -111,6 +111,57 @@
   matrix(dvec, n, n)
 }
 
+# Top-k capacity the knn_tiled pipeline is built for (the K specialization
+# constant in knn_tiled.comp / R_ggml_knn_f32's guard). k above this must fall
+# back to another path.
+.GGMLR_KNN_GPU_MAX_K <- 32L
+
+# Cell ceiling for the fused GPU kNN. Unlike the pairwise-distance shader, this
+# never materialises the n x n matrix: its footprint is X (n*dims) plus the two
+# n*k outputs, i.e. LINEAR in n. So the ceiling is far higher — bounded by the X
+# upload, not an n^2 buffer. Budget a fraction of free VRAM for n*(dims + 2k)*4.
+.ggmlr_knn_gpu_max_cells <- function(dims, k, vram_fraction = 0.5,
+                                     fallback = 500000L) {
+  mem  <- tryCatch(ggml_vulkan_device_memory(0L), error = function(e) NULL)
+  free <- mem$free %||% mem$total %||% NA_real_
+  if (!is.finite(free) || free <= 0) return(fallback)
+  per_row <- (dims + 2 * k) * 4                 # bytes of VRAM per cell
+  as.integer(max(2L, floor(free * vram_fraction / per_row)))
+}
+
+# GPU k-nearest-neighbours via the knn_tiled.comp shader: honest-f32 distances
+# with a fused per-row top-k, so the n x n distance matrix is NEVER materialised
+# (the footprint is linear in n). Returns list(idx = n x k 1-based neighbour
+# rows, dist = n x k Euclidean, backend = "vulkan"), or NULL to fall back. Guards
+# mirror .ggmlr_dist_gpu, plus the pipeline's top-k capacity (k <= 32).
+# gpu_neighbor_max_cells = NULL derives the ceiling from free VRAM; 0 disables
+# the GPU path; a positive integer overrides it.
+.ggmlr_knn_gpu <- function(X, k, gpu_neighbor_max_cells = NULL) {
+  n <- nrow(X); dims <- ncol(X)
+  if (n < 2L || k < 1L || k > .GGMLR_KNN_GPU_MAX_K) return(NULL)
+
+  ok <- tryCatch({ ag_device("gpu"); TRUE }, error = function(e) FALSE)
+  if (!ok) return(NULL)
+  backend <- .ag_device_state$backend
+  if (is.null(backend) || !ggml_vulkan_is_backend(backend)) return(NULL)
+
+  ceiling <- gpu_neighbor_max_cells %||% .ggmlr_knn_gpu_max_cells(dims, k)
+  if (n > ceiling) return(NULL)
+
+  # shader reads X row-major; R matrices are column-major, so t() gives the
+  # [row0_d0, row0_d1, ...] stream the kernel expects (as in .ggmlr_dist_gpu).
+  xrow <- as.double(t(X))
+  res <- tryCatch(
+    .Call("R_ggml_knn_f32", backend, xrow,
+          as.integer(n), as.integer(dims), as.integer(k), PACKAGE = "ggmlR"),
+    error = function(e) NULL)
+  if (is.null(res)) return(NULL)
+
+  # R_ggml_knn_f32 returns 1-based idx and Euclidean dist, sorted ascending per
+  # row with self already excluded in the shader; hand back in the knn contract.
+  list(idx = res$idx, dist = res$dist, backend = "vulkan")
+}
+
 # k nearest neighbours of each row of X (excluding self), returned sorted by
 # distance: a list of knn_idx (n x k, 1-based), knn_dist (n x k), and the method.
 # FNN's kd-tree gives the exact k-NN in O(n log n) without materialising the full
@@ -119,8 +170,24 @@
 # back to the pairwise distance matrix (GPU pairwise_dist.comp or CPU dist) and a
 # per-row order(). The GPU distance shader stays the path for op = "neighbors",
 # where the full matrix is wanted; here we only need the k smallest per row.
-.ggmlr_umap_knn <- function(X, n_neighbors, gpu_neighbor_max_cells = NULL) {
+#
+# knn_backend = "vulkan" opts into the fused GPU kNN (knn_tiled.comp): honest-f32
+# distances with a per-row top-k, exact and memory-light (no n x n matrix). It is
+# opt-in — the FNN kd-tree is fast and exact on the CPU for typical sizes, so the
+# GPU path is for the large-n case where the kd-tree degrades (d ~ 10). It falls
+# back to FNN / CPU if the GPU is unavailable, k exceeds the pipeline capacity
+# (32), or n exceeds the VRAM ceiling.
+.ggmlr_umap_knn <- function(X, n_neighbors, gpu_neighbor_max_cells = NULL,
+                            knn_backend = c("cpu", "vulkan")) {
+  knn_backend <- match.arg(knn_backend)
   n <- nrow(X)
+
+  if (knn_backend == "vulkan") {
+    g <- .ggmlr_knn_gpu(X, n_neighbors, gpu_neighbor_max_cells)
+    if (!is.null(g)) return(g)
+    # GPU path declined (no GPU, k > 32, or n > ceiling): fall through to CPU.
+  }
+
   if (.ggmlr_has_pkg("FNN")) {
     nn <- FNN::get.knn(X, k = n_neighbors, algorithm = "kd_tree")
     return(list(idx = nn$nn.index, dist = nn$nn.dist, backend = "fnn"))
@@ -140,11 +207,12 @@
 }
 
 .ggmlr_umap_fuzzy_graph <- function(X, n_neighbors = 15L,
-                                    gpu_neighbor_max_cells = NULL) {
+                                    gpu_neighbor_max_cells = NULL,
+                                    knn_backend = "cpu") {
   n <- nrow(X)
   n_neighbors <- as.integer(min(n_neighbors, n - 1L))
 
-  knn <- .ggmlr_umap_knn(X, n_neighbors, gpu_neighbor_max_cells)
+  knn <- .ggmlr_umap_knn(X, n_neighbors, gpu_neighbor_max_cells, knn_backend)
   knn_idx      <- knn$idx
   knn_dist     <- knn$dist
   dist_backend <- knn$backend
@@ -238,9 +306,50 @@
 # matches the shader exactly (PCG hash seeded per edge/epoch), so the GPU output
 # can be validated bit-for-bit against this reference.
 # ----------------------------------------------------------------------------
+# Normalise fuzzy edge weights so the largest is exactly 1. Both the CPU
+# reference and umap_sgd.comp phrase the weighted-sampling test as
+# `floor(epoch*w) > floor((epoch-1)*w)`, which is the reference UMAP schedule
+# (fire every max(w)/w epochs) only under this normalisation.
+.ggmlr_umap_norm_weights <- function(w) {
+  w <- as.double(w)
+  mx <- max(w)
+  if (!is.finite(mx) || mx <= 0) return(rep(1, length(w)))
+  w / mx
+}
+
+# The CPU SGD reference, dispatched to compiled C (R_umap_sgd_cpu in
+# src/r_umap_sgd.c). The C code is a line-for-line transcription of the pure-R
+# .ggmlr_umap_sgd_r() below — same sequential schedule, same PCG negative
+# sampling, double precision — so the embedding is identical, but it runs in
+# seconds instead of the ~700 s the interpreted R double loop took over tens of
+# millions of edge/negative updates. The pure-R version is kept as the readable
+# reference and is exercised by the tests (bit-for-bit agreement with C).
 .ggmlr_umap_sgd <- function(graph, embedding, a, b, n_epochs = 200L,
                             n_neg = 5L, alpha0 = 1.0, gamma = 1.0,
                             base_seed = 42L) {
+  n  <- graph$n
+  ne <- length(graph$from)
+  w  <- .ggmlr_umap_norm_weights(graph$weight)   # max(w) = 1, as C expects
+
+  coords <- as.double(t(embedding))              # [x0,y0,x1,y1,...]
+  out <- .Call("R_umap_sgd_cpu", coords,
+               as.integer(graph$from), as.integer(graph$to), as.double(w),
+               as.integer(n), as.integer(ne),
+               as.integer(n_epochs), as.integer(n_neg),
+               as.double(a), as.double(b),
+               as.double(alpha0), as.double(gamma), as.integer(base_seed),
+               PACKAGE = "ggmlR")
+
+  Y <- matrix(out, n, 2L, byrow = TRUE)          # undo [x,y,...] flattening
+  rownames(Y) <- rownames(embedding)
+  Y
+}
+
+# Pure-R reference (readable spec for R_umap_sgd_cpu). Not on the hot path;
+# retained for documentation and as the tests' bit-for-bit oracle.
+.ggmlr_umap_sgd_r <- function(graph, embedding, a, b, n_epochs = 200L,
+                              n_neg = 5L, alpha0 = 1.0, gamma = 1.0,
+                              base_seed = 42L) {
   Y <- embedding                               # n x 2, modified in place
   n <- graph$n
   from <- graph$from + 1L; to <- graph$to + 1L # back to 1-based for R indexing
@@ -248,12 +357,20 @@
   eps  <- 1e-3
   golden <- 2654435769                          # 0x9e3779b9
 
+  # weighted edge sampling, mirroring umap_sgd.comp: edge e is pulled only on
+  # the epochs where the reference's next_sample cursor comes due, which under
+  # max(w) = 1 is exactly when floor(epoch*w) crosses an integer. Weak edges are
+  # therefore visited rarely, strong ones every epoch.
+  w <- .ggmlr_umap_norm_weights(graph$weight)
+
   clampg <- function(g) pmax(pmin(g, 4), -4)   # UMAP clamps gradients to [-4,4]
 
   for (epoch in seq_len(n_epochs)) {
     alpha <- alpha0 * (1 - (epoch - 1) / n_epochs)
     epoch_seed <- .ggmlr_u32(base_seed + (epoch - 1))   # host varies seed/epoch
+    fires <- floor(epoch * w) > floor((epoch - 1) * w)
     for (e in seq_len(ne)) {
+      if (!fires[e]) next
       i <- from[e]; j <- to[e]
       dy  <- Y[i, ] - Y[j, ]
       d2  <- sum(dy * dy)
@@ -309,7 +426,8 @@
   ne <- length(graph$from)
   coords  <- as.double(t(embedding))                 # [x0,y0,x1,y1,...]
   edges   <- as.integer(rbind(graph$from, graph$to)) # [from0,to0,...] (0-based)
-  weights <- as.double(graph$weight)
+  # the shader's sampling test assumes max(w) = 1 (see umap_sgd.comp)
+  weights <- .ggmlr_umap_norm_weights(graph$weight)
 
   out <- .Call("R_ggml_umap_sgd", backend, coords, edges, weights,
                as.integer(n), as.integer(ne),
@@ -343,18 +461,72 @@
 #' @param gpu_neighbor_max_cells Cell ceiling for the GPU distance shader.
 #'   \code{NULL} (default) derives it from free VRAM; a positive integer forces
 #'   an explicit cap; above the ceiling the distance phase falls back to the CPU.
-#' @param backend \code{"vulkan"} (default; both GPU shaders, with per-phase CPU
-#'   fallback) or \code{"cpu"} (force the CPU reference for both phases).
+#' @param backend \code{"vulkan"} (default; GPU for the kNN/distance phase, with
+#'   per-phase CPU fallback) or \code{"cpu"} (force the CPU reference for both
+#'   phases).
+#' @param sgd_backend Which backend runs the SGD layout phase: \code{"cpu"}
+#'   (default, the single-threaded reference — best embedding quality) or
+#'   \code{"vulkan"} (the GPU shader — faster but lower quality on dense graphs,
+#'   as its Hogwild SGD does not match the reference; falls back to CPU if no GPU
+#'   is live). The graph/distance phase is unaffected and still uses
+#'   \code{backend}.
 #' @return A \code{\link{ggml_result}} whose \code{embedding} is cells x
 #'   \code{n_components}. \code{metadata} records the a/b curve parameters and the
 #'   per-phase backend (\code{backend_dist}, \code{backend_sgd}); the summary
 #'   \code{backend} is \code{"vulkan"} only when both phases ran on the GPU.
 #' @keywords internal
+# Initial layout for the SGD. Reference UMAP starts from the leading
+# eigenvectors of the normalised graph Laplacian, scaled to about +/-10; the SGD
+# then only has to refine it. Starting from near-zero noise instead leaves the
+# attraction and repulsion terms in the wrong regime and the clusters never
+# separate. Falls back to a uniform draw (uwot's own fallback) when the spectral
+# solve is unavailable or fails to converge.
+.ggmlr_umap_spectral_init <- function(graph, n_components, seed = 42L) {
+  n <- graph$n
+
+  # draw reproducibly without disturbing the caller's RNG stream
+  old <- if (exists(".Random.seed", .GlobalEnv)) get(".Random.seed", .GlobalEnv)
+         else NULL
+  on.exit(if (is.null(old)) rm(".Random.seed", envir = .GlobalEnv)
+          else assign(".Random.seed", old, envir = .GlobalEnv), add = TRUE)
+  set.seed(seed)
+
+  spectral <- NULL
+  if (.ggmlr_has_pkg("Matrix") && .ggmlr_has_pkg("irlba")) {
+    spectral <- tryCatch({
+      W <- Matrix::sparseMatrix(i = graph$from + 1L, j = graph$to + 1L,
+                                x = graph$weight, dims = c(n, n))
+      W <- W + Matrix::t(W)
+      # symmetric normalised adjacency; its top eigenvectors are the bottom
+      # eigenvectors of the Laplacian L = I - D^-1/2 W D^-1/2.
+      Dh <- Matrix::Diagonal(
+        x = 1 / sqrt(pmax(Matrix::rowSums(W), .Machine$double.eps)))
+      ev <- irlba::partial_eigen(Dh %*% W %*% Dh, n = n_components + 1L)
+      # drop the trivial leading eigenvector (constant, carries no layout)
+      V  <- ev$vectors[, seq(2L, n_components + 1L), drop = FALSE]
+      mx <- max(abs(V))
+      if (!is.finite(mx) || mx <= 0) stop("degenerate spectral embedding")
+      # scale to roughly +/-10, then jitter to break ties between coincident
+      # points -- both as uwot does
+      V / mx * 10 + matrix(stats::rnorm(length(V), sd = 1e-3), n, n_components)
+    }, error = function(e) NULL, warning = function(w) NULL)
+  }
+
+  if (!is.null(spectral) && !anyNA(spectral)) return(spectral)
+  matrix(stats::runif(n * n_components, -10, 10), n, n_components)
+}
+
 .ggmlr_umap_gpu <- function(mat, n_components = 2L, n_neighbors = 15L,
                             min_dist = 0.1, spread = 1, n_epochs = 200L,
                             gpu_neighbor_max_cells = NULL,
-                            backend = c("vulkan", "cpu")) {
+                            backend = c("vulkan", "cpu"),
+                            sgd_backend = c("cpu", "vulkan"),
+                            knn_backend = c("cpu", "vulkan")) {
   backend <- match.arg(backend)
+  sgd_backend <- match.arg(sgd_backend)
+  knn_backend <- match.arg(knn_backend)
+  # the GPU kNN only makes sense on a live Vulkan device; gate it like sgd_backend.
+  knn_backend <- if (backend == "vulkan" && knn_backend == "vulkan") "vulkan" else "cpu"
   storage.mode(mat) <- "double"
   t0 <- proc.time()[["elapsed"]]
 
@@ -371,21 +543,28 @@
   dist_ceiling <- if (backend == "cpu") 0L else gpu_neighbor_max_cells
   t_g0  <- proc.time()[["elapsed"]]
   graph <- .ggmlr_umap_fuzzy_graph(X, n_neighbors = n_neighbors,
-                                   gpu_neighbor_max_cells = dist_ceiling)
+                                   gpu_neighbor_max_cells = dist_ceiling,
+                                   knn_backend = knn_backend)
   ab    <- .ggmlr_umap_find_ab(spread = spread, min_dist = min_dist)
   t_graph <- proc.time()[["elapsed"]] - t_g0
   backend_dist <- graph$dist_backend %||% "cpu"
 
-  # init from a small random spectral-like layout (random is enough here)
-  Y0 <- matrix(stats::rnorm(n * n_components, sd = 1e-4), n, n_components)
+  # init from the graph Laplacian's leading eigenvectors (uniform if unavailable)
+  Y0 <- .ggmlr_umap_spectral_init(graph, n_components)
 
-  # Phase 3 (GPU): SGD layout via umap_sgd.comp when a backend is live, else the
-  # CPU reference. The GPU path mirrors the CPU numerics (same PCG RNG /
-  # schedule); if no Vulkan backend is available it returns NULL and we fall back.
+  # Phase 3: SGD layout. Defaults to the CPU reference even under backend =
+  # "vulkan", because the GPU shader's parallel (Hogwild) SGD does not reach the
+  # single-threaded reference's embedding quality on dense graphs — a known hard
+  # problem for async UMAP-SGD (RAPIDS cuML has the same open issue), not a
+  # defect specific to this shader. The graph/distance phase above still runs on
+  # the GPU, which is where the O(n log n)/O(n*d) cost is; the SGD over the
+  # sparse graph is cheap on the CPU at single-cell scale. Set
+  # sgd_backend = "vulkan" to opt into the GPU shader (fast, lower quality); it
+  # falls back to the CPU reference if no Vulkan backend is live.
   t_s0 <- proc.time()[["elapsed"]]
   Y <- NULL
   backend_sgd <- "cpu"
-  if (backend == "vulkan") {
+  if (backend == "vulkan" && sgd_backend == "vulkan") {
     Y <- .ggmlr_umap_sgd_gpu(graph, Y0, a = ab[["a"]], b = ab[["b"]],
                              n_epochs = n_epochs)
     if (!is.null(Y)) backend_sgd <- "vulkan"
@@ -439,14 +618,24 @@
 #' @param gpu_neighbor_max_cells Cell ceiling for the GPU distance fallback;
 #'   \code{NULL} derives it from free VRAM.
 #' @param backend \code{"vulkan"} or \code{"cpu"} (dispatch resolves "auto").
+#' @param knn_backend Which backend runs the kNN search: \code{"cpu"} (default,
+#'   the FNN kd-tree) or \code{"vulkan"} to opt into the fused GPU kNN
+#'   (\code{knn_tiled.comp}, honest f32, no n x n matrix). The GPU path is for
+#'   large \code{n}, where the kd-tree degrades in ~10-D; it falls back to the CPU
+#'   if the GPU is unavailable, \code{n_neighbors > 32}, or \code{n} exceeds the
+#'   VRAM ceiling. Only takes effect under \code{backend = "vulkan"}.
 #' @return A \code{\link{ggml_result}} with \code{metadata$kind = "graph"} and
 #'   the two graphs (\code{nn}, \code{snn}) as sparse matrices in
 #'   \code{metadata}; \code{embedding} is the SNN graph (the one clustering uses).
 #' @keywords internal
 .ggmlr_neighbors_gpu <- function(mat, n_neighbors = 20L, prune_snn = 1 / 15,
                                  gpu_neighbor_max_cells = NULL,
-                                 backend = c("vulkan", "cpu")) {
+                                 backend = c("vulkan", "cpu"),
+                                 knn_backend = c("cpu", "vulkan")) {
   backend <- match.arg(backend)
+  knn_backend <- match.arg(knn_backend)
+  # the GPU kNN only makes sense on a live Vulkan device; gate it like sgd_backend.
+  knn_backend <- if (backend == "vulkan" && knn_backend == "vulkan") "vulkan" else "cpu"
   .ggmlr_need_pkg("Matrix", "building neighbour graphs (op = \"neighbors\")")
   storage.mode(mat) <- "double"
   t0 <- proc.time()[["elapsed"]]
@@ -461,8 +650,11 @@
   k <- as.integer(min(n_neighbors, n - 1L))
   dist_ceiling <- if (backend == "cpu") 0L else gpu_neighbor_max_cells
 
-  knn <- .ggmlr_umap_knn(X, k, dist_ceiling)   # idx (n x k), dist, backend
+  t_knn0 <- proc.time()[["elapsed"]]
+  knn <- .ggmlr_umap_knn(X, k, dist_ceiling, knn_backend)  # idx (n x k), dist, backend
+  t_knn <- proc.time()[["elapsed"]] - t_knn0
   idx <- knn$idx
+  t_snn0 <- proc.time()[["elapsed"]]
 
   # binary kNN adjacency, with self included (Seurat counts the point itself in
   # its own neighbourhood, so |N| = k + 1 and the Jaccard denominators match).
@@ -474,10 +666,20 @@
 
   # SNN: overlap = |N(i) cap N(j)| via KNN %*% t(KNN); Jaccard normalises by the
   # union |N(i)| + |N(j)| - overlap. Both neighbourhoods have size k + 1.
+  # Jaccard is 0 wherever overlap is 0, so we only ever touch overlap's stored
+  # non-zeros. Compute the ratio directly on the @x slot: forming the dense
+  # `2*nsize - overlap` would materialise an n x n dgeMatrix (n^2 doubles — tens
+  # of GB at scale, an OOM) even though the result is sparse.
   overlap <- Matrix::tcrossprod(KNN)           # n x n counts of shared neighbours
   nsize   <- k + 1L
-  snn     <- overlap / (2 * nsize - overlap)   # Jaccard (elementwise on non-zeros)
+  snn     <- overlap                           # same sparsity pattern as overlap
+  snn@x   <- overlap@x / (2 * nsize - overlap@x)      # Jaccard on stored non-zeros
+  # tcrossprod yields a symmetric dsCMatrix (half stored); expand to a general
+  # dgCMatrix so downstream (as.Graph / FindClusters) sees the same class the
+  # previous dense path produced.
+  snn     <- methods::as(snn, "generalMatrix")
   snn     <- Matrix::drop0(snn * (snn >= prune_snn))  # prune weak edges
+  t_snn <- proc.time()[["elapsed"]] - t_snn0
 
   cell_names <- colnames(mat)
   if (!is.null(cell_names)) {
@@ -491,7 +693,8 @@
                      nn = KNN, snn = snn,
                      n_neighbors = k, prune_snn = prune_snn,
                      n_snn_edges = length(snn@x)),
-    timings   = c(total = proc.time()[["elapsed"]] - t0)
+    timings   = c(total = proc.time()[["elapsed"]] - t0,
+                  knn = t_knn, snn = t_snn)
   )
 }
 

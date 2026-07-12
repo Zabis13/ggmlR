@@ -1006,6 +1006,18 @@ void process_shaders() {
     // Pairwise squared-distance matrix: fixed f32 types, no variants.
     string_to_spv("pairwise_dist", "pairwise_dist.comp", {});
 
+    // Tiled fused k-NN: fixed f32 distance / uint index types. WG/K/MAXD are
+    // specialization constants set at pipeline creation, not compile-time
+    // variants, so no A_TYPE/D_TYPE permutations are needed.
+    string_to_spv("knn_tiled", "knn_tiled.comp", {});
+
+    // FP64 matmul (PoC, benchmark only): fixed double types, no variants.
+    string_to_spv("matmul_f64", "matmul_f64.comp", {});
+
+    // Sparse LogNormalize: elementwise map over a dgCMatrix's stored non-zeros.
+    // Fixed types (float values / uint column index), no variants.
+    string_to_spv("sparse_lognorm", "sparse_lognorm.comp", {});
+
     string_to_spv("topk_argsort_f32", "topk_argsort.comp", {{"A_TYPE", "float"}});
     string_to_spv("topk_nary_search_f32", "topk_nary_search.comp", {{"A_TYPE", "float"}});
 

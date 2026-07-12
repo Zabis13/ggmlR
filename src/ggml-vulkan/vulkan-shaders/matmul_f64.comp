@@ -1,0 +1,65 @@
+#version 450
+
+// FP64 matrix multiply — a minimal proof-of-concept kernel that computes
+// C = A * B entirely in double precision, to measure whether an honest-f64 GPU
+// path can beat CPU double (openBLAS) despite the hardware fp64:fp32 throughput
+// penalty (RDNA4 ~1:16, GeForce ~1:64). This is NOT wired into the dtype system;
+// it is dispatched directly by R_ggml_matmul_f64 for benchmarking only.
+//
+// A is M x K, B is K x N, C is M x N, all row-major double. One thread computes
+// one output element C[row, col] = sum_k A[row,k] * B[k,col], cooperatively
+// staging TSxTS tiles of A and B into shared memory so each value is read from
+// VRAM once per tile rather than once per output it contributes to.
+//
+// Requires the shaderFloat64 device feature (RX 9070 / RADV reports it true; it
+// is already enabled at device creation since the backend passes through every
+// core feature the device supports).
+
+#extension GL_EXT_control_flow_attributes : enable
+
+const uint TS = 16u;   // tile side (16x16 = 256 threads; fp64 registers are wide)
+
+layout(local_size_x = TS, local_size_y = TS, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A { double a[]; };   // M x K, row-major
+layout (binding = 1) readonly buffer B { double b[]; };   // K x N, row-major
+layout (binding = 2) writeonly buffer C { double c[]; };  // M x N, row-major
+
+layout (push_constant) uniform parameter {
+    uint M;
+    uint N;
+    uint K;
+} p;
+
+shared double tile_a[TS][TS];
+shared double tile_b[TS][TS];
+
+void main() {
+    const uint lx = gl_LocalInvocationID.x;   // column within tile
+    const uint ly = gl_LocalInvocationID.y;   // row within tile
+
+    const uint row = gl_WorkGroupID.y * TS + ly;   // output row (in M)
+    const uint col = gl_WorkGroupID.x * TS + lx;   // output col (in N)
+
+    double acc = 0.0LF;
+
+    // Walk the K dimension in TS-wide chunks, staging one tile of A and B each.
+    const uint n_tiles = (p.K + TS - 1u) / TS;
+    for (uint t = 0u; t < n_tiles; ++t) {
+        const uint a_col = t * TS + lx;            // K index for this thread's A load
+        const uint b_row = t * TS + ly;            // K index for this thread's B load
+
+        tile_a[ly][lx] = (row < p.M && a_col < p.K) ? a[row * p.K + a_col]  : 0.0LF;
+        tile_b[ly][lx] = (b_row < p.K && col < p.N) ? b[b_row * p.N + col]  : 0.0LF;
+        barrier();
+
+        [[unroll]] for (uint kk = 0u; kk < TS; ++kk) {
+            acc += tile_a[ly][kk] * tile_b[kk][lx];
+        }
+        barrier();
+    }
+
+    if (row < p.M && col < p.N) {
+        c[row * p.N + col] = acc;
+    }
+}

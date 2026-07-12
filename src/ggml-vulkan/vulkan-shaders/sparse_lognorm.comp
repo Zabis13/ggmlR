@@ -1,0 +1,45 @@
+#version 450
+
+// Sparse LogNormalize — one thread per stored (non-zero) count.
+//
+// Seurat's NormalizeData(method = "LogNormalize") computes, per cell j:
+//     data[i,j] = log1p(counts[i,j] / colSum[j] * scale_factor).
+// Because log1p(0) = 0, the zeros of a sparse counts matrix stay zero, so the
+// whole transform is a pure elementwise map over the stored non-zeros of the
+// dgCMatrix — no densification. Each thread owns one stored value @x[k]:
+//
+//   1. reads its per-column factor via a precomputed column index (col_of_nnz),
+//      so no binary search over the CSC column pointers is needed in the shader,
+//   2. writes log1p(val * factor) back into the SAME slot, in place.
+//
+// The host (R) computes colSum[j] with Matrix::colSums (cheap, O(nnz)) and
+// uploads factor[j] = scale_factor / colSum[j] directly, so the shader stays a
+// trivial elementwise kernel. Writes are embarrassingly parallel: every thread
+// touches a distinct @x[k] slot, so there is NO write-write race (unlike the
+// UMAP repulsion shader, which shares vertices) — no atomics, no barriers.
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// vals: the dgCMatrix @x slot — the nnz stored counts. Read + write (in place).
+layout (binding = 0) buffer Vals { float vals[]; };
+// factor: per-column scale factor = scale_factor / colSum[col], one per cell.
+layout (binding = 1) readonly buffer Factor { float factor[]; };
+// col_of_nnz: for each stored value k, the 0-based column (cell) it belongs to.
+// Precomputed on the host from the CSC column pointers @p (avoids in-shader
+// binary search).
+layout (binding = 2) readonly buffer ColOfNnz { uint col_of_nnz[]; };
+
+layout (push_constant) uniform parameter {
+    uint nnz;   // number of stored non-zero values
+};
+
+void main() {
+    const uint k = gl_GlobalInvocationID.x;
+    if (k >= nnz) {
+        return;
+    }
+    const uint col = col_of_nnz[k];
+    vals[k] = log(1.0 + vals[k] * factor[col]);  // log1p
+}

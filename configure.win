@@ -7,6 +7,9 @@
 # Default values
 USE_VULKAN="auto"
 USE_SIMD="no"
+# See ./configure: the _exit() teardown bypass is compiled out unless requested,
+# because CRAN Repository Policy forbids a package terminating the R session.
+USE_HARD_EXIT="no"
 VULKAN_CPPFLAGS=""
 VULKAN_LIBS=""
 VULKAN_OBJECTS=""
@@ -23,6 +26,7 @@ VULKAN_OBJECTS=""
 # install. We therefore honour:
 #   Sys.setenv(GGML_USE_SIMD = "1")      -> enable SIMD
 #   Sys.setenv(GGML_USE_VULKAN = "0")    -> force-disable Vulkan
+#   Sys.setenv(GGML_VK_HARD_EXIT = "1")  -> enable ggml_vulkan_shutdown(hard=TRUE)
 # These also work on Unix, where "$@" additionally carries --with-simd etc.
 for arg in "$@"; do
   case "$arg" in
@@ -34,6 +38,12 @@ for arg in "$@"; do
       ;;
     --with-simd)
       USE_SIMD="yes"
+      ;;
+    --enable-hard-exit)
+      USE_HARD_EXIT="yes"
+      ;;
+    --disable-hard-exit)
+      USE_HARD_EXIT="no"
       ;;
   esac
 done
@@ -50,6 +60,14 @@ case "$GGML_USE_VULKAN" in
     ;;
   0|no|NO|false|FALSE|off|OFF)
     USE_VULKAN="no"
+    ;;
+esac
+case "$GGML_VK_HARD_EXIT" in
+  1|yes|YES|true|TRUE|on|ON)
+    USE_HARD_EXIT="yes"
+    ;;
+  0|no|NO|false|FALSE|off|OFF)
+    USE_HARD_EXIT="no"
     ;;
 esac
 
@@ -174,6 +192,12 @@ fi
 # SIMD is disabled by default. Users who want SIMD acceleration can enable it with:
 #   install.packages("ggmlR", configure.args = "--with-simd")
 #
+# Acknowledge the hard-exit request next to the other flag banners; whether it
+# actually takes effect depends on Vulkan and is reported in the Vulkan block.
+if [ "$USE_HARD_EXIT" = "yes" ]; then
+  echo "Hard exit: requested (GGML_VK_HARD_EXIT / --enable-hard-exit)"
+fi
+
 SIMD_CFLAGS=""
 if [ "$USE_SIMD" = "yes" ]; then
   echo "SIMD: enabled by --with-simd, detecting supported flags..."
@@ -338,6 +362,12 @@ if [ "$USE_VULKAN" = "yes" ]; then
 
   VULKAN_CPPFLAGS="$VULKAN_CPPFLAGS -DGGML_USE_VULKAN -Iggml-vulkan -Iggml-vulkan/generated $SHADERGEN_DEFINES"
 
+  if [ "$USE_HARD_EXIT" = "yes" ]; then
+    VULKAN_CPPFLAGS="$VULKAN_CPPFLAGS -DGGML_VK_HARD_EXIT"
+    echo "Hard exit: ENABLED -- ggml_vulkan_shutdown(hard=TRUE) will call _exit()"
+    echo "           (verify at runtime: ggml_vulkan_hard_exit_available())"
+  fi
+
   echo "Vulkan backend enabled with $SHADER_COUNT shaders"
 fi
 
@@ -375,6 +405,12 @@ if [ "$USE_SIMD" = "yes" ]; then
   echo "  SIMD:   ENABLED ($SIMD_CFLAGS )"
 else
   echo "  SIMD:   disabled"
+fi
+# Effective state: compiled in only when requested AND Vulkan is on.
+if [ "$USE_HARD_EXIT" = "yes" ] && [ "$USE_VULKAN" = "yes" ]; then
+  echo "  Hard exit: ENABLED"
+else
+  echo "  Hard exit: disabled (default; GGML_VK_HARD_EXIT=1 to enable)"
 fi
 if [ -n "$OPENMP_CFLAGS" ]; then
   echo "  OpenMP: ENABLED ($OPENMP_CFLAGS )"

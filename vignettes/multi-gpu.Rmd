@@ -1,0 +1,285 @@
+---
+title: "Multi-GPU: Tensor, Pipeline and Hybrid Parallelism"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{12. Multi-GPU Parallelism Modes}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+# Executed locally (NOT_CRAN=true), not on CRAN — same policy as the other
+# vignettes. On top of that, every chunk needing two or more GPUs is marked
+# eval=FALSE individually: neither CRAN nor a typical workstation has them,
+# and a half-executed parallel demo is worse than a printed one. What still
+# runs here only queries the build and the driver.
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>",
+                      eval = identical(Sys.getenv("NOT_CRAN"), "true"))
+```
+
+This vignette covers running ggmlR across **more than one GPU**. For the
+single-GPU basics — installation, device discovery, Vulkan build flags — see
+`vignette("gpu-vulkan")`. For data-parallel *training* specifically, see
+`vignette("data-parallel-training")`.
+
+```{r}
+library(ggmlR)
+```
+
+## 1. Which mode do you need?
+
+The three modes differ in *what* gets split across devices, and that choice
+follows from why one GPU is not enough.
+
+| Mode | What is split | Use when | Entry point |
+|------|---------------|----------|-------------|
+| Tensor parallelism (TP) | Individual weight matrices, by rows | One layer is too big, or you want to cut per-layer latency | `ggml_vulkan_split_mul_mat()` |
+| Pipeline parallelism (PP) | Whole layers, by depth | The **model** does not fit on one card | `ggml_pp_forward()` |
+| Data parallelism (DP) | The batch | The model fits, you want throughput | `dp_train()`, `ggml_tp_dp_forward()` |
+
+They compose. `ggml_tp_dp_forward()` and `ggml_pp_dp_forward()` run DP replicas
+on top of TP or PP groups — for example four GPUs as two replicas of TP=2.
+
+The decisive practical difference is **how much data crosses between devices**:
+
+- TP moves activations across devices *twice per split layer*.
+- PP moves activations across devices *once per stage boundary* — for a
+  2-stage split of a 32-layer model, that is one transfer per forward pass.
+- DP moves *nothing* between replicas during inference.
+
+That ordering matters more than it looks, because of the transport.
+
+### Are you sure you want this layer?
+
+ggmlR provides the **tensor layer**: primitives that split individual matrices,
+graph stages and batches across devices. If your goal is to run a whole
+**language model** across several GPUs, you almost certainly want
+[llamaR](https://github.com/Zabis13/llamaR) instead, which is built on ggmlR and
+handles model loading, KV cache, sampling and serving:
+
+```{r eval=FALSE}
+# llamaR — whole-LLM inference; the split happens inside the model loader
+model <- llama_load_model("model.gguf", n_gpu_layers = -1L,
+                          devices = c("Vulkan0", "Vulkan1"),
+                          split_mode = "row")     # or "layer" for pipeline
+```
+
+The names coincide but the code does not: `split_mode = "row"` / `"layer"` is
+llamaR's own weight distribution over a real transformer, not a call into the
+`ggml_vulkan_split_mul_mat()` / `ggml_pp_forward()` shown below. Reach for the
+ggmlR primitives when you are building a custom parallel computation — a model
+architecture of your own, a research prototype, a non-LLM workload — rather than
+serving an existing GGUF.
+
+`llamaR` ships a full PP/TP/DP sweep over a real model in
+`system.file("examples", "bench_pp_tp_dp.sh", package = "llamaR")`.
+
+## 2. The transport, and why it constrains everything
+
+Copying a tensor from GPU 0 to GPU 1 needs a path. ggmlR implements three,
+selected by the `transport` argument:
+
+- `"host-staging"` (**default**) — device → host RAM → device. Portable and
+  always correct.
+- `"opaque-fd"` — zero-copy via `VK_KHR_external_memory_fd`.
+- `"device-group"` — one logical device spanning several cards (NVLink / LDA).
+
+The default is not a conservative placeholder; on the hardware we tested it is
+the only path that works. Measured on a 4×P100 server:
+
+- `"opaque-fd"` shares memory correctly in loopback (same device) but
+  **silently transfers zeros across devices** — a hardware/driver limitation
+  on NVIDIA, not a bug in the import path.
+- `"device-group"` enumerates five groups, every one of them single-device:
+  no NVLink/LDA aggregation is offered at all.
+
+Verify your own hardware before assuming a zero-copy path exists:
+
+```{r eval=FALSE}
+# Loopback sanity check: does the transport work at all on device 0?
+r <- ggml_vulkan_p2p_selftest(0L, 0L)
+cat(r$report)
+
+# The real question: does a cross-device copy carry the bytes?
+if (ggml_vulkan_device_count() >= 2) {
+  r <- ggml_vulkan_p2p_selftest(0L, 1L, transport = "opaque-fd")
+  cat(r$report)          # "verified" vs. a mismatch tells you immediately
+}
+
+# Are there any multi-device (LDA) groups?
+ggml_vulkan_device_groups()
+```
+
+Because `host-staging` routes through host RAM, **TP is the mode that suffers
+most** and PP the least. If your model does not fit on one card, prefer PP.
+
+## 3. Tensor parallelism
+
+`ggml_vulkan_split_mul_mat()` splits the weight matrix `W` by rows across
+devices, computes each slice on its own GPU, and gathers the result. It is a
+standalone C routine, deliberately outside the ggml graph.
+
+```{r eval=FALSE}
+set.seed(1)
+W <- matrix(rnorm(2048 * 64), nrow = 2048)   # [N x K] weights
+X <- matrix(rnorm(4 * 64),    nrow = 4)      # [M x K] activations
+
+Y <- ggml_vulkan_split_mul_mat(W, X, n_devices = 2)
+
+# Contract: identical to the single-device result, up to f32 rounding.
+max(abs(Y - X %*% t(W)))                     # ~3.8e-6 on 2 devices
+```
+
+Pick a subset of GPUs rather than "the first N" with `device_ids`, and give
+uneven cards uneven shares with `weights`:
+
+```{r eval=FALSE}
+Y <- ggml_vulkan_split_mul_mat(W, X, device_ids = c(0L, 1L))
+Y <- ggml_vulkan_split_mul_mat(W, X, n_devices = 2, weights = c(0.7, 0.3))
+
+# Inspect the row ranges the split math will use (0-based, half-open):
+ggml_vulkan_split_row_ranges(nrows = 2048, n_devices = 2)
+```
+
+`ggml_vulkan_split_buffer_type()` exposes the same row-split as a ggml buffer
+type, for callers that allocate weights themselves.
+
+## 4. Pipeline parallelism
+
+PP assigns *layers* to devices: GPU 0 runs stages 1–16, GPU 1 runs 17–32, and
+exactly one activation tensor crosses between them. Each stage is described by
+a list with its `device`, its `in_shape`, and a `build` function that
+constructs the sub-graph and returns a `set_weights` closure.
+
+The one non-obvious rule: **weights are set after allocation**, which is why
+`build` returns `set_weights` instead of filling tensors immediately.
+
+```{r eval=FALSE}
+K <- 64L; M <- 8L
+W1 <- matrix(rnorm(K * K), nrow = K)
+W2 <- matrix(rnorm(K * K), nrow = K)
+X  <- matrix(rnorm(K * M), nrow = K)     # ggml ne = c(K, M): column m is sample m
+
+make_stage <- function(dev, Wt, relu) {
+  list(
+    device   = dev,
+    in_shape = c(K, M),
+    build = function(ctx, input) {
+      w <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, K)
+      z <- ggml_mul_mat(ctx, w, input)     # == t(Wt) %*% input in R terms
+      list(
+        output      = if (relu) ggml_relu(ctx, z) else z,
+        set_weights = function() ggml_backend_tensor_set_data(w, as.numeric(Wt))
+      )
+    })
+}
+
+stages <- list(make_stage(0L, W1, relu = TRUE),
+               make_stage(1L, W2, relu = FALSE))
+
+y <- ggml_pp_forward(stages, x = as.numeric(X), out_shape = c(K, M))
+Y <- matrix(y, nrow = K, ncol = M)
+
+max(abs(Y - t(W2) %*% pmax(t(W1) %*% X, 0)))   # ~1.8e-5
+```
+
+## 5. Hybrid: DP over TP or PP
+
+With four GPUs, two replicas of TP=2 usually beat one TP=4 group: DP adds no
+cross-device traffic, so the hybrid *hides* the weakness of host-staging.
+
+```{r eval=FALSE}
+# Replica A = {GPU0, GPU1}, replica B = {GPU2, GPU3}.
+# Each replica takes half the batch; no traffic crosses between replicas.
+Y <- ggml_tp_dp_forward(W, X, replicas = list(c(0L, 1L), c(2L, 3L)))
+
+# The PP equivalent takes a factory: make_stages(devices, m_shard) -> stage list
+Y <- ggml_pp_dp_forward(make_stages, x, replicas = list(c(0L, 1L), c(2L, 3L)),
+                        out_ncol = M)
+```
+
+For multi-GPU *training* rather than inference, use `dp_train()` —
+see `vignette("data-parallel-training")`.
+
+## 6. Clean shutdown (and the `--enable-hard-exit` flag)
+
+A multi-GPU script can segfault **after** it has printed its results. The cause
+is a race at process exit: the Vulkan loader and the driver's ICD libraries get
+unmapped while driver worker threads are still winding down, so late destructors
+call into unmapped memory. The computed results are already out; the crash is
+harmless but noisy, and it turns a successful run into a non-zero exit code.
+
+Call `ggml_vulkan_shutdown()` to tear Vulkan down *while the loader is still
+mapped*. It is idempotent, safe mid-session, and Vulkan transparently
+re-initializes on the next operation:
+
+```{r eval=FALSE}
+ggml_vulkan_shutdown()     # safe anywhere; releases devices
+```
+
+That narrows the race but does not close it: no R exit hook runs before R
+unmaps the loader. For a guaranteed-clean exit, make `hard = TRUE` the **last**
+statement of a standalone script — after teardown it calls `_exit(status)`,
+terminating immediately without running exit handlers or unmapping libraries,
+so there is no teardown phase left to crash.
+
+```{r eval=FALSE}
+ggml_vulkan_shutdown(hard = TRUE, status = 0L)   # never returns
+```
+
+**This path is compiled out by default.** CRAN Repository Policy forbids a
+package from terminating the user's R session, so the released package must not
+link `_exit()`. In a default build, `hard = TRUE` performs the normal teardown
+and emits a `warning()` — it is never silently ignored. Compile it in with:
+
+```bash
+R CMD INSTALL . --configure-args="--enable-hard-exit"
+```
+
+On Windows R ignores `configure.args`; set `Sys.setenv(GGML_VK_HARD_EXIT = "1")`
+before installing from source. Check what the current build has:
+
+```{r}
+ggml_vulkan_hard_exit_available()
+```
+
+Two caveats. `hard = TRUE` bypasses R's shutdown entirely: no `.RData`, no
+`on.exit()` handlers, no flushed connections beyond what ggmlR flushes itself.
+Use it only as the final line of a script, never mid-session, never inside a
+package. And although the race is observed in multi-GPU scripts — more devices
+mean more driver threads and a wider window — nothing in the mechanism is
+specific to multiple GPUs; single-GPU runs simply have not been seen to trip it.
+
+## 7. Where to look next
+
+Runnable demos ship with the package, under `system.file("examples", package = "ggmlR")`:
+
+```{r eval=FALSE}
+list.files(system.file("examples", package = "ggmlR"),
+           pattern = "^(tp_|pp_|multi_gpu|dp_)")
+```
+
+- `multi_gpu_example.R` — device discovery and per-device work
+- `tp_dp_hybrid.R` — TP×DP hybrid on four GPUs
+- `pp_pipeline.R` — two-stage pipeline parallelism
+- `tp_p2p_diagnose.R` — transport diagnostics; drop `hard = TRUE` to observe the
+  exit-time crash described above
+- `dp_train_demo.R` — data-parallel training
+
+The test suite documents the numeric contracts, and skips gracefully when fewer
+than two GPUs are present:
+
+- `tests/testthat/test-vulkan-tensor-parallel.R` — split math, `split_mul_mat`,
+  buffer-type factory, TP×DP and PP forwards
+- `tests/testthat/test-vulkan.R`, `test-vulkan-caps.R` — backend and capabilities
+
+## 8. Summary
+
+```{r}
+ggml_vulkan_status()
+```
+
+Choose PP when the model does not fit, TP when a layer does not fit or latency
+matters, DP for throughput — and remember that on current NVIDIA hardware every
+cross-device byte goes through host RAM, so the mode that moves the least data
+wins.

@@ -76,6 +76,16 @@ ggml_inject.Seurat <- function(x, result, reduction_name = "ggml", key = "GGML_"
     return(x)
   }
 
+  # coldata ops (largest_gene) write per-cell columns into meta.data, exactly
+  # where Seurat's AddMetaData / percent.Largest.Gene puts them.
+  if (identical(result$metadata$kind, "coldata")) {
+    df <- as.data.frame(result$embedding)
+    x  <- SeuratObject::AddMetaData(x, metadata = df)
+    SeuratObject::Misc(x, slot = paste0(reduction_name, "_ggml")) <-
+      .ggmlr_misc_provenance(result$metadata, result$timings)
+    return(x)
+  }
+
   # transform ops (normalize / scale) write a feature-by-cell matrix back into
   # an assay layer rather than creating a DimReduc.
   if (identical(result$metadata$kind, "transform")) {

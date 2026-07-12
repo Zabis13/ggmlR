@@ -9,7 +9,8 @@
   n_neighbors = 20L,
   prune_snn = 1/15,
   gpu_neighbor_max_cells = NULL,
-  backend = c("vulkan", "cpu")
+  backend = c("vulkan", "cpu"),
+  knn_backend = c("cpu", "vulkan")
 )
 }
 \arguments{
@@ -23,6 +24,13 @@
 \code{NULL} derives it from free VRAM.}
 
 \item{backend}{\code{"vulkan"} or \code{"cpu"} (dispatch resolves "auto").}
+
+\item{knn_backend}{Which backend runs the kNN search: \code{"cpu"} (default,
+the FNN kd-tree) or \code{"vulkan"} to opt into the fused GPU kNN
+(\code{knn_tiled.comp}, honest f32, no n x n matrix). The GPU path is for
+large \code{n}, where the kd-tree degrades in ~10-D; it falls back to the CPU
+if the GPU is unavailable, \code{n_neighbors > 32}, or \code{n} exceeds the
+VRAM ceiling. Only takes effect under \code{backend = "vulkan"}.}
 }
 \value{
 A \code{\link{ggml_result}} with \code{metadata$kind = "graph"} and

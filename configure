@@ -3,10 +3,16 @@
 # Configure script for ggmlR
 # Vulkan backend: auto-detected, or forced via --with-vulkan / --without-vulkan
 # SIMD flags: disabled by default, enabled via --with-simd
+# Hard exit: disabled by default, enabled via --enable-hard-exit (see below)
 
 # Default values
 USE_VULKAN="auto"
 USE_SIMD="no"
+# ggml_vulkan_shutdown(hard = TRUE) leaves via _exit(), skipping the atexit /
+# loader-teardown phase that flakily segfaults against still-winding-down Vulkan
+# driver threads. CRAN Repository Policy forbids a package terminating the R
+# session, so the _exit() path is compiled out unless explicitly requested.
+USE_HARD_EXIT="no"
 VULKAN_CPPFLAGS=""
 VULKAN_LIBS=""
 VULKAN_OBJECTS=""
@@ -23,6 +29,12 @@ for arg in "$@"; do
       ;;
     --with-simd)
       USE_SIMD="yes"
+      ;;
+    --enable-hard-exit)
+      USE_HARD_EXIT="yes"
+      ;;
+    --disable-hard-exit)
+      USE_HARD_EXIT="no"
       ;;
     --host=*)
       HOST="${arg#--host=}"
@@ -104,6 +116,14 @@ fi
 # machine can enable it with:
 #   install.packages("ggmlR", configure.args = "--with-simd")
 #
+# Acknowledge --enable-hard-exit here, next to the other flag banners, rather
+# than only where it is applied (deep inside the Vulkan block, after the shader
+# build) -- otherwise the user cannot tell from the install log whether the flag
+# was accepted at all. Whether it takes effect depends on Vulkan; reported below.
+if [ "$USE_HARD_EXIT" = "yes" ]; then
+  echo "Hard exit: requested by --enable-hard-exit"
+fi
+
 SIMD_CFLAGS=""
 if [ "$USE_SIMD" = "yes" ]; then
   echo "SIMD: enabled by --with-simd, detecting supported flags..."
@@ -339,7 +359,17 @@ if [ "$USE_VULKAN" = "yes" ]; then
 
   VULKAN_CPPFLAGS="$VULKAN_CPPFLAGS -DGGML_USE_VULKAN -Iggml-vulkan -Iggml-vulkan/generated $SHADERGEN_DEFINES"
 
+  if [ "$USE_HARD_EXIT" = "yes" ]; then
+    VULKAN_CPPFLAGS="$VULKAN_CPPFLAGS -DGGML_VK_HARD_EXIT"
+    echo "Hard exit: ENABLED -- ggml_vulkan_shutdown(hard=TRUE) will call _exit()"
+    echo "           (verify at runtime: ggml_vulkan_hard_exit_available())"
+  fi
+
   echo "Vulkan backend enabled with $SHADER_COUNT shaders"
+fi
+
+if [ "$USE_HARD_EXIT" = "yes" ] && [ "$USE_VULKAN" = "no" ]; then
+  echo "Hard exit: --enable-hard-exit ignored (Vulkan backend disabled)"
 fi
 
 # Generate Makevars from template
@@ -379,4 +409,11 @@ if [ "$USE_SIMD" = "yes" ]; then
   echo "  SIMD:   ENABLED ($SIMD_CFLAGS )"
 else
   echo "  SIMD:   disabled"
+fi
+# Reflects the effective state: the _exit() path is compiled in only when the
+# flag was requested AND Vulkan is on (the code lives behind GGML_USE_VULKAN).
+if [ "$USE_HARD_EXIT" = "yes" ] && [ "$USE_VULKAN" = "yes" ]; then
+  echo "  Hard exit: ENABLED"
+else
+  echo "  Hard exit: disabled (default; --enable-hard-exit to enable)"
 fi

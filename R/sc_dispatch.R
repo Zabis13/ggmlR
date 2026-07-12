@@ -46,9 +46,15 @@ ggml_run <- function(task, backend = NULL, ...) {
   want    <- backend %||% task$device
   backend <- .ggmlr_resolve_backend(want)
 
-  # the matrix has already been densified by the extraction layer
+  # Densify here unless the op's engine accepts a sparse dgCMatrix directly
+  # (sparse_ok). Normalize is sparse_ok: log1p LogNormalize keeps zeros zero, so
+  # its engine transforms @x in place and never materialises the dense matrix —
+  # that is what lets the full single-cell matrix (tens of GB dense) run at all.
+  # Likewise, when chunk_size is set the engine streams the matrix in
+  # column-blocks and densifies one block at a time, so leave it sparse here too.
   mat <- task$matrix
-  if (!is.matrix(mat)) mat <- as.matrix(mat)
+  chunked <- !is.null(params$chunk_size) && !is.matrix(mat)
+  if (!isTRUE(entry$sparse_ok) && !chunked && !is.matrix(mat)) mat <- as.matrix(mat)
 
   do.call(entry$engine, c(list(mat = mat, backend = backend), params))
 }

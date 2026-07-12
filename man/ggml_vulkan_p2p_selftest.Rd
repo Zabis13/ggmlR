@@ -61,7 +61,7 @@ if (ggml_vulkan_available()) {
   r <- ggml_vulkan_p2p_selftest(0L, 0L)
   cat(r$report)
   # cross-device P2P (requires >= 2 GPUs)
-  if (ggml_vulkan_status()$n_devices >= 2) {
+  if (ggml_vulkan_device_count() >= 2) {
     r <- ggml_vulkan_p2p_selftest(0L, 1L)
     cat(r$report)
   }

@@ -16,7 +16,8 @@
 #' \code{SingleCellExperiment} objects (and a \code{.default} for bare matrices).
 #'
 #' Supported operations include \code{"embed"} (PCA), \code{"normalize"},
-#' \code{"scale"}, \code{"umap"} and \code{"neighbors"}; see
+#' \code{"scale"}, \code{"umap"}, \code{"neighbors"} and \code{"largest_gene"}
+#' (per-cell highest-expressed gene QC metric); see
 #' \code{\link{ggml_ops_registry}}.
 #'
 #' @param object A \code{Seurat} or \code{SingleCellExperiment} object, or a bare
@@ -36,7 +37,13 @@
 #'   instead of an assay layer. Seurat: \code{Embeddings()}; SCE:
 #'   \code{reducedDim()}.
 #' @param dims Optional integer vector selecting columns of \code{reduction}.
-#' @param ... Additional parameters forwarded to the engine.
+#' @param ... Additional parameters forwarded to the engine. A notable one is
+#'   \code{chunk_size}: for \code{op = "scale"} and \code{op = "embed"} (PCA),
+#'   passing an integer streams the sparse input in blocks of that many cells,
+#'   densifying one block at a time so the full dense features-by-cells matrix
+#'   (tens of GB at scale) is never held. Results are identical to the
+#'   non-chunked path. \code{op = "normalize"} is already sparse, so
+#'   \code{chunk_size} is a no-op there.
 #'
 #' @return For a Seurat object, the updated object with a new reduction. For a
 #'   bare matrix, a \code{\link{ggml_result}}.
@@ -55,9 +62,10 @@ RunGGML <- function(object, op = "embed", assay = NULL, layer = NULL,
   UseMethod("RunGGML")
 }
 
-# default input layer per op: normalize reads raw counts, everything else reads
-# the (log-)normalised data layer.
-.ggmlr_default_layer <- function(op) if (identical(op, "normalize")) "counts" else "data"
+# default input layer per op: normalize and largest_gene read raw counts,
+# everything else reads the (log-)normalised data layer.
+.ggmlr_default_layer <- function(op)
+  if (op %in% c("normalize", "largest_gene")) "counts" else "data"
 
 # build the params list for an op: n_components only matters to "embed".
 .ggmlr_op_params <- function(op, n_components, extra) {
@@ -72,8 +80,12 @@ RunGGML.default <- function(object, op = "embed", assay = NULL, layer = NULL,
                             n_components = 50L, reduction_name = "ggml",
                             device = "auto", genes = NULL, cells = NULL, ...) {
   layer <- layer %||% .ggmlr_default_layer(op)
+  # keep a sparse input sparse when the op is sparse-aware or a chunk_size was
+  # requested, so the engine can stream cell-blocks rather than densify up front.
+  entry <- ggml_ops_registry(op)
+  keep_sparse <- isTRUE(entry$sparse_ok) || !is.null(list(...)$chunk_size)
   mat  <- ggml_extract(object, assay = assay, layer = layer,
-                       genes = genes, cells = cells)
+                       genes = genes, cells = cells, keep_sparse = keep_sparse)
   task <- ggml_task(op, mat,
                     params = .ggmlr_op_params(op, n_components, list(...)),
                     device = device)
@@ -97,8 +109,15 @@ RunGGML.Seurat <- function(object, op = "embed", assay = NULL, layer = NULL,
     mat <- t(emb)
   } else {
     layer <- layer %||% .ggmlr_default_layer(op)
+    # normalize keeps the counts sparse all the way to the engine (log1p(0)=0),
+    # so the dense matrix — tens of GB on the full dataset — is never formed. A
+    # chunk_size request likewise needs the matrix left sparse, so the engine can
+    # densify one cell-block at a time instead of the whole thing up front.
+    entry <- ggml_ops_registry(op)
+    keep_sparse <- isTRUE(entry$sparse_ok) || !is.null(list(...)$chunk_size)
     mat   <- ggml_extract(object, assay = assay, layer = layer,
-                          genes = genes, cells = cells)
+                          genes = genes, cells = cells,
+                          keep_sparse = keep_sparse)
   }
   task   <- ggml_task(op, mat,
                       params = .ggmlr_op_params(op, n_components, list(...)),
@@ -110,6 +129,10 @@ RunGGML.Seurat <- function(object, op = "embed", assay = NULL, layer = NULL,
   # reduction_name = "umap" -> key "umap_"), matching Seurat conventions.
   key <- if (identical(reduction_name, "ggml")) "GGML_"
          else paste0(reduction_name, "_")
-  ggml_inject(object, result, reduction_name = reduction_name, key = key,
-              assay = assay)
+  out <- ggml_inject(object, result, reduction_name = reduction_name, key = key,
+                     assay = assay)
+  # Expose the engine's per-step timings (e.g. PCA centre/matmul/eigen breakdown)
+  # for profiling, without disturbing the returned Seurat object's contract.
+  attr(out, "ggml_timings") <- result$timings
+  out
 }

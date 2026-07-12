@@ -43,9 +43,17 @@ Enable CPU SIMD acceleration (AVX2, SSE4, etc.) for faster inference on your mac
 install.packages("ggmlR", configure.args = "--with-simd")
 ```
 
+Enable the hard-exit path used by **multi-GPU** standalone scripts
+(`ggml_vulkan_shutdown(hard = TRUE)`; see **Clean shutdown** below and
+`vignette("multi-gpu")`). Off by default — the released package must not call
+`_exit()`, as CRAN policy forbids a package terminating the R session:
+```r
+install.packages("ggmlR", configure.args = "--enable-hard-exit")
+```
+
 Options can be combined:
 ```r
-install.packages("ggmlR", configure.args = "--with-vulkan --with-simd")
+install.packages("ggmlR", configure.args = "--with-vulkan --with-simd --enable-hard-exit")
 ```
 
 ### Linux (detailed)
@@ -106,8 +114,9 @@ ggml_vulkan_status()'
 > variables** instead, set in the same R session *before* installing:
 
 ```r
-Sys.setenv(GGML_USE_SIMD = "1")    # enable CPU SIMD (AVX2/SSE4/FMA/F16C)
-Sys.setenv(GGML_USE_VULKAN = "1")  # force-enable Vulkan  (or "0" to disable)
+Sys.setenv(GGML_USE_SIMD = "1")     # enable CPU SIMD (AVX2/SSE4/FMA/F16C)
+Sys.setenv(GGML_USE_VULKAN = "1")   # force-enable Vulkan  (or "0" to disable)
+Sys.setenv(GGML_VK_HARD_EXIT = "1") # enable ggml_vulkan_shutdown(hard = TRUE)
 ```
 
 The flags are read by `configure.win`, which only runs when the package is
@@ -196,6 +205,47 @@ resampling (tidymodels / mlr3) or trips CRAN's 2-thread limit in checks, cap it:
 > not a leak. Run checks with `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1` for a
 > clean valgrind report; CRAN's own machines use single-threaded reference BLAS,
 > so it does not appear there.
+
+## GPU linear algebra (drop-in for `%*%`)
+
+Accelerate an ordinary R matrix multiply on the GPU without rewriting your code —
+plain matrices in, plain matrices out, with a transparent CPU fallback.
+
+```r
+library(ggmlR)
+
+A <- matrix(rnorm(2000 * 1500), 2000, 1500)
+B <- matrix(rnorm(1500 * 1000), 1500, 1000)
+
+C <- ggml_matmul(A, B)        # A %*% B on the GPU, returns a plain matrix
+G <- ggml_crossprod(A)        # t(A) %*% A
+H <- ggml_tcrossprod(A)       # A %*% t(A)
+```
+
+Prefer the operators? Wrap one operand and `%*%` / `crossprod()` / `tcrossprod()`
+dispatch to the GPU — nothing else in your code changes:
+
+```r
+Ag <- as_gpu_matrix(A)
+C  <- Ag %*% B                # GPU
+G  <- crossprod(Ag)           # GPU
+```
+
+- **Dispatch** — `device = "auto"` (default) uses the GPU when one is present *and*
+  the multiply is large enough to amortise the host↔VRAM transfer; small
+  multiplies and machines without a GPU stay on the CPU. Force it with
+  `device = "gpu"` / `"cpu"`.
+- **Precision** — R multiplies in double precision (f64); a GPU offers f32 at
+  best, so the GPU path is a fast *approximate* multiply, not a bit-for-bit
+  replacement. `prec = "f32"` (default) requests f32 accumulation; how close the
+  result lands depends on the Vulkan driver (some, e.g. RADV/Mesa, accumulate in
+  f16 regardless, giving ~`1e-3` relative error either way). `prec = "f16"` only
+  lowers precision further, for speed.
+- **Full double precision** — need bit-accurate results? `ggml_matmul_f64(A, B)`
+  runs the multiply in fp64 on the GPU, matching R's `%*%` to ~`1e-15`. It only
+  pays off on data-centre cards with fast fp64 (Tesla P100/V100, Instinct);
+  consumer GPUs cripple fp64, so it falls back to (and is usually slower than)
+  the CPU there.
 
 ## Sequential API
 
@@ -542,6 +592,8 @@ Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM),
 **Takeaway:** when a model **fits in one GPU**, data parallelism (DP — independent replicas) wins by a wide margin: DP=4 delivers ~2.3× the single-card throughput and ~7.5× any split mode. Splitting such a model across cards (PP/TP) only adds cross-device overhead — the ~1 GB/s host-staging transport dominates. **PP and TP earn their keep only when the model does not fit in one card** (e.g. a 30B+ model on 16 GB cards): there a split is the *only* way to run it at all, and PP minimizes cross-device hops (one activation copy per pass) while TP maximizes per-token parallelism at the cost of a per-layer all-reduce. Reproduce with `llamaR`'s `inst/examples/bench_pp_tp_dp.sh`.
 
 > **Clean shutdown**: when a standalone script uses several GPUs, make `ggml_vulkan_shutdown(hard = TRUE)` its **last** statement. This tears down Vulkan and then calls `_exit(0)`, skipping the exit-time loader-static-destruction phase that can otherwise flakily segfault *after* your results are printed (the results are already computed by then, so the crash is harmless-but-noisy). Use plain `ggml_vulkan_shutdown()` (no `hard`) mid-session — it releases the devices and is safe to call repeatedly, but does not guarantee a clean process exit on its own.
+>
+> The `_exit(0)` path is **compiled out by default**, because CRAN policy forbids a package terminating the R session. In a default build `hard = TRUE` does the normal teardown and **warns** instead of exiting — never silently — so the flaky exit-time segfault can still fire. Compile it in with `--configure-args="--enable-hard-exit"` (Windows: `Sys.setenv(GGML_VK_HARD_EXIT = "1")` before installing), and check the current build with `ggml_vulkan_hard_exit_available()`.
 
 ### Autograd op reference
 
@@ -671,13 +723,14 @@ If `FNN` is absent the kNN falls back to the GPU/CPU distance matrix; if `Matrix
 
 | `op` | Replaces | What runs on the GPU |
 |------|----------|----------------------|
-| `"normalize"` | `NormalizeData()` (LogNormalize) | per-cell library-size scaling + `log1p`, elementwise |
+| `"normalize"` | `NormalizeData()` (LogNormalize) | sparse `log1p(x / colSum × sf)` over the stored non-zeros (`sparse_lognorm.comp`) — the counts stay a `dgCMatrix`, never densified |
 | `"scale"` | `ScaleData()` | per-gene z-score `(x − mean) / sd` + clamp over the full dense matrix |
 | `"embed"` | `RunPCA()` | gene-by-gene covariance multiply (eigendecomposition stays on the CPU — ggml has no eigensolver) |
 | `"umap"` | `RunUMAP()` | **two** custom compute shaders: `pairwise_dist.comp` (kNN distances, honest f32) and `umap_sgd.comp` (SGD layout) |
-| `"neighbors"` | `FindNeighbors()` | kNN distances (`pairwise_dist.comp`) feeding the SNN/Jaccard graph; matches Seurat bit-for-bit on exact kNN |
+| `"neighbors"` | `FindNeighbors()` | kNN distances feeding the SNN/Jaccard graph; the FNN kd-tree by default, or a fused GPU kNN (`knn_tiled.comp`) with `knn_backend = "vulkan"`. Exact kNN either way |
+| `"largest_gene"` | `percent.Largest.Gene` | per-cell highest-expressed gene + its share of the cell total, over the sparse `dgCMatrix` CSC slots (no densify); bit-exact with `qlcMatrix::colMax` |
 
-`"normalize"` and `"scale"` write the transformed matrix back into the assay (the `data` and `scale.data` layers), so the rest of the Seurat pipeline picks them up unchanged. `"embed"` and `"umap"` add a dimensionality reduction; `"neighbors"` writes the `<assay>_nn` and `<assay>_snn` graphs into `@graphs`, exactly where `FindClusters()` looks.
+`"normalize"` and `"scale"` write the transformed matrix back into the assay (the `data` and `scale.data` layers), so the rest of the Seurat pipeline picks them up unchanged. `"embed"` and `"umap"` add a dimensionality reduction; `"neighbors"` writes the `<assay>_nn` and `<assay>_snn` graphs into `@graphs`, exactly where `FindClusters()` looks; `"largest_gene"` adds `largest_gene` and `percent.Largest.Gene` columns to `meta.data` / `colData`.
 
 ### What runs where
 
@@ -690,7 +743,7 @@ steps move to the GPU, and only the final community detection stays on the CPU:
 | `ScaleData()` | `RunGGML(op = "scale")` | **GPU** |
 | `RunPCA()` | `RunGGML(op = "embed")` | **GPU** matrix multiply (eigensolve on CPU — ggml has none) |
 | `RunUMAP()` | `RunGGML(op = "umap")` | **GPU** (distance + SGD shaders) |
-| `FindNeighbors()` | `RunGGML(op = "neighbors")` | **GPU** distances → CPU sparse SNN |
+| `FindNeighbors()` | `RunGGML(op = "neighbors")` | kNN on CPU (FNN kd-tree) or **GPU** (`knn_backend = "vulkan"`, `knn_tiled.comp`) → sparse SNN |
 | `FindClusters()` | — (use Seurat's) | CPU — iterative graph Louvain/Leiden, a poor GPU fit and already fast on the CPU |
 
 On a Vulkan GPU (AMD RADV) the GPU steps are markedly faster than a naive
@@ -699,10 +752,35 @@ reference. Indicative numbers at 2000 cells:
 | Step | What was sped up | Speed-up |
 |------|------------------|----------|
 | `neighbors` distance kernel | tiled f32 vs `stats::dist` | up to ~4× |
+| `neighbors` GPU kNN (`knn_backend = "vulkan"`) | fused `knn_tiled.comp` vs FNN kd-tree | ~2–3× at 25–50k cells, and grows — the kNN cost is linear in n rather than the kd-tree's ~O(n²) in ~10-D |
+| `largest_gene` | sparse CSC argmax vs `qlcMatrix::colMax` | ~30× (≈20 s → 0.6 s at 53k cells) |
 | `umap` pipeline | kd-tree kNN + sparse fuzzy graph + GPU SGD | ~13× (≈1.45 s → 0.11 s) |
 | `umap` SGD shader alone | one GPU dispatch per epoch | ~10⁹ edge-updates/s |
 
-(Numbers are hardware-dependent; reproduce them with
+The whole pipeline A/B is reproducible with `inst/examples/seurat_op2_gpu.R`,
+which runs the classic Seurat route twice — stock CPU vs `RunGGML()` on the GPU —
+on the Kaggle *Open Problems – Single-Cell Perturbations* counts (18 211 genes ×
+240 090 PBMCs), then checks the two arms agree. A representative run (11 %
+subsample = 23 279 cells, 2000 HVGs, 50 PCs, `--gpu-knn`, AMD RADV):
+
+| step | cpu (s) | gpu (s) | speedup |
+|------|--------:|--------:|--------:|
+| `largest_gene` | 8.92 | 0.28 | 32.2× |
+| `normalize` | 2.84 | 1.61 | 1.8× |
+| `scale` | 1.84 | 1.94 | 0.9× |
+| `embed` (PCA) | 15.92 | 3.03 | 5.3× |
+| `neighbors` | 4.43 | 1.45 | 3.1× |
+| `umap` | 15.32 | 5.34 | 2.9× |
+| **TOTAL (GPU ops)** | **49.27** | **13.66** | **3.6×** |
+
+Every accelerated step matches Seurat to float noise (normalize/scale max abs err
+~1e-6, PCA `|cor|` = 1.0000 over PC1–10, clusters ARI 0.94, `largest_gene`
+top-gene agreement 1.0000). `scale` comes out ~1× — it is memory-bound with
+nothing to accelerate, so it defaults to the CPU even under Vulkan; PCA's
+covariance multiply is the biggest matrix-multiply win. See the
+`single-cell-seurat` vignette for the full breakdown.
+
+(Numbers are hardware-dependent; reproduce the UMAP shaders separately with
 `inst/examples/umap_shaders_bench.R`.)
 
 ```r
@@ -726,14 +804,18 @@ pbmc <- FindClusters(pbmc, graph.name = paste0(DefaultAssay(pbmc), "_snn"))
 DimPlot(pbmc, reduction = "umap", group.by = "seurat_clusters")
 ```
 
-The `"umap"` op runs **two purpose-built Vulkan compute shaders** — a tiled f32
-pairwise-distance kernel for the kNN graph and an SGD layout kernel (one dispatch
-per epoch, Hogwild updates). The distance kernel sidesteps `mul_mat`, whose f16
-accumulation reorders nearest neighbours and corrupts the graph. With the kNN
-search on a kd-tree, a sparse fuzzy graph, and the SGD on the GPU, the UMAP
-pipeline runs ~13× faster than the initial reference (≈1.45 s → 0.11 s for 2000
-cells / 200 epochs). Layout numerics match the CPU reference to float32 precision;
-the SNN graph matches `FindNeighbors()` bit-for-bit on identical exact kNN.
+The `"umap"` op has two phases. The **graph/distance** phase uses a tiled f32
+pairwise-distance kernel that sidesteps `mul_mat` (whose f16 accumulation reorders
+nearest neighbours and corrupts the graph), with a kd-tree kNN and a sparse fuzzy
+graph. The **SGD layout** phase defaults to the single-threaded reference, which
+runs in compiled C (`R_umap_sgd_cpu`) — the earlier interpreted-R loop took
+~700 s on ~10k cells; the C version is bit-for-bit identical but finishes in
+seconds, so it stays the default for best embedding quality. Passing
+`sgd_backend = "vulkan"` opts into the `umap_sgd.comp` shader (one dispatch per
+epoch, Hogwild updates — faster still, but the lock-free races smear dense-graph
+clusters, a known hard problem for async UMAP-SGD). Layout numerics match the CPU
+reference to float32 precision; the SNN graph matches `FindNeighbors()`
+bit-for-bit on identical exact kNN.
 
 The adapter is layered, and each layer is a public generic you can call on its own:
 

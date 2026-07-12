@@ -1,3 +1,12 @@
+# ggmlR 0.8.1
+
+* **Double-precision GPU matmul** — `ggml_matmul_f64()` computes `A %*% B` on the Vulkan GPU in full fp64 (a hand-written `matmul_f64.comp` kernel), matching R's `%*%` to machine precision (~1e-15), unlike the approximate f32/f16 `ggml_matmul()`. Worthwhile on data-centre cards with fast fp64 (Tesla P100/V100, Instinct — 1:2 of fp32); on consumer GPUs (RDNA ~1:16, GeForce ~1:64) the CPU is usually faster. Silently falls back to the CPU without a GPU or the `shaderFloat64` feature.
+* **GPU k-nearest-neighbours for `op = "neighbors"`** — opt in with `knn_backend = "vulkan"` to run the kNN search on the new `knn_tiled.comp` shader: honest-f32 distances with a fused per-row top-k, so the n×n distance matrix is never materialised (footprint linear in n, not n²). Exact neighbours, memory-light, and it avoids the FNN kd-tree's ~O(n²) degradation in ~10-D at large n. Falls back to the CPU when the GPU is unavailable, `n_neighbors > 32`, or n exceeds the VRAM ceiling.
+* **GPU linear algebra drop-in** — `ggml_matmul()`, `ggml_crossprod()` and `ggml_tcrossprod()` run an ordinary R matrix multiply on the Vulkan GPU (plain matrices in and out, CPU fallback). `as_gpu_matrix()` wraps a matrix so `%*%`, `crossprod()` and `tcrossprod()` dispatch to the GPU with no other code changes. `device = "auto"` keeps small multiplies on the CPU; the f32 kernel is forced by default so results match R to ~1e-6 (`prec = "f16"` for speed).
+* **Single-cell `op = "largest_gene"`** — Seurat's `percent.Largest.Gene` QC metric (per-cell highest-expressed gene and its share of the cell total). Runs on the CPU directly over the sparse `dgCMatrix` CSC slots (no densify), bit-exact with `qlcMatrix::colMax`; results land in `meta.data` / `colData`.
+* **Single-cell `op = "normalize"`** now runs sparse on the GPU (`sparse_lognorm.comp`): counts stay a `dgCMatrix` and are never densified, lifting the memory ceiling on large datasets.
+* **UMAP CPU-SGD** layout rewritten in C — the default single-threaded reference is bit-for-bit identical but finishes in seconds instead of minutes.
+
 # ggmlR 0.8.0
 
 * **Multi-GPU tensor parallelism (Vulkan)** — `ggml_vulkan_split_mul_mat()` row-splits a weight matrix across GPUs, computes each slice on its own device, and gathers the result (not in upstream ggml). Verified on 4× Tesla P100.

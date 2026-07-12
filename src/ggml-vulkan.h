@@ -104,6 +104,33 @@ GGML_BACKEND_API bool ggml_vk_pairwise_dist_run(
     const float * x, float * d2,
     unsigned int n, unsigned int dims);
 
+// Tiled fused k-NN, dispatched directly. For each of n rows of x (dims each),
+// finds the k nearest other rows in honest f32 without materialising the n x n
+// distance matrix. Outputs knn_idx (n*k 0-based row indices) and knn_dist (n*k
+// Euclidean distances), sorted ascending per row. k must be <= the pipeline's
+// top-k capacity (32). Returns false if the backend is not Vulkan.
+GGML_BACKEND_API bool ggml_vk_knn_tiled_run(
+    ggml_backend_t backend,
+    const float * x, unsigned int * knn_idx, float * knn_dist,
+    unsigned int n, unsigned int dims, unsigned int k);
+
+// FP64 matmul (PoC, benchmark only): C[M,N] = A[M,K] * B[K,N] entirely in
+// double, dispatched directly (no float conversion). Returns false if the
+// backend is not Vulkan or the device lacks fp64 support.
+GGML_BACKEND_API bool ggml_vk_matmul_f64_run(
+    ggml_backend_t backend,
+    const double * a, const double * b, double * c,
+    unsigned int M, unsigned int N, unsigned int K);
+
+// Sparse LogNormalize over a dgCMatrix's stored non-zeros, dispatched directly.
+// vals is nnz floats updated in place; factor is scale_factor/colSum per column
+// (n_cols floats); col_of_nnz is the 0-based column of each stored value (nnz
+// uints). Returns false if the backend is not Vulkan.
+GGML_BACKEND_API bool ggml_vk_sparse_lognorm_run(
+    ggml_backend_t backend,
+    float * vals, const float * factor, const unsigned int * col_of_nnz,
+    unsigned int nnz, unsigned int n_cols);
+
 #ifdef  __cplusplus
 }
 #endif

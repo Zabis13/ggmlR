@@ -864,6 +864,9 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_umap_sgd;
     vk_pipeline pipeline_pairwise_dist;
+    vk_pipeline pipeline_knn_tiled;
+    vk_pipeline pipeline_matmul_f64;
+    vk_pipeline pipeline_sparse_lognorm;
 
     vk_pipeline pipeline_fill_f32;
     vk_pipeline pipeline_fill_f16;
@@ -1418,6 +1421,7 @@ struct vk_op_umap_sgd_push_constants {
     float    a;
     float    b;
     float    gamma;
+    uint32_t epoch;   // 1-based; drives the shader's weighted-sampling test
 };
 static_assert(sizeof(vk_op_umap_sgd_push_constants) <= 256, "sizeof(vk_op_umap_sgd_push_constants) must be <= 256");
 
@@ -1428,6 +1432,32 @@ struct vk_op_pairwise_dist_push_constants {
     uint32_t dims;
 };
 static_assert(sizeof(vk_op_pairwise_dist_push_constants) <= 256, "sizeof(vk_op_pairwise_dist_push_constants) must be <= 256");
+
+// Tiled fused k-NN push constants. Must match the `parameter` block in
+// vulkan-shaders/knn_tiled.comp exactly (three uints). k must equal the K
+// specialization constant the pipeline was created with.
+struct vk_op_knn_tiled_push_constants {
+    uint32_t n;
+    uint32_t dims;
+    uint32_t k;
+};
+static_assert(sizeof(vk_op_knn_tiled_push_constants) <= 256, "sizeof(vk_op_knn_tiled_push_constants) must be <= 256");
+
+// FP64 matmul push constants (PoC). Must match the `parameter` block in
+// vulkan-shaders/matmul_f64.comp exactly (three uints: M, N, K).
+struct vk_op_matmul_f64_push_constants {
+    uint32_t M;
+    uint32_t N;
+    uint32_t K;
+};
+static_assert(sizeof(vk_op_matmul_f64_push_constants) <= 256, "sizeof(vk_op_matmul_f64_push_constants) must be <= 256");
+
+// Sparse LogNormalize push constants. Must match the `parameter` block in
+// vulkan-shaders/sparse_lognorm.comp exactly (one uint: the nnz count).
+struct vk_op_sparse_lognorm_push_constants {
+    uint32_t nnz;
+};
+static_assert(sizeof(vk_op_sparse_lognorm_push_constants) <= 256, "sizeof(vk_op_sparse_lognorm_push_constants) must be <= 256");
 
 static vk_op_binary_push_constants vk_op_binary_push_constants_init(
     const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst,

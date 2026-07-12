@@ -3,8 +3,8 @@
 # Self-contained Flash-Attention check for P100 (no repo files needed).
 # Runs ggml_flash_attn_ext on CPU and on Vulkan, compares the two.
 #
-#   Rscript scratch_fa_p100_check.R
-#   GGML_SCHED_DEBUG=2 Rscript scratch_fa_p100_check.R 2>&1 | grep -iE "FLASH_ATTN|==="
+#   Rscript check_fa_p100.R
+#   GGML_SCHED_DEBUG=2 Rscript check_fa_p100.R 2>&1 | grep -iE "FLASH_ATTN|==="
 #
 # Verdict:
 #   cor(GPU,CPU) > 0.999  -> scalar FA works on P100 (hardware is fine)

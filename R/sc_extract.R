@@ -37,16 +37,23 @@ ggml_extract <- function(x, assay = NULL, layer = "data",
 #' @export
 ggml_extract.matrix <- function(x, assay = NULL, layer = "data",
                                 genes = NULL, cells = NULL, ...) {
+  # keep_sparse (if passed via ...) is a no-op: a dense matrix is already dense.
   x <- .ggmlr_subset_mat(x, genes, cells)
   storage.mode(x) <- "double"
   x
 }
 
 #' @rdname ggml_extract
+#' @param keep_sparse If \code{TRUE}, return the (subset) \code{dgCMatrix} without
+#'   densifying. Only the LogNormalize path (op = \code{"normalize"}) sets this,
+#'   since it transforms the stored non-zeros in place; every other op leaves it
+#'   \code{FALSE} and gets a dense matrix as before.
 #' @export
 ggml_extract.dgCMatrix <- function(x, assay = NULL, layer = "data",
-                                   genes = NULL, cells = NULL, ...) {
+                                   genes = NULL, cells = NULL,
+                                   keep_sparse = FALSE, ...) {
   x <- .ggmlr_subset_mat(x, genes, cells)
+  if (isTRUE(keep_sparse)) return(x)
   # materialise to dense only now, only for the retained submatrix
   as.matrix(x)
 }
@@ -54,7 +61,8 @@ ggml_extract.dgCMatrix <- function(x, assay = NULL, layer = "data",
 #' @rdname ggml_extract
 #' @export
 ggml_extract.Seurat <- function(x, assay = NULL, layer = "data",
-                                genes = NULL, cells = NULL, ...) {
+                                genes = NULL, cells = NULL,
+                                keep_sparse = FALSE, ...) {
   .ggmlr_need_pkg("SeuratObject", "extracting data from a Seurat object")
   assay <- assay %||% SeuratObject::DefaultAssay(x)
 
@@ -68,7 +76,7 @@ ggml_extract.Seurat <- function(x, assay = NULL, layer = "data",
   }
 
   # mat is genes x cells (Seurat convention), possibly sparse -> reuse methods
-  ggml_extract(mat, genes = genes, cells = cells)
+  ggml_extract(mat, genes = genes, cells = cells, keep_sparse = keep_sparse)
 }
 
 # internal: subset a (dense or sparse) genes x cells matrix by name or index

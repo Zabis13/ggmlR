@@ -1333,6 +1333,31 @@ static void ggml_vk_load_shaders(vk_device& device) {
     // (32, 32) = the tile side TS in pairwise_dist.comp.
     ggml_vk_create_pipeline(device, device->pipeline_pairwise_dist, "pairwise_dist", pairwise_dist_len, pairwise_dist_data, "main", 2, sizeof(vk_op_pairwise_dist_push_constants), {32, 32, 1}, {}, 1);
 
+    // Tiled fused k-NN: 3 buffers (X in, KNN_IDX out, KNN_DIST out), ONE workgroup
+    // per query row (wg_denoms = {1,1,1} so the dispatch's n elements become n
+    // groups), local_size_x = WG threads sweeping candidates. Specialization
+    // constants are { WG, K, MAXD } by id: WG = workgroup size (subgroup-friendly),
+    // K = top-k capacity (>= any requested k), MAXD = max feature dims staged to
+    // shared. The requested k arrives per-dispatch in the push constants.
+    {
+        const uint32_t knn_wg   = std::max<uint32_t>(device->subgroup_size, 1u);
+        const uint32_t knn_kcap = 32u;   // top-k capacity; matches best_d[32] in the shader
+        const uint32_t knn_maxd = 64u;   // max feature dims staged to shared (q_row[MAXD])
+        ggml_vk_create_pipeline(device, device->pipeline_knn_tiled, "knn_tiled", knn_tiled_len, knn_tiled_data, "main", 3, sizeof(vk_op_knn_tiled_push_constants), {1, 1, 1}, { knn_wg, knn_kcap, knn_maxd }, 1);
+    }
+
+    // FP64 matmul (PoC, benchmark only): 3 buffers (A, B in, C out), one thread
+    // per output element, tiled 16x16 with shared-memory staging. wg_denoms =
+    // local_size (16, 16) = the tile side TS in matmul_f64.comp. Only created when
+    // the device reports fp64 support (otherwise the double kernel is invalid).
+    if (device->physical_device.getFeatures().shaderFloat64) {
+        ggml_vk_create_pipeline(device, device->pipeline_matmul_f64, "matmul_f64", matmul_f64_len, matmul_f64_data, "main", 3, sizeof(vk_op_matmul_f64_push_constants), {16, 16, 1}, {}, 1);
+    }
+
+    // Sparse LogNormalize: 3 buffers (vals rw, factor, col_of_nnz), one thread
+    // per stored non-zero. wg_denoms.x = local_size_x in sparse_lognorm.comp (256).
+    ggml_vk_create_pipeline(device, device->pipeline_sparse_lognorm, "sparse_lognorm", sparse_lognorm_len, sparse_lognorm_data, "main", 3, sizeof(vk_op_sparse_lognorm_push_constants), {256, 1, 1}, {}, 1);
+
     ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_fill_f16, "fill_f16", fill_f16_len, fill_f16_data, "main", 1, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 

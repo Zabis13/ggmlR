@@ -89,9 +89,13 @@ print.ggml_result <- function(x, ...) {
 .ggmlr_ops_registry <- new.env(parent = emptyenv())
 
 # internal: register one operation
-.ggmlr_register_op <- function(op, engine, params = character(0), desc = "") {
+.ggmlr_register_op <- function(op, engine, params = character(0), desc = "",
+                               sparse_ok = FALSE) {
+  # sparse_ok = TRUE means the engine accepts a dgCMatrix directly (no densify);
+  # the dispatch layer then skips its as.matrix() coercion for this op.
   .ggmlr_ops_registry[[op]] <- list(
-    op = op, engine = engine, params = params, desc = desc
+    op = op, engine = engine, params = params, desc = desc,
+    sparse_ok = sparse_ok
   )
   invisible(NULL)
 }
@@ -117,8 +121,102 @@ ggml_ops_registry <- function(op = NULL) {
 }
 
 # ============================================================================
+# 2b. Chunked-column iteration (datasets whose dense form exceeds memory)
+# ============================================================================
+# Several engines densify a features x cells matrix whose dense form is tens of
+# GB at single-cell scale. When the caller passes chunk_size, the sparse
+# dgCMatrix is kept intact and only a block of `chunk_size` cell-columns is
+# densified at a time, so peak memory is one block, not the whole matrix. Each
+# engine defines *how* it consumes the blocks (single pass, two pass, or
+# accumulate); this helper only slices the column range.
+
+# Column-block boundaries as a list of integer index vectors. chunk_size = NULL
+# (or >= ncol) yields a single block spanning every column, i.e. the original
+# non-chunked behaviour.
+.ggmlr_chunk_cols <- function(ncol, chunk_size = NULL) {
+  if (is.null(chunk_size) || !is.finite(chunk_size) || chunk_size >= ncol)
+    return(list(seq_len(ncol)))
+  chunk_size <- max(1L, as.integer(chunk_size))
+  starts <- seq.int(1L, ncol, by = chunk_size)
+  lapply(starts, function(s) s:min(s + chunk_size - 1L, ncol))
+}
+
+# Densify one column block of a (sparse or dense) genes x cells matrix to a plain
+# double matrix. Keeps row names; the block is the only dense allocation.
+.ggmlr_densify_block <- function(mat, cols) {
+  blk <- mat[, cols, drop = FALSE]
+  if (!is.matrix(blk)) blk <- as.matrix(blk)
+  storage.mode(blk) <- "double"
+  blk
+}
+
+# ============================================================================
 # 3. PCA engine (op = "embed")
 # ============================================================================
+
+# Streaming PCA over cell-blocks: same result as .ggmlr_pca_gpu but never holds
+# the full dense matrix. Pass 1: per-gene mean. Pass 2: accumulate the centred
+# covariance C = sum_b (X_b - mu)(X_b - mu)^T. Pass 3: project each block onto
+# the eigenvectors. The covariance multiply per block goes to the GPU when
+# backend = "vulkan"; the (small) eigendecomposition stays on the CPU.
+.ggmlr_pca_chunked <- function(mat, n_components, center, backend, chunk_size) {
+  n_feat <- nrow(mat); n_cell <- ncol(mat)
+  denom  <- max(n_cell - 1L, 1L)
+  blocks <- .ggmlr_chunk_cols(n_cell, chunk_size)
+  t0 <- proc.time()[["elapsed"]]
+  if (backend == "vulkan") ag_device("gpu")
+
+  # Pass 1: per-feature mean over all cells (skip when not centering).
+  mu <- numeric(n_feat)
+  if (center) {
+    s1 <- numeric(n_feat)
+    for (cols in blocks) s1 <- s1 + rowSums(.ggmlr_densify_block(mat, cols))
+    mu <- s1 / n_cell
+  }
+
+  # Pass 2: accumulate the covariance from centred blocks (features x features).
+  cov <- matrix(0, n_feat, n_feat)
+  for (cols in blocks) {
+    blk <- .ggmlr_densify_block(mat, cols)
+    if (center) blk <- blk - mu
+    cov <- cov + if (backend == "vulkan") .ag_gpu_matmul(blk, t(blk))
+                 else tcrossprod(blk)
+  }
+  cov <- cov / denom
+
+  keep <- seq_len(n_components)
+  use_truncated <- requireNamespace("RSpectra", quietly = TRUE) &&
+                   n_components <= nrow(cov) %/% 2L
+  ev <- if (use_truncated) {
+    tryCatch(RSpectra::eigs_sym(cov, k = n_components, which = "LA"),
+             error = function(e) eigen(cov, symmetric = TRUE))
+  } else {
+    eigen(cov, symmetric = TRUE)
+  }
+  loadings <- ev$vectors[, keep, drop = FALSE]
+  vals     <- pmax(ev$values[keep], 0)
+
+  # Pass 3: project each centred block onto the loadings -> scores (cells x comps)
+  scores <- matrix(0, n_cell, n_components)
+  for (cols in blocks) {
+    blk <- .ggmlr_densify_block(mat, cols)
+    if (center) blk <- blk - mu
+    scores[cols, ] <- if (backend == "vulkan") .ag_gpu_matmul(t(blk), loadings)
+                      else crossprod(blk, loadings)
+  }
+
+  rownames(scores) <- colnames(mat)
+  colnames(scores) <- paste0("PC_", keep)
+  rownames(loadings) <- rownames(mat)
+  colnames(loadings) <- paste0("PC_", keep)
+
+  ggml_result(
+    embedding = scores,
+    metadata  = list(stdev = sqrt(vals), loadings = loadings, backend = backend,
+                     centered = center, chunked = TRUE),
+    timings   = c(total = proc.time()[["elapsed"]] - t0)
+  )
+}
 
 #' GPU-accelerated PCA on a dense expression matrix
 #'
@@ -141,19 +239,32 @@ ggml_ops_registry <- function(op = NULL) {
 #'   deviations), \code{loadings} (features x components) and \code{backend}.
 #' @keywords internal
 .ggmlr_pca_gpu <- function(mat, n_components = 50L, center = TRUE,
-                           backend = c("vulkan", "cpu")) {
+                           backend = c("vulkan", "cpu"), chunk_size = NULL) {
   backend <- match.arg(backend)
-  storage.mode(mat) <- "double"
   n_feat <- nrow(mat); n_cell <- ncol(mat)
   n_components <- as.integer(min(n_components, n_feat, n_cell))
 
+  # Chunked path: stream the matrix in cell-blocks so the full dense features x
+  # cells matrix is never held. The covariance is additive over cells --
+  # C = sum_b (X_b - mu)(X_b - mu)^T -- so it accumulates block by block into a
+  # small features x features matrix; the projection is likewise per-block. The
+  # per-feature mean must be known first, so pass 1 accumulates it, pass 2 the
+  # covariance, pass 3 the scores. feat x feat covariance and feat/cell x comps
+  # outputs are small; only one densified block is ever resident.
+  if (!is.null(chunk_size) && !is.matrix(mat)) {
+    return(.ggmlr_pca_chunked(mat, n_components, center, backend, chunk_size))
+  }
+
+  storage.mode(mat) <- "double"
   t0 <- proc.time()[["elapsed"]]
 
   # Centre per feature (row means): X_c = X - rowMeans(X)
+  t_ctr0 <- proc.time()[["elapsed"]]
   if (center) {
     mu  <- rowMeans(mat)
     mat <- mat - mu
   }
+  t_ctr <- proc.time()[["elapsed"]] - t_ctr0
 
   # Covariance over cells: C = (1/(n-1)) X_c %*% t(X_c)  -> features x features.
   # This is the dominant cost; route it to the GPU when asked.
@@ -177,6 +288,7 @@ ggml_ops_registry <- function(op = NULL) {
   keep <- seq_len(n_components)
   use_truncated <- requireNamespace("RSpectra", quietly = TRUE) &&
                    n_components <= nrow(cov) %/% 2L
+  t_eig0 <- proc.time()[["elapsed"]]
   ev <- if (use_truncated) {
     tryCatch(
       RSpectra::eigs_sym(cov, k = n_components, which = "LA"),
@@ -184,15 +296,18 @@ ggml_ops_registry <- function(op = NULL) {
   } else {
     eigen(cov, symmetric = TRUE)
   }
+  t_eig <- proc.time()[["elapsed"]] - t_eig0
   loadings <- ev$vectors[, keep, drop = FALSE]              # features x comps
   vals     <- pmax(ev$values[keep], 0)                      # guard tiny < 0
 
   # Project cells onto components: scores = t(X_c) %*% loadings  (cells x comps)
+  t_prj0 <- proc.time()[["elapsed"]]
   if (backend == "vulkan") {
     scores <- .ag_gpu_matmul(t(mat), loadings)
   } else {
     scores <- crossprod(mat, loadings)
   }
+  t_prj <- proc.time()[["elapsed"]] - t_prj0
 
   rownames(scores) <- colnames(mat)
   colnames(scores) <- paste0("PC_", keep)
@@ -203,7 +318,8 @@ ggml_ops_registry <- function(op = NULL) {
     embedding = scores,
     metadata  = list(stdev = sqrt(vals), loadings = loadings, backend = backend,
                      centered = center),
-    timings   = c(total = proc.time()[["elapsed"]] - t0, matmul = t_mm)
+    timings   = c(total = proc.time()[["elapsed"]] - t0, centre = t_ctr,
+                  matmul_cov = t_mm, eigen = t_eig, matmul_proj = t_prj)
   )
 }
 
@@ -231,11 +347,36 @@ ggml_ops_registry <- function(op = NULL) {
 #'   \code{metadata$layer = "data"}.
 #' @keywords internal
 .ggmlr_normalize_gpu <- function(mat, scale_factor = 1e4,
-                                 backend = c("vulkan", "cpu")) {
+                                 backend = c("vulkan", "cpu"),
+                                 chunk_size = NULL) {
   backend <- match.arg(backend)
-  storage.mode(mat) <- "double"
+  # chunk_size is accepted for a uniform RunGGML interface but is a no-op here:
+  # the sparse LogNormalize path already transforms @x in place without ever
+  # densifying, so there is no full dense matrix to stream in blocks.
   t0 <- proc.time()[["elapsed"]]
 
+  # Sparse path: mat is a dgCMatrix (dispatch left it sparse; sparse_ok). Because
+  # log1p(0) = 0, LogNormalize only touches the stored non-zeros @x, so we never
+  # densify. Column sums come from Matrix::colSums (cheap, O(nnz)); the per-column
+  # factor scale_factor/colSum and the per-nnz column index are uploaded, and the
+  # shader maps @x[k] -> log1p(@x[k] * factor[col]) in place. The transformed @x
+  # drops straight back into a dgCMatrix with the same sparsity pattern. NOTE:
+  # LogNormalize is memory-bound O(nnz), so the GPU path targets parity with (and
+  # the removal of the densify/OOM ceiling versus) Seurat's sparse CPU path, not
+  # a speed-up over it.
+  if (methods::is(mat, "dgCMatrix")) {
+    out  <- .ggmlr_normalize_sparse(mat, scale_factor, backend)
+    used <- attr(out, "backend")
+    attr(out, "backend") <- NULL                # keep the dgCMatrix contract clean
+    return(ggml_result(
+      embedding = out,
+      metadata  = list(kind = "transform", layer = "data", backend = used,
+                       scale_factor = scale_factor, sparse = TRUE),
+      timings   = c(total = proc.time()[["elapsed"]] - t0)
+    ))
+  }
+
+  storage.mode(mat) <- "double"
   cs  <- colSums(mat)
   cs[cs == 0] <- 1                              # guard empty cells
   fac <- matrix(scale_factor / cs, nrow = 1L)   # [1, cells] per-cell factor
@@ -257,6 +398,46 @@ ggml_ops_registry <- function(op = NULL) {
   )
 }
 
+# Sparse LogNormalize on a dgCMatrix, transforming @x in place (no densify).
+# Returns a dgCMatrix with the same pattern; attr "backend" records the path
+# actually taken ("vulkan" when the GPU shader ran, else "cpu"). Under
+# backend = "vulkan" it dispatches sparse_lognorm.comp; if the GPU is
+# unavailable it falls back to the elementwise CPU form on @x.
+.ggmlr_normalize_sparse <- function(mat, scale_factor, backend) {
+  out <- mat
+  nnz <- length(mat@x)
+  # per-column sums over the stored values; empty cells guarded to 1
+  cs  <- Matrix::colSums(mat)
+  cs[cs == 0] <- 1
+  factor <- scale_factor / cs                   # length ncol(mat)
+
+  used <- "cpu"
+  if (backend == "vulkan" && nnz > 0L) {
+    ok <- tryCatch({ ag_device("gpu"); TRUE }, error = function(e) FALSE)
+    vk <- if (ok) .ag_device_state$backend else NULL
+    if (!is.null(vk) && ggml_vulkan_is_backend(vk)) {
+      # @p is the CSC column pointer (length ncol+1); expand to a 0-based column
+      # index per stored value so the shader needs no binary search.
+      col_of_nnz <- rep.int(seq_len(ncol(mat)) - 1L, diff(mat@p))
+      newx <- tryCatch(
+        .Call("R_ggml_sparse_lognorm", vk, as.double(mat@x),
+              as.double(factor), as.integer(col_of_nnz),
+              as.integer(nnz), as.integer(ncol(mat)), PACKAGE = "ggmlR"),
+        error = function(e) NULL)
+      if (!is.null(newx)) { out@x <- newx; used <- "vulkan" }
+    }
+  }
+
+  if (used == "cpu") {
+    # elementwise on the stored values only: log1p(x * factor[col])
+    col_of_nnz <- rep.int(seq_len(ncol(mat)), diff(mat@p))   # 1-based for R
+    out@x <- log1p(mat@x * factor[col_of_nnz])
+  }
+
+  attr(out, "backend") <- used
+  out
+}
+
 #' GPU-accelerated ScaleData / z-score (op = "scale")
 #'
 #' Per-gene centering and scaling to unit variance, matching Seurat's
@@ -268,16 +449,63 @@ ggml_ops_registry <- function(op = NULL) {
 #' @param mat Dense numeric matrix, features x cells (log-normalised data).
 #' @param max_value Upper clip after scaling (default 10; Seurat's default).
 #' @param backend \code{"vulkan"} or \code{"cpu"} (dispatch resolves "auto").
+#' @param scale_backend Which backend actually runs the z-score: \code{"cpu"}
+#'   (default) or \code{"vulkan"}. Defaults to CPU \emph{even under}
+#'   \code{backend = "vulkan"}, because ScaleData is a memory-bound elementwise
+#'   O(nnz) pass (centre / divide / clamp) with almost no arithmetic per element:
+#'   the GPU pays for the host<->VRAM copy but has nothing to accelerate, so it is
+#'   slower than the CPU here (measured ~0.4x). Same rationale and pattern as
+#'   UMAP's \code{sgd_backend}. Pass \code{"vulkan"} to force the GPU path.
 #' @return A \code{\link{ggml_result}} whose \code{embedding} is the scaled
 #'   features x cells matrix; \code{metadata$kind = "transform"},
 #'   \code{metadata$layer = "scale.data"}.
 #' @keywords internal
-.ggmlr_scale_gpu <- function(mat, max_value = 10, backend = c("vulkan", "cpu")) {
-  backend <- match.arg(backend)
-  storage.mode(mat) <- "double"
+.ggmlr_scale_gpu <- function(mat, max_value = 10, backend = c("vulkan", "cpu"),
+                             scale_backend = c("cpu", "vulkan"),
+                             chunk_size = NULL) {
+  backend       <- match.arg(backend)
+  scale_backend <- match.arg(scale_backend)
+  # scale is memory-bound; run it on the CPU by default even when the GPU is
+  # live. Only go to Vulkan when both the device is Vulkan and the user opted in.
+  backend <- if (backend == "vulkan" && scale_backend == "vulkan") "vulkan" else "cpu"
   n_cell <- ncol(mat)
   t0 <- proc.time()[["elapsed"]]
 
+  # Chunked path: when chunk_size is set the matrix is streamed in cell-blocks
+  # (kept sparse until each block is densified), so the full dense features x
+  # cells matrix is never held. Two passes: (1) accumulate per-gene mean and
+  # sum-of-squares over all cells, (2) re-densify each block and write the
+  # z-scored, clamped values into the (dense) output. Runs on the CPU only:
+  # z-score is memory-bound (see scale_backend), and streaming to VRAM per block
+  # would only add host<->device copies. The single unavoidable dense allocation
+  # is the output, which Seurat's scale.data layer must hold in full anyway.
+  if (!is.null(chunk_size) && !is.matrix(mat)) {
+    blocks <- .ggmlr_chunk_cols(n_cell, chunk_size)
+    n_feat <- nrow(mat)
+    s1 <- numeric(n_feat); s2 <- numeric(n_feat)      # sum(x), sum(x^2) per gene
+    for (cols in blocks) {
+      blk <- .ggmlr_densify_block(mat, cols)
+      s1  <- s1 + rowSums(blk)
+      s2  <- s2 + rowSums(blk * blk)
+    }
+    mu <- s1 / n_cell
+    # population sd with n-1 divisor (Seurat uses sd()): var = (sum(x^2) - n*mu^2)/(n-1)
+    var <- (s2 - n_cell * mu * mu) / max(n_cell - 1L, 1L)
+    sd  <- sqrt(pmax(var, 0)); sd[sd == 0] <- 1
+    out <- matrix(0, n_feat, n_cell, dimnames = dimnames(mat))
+    for (cols in blocks) {
+      blk <- .ggmlr_densify_block(mat, cols)
+      out[, cols] <- pmin((blk - mu) / sd, max_value)
+    }
+    return(ggml_result(
+      embedding = out,
+      metadata  = list(kind = "transform", layer = "scale.data", backend = backend,
+                       max_value = max_value, chunked = TRUE),
+      timings   = c(total = proc.time()[["elapsed"]] - t0)
+    ))
+  }
+
+  storage.mode(mat) <- "double"
   mu <- matrix(rowMeans(mat), ncol = 1L)        # [features, 1] per-gene mean
 
   if (backend == "vulkan") {
@@ -306,6 +534,90 @@ ggml_ops_registry <- function(op = NULL) {
   )
 }
 
+# ============================================================================
+# 3c. Per-cell reduction engine (op = "largest_gene")
+# ============================================================================
+# Unlike "embed" (a reduction) and the transforms, this returns *per-cell
+# columns* — the highest-expressed gene per cell and its share of the cell's
+# total counts, matching Seurat's `percent.Largest.Gene` QC metric
+# (qlcMatrix::colMax(counts, which = TRUE)). Two vectors of length ncell carry
+# metadata$kind = "coldata" so the injection layer writes them into meta.data /
+# colData rather than a reduction or an assay layer.
+
+#' Highest-expressed gene per cell (op = "largest_gene")
+#'
+#' For every cell, finds the gene with the largest value and that value's share
+#' of the cell's column sum — Seurat's \code{largest_gene} /
+#' \code{percent.Largest.Gene} QC metric (\code{qlcMatrix::colMax(counts,
+#' which = TRUE)}). Runs on the CPU directly over the sparse \code{dgCMatrix}
+#' CSC slots (\code{@x}, \code{@i}, \code{@p}) without ever densifying, so it
+#' scales to the full counts matrix. This is a memory-bound O(nnz) column
+#' argmax/max with no arithmetic to accelerate, so — like ScaleData and the
+#' UMAP layout — there is nothing for the GPU to speed up; \code{backend} is
+#' accepted for a uniform interface but the compute always stays on the CPU.
+#'
+#' @param mat A \code{dgCMatrix} (preferred; kept sparse) or dense numeric
+#'   matrix, features x cells (raw counts).
+#' @param backend Accepted for interface uniformity; ignored (always CPU).
+#' @return A \code{\link{ggml_result}} with \code{metadata$kind = "coldata"} and
+#'   \code{embedding} a data.frame of two columns: \code{largest_gene} (chr, the
+#'   feature name, \code{NA} for empty cells) and \code{percent.Largest.Gene}
+#'   (dbl, \code{max / colSum * 100}, 0 for empty cells), one row per cell.
+#' @keywords internal
+.ggmlr_largest_gene <- function(mat, backend = c("vulkan", "cpu"),
+                                chunk_size = NULL) {
+  match.arg(backend)                        # accepted but unused (CPU-only op)
+  t0 <- proc.time()[["elapsed"]]
+
+  n_cell <- ncol(mat)
+  genes  <- rownames(mat)
+  cells  <- colnames(mat)
+
+  gene_idx <- integer(n_cell)               # 1-based row of the per-cell max (0 = none)
+  max_val  <- numeric(n_cell)               # the max value per cell
+  col_sum  <- numeric(n_cell)               # per-cell total (for the percentage)
+
+  if (methods::is(mat, "dgCMatrix")) {
+    # Sparse CSC: column j holds stored values @x[(p[j]+1):p[j+1]] at rows
+    # @i[...] (0-based). counts are non-negative, so the column max is the max of
+    # its stored values (an all-zero column stays 0 -> empty). No densify.
+    p <- mat@p; i <- mat@i; x <- mat@x
+    for (j in seq_len(n_cell)) {
+      lo <- p[j] + 1L; hi <- p[j + 1L]
+      if (hi >= lo) {
+        seg <- x[lo:hi]
+        col_sum[j] <- sum(seg)
+        k <- which.max(seg)                 # first max within the column
+        max_val[j]  <- seg[k]
+        gene_idx[j] <- i[lo + k - 1L] + 1L  # 0-based row -> 1-based
+      }
+    }
+  } else {
+    storage.mode(mat) <- "double"
+    col_sum  <- colSums(mat)
+    gene_idx <- max.col(t(mat), ties.method = "first")
+    max_val  <- mat[cbind(gene_idx, seq_len(n_cell))]
+    gene_idx[col_sum == 0] <- 0L            # treat all-zero cells as empty
+  }
+
+  largest_gene <- rep(NA_character_, n_cell)
+  have <- gene_idx > 0L
+  largest_gene[have] <- if (!is.null(genes)) genes[gene_idx[have]] else gene_idx[have]
+
+  denom <- col_sum; denom[denom == 0] <- 1  # guard empty cells (percent stays 0)
+  percent <- max_val / denom * 100
+
+  df <- data.frame(largest_gene = largest_gene,
+                   percent.Largest.Gene = percent,
+                   row.names = cells, stringsAsFactors = FALSE)
+
+  ggml_result(
+    embedding = df,
+    metadata  = list(kind = "coldata", backend = "cpu"),
+    timings   = c(total = proc.time()[["elapsed"]] - t0)
+  )
+}
+
 # register op = "embed" -> PCA engine
 .ggmlr_register_op(
   "embed", engine = .ggmlr_pca_gpu,
@@ -317,7 +629,8 @@ ggml_ops_registry <- function(op = NULL) {
 .ggmlr_register_op(
   "normalize", engine = .ggmlr_normalize_gpu,
   params = character(0),
-  desc   = "LogNormalize: per-cell library-size scaling + log1p (elementwise on GPU)"
+  desc   = "LogNormalize: per-cell library-size scaling + log1p (elementwise on GPU)",
+  sparse_ok = TRUE   # engine handles a dgCMatrix without densifying (log1p(0)=0)
 )
 
 # register op = "scale" -> z-score engine
@@ -325,4 +638,12 @@ ggml_ops_registry <- function(op = NULL) {
   "scale", engine = .ggmlr_scale_gpu,
   params = character(0),
   desc   = "ScaleData z-score per gene + clamp (elementwise on GPU)"
+)
+
+# register op = "largest_gene" -> per-cell argmax/max engine
+.ggmlr_register_op(
+  "largest_gene", engine = .ggmlr_largest_gene,
+  params = character(0),
+  desc   = "Highest-expressed gene per cell + its percent of the cell total (CPU, sparse)",
+  sparse_ok = TRUE   # engine reads the dgCMatrix CSC slots directly (no densify)
 )

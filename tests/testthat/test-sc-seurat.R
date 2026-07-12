@@ -449,8 +449,11 @@ test_that("Vulkan normalize and scale agree with the CPU path", {
   n_cpu <- ggml_run(ggml_task("normalize", X, device = "cpu"))$embedding
   expect_equal(unname(n_gpu), unname(n_cpu), tolerance = 1e-3)
 
+  # scale defaults to the CPU even under device = "vulkan" (memory-bound); force
+  # scale_backend = "vulkan" so this still exercises the GPU shader path.
   D <- log1p(X)
-  s_gpu <- ggml_run(ggml_task("scale", D, device = "vulkan"))$embedding
+  s_gpu <- ggml_run(ggml_task("scale", D, device = "vulkan"),
+                    scale_backend = "vulkan")$embedding
   s_cpu <- ggml_run(ggml_task("scale", D, device = "cpu"))$embedding
   expect_equal(unname(s_gpu), unname(s_cpu), tolerance = 1e-3)
 })

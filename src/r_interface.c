@@ -16,6 +16,7 @@ extern SEXP R_ggml_vk_split_mul_mat(SEXP w, SEXP x, SEXP N, SEXP K, SEXP M, SEXP
 extern SEXP R_ggml_vk_split_buffer_type(SEXP main_device, SEXP weights, SEXP n_devices, SEXP device_ids, SEXP transport, SEXP probe_N, SEXP probe_K);  // ggmlR TP
 extern SEXP R_ggml_vk_stage_handoff(SEXP src, SEXP dst);  // ggmlR TP (PP)
 extern SEXP R_ggml_vk_shutdown(SEXP, SEXP);  // ggmlR: explicit Vulkan teardown (+hard _exit(status))
+extern SEXP R_ggml_vk_hard_exit_available(void);  // ggmlR: was -DGGML_VK_HARD_EXIT compiled in?
 extern SEXP R_ggml_vulkan_init(SEXP device_idx);
 extern SEXP R_ggml_vulkan_free(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_is_backend(SEXP backend_ptr);
@@ -26,6 +27,13 @@ extern SEXP R_ggml_umap_sgd(SEXP backend_ptr, SEXP coords, SEXP edges, SEXP weig
                             SEXP n_, SEXP ne_, SEXP n_epochs_, SEXP n_neg_,
                             SEXP a_, SEXP b_, SEXP alpha0_, SEXP gamma_, SEXP seed_);
 extern SEXP R_ggml_dist_f32(SEXP backend_ptr, SEXP x_, SEXP n_, SEXP dims_);
+extern SEXP R_ggml_knn_f32(SEXP backend_ptr, SEXP x_, SEXP n_, SEXP dims_, SEXP k_);
+extern SEXP R_ggml_matmul_f64(SEXP backend_ptr, SEXP a_, SEXP b_, SEXP M_, SEXP N_, SEXP K_);
+extern SEXP R_ggml_sparse_lognorm(SEXP backend_ptr, SEXP vals_, SEXP factor_,
+                                  SEXP col_of_nnz_, SEXP nnz_, SEXP n_cols_);
+extern SEXP R_umap_sgd_cpu(SEXP embedding, SEXP from_, SEXP to_, SEXP weights_,
+                           SEXP n_, SEXP ne_, SEXP n_epochs_, SEXP n_neg_,
+                           SEXP a_, SEXP b_, SEXP alpha0_, SEXP gamma_, SEXP seed_);
 
 // Backend scheduler functions (defined in r_interface_scheduler.c)
 extern SEXP R_ggml_backend_sched_new(SEXP backends_list, SEXP parallel, SEXP graph_size);
@@ -1579,6 +1587,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_vk_split_buffer_type",     (DL_FUNC) &R_ggml_vk_split_buffer_type,     7},
     {"R_ggml_vk_stage_handoff",         (DL_FUNC) &R_ggml_vk_stage_handoff,         2},
     {"R_ggml_vk_shutdown",              (DL_FUNC) &R_ggml_vk_shutdown,              2},
+    {"R_ggml_vk_hard_exit_available",   (DL_FUNC) &R_ggml_vk_hard_exit_available,   0},
     {"R_ggml_vulkan_init",              (DL_FUNC) &R_ggml_vulkan_init,              1},
     {"R_ggml_vulkan_free",              (DL_FUNC) &R_ggml_vulkan_free,              1},
     {"R_ggml_vulkan_is_backend",        (DL_FUNC) &R_ggml_vulkan_is_backend,        1},
@@ -1587,6 +1596,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_vulkan_device_caps",       (DL_FUNC) &R_ggml_vulkan_device_caps,       1},
     {"R_ggml_umap_sgd",                 (DL_FUNC) &R_ggml_umap_sgd,                 13},
     {"R_ggml_dist_f32",                 (DL_FUNC) &R_ggml_dist_f32,                  4},
+    {"R_ggml_knn_f32",                  (DL_FUNC) &R_ggml_knn_f32,                   5},
+    {"R_ggml_matmul_f64",               (DL_FUNC) &R_ggml_matmul_f64,                6},
+    {"R_ggml_sparse_lognorm",           (DL_FUNC) &R_ggml_sparse_lognorm,            6},
+    {"R_umap_sgd_cpu",                  (DL_FUNC) &R_umap_sgd_cpu,                  13},
 
     // Backend scheduler functions
     {"R_ggml_backend_sched_new",                (DL_FUNC) &R_ggml_backend_sched_new,                3},

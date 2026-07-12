@@ -175,11 +175,28 @@ R CMD INSTALL .
 
 # With CPU SIMD acceleration
 R CMD INSTALL . --configure-args="--with-simd"
+
+# Also enable the hard-exit path for multi-GPU scripts (see below)
+R CMD INSTALL . --configure-args="--with-simd --enable-hard-exit"
 ```
+
+On Windows R ignores `configure.args`, so set the equivalent environment
+variables before installing from source:
+`Sys.setenv(GGML_USE_SIMD = "1")`, `Sys.setenv(GGML_VK_HARD_EXIT = "1")`.
+
+`--enable-hard-exit` is **off by default** and is only relevant to standalone
+**multi-GPU** scripts. It controls whether `ggml_vulkan_shutdown(hard = TRUE)`
+may call `_exit()` to skip the exit-time Vulkan loader teardown, which can
+otherwise flakily segfault *after* such a script has printed its results. The
+released package omits it because CRAN policy forbids a package from
+terminating the user's R session; in a default build `hard = TRUE` tears Vulkan
+down normally and emits a warning rather than silently doing nothing. See
+`vignette("multi-gpu")` for the full story.
 
 To check what was compiled in:
 
 ```{r}
 cat(ggml_version(), "\n")
 ggml_vulkan_status()   # shows "Vulkan not available" if not compiled in
+ggml_vulkan_hard_exit_available()   # TRUE only with --enable-hard-exit
 ```

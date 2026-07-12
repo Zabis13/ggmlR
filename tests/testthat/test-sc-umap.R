@@ -201,6 +201,31 @@ test_that("UMAP GPU SGD == CPU reference on a conflict-free graph", {
   expect_lt(max(abs(Yg - Yc)), 1e-4)   # float32 vs double, no races
 })
 
+# The hot-path CPU SGD (.ggmlr_umap_sgd) is compiled C (R_umap_sgd_cpu); the
+# pure-R .ggmlr_umap_sgd_r is its readable oracle. Both are sequential, double
+# precision, and use the same PCG negative sampling, so they agree to within
+# floating-point noise on any graph (including shared-vertex ones) — this is
+# what lets the C rewrite replace the ~700 s R loop without changing the
+# embedding. Not exactly bit-identical: C evaluates d2^b as two pow() calls
+# where R writes d2^(b-1) / d2^b, so rounding accumulates differently over the
+# thousands of updates; the residual is ~1e-8 (last double digit), far below
+# any meaningful difference.
+test_that("UMAP CPU SGD (C) matches the pure-R reference", {
+  set.seed(3)
+  X  <- matrix(stats::rnorm(30 * 6), 30, 6)
+  g  <- ggmlR:::.ggmlr_umap_fuzzy_graph(X, n_neighbors = 6L)
+  Y0 <- matrix(stats::rnorm(30 * 2, sd = 1), 30, 2)
+  ab <- c(a = 1.577, b = 0.895)
+
+  Yc <- ggmlR:::.ggmlr_umap_sgd(g, Y0, a = ab[["a"]], b = ab[["b"]],
+                                n_epochs = 15L, n_neg = 5L, base_seed = 42L)
+  Yr <- ggmlR:::.ggmlr_umap_sgd_r(g, Y0, a = ab[["a"]], b = ab[["b"]],
+                                  n_epochs = 15L, n_neg = 5L, base_seed = 42L)
+
+  expect_equal(dim(Yc), c(30L, 2L))
+  expect_equal(unname(Yc), unname(Yr), tolerance = 1e-6)
+})
+
 test_that("UMAP GPU SGD on a real graph is finite and well-shaped", {
   skip_if_not(ggml_vulkan_available(), "Vulkan GPU not available")
 
@@ -260,4 +285,56 @@ test_that("op = 'umap' backend = 'cpu' keeps both phases off the GPU", {
   expect_true(res$metadata$backend_dist %in% c("fnn", "cpu"))
   expect_equal(res$metadata$backend_sgd,  "cpu")
   expect_equal(res$metadata$backend,      "cpu")
+})
+
+# Quality guard. The earlier tests only checked that the layout is finite and
+# well-shaped, which a collapsed embedding (clusters smeared together) passes
+# just as happily as a good one. That blind spot let three real defects through
+# at once -- edge weights ignored in the SGD, a near-zero-noise initialisation,
+# and the shader's write scheme -- each of which wrecks separation without
+# producing NaNs. This test measures separation directly on data with known
+# clusters: three well-separated blobs must stay separated in the embedding.
+#
+# The metric is the within-cluster sum of squares as a fraction of the total
+# (0 = each cluster is a point, 1 = no structure). A correct UMAP drives it near
+# zero. We assert an absolute ceiling (the embedding is genuinely separated) and,
+# when uwot is present, that we are within a small factor of its reference
+# layout on the identical input.
+test_that("op = 'umap' keeps known clusters separated (quality, not just shape)", {
+  within_over_total <- function(emb, lab) {
+    grps <- split(seq_len(nrow(emb)), lab)
+    within <- sum(vapply(grps, function(i) {
+      sub <- emb[i, , drop = FALSE]
+      sum((sub - rep(colMeans(sub), each = length(i)))^2)
+    }, numeric(1)))
+    within / sum((emb - rep(colMeans(emb), each = nrow(emb)))^2)
+  }
+
+  set.seed(1)
+  np <- 60L; d <- 20L
+  X <- rbind(matrix(stats::rnorm(np * d, 0), np, d),
+             matrix(stats::rnorm(np * d, 6), np, d),
+             cbind(matrix(stats::rnorm(np * (d - 1L), 0), np, d - 1L),
+                   stats::rnorm(np, 12)))
+  lab <- factor(rep(1:3, each = np))
+  mat <- t(X)                                       # features x cells
+  colnames(mat) <- paste0("cell", seq_len(ncol(mat)))
+
+  # default path: GPU-eligible graph/distance, CPU reference SGD
+  res <- ggmlR:::.ggmlr_umap_gpu(mat, n_components = 2L, n_neighbors = 15L,
+                                 n_epochs = 200L)
+  expect_equal(res$metadata$backend_sgd, "cpu")     # default keeps SGD on CPU
+
+  ss <- within_over_total(res$embedding, lab)
+  # three separated blobs collapse to well under 0.1 when the layout is correct;
+  # the buggy versions sat at 0.4-0.8. Generous ceiling, still far from failure.
+  expect_lt(ss, 0.1)
+
+  # against uwot on the same points, when it is installed
+  skip_if_not_installed("uwot")
+  set.seed(1)
+  u <- uwot::umap(X, n_neighbors = 15L, n_epochs = 200L, verbose = FALSE)
+  ss_uwot <- within_over_total(u, lab)
+  # we typically land within ~2x of uwot; allow 4x so RNG jitter never flakes it.
+  expect_lt(ss, 4 * ss_uwot)
 })

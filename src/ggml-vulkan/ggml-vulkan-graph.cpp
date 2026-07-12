@@ -1,5 +1,7 @@
 #include "../r_dbg_filelog.h" /* opt-in trace via GGMLR_DBG_LOG env (no-op when unset) */
+#ifdef GGML_VK_HARD_EXIT
 #include <unistd.h>           /* _exit() for ggml_backend_vk_shutdown(hard=1, status) */
+#endif
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 
@@ -3466,6 +3468,7 @@ extern "C" void ggml_backend_vk_shutdown(int hard, int status) {
                 (int) vk_instance_initialized, hard, status);
     if (!vk_instance_initialized) {
         r_tp_tracef("vk_shutdown: already down, no-op");
+#ifdef GGML_VK_HARD_EXIT
         if (hard) {
             // Still honour the hard request: skip the process teardown that races
             // the Vulkan loader's static destructors even when we own no devices.
@@ -3473,6 +3476,7 @@ extern "C" void ggml_backend_vk_shutdown(int hard, int status) {
             fflush(NULL);
             _exit(status);
         }
+#endif
         return;   // idempotent: guards double-shutdown and use-after-shutdown init
     }
     vk_instance_initialized = false;
@@ -3505,6 +3509,7 @@ extern "C" void ggml_backend_vk_shutdown(int hard, int status) {
     // at process exit after every late device finalizer has run against it.
     r_tp_tracef("vk_shutdown: devices reset, instance left LIVE for late finalizers");
 
+#ifdef GGML_VK_HARD_EXIT
     if (hard) {
         // The f1ba0 segfault is a flaky race between NVIDIA/Mesa driver worker
         // threads still winding down and the dynamic loader unmapping the Vulkan
@@ -3522,6 +3527,13 @@ extern "C" void ggml_backend_vk_shutdown(int hard, int status) {
         fflush(NULL);
         _exit(status);
     }
+#else
+    // CRAN builds omit the _exit() path entirely (Repository Policy forbids a
+    // package terminating the R session). ggml_vulkan_shutdown() warns the caller
+    // that hard=TRUE degraded to the soft teardown above; see r_interface_vulkan.c.
+    (void) hard;
+    (void) status;
+#endif
 }
 
 // Extension availability

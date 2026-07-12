@@ -3,10 +3,26 @@
 // UMAP SGD layout optimisation — one epoch per dispatch.
 //
 // One thread = one positive edge. Each thread:
-//   1. reads the two endpoint vertices and their current 2-D coordinates,
-//   2. applies an attraction step pulling them together,
-//   3. draws n_neg random negative vertices (PCG hash RNG, seeded per
+//   1. decides whether this edge is sampled this epoch (see below),
+//   2. reads the two endpoint vertices and their current 2-D coordinates,
+//   3. applies an attraction step pulling them together,
+//   4. draws n_neg random negative vertices (PCG hash RNG, seeded per
 //      edge/epoch) and applies a repulsion step pushing them apart.
+//
+// Weighted edge sampling. Reference UMAP does not touch every edge every epoch:
+// it visits edge e once every epochs_per_sample[e] = max(w)/w[e] epochs, so a
+// weak edge (w -> 0) is pulled far less often than a strong one. Skipping this
+// makes noise edges tug as hard as real ones and the clusters smear together.
+// The reference keeps a mutable next_sample[] cursor; we need a stateless test,
+// since a thread sees only (epoch, w[e]). With weights normalised so max(w) = 1,
+// the cursor fires on epochs 1/w, 2/w, 3/w, ..., i.e. exactly when
+// floor(epoch*w) > floor((epoch-1)*w). That is the test below. It reproduces
+// the reference firing pattern (off by at most one update per edge, at the
+// boundary), and needs no per-edge state buffer.
+//
+// Negative samples are NOT weighted separately: the reference draws
+// epochs_per_negative_sample = epochs_per_sample / n_neg, which works out to
+// n_neg draws per firing of the edge, so we simply draw n_neg on each firing.
 //
 // Writes are Hogwild-style: coords are updated in place without atomics, which
 // is the standard UMAP-SGD behaviour (the CPU reference in R/sc_umap.R does the
@@ -20,7 +36,8 @@ layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 layout (binding = 0) buffer Coords { float coords[]; };
 // edges: ne positive edges, 2 uints each [from0,to0,from1,to1,...].
 layout (binding = 1) readonly buffer Edges { uint edges[]; };
-// per-edge fuzzy weight (reserved for weighted sampling; not used in the step).
+// per-edge fuzzy membership weight, normalised by the host so max(w) = 1.
+// Drives how often the edge is sampled (see the header).
 layout (binding = 2) readonly buffer Weights { float weights[]; };
 
 layout (push_constant) uniform parameter {
@@ -32,6 +49,7 @@ layout (push_constant) uniform parameter {
     float a;        // UMAP curve parameter a
     float b;        // UMAP curve parameter b
     float gamma;    // repulsion strength
+    uint  epoch;    // 1-based epoch index, for the weighted sampling test
 } p;
 
 const float EPS  = 1e-3;
@@ -54,8 +72,28 @@ void main() {
         return;
     }
 
+    // Weighted edge sampling: fire only on the epochs where the reference's
+    // next_sample cursor would have come due. w is normalised to (0, 1] and
+    // epoch stays in the low thousands, so epoch*w is exact enough in f32 for
+    // floor() to land on the right integer. Form (epoch-1)*w as its own product
+    // rather than as epoch*w - w: the two differ once rounding kicks in, and
+    // the CPU reference in R/sc_umap.R computes the former.
+    const float w = weights[e];
+    if (floor(float(p.epoch) * w) <= floor(float(p.epoch - 1u) * w)) {
+        return;
+    }
+
     const uint i = edges[2u * e];
     const uint j = edges[2u * e + 1u];
+
+    // Read-modify-write straight into global memory, one endpoint at a time, and
+    // re-read coords[i] before each use — the LargeVis/uwot Hogwild scheme. The
+    // earlier version accumulated coords[i] in a register across the whole step
+    // and wrote it once at the end; with a dense graph, where many edge-threads
+    // share vertex i, that made the last writer clobber every other thread's
+    // contribution wholesale instead of losing the odd increment. Writing each
+    // sub-step immediately keeps the races to individual dropped increments,
+    // which is the regime the CPU reference (and uwot) actually converge under.
 
     // ---- attraction between the two endpoints ----
     float yix = coords[2u * i];     float yiy = coords[2u * i + 1u];
@@ -71,10 +109,10 @@ void main() {
         float coef = (-2.0 * p.a * p.b * pb / d2) / (1.0 + p.a * pb);
         float gx = clampg(coef * dx) * p.alpha;
         float gy = clampg(coef * dy) * p.alpha;
-        yix += gx; yiy += gy;
-        yjx -= gx; yjy -= gy;
-        coords[2u * j]      = yjx;
-        coords[2u * j + 1u] = yjy;
+        coords[2u * i]      = yix + gx;
+        coords[2u * i + 1u] = yiy + gy;
+        coords[2u * j]      = yjx - gx;
+        coords[2u * j + 1u] = yjy - gy;
     }
 
     // ---- repulsion against n_neg random negatives ----
@@ -84,10 +122,14 @@ void main() {
         uint c = rng % p.n;
         if (c == i) { continue; }
 
-        float ycx = coords[2u * c];
-        float ycy = coords[2u * c + 1u];
-        float rdx = yix - ycx;
-        float rdy = yiy - ycy;
+        // re-read i and c from global memory, mirroring `Y[i,] - Y[c,]` in the
+        // R reference (which sees the freshest coords of both).
+        float yixr = coords[2u * i];
+        float yiyr = coords[2u * i + 1u];
+        float ycx  = coords[2u * c];
+        float ycy  = coords[2u * c + 1u];
+        float rdx = yixr - ycx;
+        float rdy = yiyr - ycy;
         float rd2 = rdx * rdx + rdy * rdy;
 
         float gx, gy;
@@ -101,9 +143,7 @@ void main() {
             gx = GCLAMP * p.alpha;
             gy = GCLAMP * p.alpha;
         }
-        yix += gx; yiy += gy;
+        coords[2u * i]      = yixr + gx;
+        coords[2u * i + 1u] = yiyr + gy;
     }
-
-    coords[2u * i]      = yix;
-    coords[2u * i + 1u] = yiy;
 }

@@ -8,7 +8,8 @@
   mat,
   n_components = 50L,
   center = TRUE,
-  backend = c("vulkan", "cpu")
+  backend = c("vulkan", "cpu"),
+  chunk_size = NULL
 )
 }
 \arguments{

@@ -4,7 +4,13 @@
 \alias{.ggmlr_scale_gpu}
 \title{GPU-accelerated ScaleData / z-score (op = "scale")}
 \usage{
-.ggmlr_scale_gpu(mat, max_value = 10, backend = c("vulkan", "cpu"))
+.ggmlr_scale_gpu(
+  mat,
+  max_value = 10,
+  backend = c("vulkan", "cpu"),
+  scale_backend = c("cpu", "vulkan"),
+  chunk_size = NULL
+)
 }
 \arguments{
 \item{mat}{Dense numeric matrix, features x cells (log-normalised data).}
@@ -12,6 +18,14 @@
 \item{max_value}{Upper clip after scaling (default 10; Seurat's default).}
 
 \item{backend}{\code{"vulkan"} or \code{"cpu"} (dispatch resolves "auto").}
+
+\item{scale_backend}{Which backend actually runs the z-score: \code{"cpu"}
+(default) or \code{"vulkan"}. Defaults to CPU \emph{even under}
+\code{backend = "vulkan"}, because ScaleData is a memory-bound elementwise
+O(nnz) pass (centre / divide / clamp) with almost no arithmetic per element:
+the GPU pays for the host<->VRAM copy but has nothing to accelerate, so it is
+slower than the CPU here (measured ~0.4x). Same rationale and pattern as
+UMAP's \code{sgd_backend}. Pass \code{"vulkan"} to force the GPU path.}
 }
 \value{
 A \code{\link{ggml_result}} whose \code{embedding} is the scaled

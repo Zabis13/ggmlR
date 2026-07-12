@@ -75,7 +75,7 @@ ONNX_OBJECTS = \
 
 # R interface objects
 R_INTERFACE_OBJECTS = \
-  r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o r_interface_opt.o r_interface_backend.o r_interface_quants.o r_interface_gguf.o
+  r_interface.o r_interface_graph.o r_interface_vulkan.o r_interface_scheduler.o r_interface_opt.o r_interface_backend.o r_interface_quants.o r_interface_gguf.o r_umap_sgd.o
 
 # Vulkan objects (set by configure --with-vulkan)
 VULKAN_OBJECTS = @VULKAN_OBJECTS@
@@ -113,6 +113,7 @@ r_interface_opt.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_backend.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_quants.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 r_interface_gguf.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
+r_umap_sgd.o: PKG_CPPFLAGS += -DR_GGML_IO_IMPL
 # ONNX files: only r_onnx.c includes R headers directly (needs R_GGML_IO_IMPL to
 # suppress macro redirections that conflict with R's format attributes).
 # All other onnx files use plain C stdio — the -include r_ggml_compat.h flag

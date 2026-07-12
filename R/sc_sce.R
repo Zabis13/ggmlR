@@ -17,14 +17,15 @@
 #'   with \code{SummarizedExperiment::assay()}.
 #' @export
 ggml_extract.SingleCellExperiment <- function(x, assay = NULL, layer = "logcounts",
-                                              genes = NULL, cells = NULL, ...) {
+                                              genes = NULL, cells = NULL,
+                                              keep_sparse = FALSE, ...) {
   .ggmlr_need_pkg("SummarizedExperiment", "extracting data from a SingleCellExperiment")
   # `assay` is the Seurat term; for SCE the assay is named by `layer`. Accept
   # either, preferring an explicit `assay` if the caller passed one.
   which <- assay %||% layer
   mat <- SummarizedExperiment::assay(x, i = which)
   # SCE assays are genes x cells, possibly sparse -> reuse the matrix methods
-  ggml_extract(mat, genes = genes, cells = cells)
+  ggml_extract(mat, genes = genes, cells = cells, keep_sparse = keep_sparse)
 }
 
 #' @rdname ggml_inject
@@ -51,6 +52,18 @@ ggml_inject.SingleCellExperiment <- function(x, result, reduction_name = "ggml",
   }
 
   kind <- result$metadata$kind
+
+  # coldata ops (largest_gene) write per-cell columns into colData(), the SCE
+  # counterpart of Seurat's meta.data.
+  if (identical(kind, "coldata")) {
+    df <- as.data.frame(result$embedding)
+    cd <- SummarizedExperiment::colData(x)
+    for (nm in names(df)) cd[[nm]] <- df[[nm]]
+    SummarizedExperiment::colData(x) <- cd
+    x <- set_meta(x, paste0(reduction_name, "_ggml"),
+                  meta_prov(result$metadata, result$timings))
+    return(x)
+  }
 
   # transform ops (normalize / scale) overwrite a named assay. The engines tag
   # the result with a Seurat layer name ("data" / "scale.data"); map those to the
@@ -103,8 +116,10 @@ RunGGML.SingleCellExperiment <- function(object, op = "embed", assay = NULL,
     mat <- t(emb)
   } else {
     # default assay per op: SCE keeps raw counts in "counts" and the
-    # log-normalised matrix in "logcounts".
-    layer <- layer %||% if (identical(op, "normalize")) "counts" else "logcounts"
+    # log-normalised matrix in "logcounts". normalize and largest_gene read raw
+    # counts; everything else reads the log-normalised matrix.
+    layer <- layer %||%
+      if (op %in% c("normalize", "largest_gene")) "counts" else "logcounts"
     mat   <- ggml_extract(object, assay = assay, layer = layer,
                           genes = genes, cells = cells)
   }

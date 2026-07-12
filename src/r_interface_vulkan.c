@@ -24,6 +24,19 @@ SEXP R_ggml_vulkan_is_available(void) {
 #endif
 }
 
+// Check if the hard-exit path (_exit() teardown bypass) is compiled in.
+// OFF by default: CRAN Repository Policy forbids a package terminating the R
+// session, so the CRAN tarball must not link _exit(). Self-builds opt in with
+// `--configure-args="--enable-hard-exit"`. ggml_vulkan_shutdown() consults this
+// to warn instead of silently ignoring hard = TRUE.
+SEXP R_ggml_vk_hard_exit_available(void) {
+#if defined(GGML_USE_VULKAN) && defined(GGML_VK_HARD_EXIT)
+    return ScalarLogical(TRUE);
+#else
+    return ScalarLogical(FALSE);
+#endif
+}
+
 // Get number of Vulkan devices
 SEXP R_ggml_vulkan_device_count(void) {
 #ifdef GGML_USE_VULKAN
@@ -705,6 +718,54 @@ SEXP R_ggml_umap_sgd(SEXP backend_ptr, SEXP coords, SEXP edges, SEXP weights,
 #endif
 }
 
+// Sparse LogNormalize over a dgCMatrix's stored non-zeros. vals = @x (nnz
+// doubles), factor = scale_factor/colSum per column (n_cols doubles), col_of_nnz
+// = 0-based column of each stored value (nnz ints, precomputed from @p). Returns
+// the transformed values (nnz doubles), ready to drop back into @x.
+SEXP R_ggml_sparse_lognorm(SEXP backend_ptr, SEXP vals_, SEXP factor_,
+                           SEXP col_of_nnz_, SEXP nnz_, SEXP n_cols_) {
+#ifdef GGML_USE_VULKAN
+    ggml_backend_t backend = (ggml_backend_t)R_ExternalPtrAddr(backend_ptr);
+    if (backend == NULL || !ggml_backend_is_vk(backend)) {
+        error("R_ggml_sparse_lognorm: backend is not a valid Vulkan backend");
+    }
+
+    unsigned int nnz    = (unsigned int)asInteger(nnz_);
+    unsigned int n_cols = (unsigned int)asInteger(n_cols_);
+
+    if ((R_xlen_t)XLENGTH(vals_) != (R_xlen_t)nnz)
+        error("R_ggml_sparse_lognorm: vals length != nnz");
+    if ((R_xlen_t)XLENGTH(factor_) != (R_xlen_t)n_cols)
+        error("R_ggml_sparse_lognorm: factor length != n_cols");
+    if ((R_xlen_t)XLENGTH(col_of_nnz_) != (R_xlen_t)nnz)
+        error("R_ggml_sparse_lognorm: col_of_nnz length != nnz");
+
+    // R doubles/ints -> float/uint32 working buffers
+    float *v = (float*)R_alloc((size_t)nnz, sizeof(float));
+    float *f = (float*)R_alloc((size_t)n_cols, sizeof(float));
+    unsigned int *col = (unsigned int*)R_alloc((size_t)nnz, sizeof(unsigned int));
+
+    double *vd = REAL(vals_);
+    for (R_xlen_t i = 0; i < (R_xlen_t)nnz; i++) v[i] = (float)vd[i];
+    double *fd = REAL(factor_);
+    for (R_xlen_t i = 0; i < (R_xlen_t)n_cols; i++) f[i] = (float)fd[i];
+    int *ci = INTEGER(col_of_nnz_);
+    for (R_xlen_t i = 0; i < (R_xlen_t)nnz; i++) col[i] = (unsigned int)ci[i];
+
+    bool ok = ggml_vk_sparse_lognorm_run(backend, v, f, col, nnz, n_cols);
+    if (!ok) error("R_ggml_sparse_lognorm: GPU dispatch failed");
+
+    SEXP out = PROTECT(allocVector(REALSXP, (R_xlen_t)nnz));
+    double *od = REAL(out);
+    for (R_xlen_t i = 0; i < (R_xlen_t)nnz; i++) od[i] = (double)v[i];
+    UNPROTECT(1);
+    return out;
+#else
+    error("Vulkan support not compiled");
+    return R_NilValue;
+#endif
+}
+
 // ============================================================================
 // Pairwise squared-distance matrix (direct Vulkan dispatch, f32-accurate)
 // ============================================================================
@@ -751,6 +812,118 @@ SEXP R_ggml_dist_f32(SEXP backend_ptr, SEXP x_, SEXP n_, SEXP dims_) {
         float v = d2[i];
         od[i] = (v > 0.0f) ? sqrt((double)v) : 0.0;
     }
+    UNPROTECT(1);
+    return out;
+#else
+    error("Vulkan support not compiled");
+    return R_NilValue;
+#endif
+}
+
+// Tiled fused k-NN: for each of n rows of X (dims each, passed row-major), the k
+// nearest other rows, computed on the GPU without materialising the n x n
+// distance matrix (knn_tiled.comp). Returns a list(idx, dist): idx is an n*k
+// integer matrix of 1-based neighbour rows, dist an n*k double matrix of
+// Euclidean distances, both sorted ascending per row. Unfilled slots (rows with
+// fewer than k other points) get idx = NA, dist = NA. k must be <= 32.
+SEXP R_ggml_knn_f32(SEXP backend_ptr, SEXP x_, SEXP n_, SEXP dims_, SEXP k_) {
+#ifdef GGML_USE_VULKAN
+    ggml_backend_t backend = (ggml_backend_t)R_ExternalPtrAddr(backend_ptr);
+    if (backend == NULL || !ggml_backend_is_vk(backend)) {
+        error("R_ggml_knn_f32: backend is not a valid Vulkan backend");
+    }
+
+    unsigned int n    = (unsigned int)asInteger(n_);
+    unsigned int dims = (unsigned int)asInteger(dims_);
+    unsigned int k    = (unsigned int)asInteger(k_);
+
+    if ((R_xlen_t)XLENGTH(x_) != (R_xlen_t)n * dims)
+        error("R_ggml_knn_f32: x length != n*dims");
+    if (k == 0u || k > 32u)
+        error("R_ggml_knn_f32: k must be in 1..32 (pipeline top-k capacity)");
+
+    // R doubles -> float input; uint/float outputs from the kernel.
+    float        *x   = (float*)       R_alloc((size_t)n * dims, sizeof(float));
+    unsigned int *idx = (unsigned int*)R_alloc((size_t)n * k,    sizeof(unsigned int));
+    float        *dst = (float*)       R_alloc((size_t)n * k,    sizeof(float));
+
+    double *xd = REAL(x_);
+    for (R_xlen_t i = 0; i < (R_xlen_t)n * dims; i++) x[i] = (float)xd[i];
+
+    bool ok = ggml_vk_knn_tiled_run(backend, x, idx, dst, n, dims, k);
+    if (!ok) error("R_ggml_knn_f32: GPU dispatch failed");
+
+    // The kernel writes row-major [i*k + r]; R matrices are column-major, so fill
+    // an n x k matrix transposing on the fly: out[i + r*n] = kernel[i*k + r]. idx
+    // is 0-based from the shader -> 1-based here; the sentinel 0xffffffff (an
+    // unfilled slot) becomes NA in both idx and dist.
+    SEXP r_idx  = PROTECT(allocMatrix(INTSXP,  n, k));
+    SEXP r_dist = PROTECT(allocMatrix(REALSXP, n, k));
+    int    *ip = INTEGER(r_idx);
+    double *dp = REAL(r_dist);
+    for (unsigned int i = 0; i < n; i++) {
+        for (unsigned int r = 0; r < k; r++) {
+            unsigned int raw = idx[(size_t)i * k + r];
+            R_xlen_t     out = (R_xlen_t)i + (R_xlen_t)r * n;   // column-major slot
+            if (raw == 0xffffffffu) {
+                ip[out] = NA_INTEGER;
+                dp[out] = NA_REAL;
+            } else {
+                ip[out] = (int)raw + 1;                        // 0-based -> 1-based
+                dp[out] = (double)dst[(size_t)i * k + r];
+            }
+        }
+    }
+
+    SEXP res = PROTECT(allocVector(VECSXP, 2));
+    SET_VECTOR_ELT(res, 0, r_idx);
+    SET_VECTOR_ELT(res, 1, r_dist);
+    SEXP nms = PROTECT(allocVector(STRSXP, 2));
+    SET_STRING_ELT(nms, 0, mkChar("idx"));
+    SET_STRING_ELT(nms, 1, mkChar("dist"));
+    setAttrib(res, R_NamesSymbol, nms);
+
+    UNPROTECT(4);
+    return res;
+#else
+    error("Vulkan support not compiled");
+    return R_NilValue;
+#endif
+}
+
+// FP64 matmul (PoC): C = A %*% B in double on the GPU. a_ and b_ are passed
+// row-major (t(A) and t(B) from R, whose matrices are column-major), matching
+// the shader's row-major layout; the M*N result is returned row-major as a flat
+// double vector for the R side to shape. M, N, K are the usual GEMM dims.
+SEXP R_ggml_matmul_f64(SEXP backend_ptr, SEXP a_, SEXP b_,
+                       SEXP M_, SEXP N_, SEXP K_) {
+#ifdef GGML_USE_VULKAN
+    ggml_backend_t backend = (ggml_backend_t)R_ExternalPtrAddr(backend_ptr);
+    if (backend == NULL || !ggml_backend_is_vk(backend)) {
+        error("R_ggml_matmul_f64: backend is not a valid Vulkan backend");
+    }
+
+    unsigned int M = (unsigned int)asInteger(M_);
+    unsigned int N = (unsigned int)asInteger(N_);
+    unsigned int K = (unsigned int)asInteger(K_);
+
+    if ((R_xlen_t)XLENGTH(a_) != (R_xlen_t)M * K)
+        error("R_ggml_matmul_f64: a length != M*K");
+    if ((R_xlen_t)XLENGTH(b_) != (R_xlen_t)K * N)
+        error("R_ggml_matmul_f64: b length != K*N");
+
+    // double throughout — no float conversion (the point of the fp64 path).
+    const double *a = REAL(a_);
+    const double *b = REAL(b_);
+    SEXP out = PROTECT(allocVector(REALSXP, (R_xlen_t)M * N));
+    double *c = REAL(out);
+
+    bool ok = ggml_vk_matmul_f64_run(backend, a, b, c, M, N, K);
+    if (!ok) {
+        UNPROTECT(1);
+        error("R_ggml_matmul_f64: GPU dispatch failed (no fp64 support?)");
+    }
+
     UNPROTECT(1);
     return out;
 #else

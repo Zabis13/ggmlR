@@ -93,7 +93,13 @@ instead of an assay layer. Seurat: \code{Embeddings()}; SCE:
 
 \item{dims}{Optional integer vector selecting columns of \code{reduction}.}
 
-\item{...}{Additional parameters forwarded to the engine.}
+\item{...}{Additional parameters forwarded to the engine. A notable one is
+\code{chunk_size}: for \code{op = "scale"} and \code{op = "embed"} (PCA),
+passing an integer streams the sparse input in blocks of that many cells,
+densifying one block at a time so the full dense features-by-cells matrix
+(tens of GB at scale) is never held. Results are identical to the
+non-chunked path. \code{op = "normalize"} is already sparse, so
+\code{chunk_size} is a no-op there.}
 }
 \value{
 For a Seurat object, the updated object with a new reduction. For a
@@ -109,7 +115,8 @@ object, so it slots into a \code{\%>\%} / \code{|>} pipeline next to
 }
 \details{
 Supported operations include \code{"embed"} (PCA), \code{"normalize"},
-\code{"scale"}, \code{"umap"} and \code{"neighbors"}; see
+\code{"scale"}, \code{"umap"}, \code{"neighbors"} and \code{"largest_gene"}
+(per-cell highest-expressed gene QC metric); see
 \code{\link{ggml_ops_registry}}.
 }
 \examples{

@@ -12,9 +12,25 @@ ggml_extract(x, assay = NULL, layer = "data", genes = NULL, cells = NULL, ...)
 
 \method{ggml_extract}{matrix}(x, assay = NULL, layer = "data", genes = NULL, cells = NULL, ...)
 
-\method{ggml_extract}{dgCMatrix}(x, assay = NULL, layer = "data", genes = NULL, cells = NULL, ...)
+\method{ggml_extract}{dgCMatrix}(
+  x,
+  assay = NULL,
+  layer = "data",
+  genes = NULL,
+  cells = NULL,
+  keep_sparse = FALSE,
+  ...
+)
 
-\method{ggml_extract}{Seurat}(x, assay = NULL, layer = "data", genes = NULL, cells = NULL, ...)
+\method{ggml_extract}{Seurat}(
+  x,
+  assay = NULL,
+  layer = "data",
+  genes = NULL,
+  cells = NULL,
+  keep_sparse = FALSE,
+  ...
+)
 
 \method{ggml_extract}{SingleCellExperiment}(
   x,
@@ -22,6 +38,7 @@ ggml_extract(x, assay = NULL, layer = "data", genes = NULL, cells = NULL, ...)
   layer = "logcounts",
   genes = NULL,
   cells = NULL,
+  keep_sparse = FALSE,
   ...
 )
 }
@@ -41,6 +58,11 @@ assay. Ignored for bare matrices.}
 \item{cells}{Optional character/integer vector selecting cell columns.}
 
 \item{...}{Passed to methods.}
+
+\item{keep_sparse}{If \code{TRUE}, return the (subset) \code{dgCMatrix} without
+densifying. Only the LogNormalize path (op = \code{"normalize"}) sets this,
+since it transforms the stored non-zeros in place; every other op leaves it
+\code{FALSE} and gets a dense matrix as before.}
 }
 \value{
 A dense numeric \code{matrix}, features x cells.

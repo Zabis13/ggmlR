@@ -74,7 +74,8 @@ heavy <- c(
   "mlr3-learner",
   "keras-api",
   "quants-iq-degenerate",
-  "getrows-offload-vulkan"
+  "getrows-offload-vulkan",
+  "gpu-linalg"
 )
 
 # Under the valgrind memtest, running the full light suite (~67 files) blows

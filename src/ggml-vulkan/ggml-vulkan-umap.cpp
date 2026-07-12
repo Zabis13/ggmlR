@@ -73,6 +73,7 @@ bool ggml_vk_umap_sgd_run(
         pc.a     = a;
         pc.b     = b;
         pc.gamma = gamma;
+        pc.epoch = epoch + 1;                         // shader's test is 1-based
 
         ggml_vk_dispatch_pipeline(
             ctx, subctx, ctx->device->pipeline_umap_sgd,
@@ -172,6 +173,157 @@ bool ggml_vk_pairwise_dist_run(
     // --- free the SSBOs ---
     ggml_vk_destroy_buffer(d_x);
     ggml_vk_destroy_buffer(d_d2);
+
+    return true;
+}
+
+// Tiled fused k-NN — the honest-f32 GPU nearest-neighbour search that never
+// materialises the n x n distance matrix (see vulkan-shaders/knn_tiled.comp).
+// One workgroup per query row computes and selects that row's k nearest in a
+// single dispatch; the only outputs are the n*k neighbour indices (0-based) and
+// n*k Euclidean distances, sorted ascending per row. k must be <= the pipeline's
+// top-k capacity (the K specialization constant, 32). The prototype (with
+// GGML_BACKEND_API / extern "C") comes from ggml-vulkan.h.
+bool ggml_vk_knn_tiled_run(
+        ggml_backend_t backend,
+        const float * x,               // n * dims floats, row-major
+        unsigned int * knn_idx,        // n * k uints, row-major (out, 0-based rows)
+        float * knn_dist,              // n * k floats, row-major (out, Euclidean)
+        unsigned int n, unsigned int dims, unsigned int k) {
+
+    if (!ggml_backend_is_vk(backend)) {
+        return false;
+    }
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+    vk_device& device = ctx->device;
+
+    if (n == 0 || dims == 0 || k == 0) {
+        return true;  // nothing to do
+    }
+
+    const size_t x_bytes   = (size_t)n * dims * sizeof(float);
+    const size_t idx_bytes = (size_t)n * k    * sizeof(uint32_t);
+    const size_t dst_bytes = (size_t)n * k    * sizeof(float);
+
+    // --- allocate device-local SSBOs and upload X ---
+    vk_buffer d_x   = ggml_vk_create_buffer_device(device, x_bytes);
+    vk_buffer d_idx = ggml_vk_create_buffer_device(device, idx_bytes);
+    vk_buffer d_dst = ggml_vk_create_buffer_device(device, dst_bytes);
+    ggml_vk_buffer_write(d_x, 0, x, x_bytes);
+
+    // Compile the pipeline and (on non-push drivers) allocate one descriptor set
+    // for the single dispatch — same lazy-compile guard as the paths above.
+    ctx->pipeline_descriptor_set_requirements = 0;
+    ctx->descriptor_set_idx = 0;
+    ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_knn_tiled, 1);
+
+    // --- record one command buffer: a single 1D dispatch, one group per row ---
+    vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+    ggml_vk_ctx_begin(device, subctx);
+
+    vk_op_knn_tiled_push_constants pc{};
+    pc.n    = n;
+    pc.dims = dims;
+    pc.k    = k;
+
+    // wg_denoms for this pipeline are {1,1,1} (see create_pipeline), so elements.x
+    // = n yields exactly n workgroups — one per query row. The WG threads inside
+    // each group come from the local_size (the WG specialization constant).
+    const std::array<uint32_t, 3> elements = { n, 1, 1 };
+
+    ggml_vk_dispatch_pipeline(
+        ctx, subctx, ctx->device->pipeline_knn_tiled,
+        { vk_subbuffer{ d_x,   0, x_bytes   },
+          vk_subbuffer{ d_idx, 0, idx_bytes },
+          vk_subbuffer{ d_dst, 0, dst_bytes } },
+        pc, elements);
+
+    ggml_vk_ctx_end(subctx);
+
+    // --- submit and wait ---
+    ggml_vk_submit(subctx, ctx->fence);
+    ggml_vk_wait_for_fence(ctx);
+
+    // --- read the neighbour indices and distances back ---
+    ggml_vk_buffer_read(d_idx, 0, knn_idx,  idx_bytes);
+    ggml_vk_buffer_read(d_dst, 0, knn_dist, dst_bytes);
+
+    // --- free the SSBOs ---
+    ggml_vk_destroy_buffer(d_x);
+    ggml_vk_destroy_buffer(d_idx);
+    ggml_vk_destroy_buffer(d_dst);
+
+    return true;
+}
+
+// FP64 matmul (PoC): C[M,N] = A[M,K] * B[K,N] entirely in double, dispatched
+// directly to matmul_f64.comp. Uploads/downloads double with NO float conversion
+// (the whole point of the experiment). Returns false if the backend is not
+// Vulkan or the device lacks fp64 (the pipeline was not created). The prototype
+// (with GGML_BACKEND_API / extern "C") comes from ggml-vulkan.h.
+bool ggml_vk_matmul_f64_run(
+        ggml_backend_t backend,
+        const double * a,              // M * K doubles, row-major
+        const double * b,              // K * N doubles, row-major
+        double * c,                    // M * N doubles, row-major (out)
+        unsigned int M, unsigned int N, unsigned int K) {
+
+    if (!ggml_backend_is_vk(backend)) {
+        return false;
+    }
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+    vk_device& device = ctx->device;
+
+    if (M == 0 || N == 0 || K == 0) {
+        return true;  // nothing to do
+    }
+    if (!device->pipeline_matmul_f64) {
+        return false;  // device has no fp64 support -> pipeline never created
+    }
+
+    const size_t a_bytes = (size_t)M * K * sizeof(double);
+    const size_t b_bytes = (size_t)K * N * sizeof(double);
+    const size_t c_bytes = (size_t)M * N * sizeof(double);
+
+    // --- allocate device-local SSBOs and upload A, B ---
+    vk_buffer d_a = ggml_vk_create_buffer_device(device, a_bytes);
+    vk_buffer d_b = ggml_vk_create_buffer_device(device, b_bytes);
+    vk_buffer d_c = ggml_vk_create_buffer_device(device, c_bytes);
+    ggml_vk_buffer_write(d_a, 0, a, a_bytes);
+    ggml_vk_buffer_write(d_b, 0, b, b_bytes);
+
+    ctx->pipeline_descriptor_set_requirements = 0;
+    ctx->descriptor_set_idx = 0;
+    ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_matmul_f64, 1);
+
+    vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+    ggml_vk_ctx_begin(device, subctx);
+
+    vk_op_matmul_f64_push_constants pc{};
+    pc.M = M;
+    pc.N = N;
+    pc.K = K;
+
+    // wg_denoms (16,16) come from the shader's 16x16 tile, so the dispatch rounds
+    // the N x M output up to whole tiles on each axis (x = columns, y = rows).
+    const std::array<uint32_t, 3> elements = { N, M, 1 };
+
+    ggml_vk_dispatch_pipeline(
+        ctx, subctx, ctx->device->pipeline_matmul_f64,
+        { vk_subbuffer{ d_a, 0, a_bytes },
+          vk_subbuffer{ d_b, 0, b_bytes },
+          vk_subbuffer{ d_c, 0, c_bytes } },
+        pc, elements);
+
+    ggml_vk_ctx_end(subctx);
+    ggml_vk_submit(subctx, ctx->fence);
+    ggml_vk_wait_for_fence(ctx);
+
+    ggml_vk_buffer_read(d_c, 0, c, c_bytes);
+
+    ggml_vk_destroy_buffer(d_a);
+    ggml_vk_destroy_buffer(d_b);
+    ggml_vk_destroy_buffer(d_c);
 
     return true;
 }

@@ -4,7 +4,12 @@
 \alias{.ggmlr_normalize_gpu}
 \title{GPU-accelerated LogNormalize (op = "normalize")}
 \usage{
-.ggmlr_normalize_gpu(mat, scale_factor = 10000, backend = c("vulkan", "cpu"))
+.ggmlr_normalize_gpu(
+  mat,
+  scale_factor = 10000,
+  backend = c("vulkan", "cpu"),
+  chunk_size = NULL
+)
 }
 \arguments{
 \item{mat}{Dense numeric matrix, features x cells (raw/counts).}

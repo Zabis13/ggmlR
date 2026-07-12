@@ -192,7 +192,7 @@ ggml_vulkan_split_row_ranges <- function(nrows, n_devices, weights = NULL) {
 #'   r <- ggml_vulkan_p2p_selftest(0L, 0L)
 #'   cat(r$report)
 #'   # cross-device P2P (requires >= 2 GPUs)
-#'   if (ggml_vulkan_status()$n_devices >= 2) {
+#'   if (ggml_vulkan_device_count() >= 2) {
 #'     r <- ggml_vulkan_p2p_selftest(0L, 1L)
 #'     cat(r$report)
 #'   }
@@ -325,15 +325,29 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
 #' \code{hard = TRUE} at the very end of a script, never mid-session or in a
 #' package/interactive context.
 #'
+#' @section Hard exit is opt-in at build time:
+#' The \code{_exit()} path is \strong{compiled out by default}, because CRAN
+#' Repository Policy forbids a package from terminating the user's R session. In
+#' such a build \code{hard = TRUE} performs the normal teardown and emits a
+#' \code{\link{warning}} — it is never silently ignored — so the exit-time race
+#' described above can still fire. To compile it in, build from source with
+#' \code{R CMD INSTALL . --configure-args="--enable-hard-exit"} (on Windows set
+#' \code{Sys.setenv(GGML_VK_HARD_EXIT = "1")} first, since R ignores
+#' \code{configure.args} there). Check the current build with
+#' \code{\link{ggml_vulkan_hard_exit_available}()}.
+#'
 #' @param hard Logical. If \code{TRUE}, call \code{_exit(status)} after teardown to
-#'   skip all exit handlers and guarantee no exit-time segfault. Never returns.
-#'   Default \code{FALSE} (normal return; safe to call mid-session).
+#'   skip all exit handlers and guarantee no exit-time segfault; never returns.
+#'   Requires a build with \code{--enable-hard-exit} (see above); otherwise it
+#'   warns and returns normally. Default \code{FALSE} (safe to call mid-session).
 #' @param status Integer process exit code used only when \code{hard = TRUE}
 #'   (passed to \code{_exit()}). Defaults to \code{0L} (success). If you call this
 #'   from an error path (e.g. a \code{tryCatch} handler after a stage failed),
 #'   pass a non-zero \code{status} so the failed run does not exit \code{0} and
 #'   mask the failure. Ignored when \code{hard = FALSE}.
-#' @return Invisibly \code{NULL} (does not return when \code{hard = TRUE}).
+#' @return Invisibly \code{NULL}. Does not return when \code{hard = TRUE} \emph{and}
+#'   the hard-exit path is compiled in (see the section above).
+#' @seealso \code{\link{ggml_vulkan_hard_exit_available}}
 #' @export
 #' @examples
 #' \donttest{
@@ -345,8 +359,43 @@ ggml_vulkan_split_mul_mat <- function(W, X, n_devices = ggml_vulkan_device_count
 #' }
 #' }
 ggml_vulkan_shutdown <- function(hard = FALSE, status = 0L) {
+  if (isTRUE(hard) && !ggml_vulkan_hard_exit_available()) {
+    warning("ggml_vulkan_shutdown(hard = TRUE): hard exit is not compiled into ",
+            "this build, falling back to the normal teardown. The exit-time ",
+            "Vulkan loader race may still segfault after your results are ",
+            "printed. To enable it, rebuild with ",
+            "R CMD INSTALL . --configure-args=\"--enable-hard-exit\" ",
+            "(Windows: Sys.setenv(GGML_VK_HARD_EXIT = \"1\") before installing).",
+            call. = FALSE)
+  }
   invisible(.Call("R_ggml_vk_shutdown", isTRUE(hard), as.integer(status),
                   PACKAGE = "ggmlR"))
+}
+
+#' Is the Vulkan hard-exit path compiled in?
+#'
+#' Reports whether this build of ggmlR was compiled with
+#' \code{-DGGML_VK_HARD_EXIT}, which is what makes
+#' \code{\link{ggml_vulkan_shutdown}(hard = TRUE)} actually call \code{_exit()}.
+#'
+#' The hard-exit path is \strong{disabled by default}: CRAN Repository Policy
+#' forbids a package from terminating the user's R session, so the released
+#' package must not link \code{_exit()}. Builds from source can opt in with
+#' \code{R CMD INSTALL . --configure-args="--enable-hard-exit"} (on Windows, set
+#' \code{Sys.setenv(GGML_VK_HARD_EXIT = "1")} before installing, because R there
+#' ignores \code{configure.args}).
+#'
+#' When it is not compiled in, \code{ggml_vulkan_shutdown(hard = TRUE)} performs
+#' the normal teardown and emits a \code{\link{warning}} rather than silently
+#' ignoring the request.
+#'
+#' @return \code{TRUE} if the hard-exit path is available, otherwise \code{FALSE}.
+#' @seealso \code{\link{ggml_vulkan_shutdown}}
+#' @export
+#' @examples
+#' ggml_vulkan_hard_exit_available()
+ggml_vulkan_hard_exit_available <- function() {
+  .Call("R_ggml_vk_hard_exit_available", PACKAGE = "ggmlR")
 }
 
 #' Create a Vulkan tensor-split buffer type

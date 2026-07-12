@@ -8,8 +8,9 @@ ggml_vulkan_shutdown(hard = FALSE, status = 0L)
 }
 \arguments{
 \item{hard}{Logical. If \code{TRUE}, call \code{_exit(status)} after teardown to
-skip all exit handlers and guarantee no exit-time segfault. Never returns.
-Default \code{FALSE} (normal return; safe to call mid-session).}
+skip all exit handlers and guarantee no exit-time segfault; never returns.
+Requires a build with \code{--enable-hard-exit} (see above); otherwise it
+warns and returns normally. Default \code{FALSE} (safe to call mid-session).}
 
 \item{status}{Integer process exit code used only when \code{hard = TRUE}
 (passed to \code{_exit()}). Defaults to \code{0L} (success). If you call this
@@ -18,7 +19,8 @@ pass a non-zero \code{status} so the failed run does not exit \code{0} and
 mask the failure. Ignored when \code{hard = FALSE}.}
 }
 \value{
-Invisibly \code{NULL} (does not return when \code{hard = TRUE}).
+Invisibly \code{NULL}. Does not return when \code{hard = TRUE} \emph{and}
+  the hard-exit path is compiled in (see the section above).
 }
 \description{
 Waits for all Vulkan devices to go idle, then destroys the devices and the
@@ -50,6 +52,19 @@ left to crash. Because it bypasses R's normal shutdown, only use
 \code{hard = TRUE} at the very end of a script, never mid-session or in a
 package/interactive context.
 }
+\section{Hard exit is opt-in at build time}{
+
+The \code{_exit()} path is \strong{compiled out by default}, because CRAN
+Repository Policy forbids a package from terminating the user's R session. In
+such a build \code{hard = TRUE} performs the normal teardown and emits a
+\code{\link{warning}} — it is never silently ignored — so the exit-time race
+described above can still fire. To compile it in, build from source with
+\code{R CMD INSTALL . --configure-args="--enable-hard-exit"} (on Windows set
+\code{Sys.setenv(GGML_VK_HARD_EXIT = "1")} first, since R ignores
+\code{configure.args} there). Check the current build with
+\code{\link{ggml_vulkan_hard_exit_available}()}.
+}
+
 \examples{
 \donttest{
 if (ggml_vulkan_available() && ggml_vulkan_device_count() >= 2) {
@@ -59,4 +74,7 @@ if (ggml_vulkan_available() && ggml_vulkan_device_count() >= 2) {
   ggml_vulkan_shutdown()   # clean up before the script exits
 }
 }
+}
+\seealso{
+\code{\link{ggml_vulkan_hard_exit_available}}
 }
