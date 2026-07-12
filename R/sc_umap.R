@@ -439,42 +439,6 @@
   matrix(out, n, 2L, byrow = TRUE)                   # undo [x,y,...] flattening
 }
 
-#' GPU-bound UMAP embedding (op = "umap")
-#'
-#' Lays a feature-by-cell matrix out in 2-D with UMAP. The kNN graph uses the
-#' FNN kd-tree when available (exact, O(n log n), light on memory); without FNN
-#' it falls back to a full distance matrix, computed on the GPU via the
-#' \code{pairwise_dist.comp} shader (honest f32, sidestepping mul_mat's f16 path)
-#' or on the CPU. The SGD layout optimisation runs on the GPU via
-#' \code{umap_sgd.comp} under \code{backend = "vulkan"} (the default), falling
-#' back to its exact CPU reference when the GPU is unavailable. The fuzzy
-#' simplicial set in between stays on the CPU (sparse). \code{backend_dist} in
-#' the metadata reports the kNN path actually taken (\code{"fnn"},
-#' \code{"vulkan"}, or \code{"cpu"}).
-#'
-#' @param mat Dense numeric matrix, features x cells.
-#' @param n_components Output dimensionality (UMAP is virtually always 2).
-#' @param n_neighbors kNN graph size (default 15).
-#' @param min_dist Minimum spacing of points in the embedding (default 0.1).
-#' @param spread Scale of the embedding (default 1).
-#' @param n_epochs SGD epochs (default 200).
-#' @param gpu_neighbor_max_cells Cell ceiling for the GPU distance shader.
-#'   \code{NULL} (default) derives it from free VRAM; a positive integer forces
-#'   an explicit cap; above the ceiling the distance phase falls back to the CPU.
-#' @param backend \code{"vulkan"} (default; GPU for the kNN/distance phase, with
-#'   per-phase CPU fallback) or \code{"cpu"} (force the CPU reference for both
-#'   phases).
-#' @param sgd_backend Which backend runs the SGD layout phase: \code{"cpu"}
-#'   (default, the single-threaded reference — best embedding quality) or
-#'   \code{"vulkan"} (the GPU shader — faster but lower quality on dense graphs,
-#'   as its Hogwild SGD does not match the reference; falls back to CPU if no GPU
-#'   is live). The graph/distance phase is unaffected and still uses
-#'   \code{backend}.
-#' @return A \code{\link{ggml_result}} whose \code{embedding} is cells x
-#'   \code{n_components}. \code{metadata} records the a/b curve parameters and the
-#'   per-phase backend (\code{backend_dist}, \code{backend_sgd}); the summary
-#'   \code{backend} is \code{"vulkan"} only when both phases ran on the GPU.
-#' @keywords internal
 # Initial layout for the SGD. Reference UMAP starts from the leading
 # eigenvectors of the normalised graph Laplacian, scaled to about +/-10; the SGD
 # then only has to refine it. Starting from near-zero noise instead leaves the
@@ -516,6 +480,42 @@
   matrix(stats::runif(n * n_components, -10, 10), n, n_components)
 }
 
+#' GPU-bound UMAP embedding (op = "umap")
+#'
+#' Lays a feature-by-cell matrix out in 2-D with UMAP. The kNN graph uses the
+#' FNN kd-tree when available (exact, O(n log n), light on memory); without FNN
+#' it falls back to a full distance matrix, computed on the GPU via the
+#' \code{pairwise_dist.comp} shader (honest f32, sidestepping mul_mat's f16 path)
+#' or on the CPU. The SGD layout optimisation runs on the GPU via
+#' \code{umap_sgd.comp} under \code{backend = "vulkan"} (the default), falling
+#' back to its exact CPU reference when the GPU is unavailable. The fuzzy
+#' simplicial set in between stays on the CPU (sparse). \code{backend_dist} in
+#' the metadata reports the kNN path actually taken (\code{"fnn"},
+#' \code{"vulkan"}, or \code{"cpu"}).
+#'
+#' @param mat Dense numeric matrix, features x cells.
+#' @param n_components Output dimensionality (UMAP is virtually always 2).
+#' @param n_neighbors kNN graph size (default 15).
+#' @param min_dist Minimum spacing of points in the embedding (default 0.1).
+#' @param spread Scale of the embedding (default 1).
+#' @param n_epochs SGD epochs (default 200).
+#' @param gpu_neighbor_max_cells Cell ceiling for the GPU distance shader.
+#'   \code{NULL} (default) derives it from free VRAM; a positive integer forces
+#'   an explicit cap; above the ceiling the distance phase falls back to the CPU.
+#' @param backend \code{"vulkan"} (default; GPU for the kNN/distance phase, with
+#'   per-phase CPU fallback) or \code{"cpu"} (force the CPU reference for both
+#'   phases).
+#' @param sgd_backend Which backend runs the SGD layout phase: \code{"cpu"}
+#'   (default, the single-threaded reference — best embedding quality) or
+#'   \code{"vulkan"} (the GPU shader — faster but lower quality on dense graphs,
+#'   as its Hogwild SGD does not match the reference; falls back to CPU if no GPU
+#'   is live). The graph/distance phase is unaffected and still uses
+#'   \code{backend}.
+#' @return A \code{\link{ggml_result}} whose \code{embedding} is cells x
+#'   \code{n_components}. \code{metadata} records the a/b curve parameters and the
+#'   per-phase backend (\code{backend_dist}, \code{backend_sgd}); the summary
+#'   \code{backend} is \code{"vulkan"} only when both phases ran on the GPU.
+#' @keywords internal
 .ggmlr_umap_gpu <- function(mat, n_components = 2L, n_neighbors = 15L,
                             min_dist = 0.1, spread = 1, n_epochs = 200L,
                             gpu_neighbor_max_cells = NULL,

@@ -379,6 +379,7 @@ methods::setMethod("tcrossprod", signature("ggml_matrix"), function(x, y) {
 methods::setMethod("dim", "ggml_matrix", function(x) dim(x@data))
 
 #' @rdname ggml_matrix-class
+#' @importFrom methods show
 #' @export
 methods::setMethod("show", "ggml_matrix", function(object) {
   d <- dim(object@data)
