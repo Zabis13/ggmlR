@@ -60,10 +60,28 @@ bool ggml_vk_sparse_lognorm_run(
     vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
     ggml_vk_ctx_begin(device, subctx);
 
-    vk_op_sparse_lognorm_push_constants pc{};
-    pc.nnz = nnz;
+    // The kernel is one thread per stored value, but a single 1D dispatch over
+    // nnz needs ceil(nnz/256) workgroups on X, which at single-cell scale
+    // (nnz ~ 1e8) exceeds maxComputeWorkGroupCount[0] (65535 on NVIDIA; AMD is
+    // ~2^31, which is why this only bit on the T4). Spread the work over a 2D
+    // grid instead: rows of `row_stride` elements stacked on Y. row_stride is a
+    // multiple of local_size_x (256) so a Y step lands exactly on a row start,
+    // and the shader recovers k = gid.y * row_stride + gid.x. Both axes stay
+    // under the limit as long as nnz <= (65535*256) * 65535 ~ 1.1e12.
+    const uint32_t local_x    = 256u;
+    const uint32_t max_wg     = device->properties.limits.maxComputeWorkGroupCount[0];
+    const uint32_t wg_x_max   = std::min(max_wg, 65535u);
+    const uint32_t row_stride = wg_x_max * local_x;               // elements per Y-row
+    const uint32_t wg_x       = std::min(CEIL_DIV(nnz, local_x), wg_x_max);
+    const uint32_t wg_y       = CEIL_DIV(nnz, row_stride);        // rows needed
 
-    const std::array<uint32_t, 3> elements = { nnz, 1, 1 };
+    vk_op_sparse_lognorm_push_constants pc{};
+    pc.nnz        = nnz;
+    pc.row_stride = row_stride;
+
+    // elements are pre-multiplied by wg_denoms inside the dispatcher (it divides
+    // by local_size), so pass counts that yield exactly wg_x / wg_y workgroups.
+    const std::array<uint32_t, 3> elements = { wg_x * local_x, wg_y, 1 };
 
     ggml_vk_dispatch_pipeline(
         ctx, subctx, ctx->device->pipeline_sparse_lognorm,

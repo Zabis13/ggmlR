@@ -67,7 +67,10 @@ shared float merge_d[WG * K];
 shared uint  merge_i[WG * K];
 
 void main() {
-    const uint i  = gl_WorkGroupID.x;          // this workgroup's query row
+    // 2D workgroup grid: n rows can exceed maxComputeWorkGroupCount[0] (65535 on
+    // NVIDIA) when laid on a single X axis, so the host stacks the rows on Y.
+    // gl_NumWorkGroups.x is the host-chosen X width; recover the linear row.
+    const uint i  = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
     const uint lx = gl_LocalInvocationID.x;    // thread within the workgroup
     if (i >= p.n) {
         return;

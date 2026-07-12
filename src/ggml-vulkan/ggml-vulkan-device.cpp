@@ -1421,7 +1421,8 @@ struct vk_op_umap_sgd_push_constants {
     float    a;
     float    b;
     float    gamma;
-    uint32_t epoch;   // 1-based; drives the shader's weighted-sampling test
+    uint32_t epoch;      // 1-based; drives the shader's weighted-sampling test
+    uint32_t row_stride; // edges per Y-row of the 2D dispatch grid (see umap.cpp)
 };
 static_assert(sizeof(vk_op_umap_sgd_push_constants) <= 256, "sizeof(vk_op_umap_sgd_push_constants) must be <= 256");
 
@@ -1456,6 +1457,7 @@ static_assert(sizeof(vk_op_matmul_f64_push_constants) <= 256, "sizeof(vk_op_matm
 // vulkan-shaders/sparse_lognorm.comp exactly (one uint: the nnz count).
 struct vk_op_sparse_lognorm_push_constants {
     uint32_t nnz;
+    uint32_t row_stride;  // elements per Y-row of the 2D dispatch grid (see sparse.cpp)
 };
 static_assert(sizeof(vk_op_sparse_lognorm_push_constants) <= 256, "sizeof(vk_op_sparse_lognorm_push_constants) must be <= 256");
 

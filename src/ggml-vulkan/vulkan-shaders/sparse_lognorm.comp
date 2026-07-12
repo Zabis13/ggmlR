@@ -32,11 +32,15 @@ layout (binding = 1) readonly buffer Factor { float factor[]; };
 layout (binding = 2) readonly buffer ColOfNnz { uint col_of_nnz[]; };
 
 layout (push_constant) uniform parameter {
-    uint nnz;   // number of stored non-zero values
+    uint nnz;         // number of stored non-zero values
+    uint row_stride;  // elements per Y-row of the 2D dispatch grid
 };
 
 void main() {
-    const uint k = gl_GlobalInvocationID.x;
+    // 2D dispatch: nnz can exceed maxComputeWorkGroupCount[0] (65535 on NVIDIA)
+    // when spread over a single X axis, so the host splits the work into a
+    // grid of row_stride-wide rows stacked on Y. Recover the linear index k.
+    const uint k = gl_GlobalInvocationID.y * row_stride + gl_GlobalInvocationID.x;
     if (k >= nnz) {
         return;
     }

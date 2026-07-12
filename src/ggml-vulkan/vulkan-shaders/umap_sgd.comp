@@ -50,6 +50,7 @@ layout (push_constant) uniform parameter {
     float b;        // UMAP curve parameter b
     float gamma;    // repulsion strength
     uint  epoch;    // 1-based epoch index, for the weighted sampling test
+    uint  row_stride; // edges per Y-row of the 2D dispatch grid
 } p;
 
 const float EPS  = 1e-3;
@@ -67,7 +68,12 @@ float clampg(float g) {
 }
 
 void main() {
-    const uint e = gl_GlobalInvocationID.x;
+    // 2D dispatch: ne (positive edges ~ n_cells * k) can exceed
+    // maxComputeWorkGroupCount[0] (65535 on NVIDIA) on a single X axis, so the
+    // host stacks the edges into row_stride-wide rows on Y. The linear edge index
+    // e is identical to the 1D layout (row_stride is a multiple of local_size_x),
+    // so the per-edge RNG seed (e below) stays bit-identical to the CPU path.
+    const uint e = gl_GlobalInvocationID.y * p.row_stride + gl_GlobalInvocationID.x;
     if (e >= p.ne) {
         return;
     }

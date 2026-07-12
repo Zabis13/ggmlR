@@ -61,7 +61,19 @@ bool ggml_vk_umap_sgd_run(
     vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
     ggml_vk_ctx_begin(device, subctx);
 
-    const std::array<uint32_t, 3> elements = { ne, 1, 1 };
+    // ne (positive edges ~ n*k) can exceed maxComputeWorkGroupCount[0] (65535 on
+    // NVIDIA; AMD is ~2^31) once ne > 65535*256 (~16.7M edges). Spread the edges
+    // over a 2D grid: rows of row_stride edges stacked on Y, row_stride a multiple
+    // of local_size_x (256) so the linear edge index e = gid.y*row_stride + gid.x
+    // matches the 1D layout exactly — critical because e seeds the per-edge RNG,
+    // which must stay bit-identical to the CPU reference (see sc_umap.R).
+    const uint32_t local_x    = 256u;
+    const uint32_t max_wg     = device->properties.limits.maxComputeWorkGroupCount[0];
+    const uint32_t wg_x_max   = std::min(max_wg, 65535u);
+    const uint32_t row_stride = wg_x_max * local_x;               // edges per Y-row
+    const uint32_t wg_x       = std::min(CEIL_DIV(ne, local_x), wg_x_max);
+    const uint32_t wg_y       = CEIL_DIV(ne, row_stride);
+    const std::array<uint32_t, 3> elements = { wg_x * local_x, wg_y, 1 };
 
     for (uint32_t epoch = 0; epoch < n_epochs; ++epoch) {
         vk_op_umap_sgd_push_constants pc{};
@@ -74,6 +86,7 @@ bool ggml_vk_umap_sgd_run(
         pc.b     = b;
         pc.gamma = gamma;
         pc.epoch = epoch + 1;                         // shader's test is 1-based
+        pc.row_stride = row_stride;
 
         ggml_vk_dispatch_pipeline(
             ctx, subctx, ctx->device->pipeline_umap_sgd,
@@ -127,6 +140,18 @@ bool ggml_vk_pairwise_dist_run(
 
     if (n == 0 || dims == 0) {
         return true;  // nothing to do
+    }
+
+    // This path materialises the full n*n distance matrix, so it is memory-bound
+    // (n*n*4 bytes: n=45k already needs 8 GB) long before the workgroup grid — one
+    // tile-block per axis, ceil(n/32) — could reach maxComputeWorkGroupCount (65535
+    // on NVIDIA at n~2.1M). Guard the axis limit anyway so an over-large n returns
+    // false (the caller falls back / errors) instead of tripping the dispatch
+    // GGML_ASSERT and killing the process silently. For large single-cell n use the
+    // fused knn_tiled path, which never materialises n*n.
+    const uint32_t max_wg = device->properties.limits.maxComputeWorkGroupCount[0];
+    if (CEIL_DIV(n, 32u) > max_wg) {
+        return false;
     }
 
     const size_t x_bytes  = (size_t)n * dims * sizeof(float);
@@ -226,10 +251,16 @@ bool ggml_vk_knn_tiled_run(
     pc.dims = dims;
     pc.k    = k;
 
-    // wg_denoms for this pipeline are {1,1,1} (see create_pipeline), so elements.x
-    // = n yields exactly n workgroups — one per query row. The WG threads inside
-    // each group come from the local_size (the WG specialization constant).
-    const std::array<uint32_t, 3> elements = { n, 1, 1 };
+    // wg_denoms for this pipeline are {1,1,1} (see create_pipeline), so elements
+    // are workgroup counts directly — one workgroup per query row. A flat n on X
+    // exceeds maxComputeWorkGroupCount[0] (65535 on NVIDIA; AMD is ~2^31, which is
+    // why this only bit on the T4) once n > 65535. Stack the rows on a 2D grid:
+    // X width = min(n, 65535), Y = ceil(n / X). The shader recovers the linear
+    // row as gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x.
+    const uint32_t max_wg = device->properties.limits.maxComputeWorkGroupCount[0];
+    const uint32_t wg_x   = std::min(n, std::min(max_wg, 65535u));
+    const uint32_t wg_y   = CEIL_DIV(n, wg_x);
+    const std::array<uint32_t, 3> elements = { wg_x, wg_y, 1 };
 
     ggml_vk_dispatch_pipeline(
         ctx, subctx, ctx->device->pipeline_knn_tiled,
@@ -279,6 +310,15 @@ bool ggml_vk_matmul_f64_run(
     }
     if (!device->pipeline_matmul_f64) {
         return false;  // device has no fp64 support -> pipeline never created
+    }
+
+    // The 16x16-tiled grid is ceil(N/16) x ceil(M/16) workgroups. Guard both axes
+    // against the device limits (65535 per axis on NVIDIA, so N or M ~1.05M) so an
+    // over-large matmul returns false instead of tripping the dispatch GGML_ASSERT
+    // and killing the process silently.
+    if (CEIL_DIV(N, 16u) > device->properties.limits.maxComputeWorkGroupCount[0] ||
+        CEIL_DIV(M, 16u) > device->properties.limits.maxComputeWorkGroupCount[1]) {
+        return false;
     }
 
     const size_t a_bytes = (size_t)M * K * sizeof(double);
