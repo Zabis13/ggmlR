@@ -244,17 +244,34 @@ ggml_ops_registry <- function(op = NULL) {
   n_feat <- nrow(mat); n_cell <- ncol(mat)
   n_components <- as.integer(min(n_components, n_feat, n_cell))
 
+  # Auto-stream large inputs even when no chunk_size was requested. The dense
+  # PCA below materialises two-to-three full features x cells copies (mat - mu,
+  # t(mat) for each of the two matmuls), which is what blows the host RAM at
+  # single-cell scale (the OP2 OOM on op = "embed"). The chunked path holds only
+  # one densified cell-block at a time (the covariance accumulates into a small
+  # feature x feature matrix), and it works on a dense input too — .ggmlr_densify
+  # _block just slices it. A caller-supplied chunk_size always streams (that is
+  # the explicit request); the auto trigger only kicks in past a size threshold.
+  auto_chunk <- is.null(chunk_size) && n_cell > 20000L
+  if (auto_chunk) chunk_size <- 20000L
+
   # Chunked path: stream the matrix in cell-blocks so the full dense features x
   # cells matrix is never held. The covariance is additive over cells --
   # C = sum_b (X_b - mu)(X_b - mu)^T -- so it accumulates block by block into a
   # small features x features matrix; the projection is likewise per-block. The
   # per-feature mean must be known first, so pass 1 accumulates it, pass 2 the
   # covariance, pass 3 the scores. feat x feat covariance and feat/cell x comps
-  # outputs are small; only one densified block is ever resident.
-  if (!is.null(chunk_size) && !is.matrix(mat)) {
+  # outputs are small; only one densified block is ever resident. When streaming
+  # was auto-triggered on a block >= n_cell there is nothing to stream, so fall
+  # through to the (cheaper, single-shot) dense path below instead.
+  if (!is.null(chunk_size) && !(auto_chunk && chunk_size >= n_cell)) {
     return(.ggmlr_pca_chunked(mat, n_components, center, backend, chunk_size))
   }
 
+  # Non-chunked path holds the whole matrix dense. A sparse (dgCMatrix) input
+  # reaches here only when it is small enough not to trigger streaming, so
+  # densify it in one go (storage.mode() cannot coerce an S4 sparse matrix).
+  if (!is.matrix(mat)) mat <- as.matrix(mat)
   storage.mode(mat) <- "double"
   t0 <- proc.time()[["elapsed"]]
 
@@ -416,14 +433,21 @@ ggml_ops_registry <- function(op = NULL) {
     ok <- tryCatch({ ag_device("gpu"); TRUE }, error = function(e) FALSE)
     vk <- if (ok) .ag_device_state$backend else NULL
     if (!is.null(vk) && ggml_vulkan_is_backend(vk)) {
-      # @p is the CSC column pointer (length ncol+1); expand to a 0-based column
-      # index per stored value so the shader needs no binary search.
-      col_of_nnz <- rep.int(seq_len(ncol(mat)) - 1L, diff(mat@p))
+      # @p is the CSC column pointer (length ncol+1); expand to a 0-based INTEGER
+      # column index per stored value so the shader needs no binary search. Build
+      # it directly as integer (rep.int over an integer sequence) so no separate
+      # as.integer() copy of an nnz-length vector is ever held — at single-cell
+      # nnz (hundreds of millions) each redundant copy is ~0.5-1 GB of host RAM
+      # and stacking them on top of two Seurat objects is what triggers the OOM.
+      col_of_nnz <- rep.int(0:(ncol(mat) - 1L), diff(mat@p))   # integer, 0-based
+      # mat@x is already double for a dgCMatrix, so pass it straight through
+      # (avoid an as.double() that would duplicate the whole nnz vector).
       newx <- tryCatch(
-        .Call("R_ggml_sparse_lognorm", vk, as.double(mat@x),
-              as.double(factor), as.integer(col_of_nnz),
+        .Call("R_ggml_sparse_lognorm", vk, mat@x,
+              as.double(factor), col_of_nnz,
               as.integer(nnz), as.integer(ncol(mat)), PACKAGE = "ggmlR"),
         error = function(e) NULL)
+      rm(col_of_nnz)                              # free the nnz index eagerly
       if (!is.null(newx)) { out@x <- newx; used <- "vulkan" }
     }
   }
@@ -479,9 +503,11 @@ ggml_ops_registry <- function(op = NULL) {
   # (the OOM seen on the OP2 pipeline). A dgCMatrix left sparse by ggml_extract
   # (op = "scale" is sparse_ok) is streamed in cell-blocks below; only the dense
   # output — which Seurat's scale.data layer must hold anyway — is ever fully
-  # materialised. Users can still tune the block size via chunk_size.
-  if (is.null(chunk_size) && !is.matrix(mat))
-    chunk_size <- min(n_cell, 20000L)
+  # materialised. Users can still tune the block size via chunk_size. Only stream
+  # when the matrix is larger than one block; small inputs densify in a single
+  # pass as before.
+  if (is.null(chunk_size) && !is.matrix(mat) && n_cell > 20000L)
+    chunk_size <- 20000L
 
   # Chunked path: when chunk_size is set the matrix is streamed in cell-blocks
   # (kept sparse until each block is densified), so the full dense features x
@@ -517,6 +543,10 @@ ggml_ops_registry <- function(op = NULL) {
     ))
   }
 
+  # Non-chunked path holds the whole matrix dense. A small sparse (dgCMatrix)
+  # input that did not trigger streaming reaches here, so densify it in one go
+  # (storage.mode() cannot coerce an S4 sparse matrix).
+  if (!is.matrix(mat)) mat <- as.matrix(mat)
   storage.mode(mat) <- "double"
   mu <- matrix(rowMeans(mat), ncol = 1L)        # [features, 1] per-gene mean
 
