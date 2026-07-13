@@ -1,5 +1,7 @@
 # ggmlR — Neural Networks for R
 
+[![CRAN](https://www.r-pkg.org/badges/version/ggmlR)](https://CRAN.R-project.org/package=ggmlR)
+[![downloads](https://cranlogs.r-pkg.org/badges/grand-total/ggmlR)](https://CRAN.R-project.org/package=ggmlR)
 [![R-hub check on the R Consortium cluster](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml/badge.svg)](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml)
 
 A native R package for building, training, and deploying neural networks. Backed by the [ggml](https://github.com/ggml-org/ggml) C library, designed primarily for **Vulkan GPU acceleration** with full CPU fallback — no Python, no TensorFlow, everything runs inside your R session.
@@ -594,6 +596,13 @@ Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM),
 > **Clean shutdown**: when a standalone script uses several GPUs, make `ggml_vulkan_shutdown(hard = TRUE)` its **last** statement. This tears down Vulkan and then calls `_exit(0)`, skipping the exit-time loader-static-destruction phase that can otherwise flakily segfault *after* your results are printed (the results are already computed by then, so the crash is harmless-but-noisy). Use plain `ggml_vulkan_shutdown()` (no `hard`) mid-session — it releases the devices and is safe to call repeatedly, but does not guarantee a clean process exit on its own.
 >
 > The `_exit(0)` path is **compiled out by default**, because CRAN policy forbids a package terminating the R session. In a default build `hard = TRUE` does the normal teardown and **warns** instead of exiting — never silently — so the flaky exit-time segfault can still fire. Compile it in with `--configure-args="--enable-hard-exit"` (Windows: `Sys.setenv(GGML_VK_HARD_EXIT = "1")` before installing), and check the current build with `ggml_vulkan_hard_exit_available()`.
+>
+> **When to use it — and when not.** `hard = TRUE` only pays off for **multi-GPU** scripts (tensor/pipeline parallelism, `split_mul_mat`/`pp_forward`), where late device finalizers race the loader teardown on exit. A **single-GPU** script never triggers that race, so it does not need `hard = TRUE`. Do **not** use it under a **Jupyter / Kaggle notebook**: there `_exit(0)` kills the R *kernel*, and the notebook runner (papermill/nbclient) reports it as `DeadKernelError: Kernel died` even though all results were already computed and written. In a notebook, either drop the call or use plain `ggml_vulkan_shutdown()` (soft teardown, kernel stays alive). A portable one-liner that keeps the hard exit only outside notebooks:
+>
+> ```r
+> is_notebook <- nzchar(Sys.getenv("KAGGLE_KERNEL_RUN_TYPE")) || nzchar(Sys.getenv("JPY_PARENT_PID"))
+> ggml_vulkan_shutdown(hard = !is_notebook)
+> ```
 
 ### Autograd op reference
 
