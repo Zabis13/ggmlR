@@ -455,7 +455,10 @@ ggml_ops_registry <- function(op = NULL) {
 #'   O(nnz) pass (centre / divide / clamp) with almost no arithmetic per element:
 #'   the GPU pays for the host<->VRAM copy but has nothing to accelerate, so it is
 #'   slower than the CPU here (measured ~0.4x). Same rationale and pattern as
-#'   UMAP's \code{sgd_backend}. Pass \code{"vulkan"} to force the GPU path.
+#'   UMAP's \code{sgd_backend}. Pass \code{"vulkan"} to force the GPU path. Note
+#'   that a sparse (\code{dgCMatrix}) input is always streamed in cell-blocks on
+#'   the CPU (see below), so \code{scale_backend = "vulkan"} only takes effect
+#'   for a dense \code{mat}.
 #' @return A \code{\link{ggml_result}} whose \code{embedding} is the scaled
 #'   features x cells matrix; \code{metadata$kind = "transform"},
 #'   \code{metadata$layer = "scale.data"}.
@@ -470,6 +473,15 @@ ggml_ops_registry <- function(op = NULL) {
   backend <- if (backend == "vulkan" && scale_backend == "vulkan") "vulkan" else "cpu"
   n_cell <- ncol(mat)
   t0 <- proc.time()[["elapsed"]]
+
+  # Auto-stream a sparse input even when no chunk_size was requested: densifying
+  # the full features x cells matrix up front is what blows the host RAM budget
+  # (the OOM seen on the OP2 pipeline). A dgCMatrix left sparse by ggml_extract
+  # (op = "scale" is sparse_ok) is streamed in cell-blocks below; only the dense
+  # output — which Seurat's scale.data layer must hold anyway — is ever fully
+  # materialised. Users can still tune the block size via chunk_size.
+  if (is.null(chunk_size) && !is.matrix(mat))
+    chunk_size <- min(n_cell, 20000L)
 
   # Chunked path: when chunk_size is set the matrix is streamed in cell-blocks
   # (kept sparse until each block is densified), so the full dense features x
@@ -637,7 +649,8 @@ ggml_ops_registry <- function(op = NULL) {
 .ggmlr_register_op(
   "scale", engine = .ggmlr_scale_gpu,
   params = character(0),
-  desc   = "ScaleData z-score per gene + clamp (elementwise on GPU)"
+  desc   = "ScaleData z-score per gene + clamp (elementwise on GPU)",
+  sparse_ok = TRUE   # engine streams a dgCMatrix in cell-blocks (no full densify)
 )
 
 # register op = "largest_gene" -> per-cell argmax/max engine

@@ -25,7 +25,10 @@
 O(nnz) pass (centre / divide / clamp) with almost no arithmetic per element:
 the GPU pays for the host<->VRAM copy but has nothing to accelerate, so it is
 slower than the CPU here (measured ~0.4x). Same rationale and pattern as
-UMAP's \code{sgd_backend}. Pass \code{"vulkan"} to force the GPU path.}
+UMAP's \code{sgd_backend}. Pass \code{"vulkan"} to force the GPU path. Note
+that a sparse (\code{dgCMatrix}) input is always streamed in cell-blocks on
+the CPU (see below), so \code{scale_backend = "vulkan"} only takes effect
+for a dense \code{mat}.}
 }
 \value{
 A \code{\link{ggml_result}} whose \code{embedding} is the scaled
