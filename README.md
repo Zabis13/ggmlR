@@ -1,7 +1,7 @@
 # ggmlR — Neural Networks for R
 
 [![CRAN](https://www.r-pkg.org/badges/version/ggmlR)](https://CRAN.R-project.org/package=ggmlR)
-[![downloads](https://cranlogs.r-pkg.org/badges/grand-total/ggmlR)](https://CRAN.R-project.org/package=ggmlR)
+[![ggmlR](https://cranlogs.r-pkg.org/badges/grand-total/ggmlR)](https://CRAN.R-project.org/package=ggmlR)
 [![R-hub check on the R Consortium cluster](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml/badge.svg)](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml)
 
 A native R package for building, training, and deploying neural networks. Backed by the [ggml](https://github.com/ggml-org/ggml) C library, designed primarily for **Vulkan GPU acceleration** with full CPU fallback — no Python, no TensorFlow, everything runs inside your R session.
@@ -1173,6 +1173,16 @@ Supported GPUs: NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno.
 - [llamaR](https://github.com/Zabis13/llamaR) — LLM inference in R
 - [sd2R](https://github.com/Zabis13/sd2R) — Stable Diffusion in R
 - [ggml](https://github.com/ggml-org/ggml) — underlying C library
+
+### Downloads
+
+[![ggmlR](https://cranlogs.r-pkg.org/badges/grand-total/ggmlR)](https://CRAN.R-project.org/package=ggmlR)
+[![sd2R](https://cranlogs.r-pkg.org/badges/grand-total/sd2R)](https://CRAN.R-project.org/package=sd2R)
+[![llamaR](https://cranlogs.r-pkg.org/badges/grand-total/llamaR)](https://CRAN.R-project.org/package=llamaR)
+[![drogonR](https://cranlogs.r-pkg.org/badges/grand-total/drogonR)](https://CRAN.R-project.org/package=drogonR)
+[![cayleyR](https://cranlogs.r-pkg.org/badges/grand-total/cayleyR)](https://CRAN.R-project.org/package=cayleyR)
+[![sgvR](https://cranlogs.r-pkg.org/badges/grand-total/sgvR)](https://CRAN.R-project.org/package=sgvR)
+[![av1R](https://cranlogs.r-pkg.org/badges/grand-total/av1R)](https://CRAN.R-project.org/package=av1R)
 
 ## License
 
