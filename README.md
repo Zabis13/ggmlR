@@ -1,6 +1,7 @@
 # ggmlR — Neural Networks for R
 
 [![CRAN](https://www.r-pkg.org/badges/version/ggmlR)](https://CRAN.R-project.org/package=ggmlR)
+[![downloads](https://cranlogs.r-pkg.org/badges/grand-total/ggmlR)](https://CRAN.R-project.org/package=ggmlR)
 [![R-hub check on the R Consortium cluster](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml/badge.svg)](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml)
 
 [![ggmlR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FggmlR&query=%24%5B0%5D.downloads&label=ggmlR&color=blue)](https://CRAN.R-project.org/package=ggmlR)
