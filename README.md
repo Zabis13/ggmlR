@@ -9,8 +9,8 @@
 [![llamaR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FllamaR&query=%24%5B0%5D.downloads&label=llamaR&color=blue)](https://CRAN.R-project.org/package=llamaR)
 [![drogonR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FdrogonR&query=%24%5B0%5D.downloads&label=drogonR&color=blue)](https://CRAN.R-project.org/package=drogonR)
 [![cayleyR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FcayleyR&query=%24%5B0%5D.downloads&label=cayleyR&color=blue)](https://CRAN.R-project.org/package=cayleyR)
-[![sgvR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FsgvR&query=%24%5B0%5D.downloads&label=sgvR&color=blue)](https://CRAN.R-project.org/package=sgvR)
-[![av1R](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2Fav1R&query=%24%5B0%5D.downloads&label=av1R&color=blue)](https://CRAN.R-project.org/package=av1R)
+[![cgvR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FcgvR&query=%24%5B0%5D.downloads&label=cgvR&color=blue)](https://CRAN.R-project.org/package=cgvR)
+[![AV1R](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FAV1R&query=%24%5B0%5D.downloads&label=AV1R&color=blue)](https://CRAN.R-project.org/package=AV1R)
 
 A native R package for building, training, and deploying neural networks. Backed by the [ggml](https://github.com/ggml-org/ggml) C library, designed primarily for **Vulkan GPU acceleration** with full CPU fallback — no Python, no TensorFlow, everything runs inside your R session.
 
