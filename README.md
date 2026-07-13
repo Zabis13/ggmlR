@@ -3,13 +3,13 @@
 [![CRAN](https://www.r-pkg.org/badges/version/ggmlR)](https://CRAN.R-project.org/package=ggmlR)
 [![R-hub check on the R Consortium cluster](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml/badge.svg)](https://github.com/r-hub2/separate-jaguar-ggmlR/actions/workflows/rhub-rc.yaml)
 
-[![ggmlR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fbadges%2Fgrand-total%2FggmlR&query=%24%5B0%5D.downloads&label=ggmlR&color=blue)](https://CRAN.R-project.org/package=ggmlR)
-[![sd2R](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fbadges%2Fgrand-total%2Fsd2R&query=%24%5B0%5D.downloads&label=sd2R&color=blue)](https://CRAN.R-project.org/package=sd2R)
-[![llamaR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fbadges%2Fgrand-total%2FllamaR&query=%24%5B0%5D.downloads&label=llamaR&color=blue)](https://CRAN.R-project.org/package=llamaR)
-[![drogonR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fbadges%2Fgrand-total%2FdrogonR&query=%24%5B0%5D.downloads&label=drogonR&color=blue)](https://CRAN.R-project.org/package=drogonR)
-[![cayleyR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fbadges%2Fgrand-total%2FcayleyR&query=%24%5B0%5D.downloads&label=cayleyR&color=blue)](https://CRAN.R-project.org/package=cayleyR)
-[![sgvR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fbadges%2Fgrand-total%2FsgvR&query=%24%5B0%5D.downloads&label=sgvR&color=blue)](https://CRAN.R-project.org/package=sgvR)
-[![av1R](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fbadges%2Fgrand-total%2Fav1R&query=%24%5B0%5D.downloads&label=av1R&color=blue)](https://CRAN.R-project.org/package=av1R)
+[![ggmlR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FggmlR&query=%24%5B0%5D.downloads&label=ggmlR&color=blue)](https://CRAN.R-project.org/package=ggmlR)
+[![sd2R](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2Fsd2R&query=%24%5B0%5D.downloads&label=sd2R&color=blue)](https://CRAN.R-project.org/package=sd2R)
+[![llamaR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FllamaR&query=%24%5B0%5D.downloads&label=llamaR&color=blue)](https://CRAN.R-project.org/package=llamaR)
+[![drogonR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FdrogonR&query=%24%5B0%5D.downloads&label=drogonR&color=blue)](https://CRAN.R-project.org/package=drogonR)
+[![cayleyR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FcayleyR&query=%24%5B0%5D.downloads&label=cayleyR&color=blue)](https://CRAN.R-project.org/package=cayleyR)
+[![sgvR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FsgvR&query=%24%5B0%5D.downloads&label=sgvR&color=blue)](https://CRAN.R-project.org/package=sgvR)
+[![av1R](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2Fav1R&query=%24%5B0%5D.downloads&label=av1R&color=blue)](https://CRAN.R-project.org/package=av1R)
 
 A native R package for building, training, and deploying neural networks. Backed by the [ggml](https://github.com/ggml-org/ggml) C library, designed primarily for **Vulkan GPU acceleration** with full CPU fallback — no Python, no TensorFlow, everything runs inside your R session.
 
