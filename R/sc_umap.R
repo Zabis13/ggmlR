@@ -87,6 +87,8 @@
   n <- nrow(X)
   if (n < 2L) return(NULL)
 
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   ok <- tryCatch({ ag_device("gpu"); TRUE }, error = function(e) FALSE)
   if (!ok) return(NULL)
   backend <- .ag_device_state$backend
@@ -140,6 +142,8 @@
   n <- nrow(X); dims <- ncol(X)
   if (n < 2L || k < 1L || k > .GGMLR_KNN_GPU_MAX_K) return(NULL)
 
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   ok <- tryCatch({ ag_device("gpu"); TRUE }, error = function(e) FALSE)
   if (!ok) return(NULL)
   backend <- .ag_device_state$backend
@@ -417,6 +421,8 @@
                                 base_seed = 42L) {
   # ag_device("gpu") initialises the backend and throws if no GPU is present;
   # swallow that so we fall back to the CPU loop instead of erroring out.
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   ok <- tryCatch({ ag_device("gpu"); TRUE }, error = function(e) FALSE)
   if (!ok) return(NULL)
   backend <- .ag_device_state$backend

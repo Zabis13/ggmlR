@@ -1,3 +1,7 @@
+# ggmlR 0.8.2
+
+* **Fixed a global device-state leak** — the internal GPU paths (`ggml_matmul*()`, single-cell PCA / normalize / scale / UMAP) switched the process-wide `ag_device()` to `"gpu"` and never restored it, so every later `ag_*` operation silently ran on the GPU (and in its dtype). They now restore the caller's device on exit.
+
 # ggmlR 0.8.1
 
 * **Double-precision GPU matmul** — `ggml_matmul_f64()` computes `A %*% B` on Vulkan GPUs in full fp64, matching R's native precision (~1e-15). Falls back to the CPU when the hardware or the `shaderFloat64` feature is unavailable.

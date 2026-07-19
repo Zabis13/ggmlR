@@ -48,6 +48,11 @@
 # transposes. prec = "f32" forces the f32 accumulation kernel (default); "f16"
 # leaves the faster, lower-precision default kernel. Returns an R matrix.
 .ggmlr_gpu_mul_mat <- function(src0, src1, out_shape, prec = "f32") {
+  # Restore the caller's device: ag_device() is process-global state, so leaking
+  # "gpu" here silently reroutes every later ag_* op (and its dtype) for the
+  # rest of the session.
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   ag_device("gpu")
   hook <- if (identical(prec, "f32"))
     function(node) .Call("R_ggml_mul_mat_set_prec", node, GGML_PREC_F32,
@@ -68,6 +73,8 @@
 # (no live Vulkan backend, or the device lacks the shaderFloat64 feature so the
 # pipeline was never created and the dispatch returns failure).
 .ggmlr_gpu_matmul_f64 <- function(A, B) {
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   ok <- tryCatch({ ag_device("gpu"); TRUE }, error = function(e) FALSE)
   if (!ok) return(NULL)
   backend <- .ag_device_state$backend
@@ -360,7 +367,15 @@ methods::setMethod("%*%", signature("ggml_matrix", "ggml_matrix"), function(x, y
 methods::setGeneric("crossprod")
 methods::setGeneric("tcrossprod")
 
+# The alias below is spelled out because these two generics are promoted by our
+# own setGeneric() above (base's crossprod/tcrossprod are plain functions before
+# R 4.4.0), unlike `%*%` which base already exports as an implicit generic. For
+# a promoted generic R CMD check looks up the method under the signature as
+# *written* ("ggml_matrix"), while roxygen emits the completed one
+# ("ggml_matrix,ANY") -- so without this the check reports the method as
+# undocumented even though the topic itself is documented.
 #' @rdname ggml_matrix-class
+#' @aliases crossprod,ggml_matrix-method
 #' @export
 methods::setMethod("crossprod", signature("ggml_matrix"), function(x, y) {
   b <- if (missing(y) || is.null(y)) NULL else .ggmlr_as_dmat(y)
@@ -368,6 +383,7 @@ methods::setMethod("crossprod", signature("ggml_matrix"), function(x, y) {
 })
 
 #' @rdname ggml_matrix-class
+#' @aliases tcrossprod,ggml_matrix-method
 #' @export
 methods::setMethod("tcrossprod", signature("ggml_matrix"), function(x, y) {
   b <- if (missing(y) || is.null(y)) NULL else .ggmlr_as_dmat(y)

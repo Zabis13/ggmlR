@@ -164,6 +164,8 @@ ggml_ops_registry <- function(op = NULL) {
   denom  <- max(n_cell - 1L, 1L)
   blocks <- .ggmlr_chunk_cols(n_cell, chunk_size)
   t0 <- proc.time()[["elapsed"]]
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   if (backend == "vulkan") ag_device("gpu")
 
   # Pass 1: per-feature mean over all cells (skip when not centering).
@@ -241,6 +243,8 @@ ggml_ops_registry <- function(op = NULL) {
 .ggmlr_pca_gpu <- function(mat, n_components = 50L, center = TRUE,
                            backend = c("vulkan", "cpu"), chunk_size = NULL) {
   backend <- match.arg(backend)
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   n_feat <- nrow(mat); n_cell <- ncol(mat)
   n_components <- as.integer(min(n_components, n_feat, n_cell))
 
@@ -367,6 +371,8 @@ ggml_ops_registry <- function(op = NULL) {
                                  backend = c("vulkan", "cpu"),
                                  chunk_size = NULL) {
   backend <- match.arg(backend)
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   # chunk_size is accepted for a uniform RunGGML interface but is a no-op here:
   # the sparse LogNormalize path already transforms @x in place without ever
   # densifying, so there is no full dense matrix to stream in blocks.
@@ -421,6 +427,8 @@ ggml_ops_registry <- function(op = NULL) {
 # backend = "vulkan" it dispatches sparse_lognorm.comp; if the GPU is
 # unavailable it falls back to the elementwise CPU form on @x.
 .ggmlr_normalize_sparse <- function(mat, scale_factor, backend) {
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   out <- mat
   nnz <- length(mat@x)
   # per-column sums over the stored values; empty cells guarded to 1
@@ -492,6 +500,8 @@ ggml_ops_registry <- function(op = NULL) {
                              chunk_size = NULL) {
   backend       <- match.arg(backend)
   scale_backend <- match.arg(scale_backend)
+  orig_device <- ag_default_device()
+  on.exit(tryCatch(ag_device(orig_device), error = function(e) NULL), add = TRUE)
   # scale is memory-bound; run it on the CPU by default even when the GPU is
   # live. Only go to Vulkan when both the device is Vulkan and the user opted in.
   backend <- if (backend == "vulkan" && scale_backend == "vulkan") "vulkan" else "cpu"

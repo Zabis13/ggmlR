@@ -6,7 +6,9 @@
 \alias{\%*\%,ggml_matrix,ANY-method}
 \alias{\%*\%,ANY,ggml_matrix-method}
 \alias{\%*\%,ggml_matrix,ggml_matrix-method}
+\alias{crossprod,ggml_matrix,ANY-method}
 \alias{crossprod,ggml_matrix-method}
+\alias{tcrossprod,ggml_matrix,ANY-method}
 \alias{tcrossprod,ggml_matrix-method}
 \alias{dim,ggml_matrix-method}
 \alias{show,ggml_matrix-method}
@@ -18,9 +20,9 @@
 
 \S4method{\%*\%}{ggml_matrix,ggml_matrix}(x, y)
 
-\S4method{crossprod}{ggml_matrix}(x, y)
+\S4method{crossprod}{ggml_matrix,ANY}(x, y)
 
-\S4method{tcrossprod}{ggml_matrix}(x, y)
+\S4method{tcrossprod}{ggml_matrix,ANY}(x, y)
 
 \S4method{dim}{ggml_matrix}(x)
 

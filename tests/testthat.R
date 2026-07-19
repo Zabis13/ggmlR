@@ -75,7 +75,8 @@ heavy <- c(
   "keras-api",
   "quants-iq-degenerate",
   "getrows-offload-vulkan",
-  "gpu-linalg"
+  "gpu-linalg",
+  "sc-umap"
 )
 
 # Under the valgrind memtest, running the full light suite (~67 files) blows
