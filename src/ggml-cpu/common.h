@@ -71,7 +71,7 @@ struct type_conversion_table<int32_t> {
     static constexpr int32_t (*from_f32)(float) = f32_to_i32;
 };
 
-static std::pair<int64_t, int64_t> get_thread_range(const struct ggml_compute_params * params, const struct ggml_tensor * src0) {
+static inline std::pair<int64_t, int64_t> get_thread_range(const struct ggml_compute_params * params, const struct ggml_tensor * src0) {
     const int64_t ith = params->ith;
     const int64_t nth = params->nth;
 

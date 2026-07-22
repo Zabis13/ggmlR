@@ -49,7 +49,7 @@ static inline int nearest_int(float fval) {
     return (i & 0x007fffff) - 0x00400000;
 }
 
-static float make_qx_quants(int n, int nmax, const float * GGML_RESTRICT x, int8_t * GGML_RESTRICT L, int rmse_type,
+static inline float make_qx_quants(int n, int nmax, const float * GGML_RESTRICT x, int8_t * GGML_RESTRICT L, int rmse_type,
         const float * GGML_RESTRICT qw) {
     float max = 0;
     float amax = 0;
@@ -118,7 +118,7 @@ static float make_qx_quants(int n, int nmax, const float * GGML_RESTRICT x, int8
     return scale;
 }
 
-static float make_q3_quants(int n, int nmax, const float * GGML_RESTRICT x, int8_t * GGML_RESTRICT L, bool do_rmse) {
+static inline float make_q3_quants(int n, int nmax, const float * GGML_RESTRICT x, int8_t * GGML_RESTRICT L, bool do_rmse) {
     float max = 0;
     float amax = 0;
     for (int i = 0; i < n; ++i) {
@@ -177,7 +177,7 @@ static float make_q3_quants(int n, int nmax, const float * GGML_RESTRICT x, int8
     return 1/iscale;
 }
 
-static float make_qkx1_quants(int n, int nmax, const float * GGML_RESTRICT x, uint8_t * GGML_RESTRICT L, float * GGML_RESTRICT the_min,
+static inline float make_qkx1_quants(int n, int nmax, const float * GGML_RESTRICT x, uint8_t * GGML_RESTRICT L, float * GGML_RESTRICT the_min,
         int ntry, float alpha) {
     float min = x[0];
     float max = x[0];
@@ -220,7 +220,7 @@ static float make_qkx1_quants(int n, int nmax, const float * GGML_RESTRICT x, ui
     return scale;
 }
 
-static float make_qkx2_quants(int n, int nmax, const float * GGML_RESTRICT x, const float * GGML_RESTRICT weights,
+static inline float make_qkx2_quants(int n, int nmax, const float * GGML_RESTRICT x, const float * GGML_RESTRICT weights,
         uint8_t * GGML_RESTRICT L, float * GGML_RESTRICT the_min, uint8_t * GGML_RESTRICT Laux,
         float rmin, float rdelta, int nstep, bool use_mad) {
     float min = x[0];
@@ -311,7 +311,7 @@ static inline void get_scale_min_k4(int j, const uint8_t * GGML_RESTRICT q, uint
 }
 
 
-static float make_qkx3_quants(int n, int nmax, const float * GGML_RESTRICT x, const float * GGML_RESTRICT weights,
+static inline float make_qkx3_quants(int n, int nmax, const float * GGML_RESTRICT x, const float * GGML_RESTRICT weights,
         uint8_t * GGML_RESTRICT L, float * GGML_RESTRICT the_min, uint8_t * GGML_RESTRICT Laux,
         float rmin, float rdelta, int nstep, bool use_mad) {
     float min = x[0];
@@ -394,7 +394,7 @@ static float make_qkx3_quants(int n, int nmax, const float * GGML_RESTRICT x, co
     return scale;
 }
 
-static float make_qp_quants(int n, int nmax, const float * GGML_RESTRICT x, uint8_t * GGML_RESTRICT L, const float * quant_weights) {
+static inline float make_qp_quants(int n, int nmax, const float * GGML_RESTRICT x, uint8_t * GGML_RESTRICT L, const float * quant_weights) {
     float max = 0;
     for (int i = 0; i < n; ++i) {
         max = MAX(max, x[i]);

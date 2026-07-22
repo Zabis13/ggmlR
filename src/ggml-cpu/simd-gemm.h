@@ -57,7 +57,7 @@ static inline void simd_gemm_ukernel(
 }
 
 // C[M x N] += A[M x K] * B[K x N]
-static void simd_gemm(
+static inline void simd_gemm(
     float       * GGML_RESTRICT C,
     const float * GGML_RESTRICT A,
     const float * GGML_RESTRICT B,
@@ -176,7 +176,7 @@ static inline void rvv_simd_gemm_dispatch_tail(
 static constexpr int GEMM_RM = 7;
 
 // C[M x N] += A[M x K] * B[K x N]
-static void simd_gemm(
+static inline void simd_gemm(
     float       * GGML_RESTRICT C,
     const float * GGML_RESTRICT A,
     const float * GGML_RESTRICT B,
@@ -206,7 +206,7 @@ static void simd_gemm(
 
 #else // scalar path
 
-static void simd_gemm(
+static inline void simd_gemm(
     float       * GGML_RESTRICT C,
     const float * GGML_RESTRICT A,
     const float * GGML_RESTRICT B,
