@@ -47,18 +47,47 @@ ag_regr_builder <- function(task, n_features, n_out, pars) {
 # Classification autograd tradepath
 # ---------------------------------------------------------------------------
 
+# Measures whether the autograd loop actually optimises, rather than whether it
+# converges. `training_fn` wraps the learner's own loop, so the real code path
+# is still exercised; we only snapshot the full-batch loss on either side of it.
+#
+# An accuracy threshold cannot do this job: a 16-unit MLP on iris after a fixed
+# 40 epochs is bimodal (~0.97 or ~0.55, nothing between), and 0.55 is simply a
+# start that had not yet split versicolor/virginica. Any shift in the numerics
+# flips which mode you land in, so a 0.7 cutoff tests convergence-from-a-random-
+# start, not correctness, and mires the suite in false failures.
+with_loss_probe <- function(env) {
+  function(model, x, y, pars) {
+    full_x <- ag_tensor(t(x))
+    full_y <- t(y)
+    loss_of <- function(m) {
+      ag_eval(m)
+      as.numeric(ggmlR:::.ag_data(
+        ag_softmax_cross_entropy_loss(m$forward(full_x), full_y)
+      ))
+    }
+    env$loss_before <- loss_of(model)
+    model <- ggmlR:::.ggmlr_state$LearnerClassifGGML$private_methods$.train_autograd(
+      model, x, y, pars
+    )
+    env$loss_after <- loss_of(model)
+    model
+  }
+}
+
 test_that("LearnerClassifGGML trains an ag_sequential via autograd tradepath", {
   skip_if_no_mlr3()
-  # 40 epochs keep the accuracy assertion comfortably off the convergence edge
-  # (the device is pinned to CPU at the top of the file for determinism).
   set.seed(1)
   task <- mlr3::tsk("iris")
 
+  probe   <- new.env(parent = emptyenv())
   learner <- mlr3::lrn("classif.ggml")
   learner$param_set$values$epochs        <- 40L
   learner$param_set$values$batch_size    <- 16L
   learner$param_set$values$learning_rate <- 0.05
+  learner$param_set$values$seed          <- 1L
   learner$model_fn     <- ag_classif_builder
+  learner$training_fn  <- with_loss_probe(probe)
   learner$predict_type <- "prob"
 
   learner$train(task)
@@ -72,8 +101,15 @@ test_that("LearnerClassifGGML trains an ag_sequential via autograd tradepath", {
   expect_equal(levels(pred$response), task$class_names)
   # softmax over logits -> rows sum to 1
   expect_true(all(abs(rowSums(pred$prob) - 1) < 1e-4))
-  # iris is easy: a tiny MLP should beat chance comfortably
-  expect_gt(mean(pred$response == task$truth()), 0.7)
+
+  # The tape loop must move the weights in the right direction: a 3-class start
+  # sits at about -log(1/3) = 1.10, and any working optimiser gets well below
+  # that in 40 epochs. Both modes above clear this; a dead loop (zero grads, no
+  # optimiser step, flipped loss sign) does not.
+  expect_true(is.finite(probe$loss_before) && is.finite(probe$loss_after))
+  expect_lt(probe$loss_after, probe$loss_before * 0.7)
+  # ...and predictions must not collapse onto a single class.
+  expect_gt(length(unique(pred$response)), 1L)
 })
 
 # ---------------------------------------------------------------------------
@@ -125,16 +161,23 @@ test_that("max_grad_norm clipping does not break training", {
   set.seed(2)
   task <- mlr3::tsk("iris")
 
+  probe   <- new.env(parent = emptyenv())
   learner <- mlr3::lrn("classif.ggml")
   learner$param_set$values$epochs        <- 40L
   learner$param_set$values$batch_size    <- 16L
   learner$param_set$values$learning_rate <- 0.05
   learner$param_set$values$max_grad_norm <- 1.0
-  learner$model_fn <- ag_classif_builder
+  learner$param_set$values$seed          <- 1L
+  learner$model_fn    <- ag_classif_builder
+  learner$training_fn <- with_loss_probe(probe)
 
   learner$train(task)
   pred <- learner$predict(task)
-  expect_gt(mean(pred$response == task$truth()), 0.6)
+  # Clipping must rescale the gradients, not zero them: same loss-descent check
+  # as the tradepath test above. See the note there on why accuracy is unusable.
+  expect_true(is.finite(probe$loss_before) && is.finite(probe$loss_after))
+  expect_lt(probe$loss_after, probe$loss_before * 0.7)
+  expect_gt(length(unique(pred$response)), 1L)
 })
 
 # ---------------------------------------------------------------------------
