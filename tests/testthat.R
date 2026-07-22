@@ -124,12 +124,22 @@ detect_valgrind <- function() {
 under_valgrind <- isTRUE(detect_valgrind())
 message("valgrind detected: ", under_valgrind)
 
-# Disable OpenMP thread pool under valgrind: GOMP_parallel → pthread_create
-# allocates 352b TLS per worker thread which valgrind flags as "possibly lost".
-# Under valgrind we test correctness, not throughput — 1 thread is sufficient.
-if (under_valgrind) {
-  Sys.setenv(OMP_NUM_THREADS = "1")
-}
+# Thread budget for the test run.
+#
+# Under valgrind: disable the OpenMP thread pool entirely — GOMP_parallel →
+# pthread_create allocates 352b TLS per worker thread which valgrind flags as
+# "possibly lost". Under valgrind we test correctness, not throughput.
+#
+# Otherwise: cap at 2 threads, as CRAN policy requires. Without this ggml picks
+# up omp_get_max_threads() (all cores), and check flags
+# "CPU time N times elapsed time" once the ratio exceeds ~2.5.
+#
+# Sys.setenv() alone is not enough: libgomp may already have sized its pool by
+# the time the package .so is loaded, so also call omp_set_num_threads() via
+# ggml_set_n_threads(), which additionally pins ggmlR's own backend default.
+test_threads <- if (under_valgrind) 1L else 2L
+Sys.setenv(OMP_NUM_THREADS = as.character(test_threads))
+ggml_set_n_threads(test_threads)
 
 on_cran <- !identical(Sys.getenv("NOT_CRAN"), "true")
 
