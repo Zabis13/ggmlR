@@ -935,6 +935,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_ssm_conv_f32;
     // ggmlR extension: backward of ssm_conv (no upstream Vulkan shader).
     vk_pipeline pipeline_ssm_conv_back_f32;
+    vk_pipeline pipeline_ssm_scan_back_f32_d128;
+    vk_pipeline pipeline_ssm_scan_back_f32_d256;
     vk_pipeline pipeline_out_prod_f32;   // ggmlR: backward of mul_mat
     vk_pipeline pipeline_cross_entropy_loss_back_f32;   // ggmlR
     vk_pipeline pipeline_opt_step_adamw_f32;
@@ -1783,6 +1785,20 @@ struct vk_op_ssm_conv_back_push_constants {
     uint32_t g_nb1, g_nb2;
     uint32_t nc, ncs, nr, n_t, n_s;
     uint32_t d_c_off;
+};
+
+// ggmlR extension: backward of ssm_scan. Strides are byte counts (the shader
+// divides by sizeof(float)); the *_off fields are ELEMENT offsets into the
+// packed six-gradient output, which is why they are not scaled.
+struct vk_op_ssm_scan_back_push_constants {
+    uint32_t s0_nb2, s0_nb3;
+    uint32_t x_nb2, x_nb3;
+    uint32_t dt_nb1, dt_nb2;
+    uint32_t B_nb2, B_nb3;
+    uint32_t C_nb2, C_nb3;
+    uint32_t nh, nr, ng, nt, ns;
+    uint32_t d_s_off, d_x_off, d_dt_off, d_A_off, d_B_off, d_C_off;
+    uint32_t g_s_off;
 };
 
 // ggmlR extension: GGML_OP_OUT_PROD on the GPU (no upstream Vulkan shader).

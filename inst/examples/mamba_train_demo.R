@@ -229,13 +229,20 @@ step_grads <- function(p, batch) {
   report_placement <- function(sched) {
     if (isTRUE(.demo_backend_reported)) return(invisible(NULL))
     .demo_backend_reported <<- TRUE
+    # ggml_vulkan_backend_name() is the only way to ask a backend its name, and
+    # on a build without Vulkan it errors rather than answering -- even about a
+    # CPU backend. Guard it, so the CPU pass still runs where there is no GPU.
+    name_of <- function(b) {
+      if (is.null(b)) return("unassigned")
+      if (!ggml_vulkan_available()) return("CPU")
+      ggml_vulkan_backend_name(b)
+    }
     where <- function(t) {
-      b <- tryCatch(ggml_backend_sched_get_tensor_backend(sched, t),
-                    error = function(e) NULL)
-      if (is.null(b)) "unassigned" else ggml_vulkan_backend_name(b)
+      name_of(tryCatch(ggml_backend_sched_get_tensor_backend(sched, t),
+                       error = function(e) NULL))
     }
     cat(sprintf("  backend created: %s, splits=%d\n",
-                ggml_vulkan_backend_name(backend),
+                name_of(backend),
                 ggml_backend_sched_get_n_splits(sched)))
     cat(sprintf("  ssm_conv out -> %s | ssm_scan out -> %s | loss -> %s\n",
                 where(conv_out), where(scan), where(loss)))

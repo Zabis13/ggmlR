@@ -819,6 +819,105 @@ static void ggml_vk_ssm_conv_back(ggml_backend_vk_context * ctx, vk_context& sub
         pc, elements);
 }
 
+// ggmlR extension: backward of GGML_OP_SSM_SCAN.
+//
+// One workgroup per (sequence, head, channel), d_state invocations wide, time
+// walked sequentially inside the shader. The forward keeps no intermediate
+// states, so the kernel replays the recurrence into a scratch buffer first --
+// (nt+1) states per (head, channel), far too much for shared memory at Mamba
+// sizes, hence prealloc_x rather than a shared array.
+//
+// The output buffer is zeroed first: four of the six gradients accumulate with
+// atomicAdd, so whatever the allocator left behind would otherwise be added to.
+static void ggml_vk_ssm_scan_back(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];  // s    {d_state, nr, nh, ns+}
+    const ggml_tensor * src1 = dst->src[1];  // x    {nr, nh, nt, ns}
+    const ggml_tensor * src2 = dst->src[2];  // dt   {nh, nt, ns}
+    const ggml_tensor * src3 = dst->src[3];  // A    {1, nh}
+    const ggml_tensor * src4 = dst->src[4];  // B    {d_state, ng, nt, ns}
+    const ggml_tensor * src5 = dst->src[5];  // C    {d_state, ng, nt, ns}
+
+    GGML_ASSERT(dst->buffer != nullptr);
+
+    const uint32_t d_state = (uint32_t)src0->ne[0];
+    const uint32_t nr      = (uint32_t)src0->ne[1];
+    const uint32_t nh      = (uint32_t)src1->ne[1];
+    const uint32_t ng      = (uint32_t)src4->ne[1];
+    const uint32_t nt      = (uint32_t)src1->ne[2];
+    const uint32_t ns      = (uint32_t)src1->ne[3];
+
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, src1, src2, dst, dst->op);
+    GGML_ASSERT(pipeline != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+
+    // Element offsets of the six gradients inside the packed output, in the
+    // order ggml_ssm_scan takes its inputs. These must match the CPU kernel's
+    // layout exactly -- ggml-graph.c views each part by the same arithmetic.
+    const uint32_t n_s_el  = d_state * nr * nh * ns;
+    const uint32_t n_x_el  = (uint32_t)ggml_nelements(src1);
+    const uint32_t n_dt_el = (uint32_t)ggml_nelements(src2);
+    const uint32_t n_A_el  = (uint32_t)ggml_nelements(src3);
+    const uint32_t n_B_el  = (uint32_t)ggml_nelements(src4);
+
+    const uint32_t d_s_off  = 0;
+    const uint32_t d_x_off  = d_s_off  + n_s_el;
+    const uint32_t d_dt_off = d_x_off  + n_x_el;
+    const uint32_t d_A_off  = d_dt_off + n_dt_el;
+    const uint32_t d_B_off  = d_A_off  + n_A_el;
+    const uint32_t d_C_off  = d_B_off  + n_B_el;
+
+    // The incoming gradient is outputs followed by final states, like the
+    // forward result it belongs to.
+    const uint32_t g_s_off = n_x_el;
+
+    // Scratch: (nt + 1) states for every (sequence, head, channel).
+    const size_t scratch_size =
+        (size_t)ns * nh * nr * (nt + 1) * d_state * sizeof(float);
+
+    if (ctx->prealloc_size_x < scratch_size) {
+        ctx->prealloc_size_x = scratch_size;
+        ggml_vk_preallocate_buffers(ctx, subctx);
+    }
+    if (ctx->prealloc_x_need_sync) {
+        ggml_vk_sync_buffers(ctx, subctx);
+    }
+
+    // Zero the destination before the atomics start accumulating into it.
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
+    ggml_vk_buffer_memset_async(subctx, dst_buf.buffer, dst_buf.offset, 0,
+                                ggml_nbytes(dst));
+    ggml_vk_sync_buffers(ctx, subctx);
+
+    const vk_op_ssm_scan_back_push_constants pc = {
+        (uint32_t)src0->nb[2], (uint32_t)src0->nb[3],
+        (uint32_t)src1->nb[2], (uint32_t)src1->nb[3],
+        (uint32_t)src2->nb[1], (uint32_t)src2->nb[2],
+        (uint32_t)src4->nb[2], (uint32_t)src4->nb[3],
+        (uint32_t)src5->nb[2], (uint32_t)src5->nb[3],
+        nh, nr, ng, nt, ns,
+        d_s_off, d_x_off, d_dt_off, d_A_off, d_B_off, d_C_off,
+        g_s_off,
+    };
+
+    vk_subbuffer src_buf[8] = {};
+    for (int i = 0; i < 8 && dst->src[i] != nullptr; i++) {
+        src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i]);
+    }
+    vk_subbuffer scratch_buf = { ctx->prealloc_x, 0, VK_WHOLE_SIZE };
+
+    // The grid is in work items: one workgroup per (head, channel) on x, and
+    // the pipeline's workgroup is d_state wide, so x counts nh*nr*d_state.
+    const std::array<uint32_t, 3> elements = { nh * nr * d_state, ns, 1 };
+
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+        {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5],
+         src_buf[6], src_buf[7], dst_buf, scratch_buf},
+        pc, elements);
+
+    ctx->prealloc_x_need_sync = true;
+}
+
 // ggmlR extension: GGML_OP_OUT_PROD on the GPU.
 //
 // Both gradients of ggml_mul_mat() are built from out_prod, so without this

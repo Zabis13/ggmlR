@@ -535,6 +535,11 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
 
         break;
 
+    case GGML_OP_SSM_SCAN_BACK:
+        ggml_vk_ssm_scan_back(ctx, compute_ctx, node);
+
+        break;
+
     case GGML_OP_OUT_PROD:
         ggml_vk_out_prod(ctx, compute_ctx, node);
 
@@ -3261,6 +3266,67 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                    op->src[0]->nb[0] == sizeof(float) &&
                    op->src[1]->nb[0] == sizeof(float) &&
                    op->src[2]->nb[0] == sizeof(float);
+        case GGML_OP_SSM_SCAN_BACK:
+            {
+                // ggmlR extension: backward of ssm_scan.
+                for (int i = 0; i < 8; i++) {
+                    if (op->src[i] == nullptr) {
+                        return false;
+                    }
+                }
+                if (op->src[6]->type != GGML_TYPE_I32) {
+                    return false;
+                }
+                if (op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32) {
+                    return false;
+                }
+
+                // Mamba-2 only, like the forward shader: a per-state decay would
+                // need a different reduction over d_state.
+                const bool is_mamba2 = (op->src[3]->nb[1] == sizeof(float));
+                if (!is_mamba2) {
+                    return false;
+                }
+
+                const uint32_t d_state = (uint32_t)op->src[0]->ne[0];
+                if (d_state != 128 && d_state != 256) {
+                    return false;
+                }
+
+                ggml_backend_vk_device_context * vk_ctx =
+                    (ggml_backend_vk_device_context *)dev->context;
+                const vk_device& vk_dev = ggml_vk_get_device(vk_ctx->device);
+
+                // Four of the six gradients are shared across workgroups and
+                // accumulate with atomicAdd.
+                if (!vk_dev->atomic_float_add) {
+                    return false;
+                }
+
+                // The replay scratch is (nt+1) states per (sequence, head,
+                // channel), which grows linearly in tokens and can reach
+                // hundreds of megabytes at long sequence lengths. Cap it at a
+                // quarter of device-local memory and let the CPU take anything
+                // larger: a fallback costs time, an allocation failure costs the
+                // whole run. TODO: a quarter is a judgement call, not a measured
+                // optimum -- revisit once there is a sequence length that
+                // actually presses against it.
+                const uint32_t nr = (uint32_t)op->src[0]->ne[1];
+                const uint32_t nh = (uint32_t)op->src[1]->ne[1];
+                const uint32_t nt = (uint32_t)op->src[1]->ne[2];
+                const uint32_t ns = (uint32_t)op->src[1]->ne[3];
+
+                const size_t scratch_size =
+                    (size_t)ns * nh * nr * (nt + 1) * d_state * sizeof(float);
+
+                size_t mem_free = 0, mem_total = 0;
+                ggml_backend_vk_get_device_memory(vk_ctx->device, &mem_free, &mem_total);
+                if (mem_total > 0 && scratch_size > mem_total / 4) {
+                    return false;
+                }
+
+                return true;
+            }
         case GGML_OP_OUT_PROD:
             // ggmlR: dst and both sources must be F32, and the innermost stride
             // of src0 and dst must be the element size -- the same constraints

@@ -1,0 +1,199 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_shader_atomic_float : require
+
+#include "types.glsl"
+
+// ggmlR extension: backward pass of GGML_OP_SSM_SCAN on the GPU.
+//
+// Forward, per head h and channel i1 (Mamba-2 only here; Mamba-1's per-state
+// decay is refused in supports_op):
+//     dt' = softplus(dt[h]);  dA = exp(dt' * A[h]);  x_dt = x * dt'
+//     s[t] = s[t-1]*dA + B[t]*x_dt
+//     y[t] = sum_state s[t]*C[t]
+//
+// so walking time backwards with gs = dL/ds carried from later tokens:
+//     g_st  = gs + gy*C
+//     d_C  += gy * s[t]
+//     d_B  += g_st * x_dt
+//     d_A  += (sum_state g_st * s[t-1]) * dA * dt'
+//     gxdt  = sum_state g_st * B
+//     d_x   = gxdt * dt'
+//     d_dt += (gxdt*x + d_A_term) * sigmoid(dt)
+//     gs    = g_st * dA
+//
+// dt' reaches the loss by TWO routes, through dA and through x_dt; dropping
+// either yields a gradient that still trains, just towards the wrong optimum.
+//
+// ---- decomposition ----
+// One workgroup owns one (sequence, head, channel) triple and walks time
+// sequentially -- the recurrence cannot be parallelised over t. d_state is
+// spread across the workgroup's invocations, so the per-state loops below are
+// one step each, and the three sums that fold over d_state (for d_A, gxdt and
+// the softplus term) are workgroup reductions through shared memory.
+//
+// ---- why the scratch buffer ----
+// The forward keeps no intermediate states, so the backward has to replay the
+// recurrence before it can walk back. (nt+1) states per (head, channel) is far
+// past what shared memory holds at Mamba sizes -- 64 tokens x 128 states x 4B
+// is 33KB for a single channel -- so the replay goes to a scratch buffer in
+// device memory, sized and bound by ggml_vk_ssm_scan_back.
+//
+// ---- atomics ----
+// d_x and d_s belong to one (head, channel) and are written directly. d_dt and
+// d_A are shared by every channel of a head; d_B and d_C by every head of a
+// group. Those four accumulate with atomicAdd, which is why supports_op
+// requires shaderBufferFloat32AtomicAdd and refuses the op without it.
+
+layout(constant_id = 0) const uint D_STATE = 128;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer S0  { float s0[]; };    // {d_state, dim, nh, ns+}
+layout(binding = 1) readonly buffer X   { float x[]; };     // {dim, nh, nt, ns}
+layout(binding = 2) readonly buffer DT  { float dt[]; };    // {nh, nt, ns}
+layout(binding = 3) readonly buffer A   { float Av[]; };    // {1, nh}
+layout(binding = 4) readonly buffer B   { float Bv[]; };    // {d_state, ng, nt, ns}
+layout(binding = 5) readonly buffer C   { float Cv[]; };    // {d_state, ng, nt, ns}
+layout(binding = 6) readonly buffer IDS { int ids[]; };     // {ns}
+layout(binding = 7) readonly buffer G   { float grad[]; };  // packed [g_y | g_s]
+layout(binding = 8) buffer DST { float dst[]; };            // packed six gradients
+layout(binding = 9) buffer SCRATCH { float states[]; };     // replayed states
+
+layout(push_constant) uniform PushConstants {
+    uint s0_nb2, s0_nb3;      // bytes
+    uint x_nb2, x_nb3;
+    uint dt_nb1, dt_nb2;
+    uint B_nb2, B_nb3;
+    uint C_nb2, C_nb3;
+    uint nh, nr, ng, nt, ns;
+    uint d_s_off, d_x_off, d_dt_off, d_A_off, d_B_off, d_C_off;  // elements
+    uint g_s_off;                                                // elements
+};
+
+shared float red[D_STATE];
+
+// Sum one value per invocation across the workgroup, leaving the total in
+// red[0] and returning it to every invocation.
+float workgroup_sum(float v, uint tid) {
+    red[tid] = v;
+    barrier();
+    [[unroll]] for (uint stride = D_STATE / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            red[tid] += red[tid + stride];
+        }
+        barrier();
+    }
+    const float total = red[0];
+    barrier();
+    return total;
+}
+
+void main() {
+    const uint tid = gl_LocalInvocationID.x;   // one state index
+    const uint hc  = gl_WorkGroupID.x;         // head * nr + channel
+    const uint i3  = gl_WorkGroupID.y;         // sequence
+
+    // No early return here, deliberately. Every loop below crosses a barrier()
+    // inside workgroup_sum(), and a barrier reached by only part of a workgroup
+    // is undefined behaviour -- on a real driver, a hang. The workgroup is
+    // exactly D_STATE invocations wide (the pipeline is created that way), so
+    // tid is always in range; out-of-range groups are excluded by the dispatch
+    // grid rather than by returning from the middle of the workgroup.
+    // This test is uniform across the workgroup (it reads only gl_WorkGroupID),
+    // so either every invocation returns or none does, and the barriers below
+    // stay well-defined.
+    if (hc >= nh * nr || i3 >= ns) {
+        return;
+    }
+
+    const uint h  = hc / nr;
+    const uint i1 = hc - h * nr;
+    const uint g  = h / (nh / ng);
+    const uint ii = i1 + h * nr;               // channel index within a token
+
+    // Where this (sequence, head, channel) keeps its replayed states.
+    const uint sc_base = (i3 * nh * nr + hc) * (nt + 1) * D_STATE;
+
+    const float A_h = Av[h];
+
+    // ---- replay the forward, keeping every state ---------------------------
+    // Each invocation owns state index tid for the whole replay: it writes only
+    // states[.. + tid] and reads back only what it wrote a step earlier, so no
+    // synchronisation is needed here. The barriers start in the backward loop,
+    // where the reductions fold across invocations.
+    const uint s0_seq = uint(ids[i3]) * (s0_nb3 / 4);
+    states[sc_base + tid] = s0[s0_seq + tid + ii * D_STATE];
+
+    for (uint i2 = 0; i2 < nt; ++i2) {
+        const float dt_raw = dt[i3 * (dt_nb2 / 4) + i2 * (dt_nb1 / 4) + h];
+        // softplus, guarded exactly as the forward kernel guards it
+        const float dtp = dt_raw <= 20.0 ? log(1.0 + exp(dt_raw)) : dt_raw;
+        const float dA  = exp(dtp * A_h);
+
+        const float xv   = x[i3 * (x_nb3 / 4) + i2 * (x_nb2 / 4) + ii];
+        const float x_dt = xv * dtp;
+        const float Bs   = Bv[i3 * (B_nb3 / 4) + i2 * (B_nb2 / 4) + g * D_STATE + tid];
+
+        const float prev = states[sc_base + i2 * D_STATE + tid];
+        states[sc_base + (i2 + 1) * D_STATE + tid] = prev * dA + Bs * x_dt;
+    }
+
+    // ---- walk back ---------------------------------------------------------
+    // gs starts at the gradient of the final state.
+    float gs = grad[g_s_off + tid + ii * D_STATE + i3 * D_STATE * nr * nh];
+
+    for (int t = int(nt) - 1; t >= 0; --t) {
+        const uint i2 = uint(t);
+
+        const float dt_raw = dt[i3 * (dt_nb2 / 4) + i2 * (dt_nb1 / 4) + h];
+        const float dtp = dt_raw <= 20.0 ? log(1.0 + exp(dt_raw)) : dt_raw;
+        const float dA  = exp(dtp * A_h);
+
+        const float xv   = x[i3 * (x_nb3 / 4) + i2 * (x_nb2 / 4) + ii];
+        const float x_dt = xv * dtp;
+
+        const uint  bc_off = i3 * (B_nb3 / 4) + i2 * (B_nb2 / 4) + g * D_STATE + tid;
+        const float Bs = Bv[bc_off];
+        const float Cs = Cv[i3 * (C_nb3 / 4) + i2 * (C_nb2 / 4) + g * D_STATE + tid];
+
+        const float gy = grad[ii + i2 * nh * nr + i3 * nt * nh * nr];
+
+        const float cur  = states[sc_base + (i2 + 1) * D_STATE + tid];
+        const float prev = states[sc_base + i2 * D_STATE + tid];
+
+        // d_C: the state this token produced, weighted by dL/dy.
+        atomicAdd(dst[d_C_off + (i2 * ng * D_STATE + i3 * nt * ng * D_STATE)
+                              + g * D_STATE + tid], gy * cur);
+
+        // Gradient of this token's state: through y, and through the carry.
+        const float g_st = gs + gy * Cs;
+
+        atomicAdd(dst[d_B_off + (i2 * ng * D_STATE + i3 * nt * ng * D_STATE)
+                              + g * D_STATE + tid], g_st * x_dt);
+
+        // Three folds over d_state. Each is a workgroup reduction; they cannot
+        // share one pass because the second depends on nothing the first
+        // computes, but the barriers inside make interleaving them unsafe.
+        const float ddtp_from_dA = workgroup_sum(g_st * prev, tid);
+        const float gxdt         = workgroup_sum(g_st * Bs,   tid);
+
+        if (tid == 0) {
+            atomicAdd(dst[d_A_off + h], ddtp_from_dA * dA * dtp);
+
+            const float ddtp = gxdt * xv + ddtp_from_dA * dA * A_h;
+            const float dsp  = dt_raw <= 20.0 ? 1.0 / (1.0 + exp(-dt_raw)) : 1.0;
+            atomicAdd(dst[d_dt_off + h + i2 * nh + i3 * nt * nh], ddtp * dsp);
+
+            // d_x belongs to this (head, channel) alone, so a plain store.
+            dst[d_x_off + ii + i2 * nh * nr + i3 * nt * nh * nr] = gxdt * dtp;
+        }
+
+        // Carry to the previous token.
+        gs = g_st * dA;
+    }
+
+    // What remains in gs is the gradient w.r.t. the initial state.
+    dst[d_s_off + tid + ii * D_STATE + i3 * D_STATE * nr * nh] = gs;
+}

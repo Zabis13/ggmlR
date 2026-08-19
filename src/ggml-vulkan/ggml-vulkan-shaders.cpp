@@ -1571,6 +1571,14 @@ static void ggml_vk_load_shaders(vk_device& device) {
     // ggmlR extension: 4 buffers (sx, c, grad, packed dst), one invocation per
     // channel, so a plain 1D workgroup rather than ssm_conv's 2D tiling.
     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_back_f32, "ssm_conv_back_f32", ssm_conv_back_f32_len, ssm_conv_back_f32_data, "main", 4, sizeof(vk_op_ssm_conv_back_push_constants), {256, 1, 1}, {256}, 1);
+    // ggmlR extension: backward of ssm_scan. 10 buffers (7 forward inputs, the
+    // incoming gradient, the packed output, and the replay scratch); d_state is
+    // a specialisation constant and also the workgroup width, one invocation
+    // per state.
+    if (device->atomic_float_add) {
+        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_back_f32_d128, "ssm_scan_back_128_f32", ssm_scan_back_f32_len, ssm_scan_back_f32_data, "main", 10, sizeof(vk_op_ssm_scan_back_push_constants), {1, 1, 1}, {128}, 1);
+        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_back_f32_d256, "ssm_scan_back_256_f32", ssm_scan_back_f32_len, ssm_scan_back_f32_data, "main", 10, sizeof(vk_op_ssm_scan_back_push_constants), {1, 1, 1}, {256}, 1);
+    }
     ggml_vk_create_pipeline(device, device->pipeline_out_prod_f32, "out_prod_f32", out_prod_f32_len, out_prod_f32_data, "main", 3, sizeof(vk_op_out_prod_push_constants), {32, 8, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32, "cross_entropy_loss_back_f32", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_cross_entropy_loss_back_push_constants), {1, 1, 1}, {32}, 1);
 

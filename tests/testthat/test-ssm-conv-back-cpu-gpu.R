@@ -27,6 +27,20 @@ ref_conv_back <- function(sx, cw, g, nc, ncs, nr, n_t, n_s) {
   list(d_sx = as.vector(d_sx), d_c = as.vector(d_c))
 }
 
+# Which backend the scheduler assigned a node to, as a plain string.
+#
+# ggml_vulkan_backend_name() is the only binding that reports a backend's name,
+# and it errors with "Vulkan support not compiled" on a build without Vulkan --
+# including for a CPU backend. The CPU tests below need the name too, so the
+# call is guarded rather than assumed to work.
+sched_backend_name <- function(sched, tensor) {
+  if (!ggml_vulkan_available()) {
+    return("CPU")
+  }
+  b <- ggml_backend_sched_get_tensor_backend(sched, tensor)
+  if (is.null(b)) "unassigned" else ggml_vulkan_backend_name(b)
+}
+
 # Run one SSM_CONV_BACK on the requested backend and return the packed result.
 run_conv_back <- function(sx, cw, g, nc, ncs, nr, n_t, n_s, gpu) {
   ctx <- ggml_init(64 * 1024 * 1024)
@@ -56,8 +70,7 @@ run_conv_back <- function(sx, cw, g, nc, ncs, nr, n_t, n_s, gpu) {
   ggml_backend_sched_graph_compute(sched, graph)
 
   list(data  = ggml_backend_tensor_get_data(out),
-       where = ggml_vulkan_backend_name(
-                 ggml_backend_sched_get_tensor_backend(sched, out)))
+       where = sched_backend_name(sched, out))
 }
 
 make_case <- function(nc, nr, n_t, n_s, seed = 42) {

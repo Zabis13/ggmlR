@@ -1123,6 +1123,7 @@ void process_shaders() {
     // ops, so every training step through a Mamba block used to fall back to
     // the CPU.
     string_to_spv("ssm_conv_back_f32", "ssm_conv_back.comp", {{"A_TYPE", "float"}});
+    string_to_spv("ssm_scan_back_f32", "ssm_scan_back.comp", {{"A_TYPE", "float"}});
     // ggmlR: OUT_PROD, the op both mul_mat gradients are built from.
     string_to_spv("out_prod_f32", "out_prod.comp", {{"A_TYPE", "float"}});
     string_to_spv("cross_entropy_loss_back_f32", "cross_entropy_loss_back.comp", {{"A_TYPE", "float"}});
