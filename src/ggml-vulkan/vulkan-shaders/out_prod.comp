@@ -1,0 +1,68 @@
+#version 450
+
+// ggmlR extension: GGML_OP_OUT_PROD on the GPU. Upstream ggml has no Vulkan
+// shader for it, so it fell back to the CPU -- and out_prod is what BOTH
+// gradients of ggml_mul_mat() are built from, so every training step of every
+// dense layer left the GPU for it.
+//
+// Computes, matching ggml_compute_forward_out_prod_f32:
+//     dst[i0,i1,i2,i3] = sum_{i01} src0[i0,i01,i2,i3] * src1[i1,i01,i2,i3]
+//
+// One invocation owns one dst element and reduces over i01 itself. That keeps
+// the kernel simple and correct for every layout the CPU accepts:
+//
+//   * src1 may be transposed. The second mul_mat gradient passes
+//     ggml_transpose(grad), so nb10 is not the element size there -- addresses
+//     are computed from the strides rather than assuming a contiguous row.
+//   * dims 2 and 3 may broadcast (grouped-query attention): src0 is indexed
+//     with i2/dps2 and i3/dps3, exactly as the CPU kernel does.
+//
+// All strides arrive as byte counts and are divided by 4 (sizeof(float)) here,
+// the same convention ssm_conv.comp uses.
+
+#extension GL_EXT_control_flow_attributes : require
+
+layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer Src0 { float src0[]; };
+layout(binding = 1) readonly buffer Src1 { float src1[]; };
+layout(binding = 2) writeonly buffer Dst { float dst[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint ne0; uint ne1; uint ne2; uint ne3;      // dst dims
+    uint ne01;                                    // reduction length
+    uint nb01; uint nb02; uint nb03;              // src0 strides, bytes
+    uint nb10; uint nb11; uint nb12; uint nb13;   // src1 strides, bytes
+    uint nb1;  uint nb2;  uint nb3;               // dst strides, bytes
+    uint dps2; uint dps3;                         // broadcast factors, dims 2/3
+};
+
+void main() {
+    const uint i0 = gl_GlobalInvocationID.x;              // fastest dst axis
+    const uint i1 = gl_GlobalInvocationID.y;
+    const uint i23 = gl_GlobalInvocationID.z;             // dims 2 and 3 folded
+
+    if (i0 >= ne0 || i1 >= ne1) {
+        return;
+    }
+    const uint i2 = i23 % ne2;
+    const uint i3 = i23 / ne2;
+    if (i3 >= ne3) {
+        return;
+    }
+
+    // Broadcast: several dst slices may share one src0 slice.
+    const uint i02 = i2 / dps2;
+    const uint i03 = i3 / dps3;
+
+    const uint s0_base = i0 + (i02 * nb02 + i03 * nb03) / 4u;
+    const uint s1_base = (i1 * nb10 + i2 * nb12 + i3 * nb13) / 4u;
+
+    float sum = 0.0;
+    for (uint i01 = 0u; i01 < ne01; ++i01) {
+        sum += src0[s0_base + (i01 * nb01) / 4u] *
+               src1[s1_base + (i01 * nb11) / 4u];
+    }
+
+    dst[i0 + (i1 * nb1 + i2 * nb2 + i3 * nb3) / 4u] = sum;
+}

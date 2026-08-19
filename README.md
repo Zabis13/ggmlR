@@ -303,6 +303,21 @@ preds <- ggml_predict(model, x_new)
 | Embedding | `ggml_layer_embedding(vocab_size, dim)` |
 | LSTM | `ggml_layer_lstm(units, return_sequences)` |
 | GRU | `ggml_layer_gru(units, return_sequences)` |
+| Attention | `ggml_layer_attention(d_model, n_heads, causal)` (functional API) |
+
+### Available losses
+
+| `loss =` | Notes |
+|---|---|
+| `"categorical_crossentropy"` | Multi-class; expects a `softmax` output |
+| `"mse"` | Regression, squared error |
+| `"mae"` | Regression, absolute error — robust to outliers |
+| `"huber"` | Quadratic near zero, linear beyond `delta = 1` |
+| `"binary_crossentropy"` | Independent per-output labels; expects a `sigmoid` output |
+
+`"mean_squared_error"`, `"mean_absolute_error"`, `"huber_loss"` and
+`"binary_cross_entropy"` are accepted as aliases. In a multi-output model each
+head takes its own loss — see [Multi-output model](#multi-output-model).
 
 ### CNN example (MNIST)
 
@@ -393,6 +408,74 @@ preds <- ggml_predict(m, x)
 # preds[[1]] — hidden activations  [n × 64]
 # preds[[2]] — class probabilities [n × 10]
 ```
+
+#### Training several heads at once
+
+Each output gets its own loss and weight; the optimized total is
+`sum(loss_weights[i] * loss_i)`. Losses may be mixed — a cross-entropy head and
+a regression head train in the same model.
+
+```r
+inp    <- ggml_input(shape = 64L)
+trunk  <- inp   |> ggml_layer_dense(64L, activation = "relu")
+policy <- trunk |> ggml_layer_dense(10L, activation = "softmax", name = "policy")
+value  <- trunk |> ggml_layer_dense(1L,  name = "value")
+
+m <- ggml_model(inputs = inp, outputs = list(policy, value))
+m <- ggml_compile(m, optimizer = "adam",
+                  loss         = list(policy = "categorical_crossentropy",
+                                      value  = "mse"),
+                  loss_weights = c(policy = 1.0, value = 0.5))
+
+# y is a list — one matrix per output, matched by name
+m <- ggml_fit(m, x, list(policy = y_policy, value = y_value),
+              epochs = 10L, batch_size = 32L)
+
+m$history$policy_loss   # per-head losses, so a stalled head is visible
+m$history$value_loss
+```
+
+`loss` also accepts a single name (applied to every output) or an unnamed list
+matched by position. `ggml_evaluate()` likewise reports `<output>_loss` per head
+alongside the weighted total.
+
+### Attention / transformer encoder block
+
+Attention takes and returns a sequence node `c(seq_len, d_model)`, so blocks
+stack and a residual merge needs no reshaping. `time_distributed = TRUE` applies
+one dense kernel per position — the position-wise feed-forward sublayer.
+
+```r
+inp <- ggml_input(shape = c(64L, 128L))         # c(seq_len, d_model)
+
+attn <- inp |> ggml_layer_attention(d_model = 128L, n_heads = 8L)
+h    <- ggml_layer_add(list(inp, attn))          # residual 1
+
+ff   <- h  |> ggml_layer_dense(512L, activation = "relu", time_distributed = TRUE)
+ff   <- ff |> ggml_layer_dense(128L, time_distributed = TRUE)
+h2   <- ggml_layer_add(list(h, ff))              # residual 2
+
+out <- h2 |> ggml_layer_flatten() |>
+  ggml_layer_dense(2L, activation = "softmax")
+
+m <- ggml_model(inputs = inp, outputs = out)
+```
+
+`causal = TRUE` masks keys after the query (GPT-style decoder). Cross-attention
+takes queries from one node and keys/values from another, which may have a
+different length:
+
+```r
+dec <- inp |> ggml_layer_attention(128L, n_heads = 8L, causal = TRUE)
+
+ctx <- ggml_input(shape = c(96L, 128L))
+x   <- ggml_apply(list(dec, ctx), ggml_attention(128L, n_heads = 8L))
+```
+
+`ggml_attention()` returns a reusable layer object — applying it to several
+nodes shares one set of projections, which is how an encoder block is reused
+across a stack. All heads are computed in one batched pass, so the graph does
+not grow with `n_heads`.
 
 ### ResNet-like image classifier
 
@@ -1120,6 +1203,37 @@ backend can run it. Computing a graph that would put one on a GPU backend raises
 an error rather than failing inside the backend. Kernels may run on any thread
 (`ith` in `[0, nth)`) and must not call into R; pass `n_tasks = 1` for a kernel
 that is not thread-safe.
+
+## State-Space (Mamba) and RWKV Ops
+
+Low-level bindings for the recurrent alternatives to attention — linear in
+sequence length instead of quadratic.
+
+| Op | Signature |
+|---|---|
+| Mamba convolution | `ggml_ssm_conv(ctx, sx, c)` |
+| Mamba selective scan | `ggml_ssm_scan(ctx, s, x, dt, A, B, C, ids)` |
+| RWKV-6 | `ggml_rwkv_wkv6(ctx, k, v, r, tf, td, state)` |
+| RWKV-7 | `ggml_rwkv_wkv7(ctx, r, w, k, v, a, b, state)` |
+| Gated linear attention | `ggml_gated_linear_attn(ctx, k, v, q, g, state, scale)` |
+
+`ggml_ssm_scan()` and the three RWKV-family ops each return **one** tensor with
+the sequence output and the final recurrent state concatenated. View either half
+rather than computing byte offsets by hand:
+
+```r
+r     <- ggml_ssm_scan(ctx, s, x, dt, A, B, C, ids)
+y     <- ggml_ssm_scan_output(ctx, r, x)        # shaped like x
+state <- ggml_ssm_scan_state(ctx, r, s, ids)    # [d_state, head_dim, n_head, n_seqs]
+
+w   <- ggml_rwkv_wkv6(ctx, k, v, rr, tf, td, st)
+out <- ggml_rwkv_output(ctx, w, k)              # [S*H, n_tokens]
+st2 <- ggml_rwkv_state(ctx, w, k, st)           # [S*H, S*n_seqs]
+```
+
+**Inference only** — none of these ops has a backward pass in ggml, so a graph
+containing one cannot be trained. `ggml_gated_linear_attn()` is additionally
+CPU-only (no Vulkan shader); the other four run on both CPU and Vulkan.
 
 ## GGUF Pre-trained Weights
 

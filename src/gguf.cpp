@@ -3,6 +3,8 @@
 #include "ggml-impl.h"
 #include "gguf.h"
 
+#include <cerrno>   // errno, used below via strerror(); older toolchains pulled
+                    // it in transitively, clang 23 does not
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>

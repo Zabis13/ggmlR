@@ -10,7 +10,8 @@ ggml_layer_dense(
   activation = NULL,
   input_shape = NULL,
   name = NULL,
-  trainable = TRUE
+  trainable = TRUE,
+  time_distributed = FALSE
 )
 }
 \arguments{
@@ -25,6 +26,10 @@ ggml_layer_dense(
 \item{name}{Optional character name for the layer.}
 
 \item{trainable}{Logical; whether the layer weights are updated during training.}
+
+\item{time_distributed}{Logical; apply the kernel per position of a sequence
+input rather than flattening it (default \code{FALSE}). See
+\emph{Time-distributed application}.}
 }
 \value{
 The model object with the dense layer appended (invisibly).
@@ -32,6 +37,26 @@ The model object with the dense layer appended (invisibly).
 \description{
 Add Dense (Fully Connected) Layer
 }
+\section{Time-distributed application}{
+
+By default a dense layer flattens its input, so a sequence node of shape
+\code{c(seq_len, features)} becomes a single vector of \code{units} and the
+sequence axis is gone.  With \code{time_distributed = TRUE} the same kernel
+is applied independently at every position instead, sharing one set of
+weights across the sequence, and the output keeps its length:
+\code{c(seq_len, units)}.  This is the semantics of Keras'
+\code{TimeDistributed}, and it is what the position-wise feed-forward
+sublayer of a transformer block needs -- without it, a dense layer after
+\code{\link{ggml_layer_attention}} would collapse every position into one
+vector.
+
+It is computed as a single batched \code{ggml_mul_mat()} over the combined
+position/batch axes, not as a loop over positions.
+
+Functional API only: a sequential model carries a flat running shape, so
+there is no sequence axis to distribute over.
+}
+
 \examples{
 \donttest{
 model <- ggml_model_sequential() |>
@@ -39,5 +64,9 @@ model <- ggml_model_sequential() |>
                      input_shape = c(28, 28, 1)) |>
   ggml_layer_flatten() |>
   ggml_layer_dense(128, activation = "relu")
+
+# Position-wise feed-forward, as in a transformer block.
+x  <- ggml_input(shape = c(10L, 32L))
+ff <- x |> ggml_layer_dense(64L, activation = "relu", time_distributed = TRUE)
 }
 }

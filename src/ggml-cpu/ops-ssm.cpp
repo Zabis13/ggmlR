@@ -10,6 +10,7 @@
 
 #include <cfloat>
 #include <algorithm>
+#include <vector>
 #include <cmath>
 #include <functional>
 
@@ -1159,6 +1160,340 @@ void ggml_compute_forward_ssm_conv(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_ssm_conv_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_forward_ssm_conv_back
+//
+// ggmlR extension: backward pass for ggml_ssm_conv, absent upstream.
+//
+// The forward is a per-channel (depthwise) correlation over a sliding window:
+//     y[i1, t, s] = sum_{i0 < d_conv} sx[t + i0, i1, s] * c[i0, i1]
+// so with g = dL/dy,
+//     d_sx[t + i0, i1, s] += g[i1, t, s] * c[i0, i1]
+//     d_c [i0, i1]        += sum_{t, s} g[i1, t, s] * sx[t + i0, i1, s]
+//
+// Both gradients land in one output buffer, [d_sx | d_c], since a ggml op
+// returns a single tensor; ggml-graph.c views each half.
+//
+// Threads split over channels (i1), exactly as the forward does. That keeps
+// every write private to one thread: d_sx rows and d_c columns both belong to
+// a single channel, so no accumulation crosses threads and no barrier is
+// needed.
+static void ggml_compute_forward_ssm_conv_back_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0]; // sx   {d_conv - 1 + n_t, d_inner, n_s}
+    const ggml_tensor * src1 = dst->src[1]; // c    {d_conv, d_inner}
+    const ggml_tensor * src2 = dst->src[2]; // grad {d_inner, n_t, n_s}
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc  = src1->ne[0]; // d_conv
+    const int ncs = src0->ne[0]; // d_conv - 1 + n_t
+    const int nr  = src0->ne[1]; // d_inner
+    const int n_t = src2->ne[1]; // tokens per sequence
+    const int n_s = src2->ne[2]; // number of sequences
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+    GGML_ASSERT(src2->nb[0] == sizeof(float));
+    GGML_ASSERT(ggml_nelements(dst) == ggml_nelements(src0) + ggml_nelements(src1));
+
+    // rows (channels) per thread -- same split as the forward
+    const int dr  = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    float * d_sx = (float *) dst->data;                       // {ncs, nr, n_s}
+    float * d_c  = d_sx + ggml_nelements(src0);               // {nc, nr}
+
+    // Zero only this thread's slice, so no barrier is required.
+    for (int i3 = 0; i3 < n_s; ++i3) {
+        for (int i1 = ir0; i1 < ir1; ++i1) {
+            memset(d_sx + i3*ncs*nr + i1*ncs, 0, ncs*sizeof(float));
+        }
+    }
+    for (int i1 = ir0; i1 < ir1; ++i1) {
+        memset(d_c + i1*nc, 0, nc*sizeof(float));
+    }
+
+    for (int i3 = 0; i3 < n_s; ++i3) {
+        for (int i2 = 0; i2 < n_t; ++i2) {
+            const float * s = (const float *) ((const char *) src0->data + i2*(src0->nb[0]) + i3*(src0->nb[2]));
+            const float * c = (const float *) ((const char *) src1->data);
+            const float * g = (const float *) ((const char *) src2->data + i2*(src2->nb[1]) + i3*(src2->nb[2]));
+
+            for (int i1 = ir0; i1 < ir1; ++i1) {
+                const float gv = g[i1];
+                // The same window offset the forward reads from, so the two
+                // index expressions cannot drift apart.
+                float * dsx_row = d_sx + i3*ncs*nr + i1*ncs + i2;
+                const float * sx_row = s + i1*ncs;
+
+                for (int i0 = 0; i0 < nc; ++i0) {
+                    dsx_row[i0]   += gv * c[i0 + i1*nc];
+                    d_c[i0 + i1*nc] += gv * sx_row[i0];
+                }
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_ssm_conv_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_ssm_conv_back_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_forward_ssm_scan_back
+//
+// ggmlR extension: backward pass for ggml_ssm_scan, absent upstream.
+//
+// Forward, per head h and channel i1 (Mamba-2; Mamba-1 differs only in dA
+// being per-state rather than one scalar per head):
+//     dt' = softplus(dt[h]);  dA = exp(dt' * A);  x_dt = x * dt'
+//     s[t] = s[t-1]*dA + B*x_dt
+//     y[t] = sum_state s[t]*C
+//
+// Backward walks time in reverse. Note that dt' reaches the loss by TWO routes,
+// through dA and through x_dt, so d_dt gets both terms; dropping either yields
+// a gradient that still trains, just towards the wrong optimum.
+//
+// The forward does not keep the intermediate states, so this replays the
+// recurrence forward into a scratch buffer first and then walks back. That
+// costs one extra forward pass but leaves ggml_ssm_scan() untouched, which
+// matters because llamaR and sd2R already depend on its output layout.
+//
+// Threads split over heads, as the forward does: every write below belongs to
+// one head, except d_B/d_C which are shared by the heads of a group -- those
+// are accumulated into per-thread scratch and reduced once at the end.
+static void ggml_compute_forward_ssm_scan_back_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0]; // s    {d_state, dim, nh, ns+}
+    const ggml_tensor * src1 = dst->src[1]; // x    {dim, nh, nt, ns}
+    const ggml_tensor * src2 = dst->src[2]; // dt   {nh, nt, ns}
+    const ggml_tensor * src3 = dst->src[3]; // A    {d_state, nh} or {1, nh}
+    const ggml_tensor * src4 = dst->src[4]; // B    {d_state, ng, nt, ns}
+    const ggml_tensor * src5 = dst->src[5]; // C    {d_state, ng, nt, ns}
+    const ggml_tensor * src6 = dst->src[6]; // ids  {ns}
+    const ggml_tensor * src7 = dst->src[7]; // grad of the packed forward result
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t nc = src0->ne[0]; // d_state
+    const int64_t nr = src0->ne[1]; // dim
+    const int64_t nh = src1->ne[1]; // n_head
+    const int64_t ng = src4->ne[1]; // n_group
+    const int64_t nt = src1->ne[2]; // tokens per sequence
+    const int64_t ns = src1->ne[3]; // sequences
+
+    const bool is_mamba2 = (src3->ne[0] == 1);
+
+    // Layout of the packed output, in ggml_ssm_scan() source order.
+    const int64_t n_s_el  = nc*nr*nh*ns;
+    const int64_t n_x_el  = ggml_nelements(src1);
+    const int64_t n_dt_el = ggml_nelements(src2);
+    const int64_t n_A_el  = ggml_nelements(src3);
+    const int64_t n_B_el  = ggml_nelements(src4);
+    const int64_t n_C_el  = ggml_nelements(src5);
+
+    float * d_s  = (float *) dst->data;
+    float * d_x  = d_s  + n_s_el;
+    float * d_dt = d_x  + n_x_el;
+    float * d_A  = d_dt + n_dt_el;
+    float * d_B  = d_A  + n_A_el;
+    float * d_C  = d_B  + n_B_el;
+
+    // The forward result is outputs followed by final states, so the incoming
+    // gradient splits the same way.
+    const float * g_y = (const float *) src7->data;
+    const float * g_s = g_y + n_x_el;
+
+    const int32_t * ids = (const int32_t *) src6->data;
+
+    if (ith == 0) {
+        memset(dst->data, 0, ggml_nbytes(dst));
+    }
+    ggml_barrier(params->threadpool);
+
+    // Thread 0 does all of it.
+    //
+    // Splitting over heads is what the forward does, but it does not work here:
+    // B and C are shared by the nh/ng heads of a group, so `d_B[...] +=` from
+    // two threads at once is a data race that silently loses gradient. Correct
+    // sharding would need per-thread scratch for d_B/d_C plus a reduction, and
+    // this kernel already replays the recurrence -- a wrong gradient costs far
+    // more than the lost parallelism, so correctness first. The head loop below
+    // is where to add sharding once the reduction exists.
+    //
+    // The barrier above still runs on every thread, so the early return is safe
+    // (see the deadlock fixed in ops-recurrent.cpp, where it was not).
+    if (ith != 0) {
+        return;
+    }
+
+    const int ih0 = 0;
+    const int ih1 = (int) nh;
+    GGML_UNUSED(nth);
+
+    // Scratch for the replayed states: (nt+1) snapshots of one channel's state.
+    // Allocated per thread from the work buffer would be tidier, but the sizes
+    // here are small (d_state * (nt+1) floats) and this keeps the kernel free
+    // of work-buffer bookkeeping.
+    std::vector<float> S((size_t)(nt + 1) * nc);
+    std::vector<float> dtp_v(nt), dA_v((size_t) nt * (is_mamba2 ? 1 : nc));
+
+    for (int64_t i3 = 0; i3 < ns; ++i3) {
+        const float * s0_seq = (const float *) ((const char *) src0->data + ids[i3]*(src0->nb[3]));
+
+        for (int h = ih0; h < ih1; ++h) {
+            const int g = h / (nh / ng);
+
+            // Per-token dt' and dA for this head: shared by every channel.
+            for (int64_t i2 = 0; i2 < nt; ++i2) {
+                const float * dt_t = (const float *) ((const char *) src2->data
+                    + i2*(src2->nb[1]) + i3*(src2->nb[2]));
+                const float dtp = ggml_compute_softplus_f32(dt_t[h]);
+                dtp_v[i2] = dtp;
+                if (is_mamba2) {
+                    dA_v[i2] = expf(dtp * ((const float *) src3->data)[h]);
+                } else {
+                    const float * A = (const float *) src3->data;
+                    for (int64_t i0 = 0; i0 < nc; ++i0) {
+                        dA_v[i2*nc + i0] = expf(dtp * A[i0 + h*nc]);
+                    }
+                }
+            }
+
+            for (int64_t i1 = 0; i1 < nr; ++i1) {
+                const int64_t ii = i1 + h*nr;
+
+                // --- replay forward, keeping every state ---
+                for (int64_t i0 = 0; i0 < nc; ++i0) {
+                    S[i0] = s0_seq[i0 + ii*nc];
+                }
+                for (int64_t i2 = 0; i2 < nt; ++i2) {
+                    const float * x = (const float *) ((const char *) src1->data
+                        + i2*(src1->nb[2]) + i3*(src1->nb[3]));
+                    const float * B = (const float *) ((const char *) src4->data
+                        + i2*(src4->nb[2]) + i3*(src4->nb[3]));
+                    const float x_dt = x[ii] * dtp_v[i2];
+                    const float * prev = &S[i2*nc];
+                    float * cur = &S[(i2 + 1)*nc];
+                    for (int64_t i0 = 0; i0 < nc; ++i0) {
+                        const float dA = is_mamba2 ? dA_v[i2] : dA_v[i2*nc + i0];
+                        cur[i0] = prev[i0]*dA + B[i0 + g*nc]*x_dt;
+                    }
+                }
+
+                // --- walk back ---
+                // gs carries d(loss)/d(state) arriving from later tokens; it
+                // starts at the gradient of the final state.
+                std::vector<float> gs(nc);
+                for (int64_t i0 = 0; i0 < nc; ++i0) {
+                    gs[i0] = g_s[i0 + ii*nc + i3*nc*nr*nh];
+                }
+
+                for (int64_t i2 = nt - 1; i2 >= 0; --i2) {
+                    const float * x = (const float *) ((const char *) src1->data
+                        + i2*(src1->nb[2]) + i3*(src1->nb[3]));
+                    const float * B = (const float *) ((const char *) src4->data
+                        + i2*(src4->nb[2]) + i3*(src4->nb[3]));
+                    const float * C = (const float *) ((const char *) src5->data
+                        + i2*(src5->nb[2]) + i3*(src5->nb[3]));
+
+                    const float gy = g_y[ii + i2*nh*nr + i3*nt*nh*nr];
+                    const float dtp = dtp_v[i2];
+                    const float x_dt = x[ii] * dtp;
+
+                    const float * cur  = &S[(i2 + 1)*nc];
+                    const float * prev = &S[i2*nc];
+
+                    const int64_t Boff = (i2*ng*nc + i3*nt*ng*nc) + g*nc;
+                    float gxdt = 0.0f;
+                    float ddtp_from_dA = 0.0f;
+
+                    for (int64_t i0 = 0; i0 < nc; ++i0) {
+                        const float dA = is_mamba2 ? dA_v[i2] : dA_v[i2*nc + i0];
+
+                        // d_C: the state this token produced, weighted by dL/dy
+                        d_C[Boff + i0] += gy * cur[i0];
+
+                        // Gradient of this token's state: through y, and through
+                        // the carry into the next token.
+                        const float g_st = gs[i0] + gy * C[i0 + g*nc];
+
+                        // d_A: dA = exp(dt'*A), so d(dA)/dA = dA*dt'
+                        const float g_dA = g_st * prev[i0];
+                        if (is_mamba2) {
+                            ddtp_from_dA += g_dA;
+                        } else {
+                            d_A[i0 + h*nc] += g_dA * dA * dtp;
+                            ddtp_from_dA   += g_dA * dA * ((const float *) src3->data)[i0 + h*nc];
+                        }
+
+                        d_B[Boff + i0] += g_st * x_dt;
+                        gxdt           += g_st * B[i0 + g*nc];
+
+                        // Carry to the previous token.
+                        gs[i0] = g_st * dA;
+                    }
+
+                    if (is_mamba2) {
+                        const float A_h = ((const float *) src3->data)[h];
+                        const float dA  = dA_v[i2];
+                        d_A[h]        += ddtp_from_dA * dA * dtp;
+                        ddtp_from_dA   = ddtp_from_dA * dA * A_h;
+                    }
+
+                    // d_x and d_dt: x_dt = x*dt', so dt' reaches the loss both
+                    // here and through dA above.
+                    d_x[ii + i2*nh*nr + i3*nt*nh*nr] = gxdt * dtp;
+
+                    const float * dt_t = (const float *) ((const char *) src2->data
+                        + i2*(src2->nb[1]) + i3*(src2->nb[2]));
+                    const float ddtp = gxdt * x[ii] + ddtp_from_dA;
+                    // softplus'(z) = sigmoid(z), guarded the same way the
+                    // forward's softplus is.
+                    const float z = dt_t[h];
+                    const float dsp = z <= 20.0f ? 1.0f/(1.0f + expf(-z)) : 1.0f;
+                    d_dt[h + i2*nh + i3*nt*nh] += ddtp * dsp;
+                }
+
+                // What remains in gs is the gradient w.r.t. the initial state.
+                for (int64_t i0 = 0; i0 < nc; ++i0) {
+                    d_s[i0 + ii*nc + i3*nc*nr*nh] = gs[i0];
+                }
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_ssm_scan_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_ssm_scan_back_f32(params, dst);
             } break;
         default:
             {

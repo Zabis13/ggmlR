@@ -1568,6 +1568,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
     }
 
     ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_f32, "ssm_conv_f32", ssm_conv_f32_len, ssm_conv_f32_data, "main", 3, sizeof(vk_op_ssm_conv_push_constants), {32, 16, 1}, {32, 16}, 1);
+    // ggmlR extension: 4 buffers (sx, c, grad, packed dst), one invocation per
+    // channel, so a plain 1D workgroup rather than ssm_conv's 2D tiling.
+    ggml_vk_create_pipeline(device, device->pipeline_ssm_conv_back_f32, "ssm_conv_back_f32", ssm_conv_back_f32_len, ssm_conv_back_f32_data, "main", 4, sizeof(vk_op_ssm_conv_back_push_constants), {256, 1, 1}, {256}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_out_prod_f32, "out_prod_f32", out_prod_f32_len, out_prod_f32_data, "main", 3, sizeof(vk_op_out_prod_push_constants), {32, 8, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32, "cross_entropy_loss_back_f32", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_cross_entropy_loss_back_push_constants), {1, 1, 1}, {32}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_opt_step_adamw_f32, "opt_step_adamw_f32", opt_step_adamw_f32_len, opt_step_adamw_f32_data, "main", 5, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
@@ -1777,6 +1782,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->coopmat_support = false;
         device->integer_dot_product = false;
         device->shader_64b_indexing = false;
+        // ggmlR: presence of the extension only -- the actual
+        // shaderBufferFloat32AtomicAdd feature bit is read after
+        // vkGetPhysicalDeviceFeatures2 below.
+        bool atomic_float_ext = false;
         bool bfloat16_support = false;
 
         for (const auto& properties : ext_props) {
@@ -1792,6 +1801,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 amd_shader_core_properties = true;
             } else if (strcmp("VK_AMD_shader_core_properties2", properties.extensionName) == 0) {
                 amd_shader_core_properties2 = true;
+            } else if (strcmp("VK_EXT_shader_atomic_float", properties.extensionName) == 0) {
+                atomic_float_ext = true;
             } else if (strcmp("VK_EXT_pipeline_robustness", properties.extensionName) == 0) {
                 pipeline_robustness = true;
             } else if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
@@ -2190,6 +2201,16 @@ static vk_device ggml_vk_get_device(size_t idx) {
             device_extensions.push_back("VK_KHR_shader_integer_dot_product");
         }
 
+        // ggmlR extension: float atomics, needed by the SSM backward kernels
+        // that accumulate into gradients shared across workgroups.
+        VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float_features {};
+        atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+        if (atomic_float_ext) {
+            last_struct->pNext = (VkBaseOutStructure *)&atomic_float_features;
+            last_struct = (VkBaseOutStructure *)&atomic_float_features;
+            device_extensions.push_back("VK_EXT_shader_atomic_float");
+        }
+
         VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pep_features {};
         pep_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR;
         if (pipeline_executable_properties_support) {
@@ -2247,6 +2268,13 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->shader_int64 = device_features2.features.shaderInt64;
         device->buffer_device_address = vk12_features.bufferDeviceAddress;
         device->vulkan_memory_model = vk12_features.vulkanMemoryModel;
+
+        // ggmlR: the extension may be present while the specific atomic-add
+        // capability is not, so both are required. An env override is kept for
+        // bisecting a suspected atomics bug without rebuilding.
+        device->atomic_float_add = atomic_float_ext &&
+                                   atomic_float_features.shaderBufferFloat32AtomicAdd &&
+                                   getenv("GGML_VK_DISABLE_ATOMIC_FLOAT") == nullptr;
 
         if (device->subgroup_size_control) {
             device->subgroup_min_size = subgroup_size_control_props.minSubgroupSize;

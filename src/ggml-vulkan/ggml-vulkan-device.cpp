@@ -18,6 +18,13 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <vulkan/vulkan.hpp>
 
 #include <algorithm>
+// The Vulkan backend is one translation unit: this file is the root, and
+// ggml-vulkan.cpp #includes the rest on top of it. memcpy/assert are used
+// throughout those parts and used to arrive transitively through the C++
+// headers below -- clang 23 no longer provides them that way, so they are
+// requested explicitly here rather than in each part.
+#include <cassert>
+#include <cstring>
 #include <cmath>
 #include <cstdarg>  // ggmlR TP: va_list/vsnprintf for device-group diagnostic report
 #include <iomanip>
@@ -696,6 +703,13 @@ struct vk_device_struct {
     bool shader_64b_indexing;
 
     bool integer_dot_product;
+
+    // ggmlR extension: VK_EXT_shader_atomic_float with shaderBufferFloat32AtomicAdd.
+    // Backward kernels that accumulate into shared gradients (ssm_scan_back, and
+    // scatter_elements in add mode) need it; supports_op refuses those ops rather
+    // than dispatching a shader whose atomicAdd would not compile or, worse,
+    // would silently drop the accumulation.
+    bool atomic_float_add;
     // 0: default, 1: force mmvq, -1: disable mmvq
     int32_t mmvq_mode;
 
@@ -919,6 +933,10 @@ struct vk_device_struct {
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;
+    // ggmlR extension: backward of ssm_conv (no upstream Vulkan shader).
+    vk_pipeline pipeline_ssm_conv_back_f32;
+    vk_pipeline pipeline_out_prod_f32;   // ggmlR: backward of mul_mat
+    vk_pipeline pipeline_cross_entropy_loss_back_f32;   // ggmlR
     vk_pipeline pipeline_opt_step_adamw_f32;
     vk_pipeline pipeline_opt_step_sgd_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f32[CONV_SHAPE_COUNT];
@@ -1754,6 +1772,37 @@ struct vk_op_ssm_conv_push_constants {
     uint32_t nb11;
     uint32_t dst_nb0, dst_nb1, dst_nb2;
     uint32_t nc, ncs, nr, n_t, n_s;
+};
+
+// ggmlR extension: backward of ssm_conv. Strides are byte counts; the shader
+// divides by sizeof(float). d_c_off is where the packed [d_sx | d_c] output
+// switches from one gradient to the other.
+struct vk_op_ssm_conv_back_push_constants {
+    uint32_t nb01, nb02;
+    uint32_t nb11;
+    uint32_t g_nb1, g_nb2;
+    uint32_t nc, ncs, nr, n_t, n_s;
+    uint32_t d_c_off;
+};
+
+// ggmlR extension: GGML_OP_OUT_PROD on the GPU (no upstream Vulkan shader).
+// Strides are byte counts; the shader divides by sizeof(float).
+struct vk_op_out_prod_push_constants {
+    uint32_t ne0, ne1, ne2, ne3;
+    uint32_t ne01;
+    uint32_t nb01, nb02, nb03;
+    uint32_t nb10, nb11, nb12, nb13;
+    uint32_t nb1, nb2, nb3;
+    uint32_t dps2, dps3;
+};
+
+// ggmlR extension: GGML_OP_CROSS_ENTROPY_LOSS_BACK on the GPU (no upstream
+// Vulkan shader). inv_nr is 1/nrows, folded in on the host so the shader does
+// not repeat the division per row.
+struct vk_op_cross_entropy_loss_back_push_constants {
+    uint32_t nc;
+    uint32_t nr;
+    float    inv_nr;
 };
 
 struct vk_op_conv2d_push_constants {

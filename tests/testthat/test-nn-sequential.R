@@ -1260,3 +1260,56 @@ test_that("ggml_load_model Sequential preserves layer configs", {
   expect_equal(m2$compilation$optimizer, "sgd")
   expect_equal(m2$compilation$loss, "mse")
 })
+
+test_that("requested regression metrics are computed by ggml_evaluate", {
+  # ggml_evaluate() already knew how to compute these, but ggml_compile()
+  # rejected the names as unsupported -- so the working code was unreachable.
+  # The sequential path computed none at all.
+  skip_on_cran()
+  set.seed(9)
+  n <- 64L
+  x <- matrix(runif(n * 4L, -1, 1), nrow = n)
+  y <- matrix(rowSums(x[, 1:2]), ncol = 1L)
+
+  m <- ggml_model_sequential() |>
+    ggml_layer_dense(8L, activation = "relu", input_shape = 4L) |>
+    ggml_layer_dense(1L)
+  m <- ggml_compile(m, optimizer = "adam", loss = "mse",
+                    metrics = c("mae", "rmse"))
+  m <- ggml_fit(m, x, y, epochs = 5L, batch_size = 16L, verbose = 0L)
+
+  ev <- ggml_evaluate(m, x, y, batch_size = 16L)
+  expect_true(is.finite(ev$mae))
+  expect_true(is.finite(ev$rmse))
+  expect_gte(ev$mae, 0)
+
+  # Checked against the definitions, not just for being present.
+  p <- ggml_predict(m, x, batch_size = 16L)
+  expect_equal(ev$mae,  mean(abs(y - p)),        tolerance = 1e-5)
+  expect_equal(ev$rmse, sqrt(mean((y - p)^2)),   tolerance = 1e-5)
+
+  cleanup_model(m)
+})
+
+test_that("metrics that were not requested are absent", {
+  # Accuracy is reported regardless; the regression metrics are opt-in, so a
+  # model that did not ask for them must not grow the fields.
+  skip_on_cran()
+  set.seed(9)
+  n <- 64L
+  x <- matrix(runif(n * 4L, -1, 1), nrow = n)
+  y <- matrix(rowSums(x[, 1:2]), ncol = 1L)
+
+  m <- ggml_model_sequential() |>
+    ggml_layer_dense(8L, activation = "relu", input_shape = 4L) |>
+    ggml_layer_dense(1L)
+  m <- ggml_compile(m, optimizer = "adam", loss = "mse")
+  m <- ggml_fit(m, x, y, epochs = 3L, batch_size = 16L, verbose = 0L)
+
+  ev <- ggml_evaluate(m, x, y, batch_size = 16L)
+  expect_null(ev$mae)
+  expect_null(ev$rmse)
+  expect_false(is.null(ev$loss))
+
+  cleanup_model(m)
+})

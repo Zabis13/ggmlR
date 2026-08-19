@@ -191,6 +191,36 @@ SEXP R_ggml_step(SEXP ctx_ptr, SEXP a_ptr) {
 // Graph Building and Execution
 // ============================================================================
 
+// Build a forward graph that also reserves room for gradients.
+//
+// R_ggml_build_forward_expand() below goes through ggml_new_graph(), which is
+// hardcoded to grads = false, so the graph it returns has cgraph->grads == NULL
+// and ggml_build_backward_expand() asserts on it. That made
+// R_ggml_build_backward_expand() unreachable from R for any input at all --
+// registered, but impossible to call successfully. This is the entry point that
+// makes it reachable.
+//
+// `graph_size` is the node capacity; the backward pass adds nodes on top of the
+// forward ones, so it must be larger than a forward-only graph would need.
+SEXP R_ggml_build_forward_expand_grads(SEXP ctx_ptr, SEXP tensor_ptr, SEXP graph_size) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * tensor = (struct ggml_tensor *) r_ptr_required(tensor_ptr, "tensor");
+
+    const int size = asInteger(graph_size);
+    if (size <= 0) {
+        error("graph_size must be a positive integer");
+    }
+
+    struct ggml_cgraph * graph = ggml_new_graph_custom(ctx, (size_t) size, true);
+    if (graph == NULL) {
+        error("Failed to create computation graph (context memory pool too small?)");
+    }
+
+    ggml_build_forward_expand(graph, tensor);
+
+    return R_MakeExternalPtr(graph, R_NilValue, R_NilValue);
+}
+
 SEXP R_ggml_build_forward_expand(SEXP ctx_ptr, SEXP tensor_ptr) {
     struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
     struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
@@ -312,6 +342,12 @@ SEXP R_ggml_graph_reset(SEXP graph_ptr) {
 
     if (graph == NULL) {
         error("Invalid graph pointer");
+    }
+    // ggml_graph_reset() asserts on cgraph->grads, and a failed GGML_ASSERT
+    // aborts the R process. Report it instead.
+    if (graph->grads == NULL) {
+        error("This graph carries no gradient storage, so there is nothing to "
+              "reset. Build it with ggml_build_forward_expand_grads().");
     }
 
     ggml_graph_reset(graph);
@@ -3055,6 +3091,17 @@ SEXP R_ggml_set_param(SEXP tensor_ptr) {
     return tensor_ptr;
 }
 
+// Mark a tensor as the loss to differentiate. ggml_build_backward_expand()
+// asserts that the graph contains one, so without this the whole low-level
+// autodiff path is unreachable from R.
+SEXP R_ggml_set_loss(SEXP tensor_ptr) {
+    struct ggml_tensor * tensor = (struct ggml_tensor *) r_ptr_required(tensor_ptr, "tensor");
+
+    ggml_set_loss(tensor);
+
+    return tensor_ptr;
+}
+
 // Set tensor as input
 SEXP R_ggml_set_input(SEXP tensor_ptr) {
     struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
@@ -4367,6 +4414,38 @@ SEXP R_ggml_build_backward_expand(SEXP ctx_ptr, SEXP graph_ptr) {
     if (ctx == NULL || graph == NULL) {
         error("Invalid pointer");
     }
+    // ggml_build_backward_expand() asserts on both of these, and a failed
+    // GGML_ASSERT aborts the R process rather than raising a condition. Check
+    // them here so the caller gets an error naming the fix.
+    if (ggml_graph_n_nodes(graph) == 0) {
+        error("Cannot build a backward pass for an empty graph");
+    }
+    if (graph->grads == NULL || graph->grad_accs == NULL) {
+        error("This graph carries no gradient storage. Build it with "
+              "ggml_build_forward_expand_grads() rather than "
+              "ggml_build_forward_expand().");
+    }
+    // ggml_build_backward_expand() also asserts that the graph holds at least
+    // one parameter and one loss node. Both aborts are turned into errors here,
+    // naming the call that is missing.
+    {
+        bool any_params = false;
+        bool any_loss   = false;
+        const int n = ggml_graph_n_nodes(graph);
+        for (int i = 0; i < n; ++i) {
+            struct ggml_tensor * node = ggml_graph_node(graph, i);
+            if (node->flags & GGML_TENSOR_FLAG_PARAM) any_params = true;
+            if (node->flags & GGML_TENSOR_FLAG_LOSS)  any_loss   = true;
+        }
+        if (!any_params) {
+            error("This graph has no trainable parameters. Mark them with "
+                  "ggml_set_param() before building the graph.");
+        }
+        if (!any_loss) {
+            error("This graph has no loss node. Mark the output with "
+                  "ggml_set_loss() before building the graph.");
+        }
+    }
     ggml_build_backward_expand(ctx, graph, NULL);
     return R_NilValue;
 }
@@ -5052,4 +5131,218 @@ SEXP R_ggml_get_next_tensor(SEXP ctx_ptr, SEXP tensor_ptr) {
         return R_NilValue;
     }
     return R_MakeExternalPtr(t, R_NilValue, R_NilValue);
+}
+
+// ============================================================================
+// State-space models (Mamba) and RWKV-family recurrences
+//
+// These ops share an unusual output convention: each returns ONE tensor with
+// the sequence output and the final recurrent state concatenated, so a caller
+// that wants either half has to slice it. The R layer exposes the raw ops as
+// they are, plus view helpers (see ggml_ssm_scan_output() and friends) that do
+// the offset arithmetic, since getting it wrong reads the state as output.
+//
+// None of these have a backward pass in ggml, so they are inference-only.
+// ============================================================================
+
+// State-space convolution (Mamba).
+// sx: [d_conv - 1 + n_t, d_inner, n_s], c: [d_conv, d_inner]
+// result: [d_inner, n_t, n_s]
+SEXP R_ggml_ssm_conv(SEXP ctx_ptr, SEXP sx_ptr, SEXP c_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * sx = (struct ggml_tensor *) r_ptr_required(sx_ptr, "sx tensor");
+    struct ggml_tensor * c  = (struct ggml_tensor *) r_ptr_required(c_ptr,  "c tensor");
+
+    struct ggml_tensor * result = ggml_ssm_conv(ctx, sx, c);
+    if (result == NULL) {
+        error("Failed to create ssm_conv operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Backward pass for ssm_conv (ggmlR extension).
+// Returns one flat tensor holding both input gradients: [d_sx | d_c].
+// Exposed mainly so the gradient can be checked against a numeric one from R;
+// ordinary training reaches it through ggml_build_backward_expand().
+// Backward pass for rwkv_wkv7 (ggmlR extension).
+// Packs [d_r | d_w | d_k | d_v | d_a | d_b | d_state].
+SEXP R_ggml_rwkv_wkv7_back(SEXP ctx_ptr, SEXP r_ptr, SEXP w_ptr, SEXP k_ptr,
+                           SEXP v_ptr, SEXP a_ptr, SEXP b_ptr, SEXP state_ptr,
+                           SEXP grad_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * r     = (struct ggml_tensor *) r_ptr_required(r_ptr,     "r tensor");
+    struct ggml_tensor * w     = (struct ggml_tensor *) r_ptr_required(w_ptr,     "w tensor");
+    struct ggml_tensor * k     = (struct ggml_tensor *) r_ptr_required(k_ptr,     "k tensor");
+    struct ggml_tensor * v     = (struct ggml_tensor *) r_ptr_required(v_ptr,     "v tensor");
+    struct ggml_tensor * a     = (struct ggml_tensor *) r_ptr_required(a_ptr,     "a tensor");
+    struct ggml_tensor * b     = (struct ggml_tensor *) r_ptr_required(b_ptr,     "b tensor");
+    struct ggml_tensor * state = (struct ggml_tensor *) r_ptr_required(state_ptr, "state tensor");
+    struct ggml_tensor * grad  = (struct ggml_tensor *) r_ptr_required(grad_ptr,  "grad tensor");
+
+    struct ggml_tensor * result = ggml_rwkv_wkv7_back(ctx, r, w, k, v, a, b, state, grad);
+    if (result == NULL) {
+        error("Failed to create rwkv_wkv7_back operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Backward pass for gated_linear_attn (ggmlR extension).
+// Packs [d_k | d_v | d_q | d_g | d_state].
+SEXP R_ggml_gated_linear_attn_back(SEXP ctx_ptr, SEXP k_ptr, SEXP v_ptr, SEXP q_ptr,
+                                   SEXP g_ptr, SEXP state_ptr, SEXP grad_ptr,
+                                   SEXP scale_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * k     = (struct ggml_tensor *) r_ptr_required(k_ptr,     "k tensor");
+    struct ggml_tensor * v     = (struct ggml_tensor *) r_ptr_required(v_ptr,     "v tensor");
+    struct ggml_tensor * q     = (struct ggml_tensor *) r_ptr_required(q_ptr,     "q tensor");
+    struct ggml_tensor * g     = (struct ggml_tensor *) r_ptr_required(g_ptr,     "g tensor");
+    struct ggml_tensor * state = (struct ggml_tensor *) r_ptr_required(state_ptr, "state tensor");
+    struct ggml_tensor * grad  = (struct ggml_tensor *) r_ptr_required(grad_ptr,  "grad tensor");
+    float scale = (float) asReal(scale_sexp);
+
+    struct ggml_tensor * result = ggml_gated_linear_attn_back(ctx, k, v, q, g, state, grad, scale);
+    if (result == NULL) {
+        error("Failed to create gated_linear_attn_back operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Backward pass for rwkv_wkv6 (ggmlR extension).
+// Packs [d_k | d_v | d_r | d_tf | d_td | d_state].
+SEXP R_ggml_rwkv_wkv6_back(SEXP ctx_ptr, SEXP k_ptr, SEXP v_ptr, SEXP r_ptr,
+                           SEXP tf_ptr, SEXP td_ptr, SEXP state_ptr, SEXP grad_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * k     = (struct ggml_tensor *) r_ptr_required(k_ptr,     "k tensor");
+    struct ggml_tensor * v     = (struct ggml_tensor *) r_ptr_required(v_ptr,     "v tensor");
+    struct ggml_tensor * r     = (struct ggml_tensor *) r_ptr_required(r_ptr,     "r tensor");
+    struct ggml_tensor * tf    = (struct ggml_tensor *) r_ptr_required(tf_ptr,    "tf tensor");
+    struct ggml_tensor * td    = (struct ggml_tensor *) r_ptr_required(td_ptr,    "td tensor");
+    struct ggml_tensor * state = (struct ggml_tensor *) r_ptr_required(state_ptr, "state tensor");
+    struct ggml_tensor * grad  = (struct ggml_tensor *) r_ptr_required(grad_ptr,  "grad tensor");
+
+    struct ggml_tensor * result = ggml_rwkv_wkv6_back(ctx, k, v, r, tf, td, state, grad);
+    if (result == NULL) {
+        error("Failed to create rwkv_wkv6_back operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Backward pass for ssm_scan (ggmlR extension).
+// Returns all six input gradients packed: [d_s | d_x | d_dt | d_A | d_B | d_C].
+SEXP R_ggml_ssm_scan_back(SEXP ctx_ptr, SEXP s_ptr, SEXP x_ptr, SEXP dt_ptr,
+                          SEXP A_ptr, SEXP B_ptr, SEXP C_ptr, SEXP ids_ptr,
+                          SEXP grad_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * s    = (struct ggml_tensor *) r_ptr_required(s_ptr,    "s tensor");
+    struct ggml_tensor * x    = (struct ggml_tensor *) r_ptr_required(x_ptr,    "x tensor");
+    struct ggml_tensor * dt   = (struct ggml_tensor *) r_ptr_required(dt_ptr,   "dt tensor");
+    struct ggml_tensor * A    = (struct ggml_tensor *) r_ptr_required(A_ptr,    "A tensor");
+    struct ggml_tensor * B    = (struct ggml_tensor *) r_ptr_required(B_ptr,    "B tensor");
+    struct ggml_tensor * C    = (struct ggml_tensor *) r_ptr_required(C_ptr,    "C tensor");
+    struct ggml_tensor * ids  = (struct ggml_tensor *) r_ptr_required(ids_ptr,  "ids tensor");
+    struct ggml_tensor * grad = (struct ggml_tensor *) r_ptr_required(grad_ptr, "grad tensor");
+
+    struct ggml_tensor * result = ggml_ssm_scan_back(ctx, s, x, dt, A, B, C, ids, grad);
+    if (result == NULL) {
+        error("Failed to create ssm_scan_back operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_ssm_conv_back(SEXP ctx_ptr, SEXP sx_ptr, SEXP c_ptr, SEXP grad_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * sx   = (struct ggml_tensor *) r_ptr_required(sx_ptr,   "sx tensor");
+    struct ggml_tensor * c    = (struct ggml_tensor *) r_ptr_required(c_ptr,    "c tensor");
+    struct ggml_tensor * grad = (struct ggml_tensor *) r_ptr_required(grad_ptr, "grad tensor");
+
+    struct ggml_tensor * result = ggml_ssm_conv_back(ctx, sx, c, grad);
+    if (result == NULL) {
+        error("Failed to create ssm_conv_back operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Selective state-space scan (Mamba / Mamba-2).
+// s: [d_state, head_dim, n_head, n_seqs_total], x: [head_dim, n_head, n_seq_tokens, n_seqs]
+// dt: [n_head, n_seq_tokens, n_seqs], A: [1 or d_state, n_head]
+// B, C: [d_state, n_group, n_seq_tokens, n_seqs], ids: [n_seqs] I32
+// result: flat, ggml_nelements(x) + d_state*head_dim*n_head*n_seqs elements --
+// the outputs followed by the final states.
+SEXP R_ggml_ssm_scan(SEXP ctx_ptr, SEXP s_ptr, SEXP x_ptr, SEXP dt_ptr,
+                     SEXP A_ptr, SEXP B_ptr, SEXP C_ptr, SEXP ids_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * s   = (struct ggml_tensor *) r_ptr_required(s_ptr,   "s tensor");
+    struct ggml_tensor * x   = (struct ggml_tensor *) r_ptr_required(x_ptr,   "x tensor");
+    struct ggml_tensor * dt  = (struct ggml_tensor *) r_ptr_required(dt_ptr,  "dt tensor");
+    struct ggml_tensor * A   = (struct ggml_tensor *) r_ptr_required(A_ptr,   "A tensor");
+    struct ggml_tensor * B   = (struct ggml_tensor *) r_ptr_required(B_ptr,   "B tensor");
+    struct ggml_tensor * C   = (struct ggml_tensor *) r_ptr_required(C_ptr,   "C tensor");
+    struct ggml_tensor * ids = (struct ggml_tensor *) r_ptr_required(ids_ptr, "ids tensor");
+
+    struct ggml_tensor * result = ggml_ssm_scan(ctx, s, x, dt, A, B, C, ids);
+    if (result == NULL) {
+        error("Failed to create ssm_scan operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// RWKV-6 WKV recurrence.
+// k, v, r, td: [S, H, n_tokens], tf: [S, H], state: [S*S*H, n_seqs]
+// result: [S*H, n_tokens + S*n_seqs] -- outputs then the final state.
+SEXP R_ggml_rwkv_wkv6(SEXP ctx_ptr, SEXP k_ptr, SEXP v_ptr, SEXP r_ptr,
+                      SEXP tf_ptr, SEXP td_ptr, SEXP state_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * k     = (struct ggml_tensor *) r_ptr_required(k_ptr,     "k tensor");
+    struct ggml_tensor * v     = (struct ggml_tensor *) r_ptr_required(v_ptr,     "v tensor");
+    struct ggml_tensor * r     = (struct ggml_tensor *) r_ptr_required(r_ptr,     "r tensor");
+    struct ggml_tensor * tf    = (struct ggml_tensor *) r_ptr_required(tf_ptr,    "tf tensor");
+    struct ggml_tensor * td    = (struct ggml_tensor *) r_ptr_required(td_ptr,    "td tensor");
+    struct ggml_tensor * state = (struct ggml_tensor *) r_ptr_required(state_ptr, "state tensor");
+
+    struct ggml_tensor * result = ggml_rwkv_wkv6(ctx, k, v, r, tf, td, state);
+    if (result == NULL) {
+        error("Failed to create rwkv_wkv6 operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// RWKV-7 WKV recurrence.
+// r, w, k, v, a, b: [S, H, n_tokens], state: [S*S*H, n_seqs]
+// result: [S*H, n_tokens + S*n_seqs] -- outputs then the final state.
+SEXP R_ggml_rwkv_wkv7(SEXP ctx_ptr, SEXP r_ptr, SEXP w_ptr, SEXP k_ptr,
+                      SEXP v_ptr, SEXP a_ptr, SEXP b_ptr, SEXP state_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * r     = (struct ggml_tensor *) r_ptr_required(r_ptr,     "r tensor");
+    struct ggml_tensor * w     = (struct ggml_tensor *) r_ptr_required(w_ptr,     "w tensor");
+    struct ggml_tensor * k     = (struct ggml_tensor *) r_ptr_required(k_ptr,     "k tensor");
+    struct ggml_tensor * v     = (struct ggml_tensor *) r_ptr_required(v_ptr,     "v tensor");
+    struct ggml_tensor * a     = (struct ggml_tensor *) r_ptr_required(a_ptr,     "a tensor");
+    struct ggml_tensor * b     = (struct ggml_tensor *) r_ptr_required(b_ptr,     "b tensor");
+    struct ggml_tensor * state = (struct ggml_tensor *) r_ptr_required(state_ptr, "state tensor");
+
+    struct ggml_tensor * result = ggml_rwkv_wkv7(ctx, r, w, k, v, a, b, state);
+    if (result == NULL) {
+        error("Failed to create rwkv_wkv7 operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Gated linear attention (GLA).
+// k, v, q, g: [S, H, n_tokens], state: [S*S*H, n_seqs], scale: scalar
+// result: [S*H, n_tokens + S*n_seqs] -- outputs then the final state.
+SEXP R_ggml_gated_linear_attn(SEXP ctx_ptr, SEXP k_ptr, SEXP v_ptr, SEXP q_ptr,
+                              SEXP g_ptr, SEXP state_ptr, SEXP scale_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * k     = (struct ggml_tensor *) r_ptr_required(k_ptr,     "k tensor");
+    struct ggml_tensor * v     = (struct ggml_tensor *) r_ptr_required(v_ptr,     "v tensor");
+    struct ggml_tensor * q     = (struct ggml_tensor *) r_ptr_required(q_ptr,     "q tensor");
+    struct ggml_tensor * g     = (struct ggml_tensor *) r_ptr_required(g_ptr,     "g tensor");
+    struct ggml_tensor * state = (struct ggml_tensor *) r_ptr_required(state_ptr, "state tensor");
+    float scale = (float) asReal(scale_sexp);
+
+    struct ggml_tensor * result = ggml_gated_linear_attn(ctx, k, v, q, g, state, scale);
+    if (result == NULL) {
+        error("Failed to create gated_linear_attn operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }

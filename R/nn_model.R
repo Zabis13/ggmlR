@@ -269,9 +269,25 @@ ggml_unfreeze_weights.ggml_functional_model <- function(model,
 #'
 #' @param model A ggml_sequential_model object
 #' @param optimizer Optimizer name: "adam" or "sgd"
-#' @param loss Loss function name: "categorical_crossentropy" or "mse"
-#' @param metrics Character vector of metrics (currently "accuracy")
+#' @param loss Loss function name: \code{"categorical_crossentropy"} (expects a
+#'   softmax output), \code{"mse"}, \code{"mae"}, \code{"huber"} (smooth L1,
+#'   delta 1) or \code{"binary_crossentropy"} (expects a sigmoid output, one
+#'   independent label per unit).  \code{"mean_squared_error"},
+#'   \code{"mean_absolute_error"}, \code{"huber_loss"} and
+#'   \code{"binary_cross_entropy"} are accepted as aliases.
+#'   For a multi-output functional model, a list or character vector with one
+#'   loss per output -- named after the output layers, or positional:
+#'   \code{loss = list(policy = "categorical_crossentropy", value = "mse")}.
+#' @param metrics Character vector of metrics to report from
+#'   \code{\link{ggml_evaluate}}.  \code{"accuracy"} is reported for
+#'   multi-class outputs whether or not it is requested; \code{"mae"},
+#'   \code{"mse"} and \code{"rmse"} (and the long forms
+#'   \code{"mean_absolute_error"}, \code{"mean_squared_error"}) are computed
+#'   only when asked for.  Any other name is dropped with a warning.
 #' @param backend Backend to use: "auto" (GPU if available, else CPU), "cpu", or "vulkan"
+#' @param loss_weights Optional per-output weights for a multi-output model;
+#'   the optimized total is \code{sum(loss_weights[i] * loss_i)}. Named after
+#'   the output layers or positional. Default: all outputs weighted 1.
 #' @return The compiled model (invisibly).
 #' @export
 #' @examples
@@ -288,7 +304,8 @@ ggml_unfreeze_weights.ggml_functional_model <- function(model,
 ggml_compile <- function(model, optimizer = "adam",
                           loss = "categorical_crossentropy",
                           metrics = c("accuracy"),
-                          backend = "auto") {
+                          backend = "auto",
+                          loss_weights = NULL) {
   UseMethod("ggml_compile")
 }
 
@@ -298,13 +315,28 @@ ggml_compile <- function(model, optimizer = "adam",
 # ggml_evaluate(), which has no such fallback, would then report loss = NA for
 # the very same model.
 NN_LOSSES <- c("categorical_crossentropy", "crossentropy", "cross_entropy",
-               "mse", "mean_squared_error")
+               "mse", "mean_squared_error",
+               "mae", "mean_absolute_error",
+               "huber", "huber_loss",
+               "binary_crossentropy", "binary_cross_entropy")
 NN_OPTIMIZERS <- c("adam", "adamw", "sgd")
-NN_METRICS <- c("accuracy")
+# Metrics ggml_evaluate() knows how to compute. "accuracy" is reported for
+# multi-class outputs whether or not it is asked for; the regression metrics are
+# computed only when requested.
+NN_METRICS <- c("accuracy", "acc",
+                "mae", "mean_absolute_error",
+                "mse", "mean_squared_error",
+                "rmse")
 
 nn_validate_compilation <- function(optimizer, loss, metrics) {
-  if (!is.character(loss) || length(loss) != 1L || !(loss %in% NN_LOSSES)) {
-    stop("Unsupported loss: ", paste(format(loss), collapse = ", "),
+  # `loss` may be a single name (all heads alike) or, for multi-output models,
+  # a list/vector with one name per output head -- optionally named after the
+  # output layers. Every element still has to be a supported loss name.
+  loss_names <- if (is.list(loss)) unlist(loss, use.names = FALSE) else loss
+  if (!is.character(loss_names) || length(loss_names) < 1L ||
+      !all(loss_names %in% NN_LOSSES)) {
+    bad <- if (is.character(loss_names)) setdiff(loss_names, NN_LOSSES) else loss
+    stop("Unsupported loss: ", paste(format(bad), collapse = ", "),
          ". Supported: ", paste(NN_LOSSES, collapse = ", "),
          ". (binary_crossentropy is not implemented; for two classes use ",
          "categorical_crossentropy with one-hot labels.)", call. = FALSE)
@@ -314,18 +346,115 @@ nn_validate_compilation <- function(optimizer, loss, metrics) {
     stop("Unsupported optimizer: ", paste(format(optimizer), collapse = ", "),
          ". Supported: ", paste(NN_OPTIMIZERS, collapse = ", "), call. = FALSE)
   }
-  # metrics is accepted for keras compatibility. Accuracy is always computed
-  # for multi-class outputs, so anything else would be silently ignored.
+  # Accuracy is reported for multi-class outputs whether or not it is asked
+  # for; the regression metrics in NN_METRICS are computed by ggml_evaluate()
+  # when requested. Anything outside that list would be silently dropped, so
+  # say so rather than letting the caller assume it is being tracked.
   if (!is.null(metrics)) {
     unknown <- setdiff(as.character(metrics), NN_METRICS)
     if (length(unknown) > 0L) {
       warning("Ignoring unsupported metric(s): ", paste(unknown, collapse = ", "),
-              ". Only ", paste(NN_METRICS, collapse = ", "),
-              " is computed; it is reported whether or not it is requested.",
+              ". Supported: ", paste(NN_METRICS, collapse = ", "), ".",
               call. = FALSE)
     }
   }
   invisible(TRUE)
+}
+
+# Map a loss name to its ggml loss-type constant. Kept next to NN_LOSSES so the
+# two cannot drift apart: every name accepted by nn_validate_compilation() must
+# be handled here.
+nn_loss_type_of <- function(loss_name) {
+  switch(loss_name,
+    "categorical_crossentropy" = ,
+    "crossentropy" = ,
+    "cross_entropy" = ggml_opt_loss_type_cross_entropy(),
+    "mse" = ,
+    "mean_squared_error" = ggml_opt_loss_type_mse(),
+    "mae" = ,
+    "mean_absolute_error" = ggml_opt_loss_type_mae(),
+    "huber" = ,
+    "huber_loss" = ggml_opt_loss_type_huber(),
+    "binary_crossentropy" = ,
+    "binary_cross_entropy" = ggml_opt_loss_type_binary_cross_entropy(),
+    stop("Unsupported loss: ", loss_name, call. = FALSE)
+  )
+}
+
+# Is this a cross-entropy loss? CE training needs logits, since
+# ggml_cross_entropy_loss() applies its own softmax -- so a head with this loss
+# has its final softmax stripped when the training graph is built.
+#
+# "binary_crossentropy" is deliberately NOT in this list: it treats every output
+# as an independent Bernoulli and consumes probabilities, so its sigmoid must
+# survive into the training graph. Stripping it would feed logits to log().
+nn_loss_is_ce <- function(loss_name) {
+  loss_name %in% c("categorical_crossentropy", "crossentropy", "cross_entropy")
+}
+
+# Resolve the compiled `loss`/`loss_weights` against a model's output heads.
+#
+# `loss` is either one name for every head, or one name per head -- as a list or
+# character vector, named after the output layers or positional. `output_names`
+# comes from the model's outputs and is used for name-based matching (keras
+# semantics) and for labelling the per-head history.
+#
+# Returns a list with one entry per head: name, loss_type, weight, is_ce.
+nn_resolve_losses <- function(loss, loss_weights, output_names) {
+  n_head <- length(output_names)
+
+  spec_names <- if (is.list(loss)) unlist(loss, use.names = FALSE) else loss
+  keys       <- names(loss)
+
+  if (length(spec_names) == 1L && is.null(keys)) {
+    spec_names <- rep(spec_names, n_head) # one loss for every head
+  } else if (length(spec_names) != n_head) {
+    stop("'loss' must have one entry per output (", length(spec_names),
+         " given, ", n_head, " expected).", call. = FALSE)
+  } else if (!is.null(keys) && !any(keys == "")) {
+    # Named: match outputs by name, as keras does, rather than by position.
+    unknown <- setdiff(keys, output_names)
+    if (length(unknown) > 0L) {
+      stop("'loss' names do not match model outputs: ",
+           paste(unknown, collapse = ", "), ". Model outputs: ",
+           paste(output_names, collapse = ", "), call. = FALSE)
+    }
+    spec_names <- spec_names[match(output_names, keys)]
+  }
+
+  w <- loss_weights
+  if (is.null(w)) {
+    w <- rep(1, n_head)
+  } else {
+    if (is.list(w)) w <- unlist(w, use.names = FALSE)
+    wkeys <- names(loss_weights)
+    if (length(w) == 1L && is.null(wkeys)) {
+      w <- rep(w, n_head)
+    } else if (length(w) != n_head) {
+      stop("'loss_weights' must have one entry per output (", length(w),
+           " given, ", n_head, " expected).", call. = FALSE)
+    } else if (!is.null(wkeys) && !any(wkeys == "")) {
+      unknown <- setdiff(wkeys, output_names)
+      if (length(unknown) > 0L) {
+        stop("'loss_weights' names do not match model outputs: ",
+             paste(unknown, collapse = ", "), call. = FALSE)
+      }
+      w <- w[match(output_names, wkeys)]
+    }
+  }
+  if (!is.numeric(w) || anyNA(w)) {
+    stop("'loss_weights' must be numeric and free of NA.", call. = FALSE)
+  }
+
+  lapply(seq_len(n_head), function(i) {
+    list(
+      name      = output_names[[i]],
+      loss      = spec_names[[i]],
+      loss_type = nn_loss_type_of(spec_names[[i]]),
+      weight    = as.numeric(w[[i]]),
+      is_ce     = nn_loss_is_ce(spec_names[[i]])
+    )
+  })
 }
 
 #' @rdname ggml_compile
@@ -333,9 +462,20 @@ nn_validate_compilation <- function(optimizer, loss, metrics) {
 ggml_compile.ggml_sequential_model <- function(model, optimizer = "adam",
                                                 loss = "categorical_crossentropy",
                                                 metrics = c("accuracy"),
-                                                backend = "auto") {
+                                                backend = "auto",
+                                                loss_weights = NULL) {
   if (length(model$layers) == 0) {
     stop("Model has no layers. Add layers before compiling.")
+  }
+  # Sequential models have exactly one output, so per-head losses/weights have
+  # nothing to attach to. Rejecting is better than accepting and ignoring them.
+  if (!is.null(loss_weights)) {
+    stop("'loss_weights' applies to multi-output models; a sequential model ",
+         "has a single output.", call. = FALSE)
+  }
+  if (length(if (is.list(loss)) unlist(loss, use.names = FALSE) else loss) != 1L) {
+    stop("A sequential model has a single output, so 'loss' must be one loss name.",
+         call. = FALSE)
   }
   nn_validate_compilation(optimizer, loss, metrics)
 
@@ -1149,14 +1289,12 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
     stop("Unsupported optimizer: ", model$compilation$optimizer, call. = FALSE)
   )
 
+  # nn_loss_type_of() rather than a second switch: a duplicate mapping here
+  # would silently reject any loss added to the shared one.
   loss_type <- if (use_weighted_mse) {
     ggml_opt_loss_type_weighted_mse()
   } else {
-    switch(model$compilation$loss,
-      "categorical_crossentropy" = , "crossentropy" = , "cross_entropy" = ggml_opt_loss_type_cross_entropy(),
-      "mse" = , "mean_squared_error" = ggml_opt_loss_type_mse(),
-      stop("Unsupported loss: ", model$compilation$loss, call. = FALSE)
-    )
+    nn_loss_type_of(model$compilation$loss)
   }
 
   # Train.  Uses the R-side epoch loop (ggml_fit_opt) rather than the single
@@ -1240,7 +1378,13 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
 #' @param batch_size Batch size for evaluation
 #' @param sample_weight Numeric vector of per-sample weights (length = nrow(x)).
 #' @param class_weight Named vector of weights per class, e.g. c("0"=1, "1"=10). Cannot be used with sample_weight.
-#' @return Named list with \code{loss} and \code{accuracy}.
+#' @return Named list with \code{loss} and \code{accuracy}. A multi-output
+#'   functional model additionally reports each head as \code{<output>_loss}.
+#'   Note the deliberate difference from the training history, which names the
+#'   same quantities \code{train_<output>_loss} and \code{val_<output>_loss}:
+#'   there the prefix distinguishes the two phases (and keeps an output named
+#'   \code{val_x} from colliding with another output's validation column),
+#'   whereas evaluation has no phases to tell apart, so the bare name is used.
 #' @examples
 #' \donttest{
 #' ggml_set_n_threads(1L)  # deterministic, single OpenMP pool
@@ -1305,18 +1449,10 @@ ggml_evaluate.ggml_sequential_model <- function(model, x, y, batch_size = 32,
   # Get predictions for ALL samples (no truncation)
   preds <- ggml_predict(model, x, batch_size = batch_size)
 
-  # Compute loss
-  loss_name <- model$compilation$loss
-  if (loss_name %in% c("categorical_crossentropy", "crossentropy", "cross_entropy")) {
-    # Cross-entropy: -sum(y * log(p)) / n
-    eps <- 1e-7
-    preds_clipped <- pmax(pmin(preds, 1 - eps), eps)
-    loss_val <- -mean(rowSums(y * log(preds_clipped)))
-  } else if (loss_name %in% c("mse", "mean_squared_error")) {
-    loss_val <- mean(rowSums((y - preds)^2) / ne_label)
-  } else {
-    loss_val <- NA_real_
-  }
+  # Compute loss. nn_head_loss() is the shared implementation the functional
+  # path uses, so both report the same number for the same loss name -- and a
+  # loss added there is not silently NA here.
+  loss_val <- nn_head_loss(model$compilation$loss, preds, y)
 
   # Compute accuracy (classification: argmax match)
   if (ne_label > 1L) {
@@ -1327,7 +1463,10 @@ ggml_evaluate.ggml_sequential_model <- function(model, x, y, batch_size = 32,
     acc_val <- NA_real_
   }
 
-  list(loss = loss_val, accuracy = acc_val, n_samples = n_samples)
+  out <- list(loss = loss_val, accuracy = acc_val, n_samples = n_samples)
+  # Same helper the functional path uses, so a metric means the same thing in
+  # both APIs -- previously the sequential evaluate() computed none at all.
+  nn_add_extra_metrics(out, model$compilation$metrics, preds, y)
 }
 
 # ============================================================================
@@ -1933,9 +2072,12 @@ ggml_save_model.ggml_functional_model <- function(model, path) {
     inputs       = model$inputs,     # pure R ggml_tensor_node lists
     outputs      = model$outputs,
     compilation  = list(
-      optimizer = model$compilation$optimizer,
-      loss      = model$compilation$loss,
-      metrics   = model$compilation$metrics
+      optimizer    = model$compilation$optimizer,
+      loss         = model$compilation$loss,
+      metrics      = model$compilation$metrics,
+      # Per-output weights must survive the round trip: without them a reloaded
+      # multi-output model would silently retrain with every head weighted 1.
+      loss_weights = model$compilation$loss_weights
     ),
     node_weights_data = nw_data,
     version = 2L
@@ -2005,10 +2147,13 @@ ggml_load_model <- function(path, backend = "auto") {
   } else if (data$model_class == "ggml_functional_model") {
     model <- ggml_model(inputs = data$inputs, outputs = data$outputs)
     model <- ggml_compile(model,
-      optimizer = data$compilation$optimizer,
-      loss      = data$compilation$loss,
-      metrics   = data$compilation$metrics,
-      backend   = backend
+      optimizer    = data$compilation$optimizer,
+      loss         = data$compilation$loss,
+      metrics      = data$compilation$metrics,
+      backend      = backend,
+      # NULL for models saved before multi-output support, which is exactly the
+      # single-head default.
+      loss_weights = data$compilation$loss_weights
     )
 
     # Ensure no stale ggml tensor pointers from the freshly-created model.

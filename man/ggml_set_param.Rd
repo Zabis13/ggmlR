@@ -16,3 +16,7 @@ The tensor (for chaining)
 Marks a tensor as a trainable parameter for backpropagation.
 The optimizer will compute gradients for this tensor during training.
 }
+\seealso{
+\code{\link{ggml_set_loss}}, which marks the other end of the
+  backward pass, and \code{\link{ggml_build_backward_expand}}.
+}

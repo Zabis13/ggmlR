@@ -1,6 +1,7 @@
 #include "vec.h"
 
 #include <cassert>
+#include <cmath>    // isnan/isinf in the assert below; previously transitive
 
 // precomputed gelu table for f16 (128 KB)
 ggml_fp16_t ggml_table_gelu_f16[1 << 16];

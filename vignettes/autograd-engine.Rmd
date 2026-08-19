@@ -105,6 +105,23 @@ params <- model$parameters()
 cat("Parameter tensors:", length(params), "\n")
 ```
 
+`ag_layer_norm()` is the other normalization available. The two differ in what
+they average over: batch norm normalizes each *feature* across the batch, so its
+result depends on the other examples in the batch and it needs running
+statistics for inference; layer norm normalizes each *example* across its own
+features, so it behaves identically in training and evaluation and works with a
+batch of one. That independence from batch size is why transformers use it.
+
+```{r}
+model_ln <- ag_sequential(
+  ag_linear(4L,  64L, activation = "relu"),
+  ag_layer_norm(64L),
+  ag_linear(64L, 32L, activation = "relu"),
+  ag_linear(32L,  3L)
+)
+cat("LayerNorm model parameters:", length(model_ln$parameters()), "\n")
+```
+
 ---
 
 ## 4. Optimizers
@@ -159,6 +176,22 @@ sch_cos <- lr_scheduler_cosine(opt2, T_max = 150L, lr_min = 1e-5)
 # Step decay: multiply lr by gamma every step_size epochs
 sch_step <- lr_scheduler_step(opt2, step_size = 30L, gamma = 0.5)
 
+# SGDR warm restarts: each cycle T_mult times longer than the last.
+# T_mult only takes effect with restart = TRUE.
+sch_sgdr <- lr_scheduler_cosine(opt2, T_max = 20L, lr_min = 1e-5,
+                                restart = TRUE, T_mult = 2L)
+
+# 1cycle: lr rises then falls, momentum (or Adam beta1) moves inversely
+sch_1cyc <- lr_scheduler_onecycle(opt2, max_lr = 1e-2, total_steps = 150L)
+
+# Cyclic: triangular by default, also "triangular2" and "exp_range"
+sch_cyc <- lr_scheduler_cyclic(opt2, base_lr = 1e-4, max_lr = 1e-2,
+                               step_size_up = 25L)
+
+# Linear warmup, then cosine decay
+sch_warm <- lr_scheduler_warmup_cosine(opt2, warmup_steps = 10L,
+                                       total_steps = 150L)
+
 # Call after each epoch:
 # sch_cos$step()
 ```
@@ -173,8 +206,18 @@ with_grad_tape({
 })
 grads <- backward(loss)
 
-# Clip global gradient norm to max_norm
+# Clip global gradient norm to max_norm -- rescales every gradient by one
+# factor, so their relative directions are preserved.
 clip_grad_norm(params, grads, max_norm = 5.0)
+
+# Element-wise alternative: clamp each value into [-clip_value, clip_value].
+# Blunter than norm clipping, but it bounds every element individually.
+clip_grad_value(params, grads, clip_value = 1.0)
+
+# Catch NaN/Inf gradients where they appear, rather than after the weights
+# have already been poisoned. action = "warn" (default), "stop" or "silent";
+# max_abs additionally flags gradients that are merely oversized.
+check_grad_anomaly(params, grads, action = "warn")
 
 opt$step(grads)
 opt$zero_grad()

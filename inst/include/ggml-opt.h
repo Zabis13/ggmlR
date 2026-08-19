@@ -33,6 +33,9 @@ extern "C" {
         GGML_OPT_LOSS_TYPE_CROSS_ENTROPY,
         GGML_OPT_LOSS_TYPE_MEAN_SQUARED_ERROR,
         GGML_OPT_LOSS_TYPE_WEIGHTED_MEAN_SQUARED_ERROR, // per-datapoint weighted MSE (ggmlR extension)
+        GGML_OPT_LOSS_TYPE_MEAN_ABSOLUTE_ERROR,         // MAE / L1 (ggmlR extension)
+        GGML_OPT_LOSS_TYPE_HUBER,                       // Huber / smooth L1, delta = 1 (ggmlR extension)
+        GGML_OPT_LOSS_TYPE_BINARY_CROSS_ENTROPY,        // per-element binary CE (ggmlR extension)
     };
 
     // ====== Dataset ======
@@ -62,6 +65,18 @@ extern "C" {
             ggml_opt_dataset_t   dataset,
             struct ggml_tensor * data_batch,   // shape = [ne_datapoint, ndata_batch]
             struct ggml_tensor * labels_batch, // shape = [ne_label,     ndata_batch]
+            int64_t              ibatch);
+    // as ggml_opt_dataset_get_batch, but copies only one output head's slice of
+    // the labels (ggmlR multi-loss extension). The dataset's labels hold all
+    // heads concatenated along ne[0]: head i occupies columns
+    // [labels_off, labels_off + labels_batch->ne[0]) of every label row.
+    // The heads share the dataset's datapoints, permutation and shards, so the
+    // batch composition matches ggml_opt_dataset_get_batch exactly.
+    GGML_API void ggml_opt_dataset_get_batch_head(
+            ggml_opt_dataset_t   dataset,
+            struct ggml_tensor * data_batch,   // shape = [ne_datapoint, ndata_batch], may be NULL to copy labels only
+            struct ggml_tensor * labels_batch, // shape = [ne_label_head, ndata_batch]
+            int64_t              labels_off,   // offset of this head within a label row, in elements
             int64_t              ibatch);
     GGML_API void ggml_opt_dataset_get_batch_host(
             ggml_opt_dataset_t   dataset,
@@ -129,6 +144,22 @@ extern "C" {
         enum ggml_opt_loss_type  loss_type;
         enum ggml_opt_build_type build_type;
 
+        // Multi-loss (ggmlR extension): several output heads, each with its own
+        // labels, loss type and weight; the optimized total is
+        //     loss = sum_i loss_w[i] * loss_i
+        // Leave these NULL/0 for the single-head case — then `outputs` and
+        // `loss_type` above are used and the built graph is identical, node for
+        // node, to the one produced before multi-loss existed.
+        // When n_loss > 0 the arrays take precedence and `outputs`/`loss_type`
+        // are ignored; the arrays are copied by ggml_opt_init and need not
+        // outlive the call. loss_w may be NULL, meaning all weights are 1.
+        // All heads must share the same number of datapoints (batch size), and
+        // must not mix GGML_OPT_LOSS_TYPE_SUM with the per-datapoint loss types.
+        int64_t                        n_loss;      // number of heads, 0 = single-head (legacy) mode
+        struct ggml_tensor    * const * outputs_multi; // [n_loss]
+        const enum ggml_opt_loss_type * loss_type_multi; // [n_loss]
+        const float                   * loss_w;      // [n_loss], NULL = all 1.0f
+
         int32_t opt_period; // after how many gradient accumulation steps an optimizer step should be done
 
         ggml_opt_get_optimizer_params get_opt_pars;    // callback for calculating optimizer parameters
@@ -143,6 +174,16 @@ extern "C" {
     GGML_API struct ggml_opt_params ggml_opt_default_params(
             ggml_backend_sched_t    backend_sched,
             enum ggml_opt_loss_type loss_type);
+
+    // as ggml_opt_default_params, but for a model with several output heads
+    // (ggmlR multi-loss extension). loss_w may be NULL, meaning all weights 1.
+    // The caller still has to set ctx_compute/inputs and the outputs_multi
+    // array in the returned params.
+    GGML_API struct ggml_opt_params ggml_opt_default_params_multi(
+            ggml_backend_sched_t            backend_sched,
+            int64_t                         n_loss,
+            const enum ggml_opt_loss_type * loss_type,
+            const float                   * loss_w);
 
     GGML_API ggml_opt_context_t ggml_opt_init(struct ggml_opt_params params);
     GGML_API void ggml_opt_free(ggml_opt_context_t opt_ctx);
@@ -161,6 +202,29 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_opt_loss(    ggml_opt_context_t opt_ctx); // scalar tensor that contains the loss
     GGML_API struct ggml_tensor * ggml_opt_pred(    ggml_opt_context_t opt_ctx); // predictions made by outputs
     GGML_API struct ggml_tensor * ggml_opt_ncorrect(ggml_opt_context_t opt_ctx); // number of matching predictions between outputs and labels
+
+    // Per-head variants of the accessors above (ggmlR multi-loss extension).
+    // Head indices run [0, ggml_opt_n_loss); index 0 is what the accessors
+    // above return, so single-head code needs no change.
+    GGML_API int64_t              ggml_opt_n_loss(ggml_opt_context_t opt_ctx); // number of output heads, >= 1
+    GGML_API struct ggml_tensor * ggml_opt_outputs_i     (ggml_opt_context_t opt_ctx, int64_t i);
+    GGML_API struct ggml_tensor * ggml_opt_labels_i      (ggml_opt_context_t opt_ctx, int64_t i);
+    GGML_API struct ggml_tensor * ggml_opt_loss_weights_i(ggml_opt_context_t opt_ctx, int64_t i);
+    GGML_API struct ggml_tensor * ggml_opt_pred_i        (ggml_opt_context_t opt_ctx, int64_t i);
+    GGML_API struct ggml_tensor * ggml_opt_ncorrect_i    (ggml_opt_context_t opt_ctx, int64_t i);
+    // Per-head loss scalar, BEFORE weighting and reduction — for reporting the
+    // individual heads in the training history. ggml_opt_loss() returns the
+    // weighted total that is actually optimized.
+    GGML_API struct ggml_tensor * ggml_opt_loss_i        (ggml_opt_context_t opt_ctx, int64_t i);
+
+    // Tell the context where each head's labels sit inside a dataset label row
+    // (in elements). Needed when driving ggml_opt_epoch directly instead of
+    // going through ggml_opt_fit_multi, which sets them itself. n_loss must
+    // match the context's head count.
+    GGML_API void ggml_opt_set_labels_offs(
+            ggml_opt_context_t opt_ctx,
+            int64_t            n_loss,
+            const int64_t    * labels_offs);
 
     // get the gradient accumulator for a node from the forward graph
     GGML_API struct ggml_tensor * ggml_opt_grad_acc(ggml_opt_context_t opt_ctx, struct ggml_tensor * node);
@@ -181,6 +245,13 @@ extern "C" {
     GGML_API void ggml_opt_result_pred(    ggml_opt_result_t result, int32_t * pred);                   // writes ndata values
     GGML_API void ggml_opt_result_accuracy(ggml_opt_result_t result, double  * accuracy, double * unc); // writes 1 value
 
+    // Per-head results (ggmlR multi-loss extension). The accessors above report
+    // head 0, so single-output callers need no change. Accuracy is NAN for a
+    // head whose loss is not cross-entropy.
+    GGML_API int64_t ggml_opt_result_n_loss(ggml_opt_result_t result);
+    GGML_API void ggml_opt_result_loss_i(    ggml_opt_result_t result, int64_t i, double * loss,     double * unc);
+    GGML_API void ggml_opt_result_accuracy_i(ggml_opt_result_t result, int64_t i, double * accuracy, double * unc);
+
     // ====== Computation ======
 
     // if not using static graphs, this function must be called prior to ggml_opt_alloc
@@ -190,6 +261,17 @@ extern "C" {
         struct ggml_cgraph  * gf,
         struct ggml_tensor  * inputs,
         struct ggml_tensor  * outputs);
+
+    // as ggml_opt_prepare_alloc, for a model with several output heads
+    // (ggmlR multi-loss extension). n_loss must match the one the context was
+    // initialized with.
+    GGML_API void ggml_opt_prepare_alloc_multi(
+        ggml_opt_context_t             opt_ctx,
+        struct ggml_context          * ctx_compute,
+        struct ggml_cgraph           * gf,
+        struct ggml_tensor           * inputs,
+        int64_t                        n_loss,
+        struct ggml_tensor   * const * outputs);
 
     // allocate the next graph for evaluation, either forward or forward + backward
     // must be called exactly once prior to calling ggml_opt_eval
@@ -259,6 +341,27 @@ extern "C" {
             int64_t                         nbatch_logical, // datapoints optimizer step, must be a multiple of ndata_batch in inputs/outputs
             float                           val_split,      // fraction of the dataset to use for validation, must be in [0.0f, 1.0f)
             bool                            silent);        // whether or not info prints to stderr should be suppressed
+
+    // as ggml_opt_fit, for a model with several output heads (ggmlR multi-loss
+    // extension). The dataset holds the labels of all heads concatenated along
+    // ne[0]; labels_offs[i]/labels_ne[i] give the offset and width of head i
+    // within a label row. All heads share the dataset's datapoints.
+    GGML_API void ggml_opt_fit_multi(
+            ggml_backend_sched_t            backend_sched,
+            struct ggml_context           * ctx_compute,
+            struct ggml_tensor            * inputs,
+            int64_t                         n_loss,         // number of output heads
+            struct ggml_tensor    * const * outputs,        // [n_loss]
+            const enum ggml_opt_loss_type * loss_type,      // [n_loss]
+            const float                   * loss_w,         // [n_loss], NULL = all 1.0f
+            const int64_t                 * labels_offs,    // [n_loss], offset of head i in a label row
+            ggml_opt_dataset_t              dataset,
+            enum ggml_opt_optimizer_type    optimizer,
+            ggml_opt_get_optimizer_params   get_opt_pars,
+            int64_t                         nepoch,
+            int64_t                         nbatch_logical,
+            float                           val_split,
+            bool                            silent);
 
 
 #ifdef  __cplusplus

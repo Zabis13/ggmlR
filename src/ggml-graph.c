@@ -621,6 +621,238 @@ static void ggml_compute_backward(
                 ggml_add_or_set(ctx, cgraph, isrc1, ggml_im2col_back(ctx, grad, src0, src1->ne, s0, s1, p0, p1, d0, d1, is_2D));
             }
         } break;
+        case GGML_OP_SSM_CONV: {
+            // DIVERGENCE from upstream: ggml has no backward for SSM_CONV at
+            // all, which makes the convolution branch of a Mamba block
+            // inference-only. Note the contrast with GGML_OP_FLASH_ATTN_EXT,
+            // whose ggml_flash_attn_back() exists as an op and a kernel but was
+            // never wired up here -- a kernel alone does not make an op
+            // differentiable.
+            //
+            // One ggml_ssm_conv_back() call yields both gradients packed as
+            // [d_sx | d_c]; each src then takes a view of its own half, so the
+            // convolution runs once rather than once per input.
+            if (src0_needs_grads || src1_needs_grads) {
+                struct ggml_tensor * bk = ggml_ssm_conv_back(ctx, src0, src1, grad);
+
+                if (src0_needs_grads) {
+                    struct ggml_tensor * d_sx = ggml_view_3d(ctx, bk,
+                        src0->ne[0], src0->ne[1], src0->ne[2],
+                        src0->ne[0]*sizeof(float),
+                        src0->ne[0]*src0->ne[1]*sizeof(float),
+                        0);
+                    ggml_add_or_set(ctx, cgraph, isrc0, d_sx);
+                }
+                if (src1_needs_grads) {
+                    struct ggml_tensor * d_c = ggml_view_2d(ctx, bk,
+                        src1->ne[0], src1->ne[1],
+                        src1->ne[0]*sizeof(float),
+                        ggml_nelements(src0)*sizeof(float));
+                    ggml_add_or_set(ctx, cgraph, isrc1, d_c);
+                }
+            }
+        } break;
+        case GGML_OP_SSM_SCAN: {
+            // DIVERGENCE from upstream: ggml has no backward for SSM_SCAN, so
+            // the recurrent core of a Mamba block was inference-only.
+            //
+            // One ggml_ssm_scan_back() call produces all six gradients packed
+            // as [d_s | d_x | d_dt | d_A | d_B | d_C]; each src takes a view of
+            // its own slice, so the recurrence is replayed once rather than
+            // once per input. src[6] is `ids`, which is integer and has no
+            // gradient.
+            const struct ggml_tensor * s   = tensor->src[0];
+            const struct ggml_tensor * xx  = tensor->src[1];
+            const struct ggml_tensor * dtt = tensor->src[2];
+            const struct ggml_tensor * AA  = tensor->src[3];
+            const struct ggml_tensor * BB  = tensor->src[4];
+            const struct ggml_tensor * CC  = tensor->src[5];
+
+            bool any = false;
+            for (int j = 0; j < 6; ++j) {
+                if (tensor->src[j] && grads_needed[ggml_hash_find(&cgraph->visited_hash_set, tensor->src[j])]) {
+                    any = true;
+                    break;
+                }
+            }
+
+            if (any) {
+                struct ggml_tensor * bk = ggml_ssm_scan_back(ctx,
+                    (struct ggml_tensor *) s,   (struct ggml_tensor *) xx,
+                    (struct ggml_tensor *) dtt, (struct ggml_tensor *) AA,
+                    (struct ggml_tensor *) BB,  (struct ggml_tensor *) CC,
+                    tensor->src[6], grad);
+
+                const int64_t n_seqs = xx->ne[3];
+                const int64_t n_s_el = s->ne[0]*s->ne[1]*s->ne[2]*n_seqs;
+                size_t off = 0;
+
+                // d_s covers only the rows `ids` selected, so it is shaped
+                // [d_state, dim, n_head, n_seqs] rather than like s itself.
+                if (cgraph->grads && grads_needed[ggml_hash_find(&cgraph->visited_hash_set, s)]) {
+                    struct ggml_tensor * d_s = ggml_view_4d(ctx, bk,
+                        s->ne[0], s->ne[1], s->ne[2], n_seqs,
+                        s->ne[0]*sizeof(float),
+                        s->ne[0]*s->ne[1]*sizeof(float),
+                        s->ne[0]*s->ne[1]*s->ne[2]*sizeof(float), off);
+                    ggml_add_or_set(ctx, cgraph, ggml_hash_find(&cgraph->visited_hash_set, s), d_s);
+                }
+                off += n_s_el*sizeof(float);
+
+                if (grads_needed[ggml_hash_find(&cgraph->visited_hash_set, xx)]) {
+                    struct ggml_tensor * d_x = ggml_view_4d(ctx, bk,
+                        xx->ne[0], xx->ne[1], xx->ne[2], xx->ne[3],
+                        xx->ne[0]*sizeof(float),
+                        xx->ne[0]*xx->ne[1]*sizeof(float),
+                        xx->ne[0]*xx->ne[1]*xx->ne[2]*sizeof(float), off);
+                    ggml_add_or_set(ctx, cgraph, ggml_hash_find(&cgraph->visited_hash_set, xx), d_x);
+                }
+                off += ggml_nelements(xx)*sizeof(float);
+
+                if (grads_needed[ggml_hash_find(&cgraph->visited_hash_set, dtt)]) {
+                    struct ggml_tensor * d_dt = ggml_view_3d(ctx, bk,
+                        dtt->ne[0], dtt->ne[1], dtt->ne[2],
+                        dtt->ne[0]*sizeof(float),
+                        dtt->ne[0]*dtt->ne[1]*sizeof(float), off);
+                    ggml_add_or_set(ctx, cgraph, ggml_hash_find(&cgraph->visited_hash_set, dtt), d_dt);
+                }
+                off += ggml_nelements(dtt)*sizeof(float);
+
+                if (grads_needed[ggml_hash_find(&cgraph->visited_hash_set, AA)]) {
+                    struct ggml_tensor * d_A = ggml_view_2d(ctx, bk,
+                        AA->ne[0], AA->ne[1], AA->ne[0]*sizeof(float), off);
+                    ggml_add_or_set(ctx, cgraph, ggml_hash_find(&cgraph->visited_hash_set, AA), d_A);
+                }
+                off += ggml_nelements(AA)*sizeof(float);
+
+                if (grads_needed[ggml_hash_find(&cgraph->visited_hash_set, BB)]) {
+                    struct ggml_tensor * d_B = ggml_view_4d(ctx, bk,
+                        BB->ne[0], BB->ne[1], BB->ne[2], BB->ne[3],
+                        BB->ne[0]*sizeof(float),
+                        BB->ne[0]*BB->ne[1]*sizeof(float),
+                        BB->ne[0]*BB->ne[1]*BB->ne[2]*sizeof(float), off);
+                    ggml_add_or_set(ctx, cgraph, ggml_hash_find(&cgraph->visited_hash_set, BB), d_B);
+                }
+                off += ggml_nelements(BB)*sizeof(float);
+
+                if (grads_needed[ggml_hash_find(&cgraph->visited_hash_set, CC)]) {
+                    struct ggml_tensor * d_C = ggml_view_4d(ctx, bk,
+                        CC->ne[0], CC->ne[1], CC->ne[2], CC->ne[3],
+                        CC->ne[0]*sizeof(float),
+                        CC->ne[0]*CC->ne[1]*sizeof(float),
+                        CC->ne[0]*CC->ne[1]*CC->ne[2]*sizeof(float), off);
+                    ggml_add_or_set(ctx, cgraph, ggml_hash_find(&cgraph->visited_hash_set, CC), d_C);
+                }
+            }
+        } break;
+        case GGML_OP_RWKV_WKV6: {
+            // DIVERGENCE from upstream: ggml has no backward for RWKV_WKV6, so
+            // an RWKV-6 block was inference-only.
+            //
+            // One ggml_rwkv_wkv6_back() call yields every gradient packed in
+            // forward source order, [d_k | d_v | d_r | d_tf | d_td | d_state];
+            // each src views its own slice.
+            struct ggml_tensor * kk  = tensor->src[0];
+            struct ggml_tensor * vv  = tensor->src[1];
+            struct ggml_tensor * rr  = tensor->src[2];
+            struct ggml_tensor * tf  = tensor->src[3];
+            struct ggml_tensor * tdd = tensor->src[4];
+            struct ggml_tensor * st  = tensor->src[5];
+
+            bool any = false;
+            for (int j = 0; j < 6; ++j) {
+                if (tensor->src[j] && grads_needed[ggml_hash_find(&cgraph->visited_hash_set, tensor->src[j])]) {
+                    any = true;
+                    break;
+                }
+            }
+
+            if (any) {
+                struct ggml_tensor * bk =
+                    ggml_rwkv_wkv6_back(ctx, kk, vv, rr, tf, tdd, st, grad);
+
+                struct ggml_tensor * srcs[6] = { kk, vv, rr, tf, tdd, st };
+                size_t off = 0;
+                for (int j = 0; j < 6; ++j) {
+                    struct ggml_tensor * s = srcs[j];
+                    if (grads_needed[ggml_hash_find(&cgraph->visited_hash_set, s)]) {
+                        struct ggml_tensor * d = ggml_view_4d(ctx, bk,
+                            s->ne[0], s->ne[1], s->ne[2], s->ne[3],
+                            s->ne[0]*sizeof(float),
+                            s->ne[0]*s->ne[1]*sizeof(float),
+                            s->ne[0]*s->ne[1]*s->ne[2]*sizeof(float), off);
+                        ggml_add_or_set(ctx, cgraph,
+                            ggml_hash_find(&cgraph->visited_hash_set, s), d);
+                    }
+                    off += ggml_nelements(s)*sizeof(float);
+                }
+            }
+        } break;
+        case GGML_OP_RWKV_WKV7: {
+            // DIVERGENCE from upstream: no backward for RWKV_WKV7 in ggml.
+            // Packed as [d_r | d_w | d_k | d_v | d_a | d_b | d_state].
+            bool any = false;
+            for (int j = 0; j < 7; ++j) {
+                if (tensor->src[j] && grads_needed[ggml_hash_find(&cgraph->visited_hash_set, tensor->src[j])]) {
+                    any = true;
+                    break;
+                }
+            }
+            if (any) {
+                struct ggml_tensor * bk = ggml_rwkv_wkv7_back(ctx,
+                    tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3],
+                    tensor->src[4], tensor->src[5], tensor->src[6], grad);
+
+                size_t off = 0;
+                for (int j = 0; j < 7; ++j) {
+                    struct ggml_tensor * s = tensor->src[j];
+                    if (grads_needed[ggml_hash_find(&cgraph->visited_hash_set, s)]) {
+                        struct ggml_tensor * d = ggml_view_4d(ctx, bk,
+                            s->ne[0], s->ne[1], s->ne[2], s->ne[3],
+                            s->ne[0]*sizeof(float),
+                            s->ne[0]*s->ne[1]*sizeof(float),
+                            s->ne[0]*s->ne[1]*s->ne[2]*sizeof(float), off);
+                        ggml_add_or_set(ctx, cgraph,
+                            ggml_hash_find(&cgraph->visited_hash_set, s), d);
+                    }
+                    off += ggml_nelements(s)*sizeof(float);
+                }
+            }
+        } break;
+        case GGML_OP_GATED_LINEAR_ATTN: {
+            // DIVERGENCE from upstream: no backward for GATED_LINEAR_ATTN.
+            // Packed as [d_k | d_v | d_q | d_g | d_state].
+            bool any = false;
+            for (int j = 0; j < 5; ++j) {
+                if (tensor->src[j] && grads_needed[ggml_hash_find(&cgraph->visited_hash_set, tensor->src[j])]) {
+                    any = true;
+                    break;
+                }
+            }
+            if (any) {
+                float scale;
+                memcpy(&scale, tensor->op_params, sizeof(float));
+
+                struct ggml_tensor * bk = ggml_gated_linear_attn_back(ctx,
+                    tensor->src[0], tensor->src[1], tensor->src[2],
+                    tensor->src[3], tensor->src[4], grad, scale);
+
+                size_t off = 0;
+                for (int j = 0; j < 5; ++j) {
+                    struct ggml_tensor * s = tensor->src[j];
+                    if (grads_needed[ggml_hash_find(&cgraph->visited_hash_set, s)]) {
+                        struct ggml_tensor * d = ggml_view_4d(ctx, bk,
+                            s->ne[0], s->ne[1], s->ne[2], s->ne[3],
+                            s->ne[0]*sizeof(float),
+                            s->ne[0]*s->ne[1]*sizeof(float),
+                            s->ne[0]*s->ne[1]*s->ne[2]*sizeof(float), off);
+                        ggml_add_or_set(ctx, cgraph,
+                            ggml_hash_find(&cgraph->visited_hash_set, s), d);
+                    }
+                    off += ggml_nelements(s)*sizeof(float);
+                }
+            }
+        } break;
         case GGML_OP_POOL_2D: {
             if (src0_needs_grads) {
                 const enum ggml_op_pool op = ggml_get_op_params_i32(tensor, 0);

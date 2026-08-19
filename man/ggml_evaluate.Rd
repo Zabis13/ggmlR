@@ -36,7 +36,13 @@ ggml_evaluate(model, ...)
 \item{class_weight}{Named vector of weights per class, e.g. c("0"=1, "1"=10). Cannot be used with sample_weight.}
 }
 \value{
-Named list with \code{loss} and \code{accuracy}.
+Named list with \code{loss} and \code{accuracy}. A multi-output
+  functional model additionally reports each head as \code{<output>_loss}.
+  Note the deliberate difference from the training history, which names the
+  same quantities \code{train_<output>_loss} and \code{val_<output>_loss}:
+  there the prefix distinguishes the two phases (and keeps an output named
+  \code{val_x} from colliding with another output's validation column),
+  whereas evaluation has no phases to tell apart, so the bare name is used.
 }
 \description{
 Evaluate a Trained Model

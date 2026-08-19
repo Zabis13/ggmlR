@@ -23,6 +23,119 @@ ggml_build_forward_expand <- function(ctx, tensor) {
   .Call("R_ggml_build_forward_expand", ctx, tensor, PACKAGE = "ggmlR")
 }
 
+#' Build a Forward Graph That Can Be Differentiated
+#'
+#' Like \code{\link{ggml_build_forward_expand}}, but the graph also reserves
+#' storage for gradients, which is what \code{\link{ggml_build_backward_expand}}
+#' requires.  A graph from the plain forward builder carries none, so passing it
+#' to the backward builder is an error.
+#'
+#' Mark the tensors to differentiate with respect to using
+#' \code{\link{ggml_set_param}} \emph{before} building the graph.
+#'
+#' @section Graph size:
+#' \code{graph_size} is the node capacity.  The backward pass appends nodes to
+#' the forward ones, so it needs more room than a forward-only graph: roughly
+#' three times the forward node count is a safe starting point.  Too small a
+#' value fails while the graph is being built, not silently.
+#'
+#' @param ctx GGML context
+#' @param tensor Output tensor of the computation (usually a scalar loss)
+#' @param graph_size Node capacity of the graph (default 2048)
+#' @return Graph object (external pointer)
+#' @seealso \code{\link{ggml_build_backward_expand}},
+#'   \code{\link{ggml_graph_get_grad}}
+#' @export
+#' @examples
+#' \donttest{
+#' ctx <- ggml_init(16 * 1024 * 1024)
+#' a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+#' b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+#' ggml_set_f32(a, c(1, 2, 3, 4))
+#' ggml_set_f32(b, c(5, 6, 7, 8))
+#' ggml_set_param(a)
+#' loss  <- ggml_sum(ctx, ggml_mul(ctx, a, b))
+#' ggml_set_loss(loss)
+#' graph <- ggml_build_forward_expand_grads(ctx, loss)
+#' ggml_build_backward_expand(ctx, graph)
+#' ggml_graph_reset(graph)     # seeds d(loss)/d(loss) = 1
+#' ggml_graph_compute(ctx, graph)
+#' # d(sum(a*b))/da == b
+#' ggml_get_f32(ggml_graph_get_grad(graph, a))
+#' ggml_free(ctx)
+#' }
+ggml_build_forward_expand_grads <- function(ctx, tensor, graph_size = 2048L) {
+  .Call("R_ggml_build_forward_expand_grads", ctx, tensor,
+        as.integer(graph_size), PACKAGE = "ggmlR")
+}
+
+#' Add the Backward Pass to a Computation Graph
+#'
+#' Extends \code{graph} in place with the nodes that compute gradients of its
+#' output with respect to every tensor marked by \code{\link{ggml_set_param}}.
+#' After computing the graph, read a gradient with
+#' \code{\link{ggml_graph_get_grad}}.
+#'
+#' The graph must come from \code{\link{ggml_build_forward_expand_grads}}:
+#' \code{\link{ggml_build_forward_expand}} produces one without gradient
+#' storage, and that is rejected rather than allowed to abort inside ggml.
+#'
+#' @section The full sequence:
+#' Every step is required; skipping one gives either an error or -- for the
+#' last -- gradients that are silently all zero.
+#' \enumerate{
+#'   \item \code{\link{ggml_set_param}} on each tensor to differentiate
+#'   \item build the forward ops
+#'   \item \code{\link{ggml_set_loss}} on the output
+#'   \item \code{\link{ggml_build_forward_expand_grads}}
+#'   \item \code{ggml_build_backward_expand()}
+#'   \item \code{\link{ggml_graph_reset}} -- seeds \code{d(loss)/d(loss) = 1}
+#'   \item \code{\link{ggml_graph_compute}}
+#'   \item \code{\link{ggml_graph_get_grad}} to read a gradient
+#' }
+#'
+#' @section Which ops are differentiable:
+#' Gradients flow only through operations that implement a backward pass.  Most
+#' do, but not all -- \code{\link{ggml_clamp}} is a notable exception, and among
+#' the state-space ops only \code{\link{ggml_ssm_conv}} is differentiable.
+#'
+#' @param ctx GGML context
+#' @param graph Graph from \code{\link{ggml_build_forward_expand_grads}}
+#' @return \code{NULL}, invisibly; \code{graph} is modified in place
+#' @seealso \code{\link{ggml_build_forward_expand_grads}},
+#'   \code{\link{ggml_graph_get_grad}}, \code{\link{ggml_set_param}}
+#' @export
+ggml_build_backward_expand <- function(ctx, graph) {
+  invisible(.Call("R_ggml_build_backward_expand", ctx, graph, PACKAGE = "ggmlR"))
+}
+
+#' Get the Gradient Tensor of a Node
+#'
+#' Returns the tensor holding \code{d(output)/d(node)} after
+#' \code{\link{ggml_build_backward_expand}} has added the backward pass and the
+#' graph has been computed.
+#'
+#' Returns \code{NULL} when the node has no gradient in this graph -- because it
+#' was never marked with \code{\link{ggml_set_param}}, or because nothing
+#' differentiable connects it to the output.
+#'
+#' @param graph Graph carrying a backward pass
+#' @param node Tensor whose gradient is wanted
+#' @return The gradient tensor, or \code{NULL}
+#' @seealso \code{\link{ggml_build_backward_expand}}
+#' @export
+ggml_graph_get_grad <- function(graph, node) {
+  .Call("R_ggml_graph_get_grad", graph, node, PACKAGE = "ggmlR")
+}
+
+#' @rdname ggml_graph_get_grad
+#' @return For \code{ggml_graph_get_grad_acc()}, the gradient accumulator
+#'   tensor, or \code{NULL}
+#' @export
+ggml_graph_get_grad_acc <- function(graph, node) {
+  .Call("R_ggml_graph_get_grad_acc", graph, node, PACKAGE = "ggmlR")
+}
+
 #' Add Another Root to an Existing Computation Graph
 #'
 #' \code{ggml_build_forward_expand()} always creates a fresh graph, so it can
@@ -104,13 +217,19 @@ ggml_graph_print <- function(graph) {
 
 #' Reset Graph (for backpropagation)
 #'
-#' Resets the computation graph for a new backward pass.
-#' NOTE: This function requires the graph to have gradients allocated
-#' (used for training/backpropagation). For inference-only graphs,
-#' this function will cause an error.
+#' Zeroes every gradient in the graph and seeds the loss node's own gradient
+#' with 1 -- the value the chain rule starts from.  \strong{Call this after
+#' \code{\link{ggml_build_backward_expand}} and before
+#' \code{\link{ggml_graph_compute}}}: without it every gradient computes as
+#' zero, since the backward pass multiplies through a seed that was never set.
+#'
+#' Requires a graph built by \code{\link{ggml_build_forward_expand_grads}};
+#' an inference-only graph has no gradients to reset and is rejected.
 #'
 #' @param graph Graph object with gradients allocated
 #' @return No return value, called for side effects
+#' @seealso \code{\link{ggml_build_backward_expand}},
+#'   \code{\link{ggml_build_forward_expand_grads}}
 #' @export
 ggml_graph_reset <- function(graph) {
   invisible(.Call("R_ggml_graph_reset", graph, PACKAGE = "ggmlR"))
@@ -462,4 +581,102 @@ ggml_op_can_inplace <- function(op) {
 #' }
 ggml_are_same_layout <- function(a, b) {
   .Call("R_ggml_are_same_layout", a, b, PACKAGE = "ggmlR")
+}
+
+# ============================================================================
+# Graph manipulation
+#
+# These wrap .Call entry points that were registered but had no R wrapper, so
+# they were unreachable from R.
+# ============================================================================
+
+#' Duplicate a Computation Graph
+#'
+#' Copies \code{graph} into \code{ctx}.  With \code{force_grads = TRUE} the copy
+#' carries gradient storage even when the original does not, which is one way to
+#' turn a plain forward graph into one that
+#' \code{\link{ggml_build_backward_expand}} accepts.
+#'
+#' @param ctx GGML context to allocate the copy in
+#' @param graph Graph to duplicate
+#' @param force_grads Logical; give the copy gradient storage (default
+#'   \code{FALSE})
+#' @return A new graph object (external pointer)
+#' @seealso \code{\link{ggml_build_forward_expand_grads}}
+#' @export
+ggml_graph_dup <- function(ctx, graph, force_grads = FALSE) {
+  .Call("R_ggml_graph_dup", ctx, graph, as.logical(force_grads),
+        PACKAGE = "ggmlR")
+}
+
+#' Copy One Graph's Nodes Into Another
+#'
+#' Copies the contents of \code{src} into \code{dst}, which must already have
+#' room for them.  Unlike \code{\link{ggml_graph_dup}} this allocates nothing.
+#'
+#' @param src Source graph
+#' @param dst Destination graph
+#' @return \code{NULL}, invisibly; \code{dst} is modified in place
+#' @export
+ggml_graph_cpy <- function(src, dst) {
+  invisible(.Call("R_ggml_graph_cpy", src, dst, PACKAGE = "ggmlR"))
+}
+
+#' Clear a Computation Graph
+#'
+#' Removes every node from \code{graph}, keeping its allocated capacity so it
+#' can be rebuilt without a fresh allocation.
+#'
+#' @param graph Graph to clear
+#' @return \code{NULL}, invisibly; \code{graph} is modified in place
+#' @export
+ggml_graph_clear <- function(graph) {
+  invisible(.Call("R_ggml_graph_clear", graph, PACKAGE = "ggmlR"))
+}
+
+#' Append a Node to a Computation Graph
+#'
+#' Adds \code{tensor} to \code{graph} as a node, without expanding its
+#' dependencies.  For the usual case -- adding a tensor together with everything
+#' it depends on -- use \code{\link{ggml_graph_expand}}.
+#'
+#' @param graph Graph to add to
+#' @param tensor Tensor to append
+#' @return \code{NULL}, invisibly; \code{graph} is modified in place
+#' @seealso \code{\link{ggml_graph_expand}}
+#' @export
+ggml_graph_add_node <- function(graph, tensor) {
+  invisible(.Call("R_ggml_graph_add_node", graph, tensor, PACKAGE = "ggmlR"))
+}
+
+#' Create a Graph Allocator for a Specific Buffer Type
+#'
+#' Like \code{\link{ggml_gallocr_new}}, but allocates from the given buffer type
+#' rather than the CPU default -- so a graph can be allocated in GPU memory.
+#'
+#' @param buft Buffer type (e.g. from \code{ggml_backend_get_default_buffer_type()})
+#' @return Graph allocator object (external pointer)
+#' @seealso \code{\link{ggml_gallocr_new}}, \code{\link{ggml_gallocr_alloc_graph}}
+#' @export
+ggml_gallocr_new_buft <- function(buft) {
+  .Call("R_ggml_gallocr_new_buft", buft, PACKAGE = "ggmlR")
+}
+
+#' Trace Every Node a Scheduler Computes
+#'
+#' Turns on a per-node trace: for each node the scheduler evaluates, its name,
+#' op, shape and value summary (sum/min/max) are printed to stderr.  Nodes are
+#' identified by NAME rather than index, so traces from two backends can be
+#' diffed even when their graphs enumerate nodes differently -- which is what
+#' makes this useful for finding where a CPU and a GPU run diverge.
+#'
+#' Off by default; leaving it on makes computation much slower.
+#'
+#' @param sched Backend scheduler
+#' @param enable Logical; turn tracing on or off
+#' @return \code{NULL}, invisibly
+#' @export
+ggml_backend_sched_trace <- function(sched, enable = TRUE) {
+  invisible(.Call("R_ggml_backend_sched_trace", sched, as.logical(enable),
+                  PACKAGE = "ggmlR"))
 }

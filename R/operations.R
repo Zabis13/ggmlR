@@ -1776,11 +1776,24 @@ ggml_scale_bias <- function(ctx, a, s, b) {
 #'
 #' Creates a graph node for clamping values to a range: clamp(x, min, max)
 #'
+#' @section Inference only:
+#' \code{GGML_OP_CLAMP} has no backward pass, and the node it builds is a view
+#' of its input.  A graph containing it therefore cannot be differentiated: the
+#' backward pass aborts with \emph{"inplace operations are currently not
+#' supported"} rather than returning an error.  This matters inside
+#' \code{\link{ggml_layer_custom}}, whose gradients flow only through
+#' operations that implement a backward pass.
+#'
+#' For a trainable equivalent, express the clamp with operations that do:
+#' \code{min(x, hi)} is \code{x - ggml_relu(ctx, x - hi)} and \code{max(x, lo)}
+#' is \code{lo + ggml_relu(ctx, x - lo)}.
+#'
 #' @param ctx GGML context
 #' @param a Input tensor
 #' @param min_val Minimum value
 #' @param max_val Maximum value
 #' @return Tensor with values clamped to [min_val, max_val]
+#' @seealso \code{\link{ggml_relu}} for the differentiable formulation above.
 #' @export
 ggml_clamp <- function(ctx, a, min_val, max_val) {
   .Call("R_ggml_clamp", ctx, a, as.numeric(min_val), as.numeric(max_val), PACKAGE = "ggmlR")
@@ -3170,9 +3183,31 @@ ggml_set_name <- function(tensor, name) {
 #'
 #' @param tensor Tensor pointer
 #' @return The tensor (for chaining)
+#' @seealso \code{\link{ggml_set_loss}}, which marks the other end of the
+#'   backward pass, and \code{\link{ggml_build_backward_expand}}.
 #' @export
 ggml_set_param <- function(tensor) {
   .Call("R_ggml_set_param", tensor, PACKAGE = "ggmlR")
+}
+
+#' Mark a Tensor as the Loss
+#'
+#' Marks a tensor as the quantity to differentiate.
+#' \code{\link{ggml_build_backward_expand}} requires the graph to contain one --
+#' together with at least one \code{\link{ggml_set_param}} tensor, these are the
+#' two ends of the backward pass.
+#'
+#' A graph missing either is rejected with an error rather than aborting inside
+#' ggml.
+#'
+#' @param tensor Tensor pointer, usually a scalar produced by
+#'   \code{\link{ggml_sum}} or a loss op
+#' @return The tensor (for chaining)
+#' @seealso \code{\link{ggml_set_param}},
+#'   \code{\link{ggml_build_forward_expand_grads}}
+#' @export
+ggml_set_loss <- function(tensor) {
+  .Call("R_ggml_set_loss", tensor, PACKAGE = "ggmlR")
 }
 
 #' Mark Tensor as Input
@@ -4506,4 +4541,570 @@ ggml_get_first_tensor <- function(ctx) {
 #' @export
 ggml_get_next_tensor <- function(ctx, tensor) {
   .Call("R_ggml_get_next_tensor", ctx, tensor, PACKAGE = "ggmlR")
+}
+
+# ============================================================================
+# State-space models (Mamba) and RWKV-family recurrences
+# ============================================================================
+
+#' State-Space Convolution (Mamba)
+#'
+#' Depthwise causal convolution over a sequence, the convolution branch of a
+#' Mamba block.  Each of the \code{d_inner} channels is convolved with its own
+#' \code{d_conv}-tap kernel; the leading \code{d_conv - 1} positions of
+#' \code{sx} are the carried-over context from the previous chunk, which is
+#' what makes the op resumable across chunks.
+#'
+#' @section Shapes:
+#' \code{sx} is \code{[d_conv - 1 + n_t, d_inner, n_s]} and \code{c} is
+#' \code{[d_conv, d_inner]}; the result is \code{[d_inner, n_t, n_s]}, where
+#' \code{n_t} is the number of tokens per sequence and \code{n_s} the number of
+#' sequences.  All tensors are F32.
+#'
+#' @section Inference only:
+#' \code{GGML_OP_SSM_CONV} has no backward pass in ggml, so a graph containing
+#' it cannot be trained -- see \code{\link{ggml_ssm_scan}}.
+#'
+#' @param ctx GGML context
+#' @param sx Input with carried context, \code{[d_conv - 1 + n_t, d_inner, n_s]}
+#' @param c Convolution kernels, \code{[d_conv, d_inner]}
+#' @return A tensor \code{[d_inner, n_t, n_s]}
+#' @seealso \code{\link{ggml_ssm_scan}}
+#' @export
+#' @family state-space
+ggml_ssm_conv <- function(ctx, sx, c) {
+  .Call("R_ggml_ssm_conv", ctx, sx, c, PACKAGE = "ggmlR")
+}
+
+#' Backward Pass of the State-Space Convolution
+#'
+#' Gradients of \code{\link{ggml_ssm_conv}} with respect to both of its inputs,
+#' given \code{grad}, the gradient of the loss with respect to the convolution's
+#' output.
+#'
+#' Training reaches this automatically through the backward graph -- an
+#' \code{\link{ggml_ssm_conv}} node is differentiable, unlike the other
+#' state-space and RWKV ops.  It is exported so the gradient can be checked
+#' directly against a numeric one.
+#'
+#' @section Packed result:
+#' Both gradients come back in one flat tensor, \code{[d_sx | d_c]}: the first
+#' \code{ggml_nelements(sx)} elements are the gradient with respect to
+#' \code{sx}, the remaining \code{ggml_nelements(c)} the gradient with respect
+#' to \code{c}.  A single op returns a single tensor, and packing them keeps the
+#' convolution from being run once per input.
+#'
+#' @param ctx GGML context
+#' @param sx The \code{sx} passed to the forward convolution
+#' @param c The \code{c} passed to the forward convolution
+#' @param grad Gradient w.r.t. the output, shaped like it: \code{[d_inner, n_t, n_s]}
+#' @return A flat tensor holding \code{d_sx} followed by \code{d_c}
+#' @seealso \code{\link{ggml_ssm_conv}}
+#' @export
+#' @family state-space
+ggml_ssm_conv_back <- function(ctx, sx, c, grad) {
+  .Call("R_ggml_ssm_conv_back", ctx, sx, c, grad, PACKAGE = "ggmlR")
+}
+
+#' Backward Pass of the Selective State-Space Scan
+#'
+#' Gradients of \code{\link{ggml_ssm_scan}} with respect to all six of its
+#' differentiable inputs, given \code{grad}, the gradient of the loss with
+#' respect to the scan's packed forward result.
+#'
+#' Training reaches this automatically through the backward graph. It is
+#' exported so the gradient can be checked directly against a numeric one.
+#'
+#' @section Packed result:
+#' All six gradients come back in one flat tensor, in the same order the scan
+#' takes its inputs: \code{[d_s | d_x | d_dt | d_A | d_B | d_C]}. \code{ids} is
+#' integer and has no gradient. A single op returns a single tensor, and packing
+#' them keeps the recurrence from being replayed once per input.
+#'
+#' @section Cost:
+#' The forward pass does not keep its intermediate states, so this replays the
+#' recurrence before walking it back -- roughly twice the forward work, and no
+#' extra memory beyond one state buffer.
+#'
+#' @param ctx GGML context
+#' @param s Initial states, as passed to the forward scan
+#' @param x Inputs, as passed to the forward scan
+#' @param dt Per-token timestep, as passed to the forward scan
+#' @param A State decay, as passed to the forward scan
+#' @param B Input projection, as passed to the forward scan
+#' @param C Output projection, as passed to the forward scan
+#' @param ids Sequence-to-state mapping, as passed to the forward scan
+#' @param grad Gradient w.r.t. the packed forward result
+#' @return A flat tensor holding the six gradients, concatenated
+#' @seealso \code{\link{ggml_ssm_scan}}
+#' @export
+#' @family state-space
+ggml_ssm_scan_back <- function(ctx, s, x, dt, A, B, C, ids, grad) {
+  .Call("R_ggml_ssm_scan_back", ctx, s, x, dt, A, B, C, ids, grad,
+        PACKAGE = "ggmlR")
+}
+
+#' Selective State-Space Scan (Mamba / Mamba-2)
+#'
+#' The recurrent core of a Mamba block: a linear state-space recurrence whose
+#' transition is modulated per token by \code{dt}, \code{B} and \code{C}.
+#' \code{ids} selects which state row each sequence continues from, so several
+#' sequences can share one state buffer.
+#'
+#' @section Shapes:
+#' With \code{d_state} the state width, \code{head_dim} the per-head channel
+#' count, \code{n_head} heads, \code{n_seq_tokens} tokens and \code{n_seqs}
+#' sequences:
+#' \itemize{
+#'   \item \code{s} — \code{[d_state, head_dim, n_head, n_seqs_total]}, contiguous
+#'   \item \code{x} — \code{[head_dim, n_head, n_seq_tokens, n_seqs]}
+#'   \item \code{dt} — \code{[n_head, n_seq_tokens, n_seqs]}, contiguous
+#'   \item \code{A} — \code{[1, n_head]} (Mamba-2) or \code{[d_state, n_head]} (Mamba-1)
+#'   \item \code{B}, \code{C} — \code{[d_state, n_group, n_seq_tokens, n_seqs]}, same shape
+#'   \item \code{ids} — \code{[n_seqs]}, type \code{GGML_TYPE_I32}, 0-based
+#' }
+#'
+#' @section Packed result:
+#' The result is a \emph{flat} tensor holding the outputs followed by the final
+#' states: \code{ggml_nelements(x)} output elements, then
+#' \code{d_state * head_dim * n_head * n_seqs} state elements.  Use
+#' \code{\link{ggml_ssm_scan_output}} and \code{\link{ggml_ssm_scan_state}} to
+#' view either half rather than computing the offsets by hand -- getting them
+#' wrong silently reads the state as output.
+#'
+#' @section Inference only:
+#' \code{GGML_OP_SSM_SCAN} has no backward pass in ggml.  A graph containing it
+#' runs forward on CPU and Vulkan, but cannot be trained: \code{ggml_fit()} and
+#' the autograd engine will not produce gradients for it.
+#'
+#' @param ctx GGML context
+#' @param s Initial states, \code{[d_state, head_dim, n_head, n_seqs_total]}
+#' @param x Inputs, \code{[head_dim, n_head, n_seq_tokens, n_seqs]}
+#' @param dt Per-token timestep, \code{[n_head, n_seq_tokens, n_seqs]}
+#' @param A State decay, \code{[1 or d_state, n_head]}
+#' @param B Input projection, \code{[d_state, n_group, n_seq_tokens, n_seqs]}
+#' @param C Output projection, same shape as \code{B}
+#' @param ids Sequence-to-state mapping, \code{[n_seqs]} I32, 0-based
+#' @return A flat tensor: outputs followed by final states
+#' @seealso \code{\link{ggml_ssm_scan_output}}, \code{\link{ggml_ssm_scan_state}},
+#'   \code{\link{ggml_ssm_conv}}
+#' @export
+#' @family state-space
+ggml_ssm_scan <- function(ctx, s, x, dt, A, B, C, ids) {
+  .Call("R_ggml_ssm_scan", ctx, s, x, dt, A, B, C, ids, PACKAGE = "ggmlR")
+}
+
+#' Views Into a Packed ssm_scan Result
+#'
+#' \code{\link{ggml_ssm_scan}} returns the outputs and the final states in one
+#' flat tensor.  These helpers view either half with the right shape, so the
+#' offset arithmetic lives in one place: \code{ggml_ssm_scan_output()} yields
+#' the outputs shaped like \code{x}, and \code{ggml_ssm_scan_state()} the final
+#' states shaped like the leading \code{n_seqs} rows of \code{s}.
+#'
+#' Both are graph views sharing memory with \code{result}; they add no
+#' computation.  \code{x}, \code{s} and \code{ids} must be the same tensors the
+#' scan was built with, since their shapes are what the offsets are derived
+#' from.
+#'
+#' @param ctx GGML context
+#' @param result The tensor returned by \code{\link{ggml_ssm_scan}}
+#' @param x The \code{x} passed to the scan (gives the output shape)
+#' @return For \code{ggml_ssm_scan_output()}, a tensor shaped like \code{x}
+#' @export
+#' @family state-space
+ggml_ssm_scan_output <- function(ctx, result, x) {
+  ne <- ggml_tensor_shape(x)
+  ne <- c(ne, rep(1, 4L - length(ne)))[1:4]
+  fsz <- ggml_type_size(GGML_TYPE_F32)
+  # The outputs sit at the front of the packed result, contiguous and shaped
+  # exactly like x, so the strides are x's own.
+  ggml_view_4d(ctx, result, ne[1], ne[2], ne[3], ne[4],
+               nb1 = ne[1] * fsz,
+               nb2 = ne[1] * ne[2] * fsz,
+               nb3 = ne[1] * ne[2] * ne[3] * fsz,
+               offset = 0)
+}
+
+#' @rdname ggml_ssm_scan_output
+#' @param s The \code{s} passed to the scan (gives the state shape)
+#' @param ids The \code{ids} passed to the scan (gives the sequence count)
+#' @return For \code{ggml_ssm_scan_state()}, a tensor
+#'   \code{[d_state, head_dim, n_head, n_seqs]}
+#' @export
+ggml_ssm_scan_state <- function(ctx, result, s, ids) {
+  sne <- ggml_tensor_shape(s)
+  sne <- c(sne, rep(1, 4L - length(sne)))[1:4]
+  n_seqs <- ggml_tensor_shape(ids)[1]
+  fsz <- ggml_type_size(GGML_TYPE_F32)
+  # The states follow the outputs, so the offset is the whole output block.
+  ggml_view_4d(ctx, result, sne[1], sne[2], sne[3], n_seqs,
+               nb1 = sne[1] * fsz,
+               nb2 = sne[1] * sne[2] * fsz,
+               nb3 = sne[1] * sne[2] * sne[3] * fsz,
+               offset = ggml_nelements(result) * fsz -
+                        sne[1] * sne[2] * sne[3] * n_seqs * fsz)
+}
+
+#' RWKV-6 WKV Recurrence
+#'
+#' The weighted key-value recurrence of RWKV-6: a linear-attention-style scan
+#' whose decay is per-token (\code{td}) on top of a per-channel bonus
+#' (\code{tf}).  Runs in O(n_tokens) rather than the O(n_tokens^2) of ordinary
+#' attention, which is what makes RWKV a recurrent model at inference time.
+#'
+#' @section Shapes:
+#' With head size \code{S}, \code{H} heads, \code{n_tokens} tokens and
+#' \code{n_seqs} sequences: \code{k}, \code{v}, \code{r} and \code{td} are
+#' \code{[S, H, n_tokens]}, \code{tf} is \code{[S, H]}, and \code{state} holds
+#' \code{S * S * H * n_seqs} elements (typically \code{[S * S * H, n_seqs]}).
+#' All must be contiguous.
+#'
+#' \code{n_tokens} counts the tokens of \emph{all} sequences together, so it
+#' must be a multiple of \code{n_seqs}: the kernel derives the per-sequence
+#' length as \code{n_tokens / n_seqs} and restarts the state at each boundary.
+#'
+#' @section Packed result:
+#' The result is \code{[S * H, n_tokens + S * n_seqs]}: the per-token outputs
+#' occupy the first \code{n_tokens} columns and the final state the remaining
+#' \code{S * n_seqs}.  \code{\link{ggml_rwkv_output}} and
+#' \code{\link{ggml_rwkv_state}} view either half.
+#'
+#' @section Inference only:
+#' \code{GGML_OP_RWKV_WKV6} has no backward pass in ggml.
+#'
+#' @param ctx GGML context
+#' @param k Keys, \code{[S, H, n_tokens]}
+#' @param v Values, \code{[S, H, n_tokens]}
+#' @param r Receptance, \code{[S, H, n_tokens]}
+#' @param tf Per-channel decay bonus, \code{[S, H]}
+#' @param td Per-token decay, \code{[S, H, n_tokens]}
+#' @param state Initial state, \code{S * S * H * n_seqs} elements
+#' @return A tensor \code{[S * H, n_tokens + S * n_seqs]}
+#' @seealso \code{\link{ggml_rwkv_wkv7}}, \code{\link{ggml_rwkv_output}}
+#' @export
+#' @family state-space
+ggml_rwkv_wkv6 <- function(ctx, k, v, r, tf, td, state) {
+  .Call("R_ggml_rwkv_wkv6", ctx, k, v, r, tf, td, state, PACKAGE = "ggmlR")
+}
+
+#' RWKV-7 WKV Recurrence
+#'
+#' The RWKV-7 ("Goose") recurrence.  Where RWKV-6 decays the state by a vector,
+#' RWKV-7 applies a rank-1 update built from \code{a} and \code{b} alongside the
+#' decay \code{w}, giving the state a richer transition.
+#'
+#' @section Shapes:
+#' \code{r}, \code{w}, \code{k}, \code{v}, \code{a} and \code{b} are
+#' \code{[S, H, n_tokens]}; \code{state} holds \code{S * S * H * n_seqs}
+#' elements.  All must be contiguous.  The result is
+#' \code{[S * H, n_tokens + S * n_seqs]}, outputs then final state -- see
+#' \code{\link{ggml_rwkv_output}}.
+#'
+#' \code{n_tokens} counts the tokens of \emph{all} sequences together, so it
+#' must be a multiple of \code{n_seqs}.
+#'
+#' @section Inference only:
+#' \code{GGML_OP_RWKV_WKV7} has no backward pass in ggml.
+#'
+#' @param ctx GGML context
+#' @param r Receptance, \code{[S, H, n_tokens]}
+#' @param w Decay, \code{[S, H, n_tokens]}
+#' @param k Keys, \code{[S, H, n_tokens]}
+#' @param v Values, \code{[S, H, n_tokens]}
+#' @param a Removal (state update term), \code{[S, H, n_tokens]}
+#' @param b Addition (state update term), \code{[S, H, n_tokens]}
+#' @param state Initial state, \code{S * S * H * n_seqs} elements
+#' @return A tensor \code{[S * H, n_tokens + S * n_seqs]}
+#' @seealso \code{\link{ggml_rwkv_wkv6}}, \code{\link{ggml_rwkv_output}}
+#' @export
+#' @family state-space
+ggml_rwkv_wkv7 <- function(ctx, r, w, k, v, a, b, state) {
+  .Call("R_ggml_rwkv_wkv7", ctx, r, w, k, v, a, b, state, PACKAGE = "ggmlR")
+}
+
+#' Gated Linear Attention
+#'
+#' Linear attention with a per-token gate (the GLA / RetNet family).  Shares the
+#' RWKV recurrence machinery: keys, values and queries drive a running state
+#' that \code{g} gates, and \code{scale} multiplies the query.
+#'
+#' @section Shapes:
+#' \code{k}, \code{v}, \code{q} and \code{g} are \code{[S, H, n_tokens]};
+#' \code{state} holds \code{S * S * H * n_seqs} elements.  The result is
+#' \code{[S * H, n_tokens + S * n_seqs]}, outputs then final state -- see
+#' \code{\link{ggml_rwkv_output}}.
+#'
+#' \code{n_tokens} counts the tokens of \emph{all} sequences together, so it
+#' must be a multiple of \code{n_seqs}.
+#'
+#' @section Backend support:
+#' CPU only.  Unlike the RWKV and SSM ops, \code{GGML_OP_GATED_LINEAR_ATTN} has
+#' no Vulkan shader, so a graph containing it falls back to the CPU for this
+#' node.  It has no backward pass either, so it is inference-only.
+#'
+#' @param ctx GGML context
+#' @param k Keys, \code{[S, H, n_tokens]}
+#' @param v Values, \code{[S, H, n_tokens]}
+#' @param q Queries, \code{[S, H, n_tokens]}
+#' @param g Gate, \code{[S, H, n_tokens]}
+#' @param state Initial state, \code{S * S * H * n_seqs} elements
+#' @param scale Scalar applied to the queries (usually \code{1 / sqrt(S)})
+#' @return A tensor \code{[S * H, n_tokens + S * n_seqs]}
+#' @seealso \code{\link{ggml_rwkv_wkv7}}, \code{\link{ggml_rwkv_output}}
+#' @export
+#' @family state-space
+ggml_gated_linear_attn <- function(ctx, k, v, q, g, state, scale) {
+  .Call("R_ggml_gated_linear_attn", ctx, k, v, q, g, state,
+        as.numeric(scale), PACKAGE = "ggmlR")
+}
+
+#' Views Into a Packed RWKV / GLA Result
+#'
+#' \code{\link{ggml_rwkv_wkv6}}, \code{\link{ggml_rwkv_wkv7}} and
+#' \code{\link{ggml_gated_linear_attn}} all return one
+#' \code{[S * H, n_tokens + S * n_seqs]} tensor holding the per-token outputs
+#' followed by the final state.  These helpers view either half, so the column
+#' arithmetic lives in one place rather than at every call site.
+#'
+#' Both are graph views sharing memory with \code{result} and add no
+#' computation.  \code{k} must be the same tensor the op was built with, since
+#' \code{S}, \code{H} and \code{n_tokens} are read from it.
+#'
+#' @param ctx GGML context
+#' @param result The tensor returned by one of the RWKV / GLA ops
+#' @param k The \code{k} passed to that op (gives \code{S}, \code{H} and the
+#'   token count)
+#' @return For \code{ggml_rwkv_output()}, a tensor \code{[S * H, n_tokens]}
+#' @export
+#' @family state-space
+ggml_rwkv_output <- function(ctx, result, k) {
+  kne <- ggml_tensor_shape(k)
+  S <- kne[1]; H <- kne[2]
+  n_tokens <- if (length(kne) >= 3L) kne[3] else 1
+  fsz <- ggml_type_size(GGML_TYPE_F32)
+  # Outputs are the leading n_tokens columns of the packed result.
+  ggml_view_2d(ctx, result, S * H, n_tokens, nb1 = S * H * fsz, offset = 0)
+}
+
+#' @rdname ggml_rwkv_output
+#' @param state The \code{state} passed to that op (gives the sequence count)
+#' @return For \code{ggml_rwkv_state()}, a tensor \code{[S * H, S * n_seqs]}
+#' @export
+ggml_rwkv_state <- function(ctx, result, k, state) {
+  kne <- ggml_tensor_shape(k)
+  S <- kne[1]; H <- kne[2]
+  n_tokens <- if (length(kne) >= 3L) kne[3] else 1
+  # n_seqs is whatever the state buffer holds beyond one S*S*H block.
+  n_seqs <- ggml_nelements(state) / (S * S * H)
+  fsz <- ggml_type_size(GGML_TYPE_F32)
+  # The state follows the outputs, hence the n_tokens-column offset.
+  ggml_view_2d(ctx, result, S * H, S * n_seqs,
+               nb1 = S * H * fsz,
+               offset = S * H * n_tokens * fsz)
+}
+
+# ============================================================================
+# Entry points that were registered without an R wrapper
+#
+# Each of these had a .Call registration in r_interface.c but no way to reach
+# it from R.
+# ============================================================================
+
+#' Cross-Entropy Loss (Graph)
+#'
+#' Creates a graph node computing the cross-entropy loss between logits
+#' \code{a} and labels \code{b}.  The op applies its own softmax, so \code{a}
+#' must be logits, not probabilities.
+#'
+#' Differentiable: the backward pass is wired into the graph, so this can be
+#' used as a training loss in a hand-built graph.
+#'
+#' @param ctx GGML context
+#' @param a Logits
+#' @param b Labels, same shape as \code{a}
+#' @return A scalar tensor holding the loss
+#' @seealso \code{\link{ggml_cross_entropy_loss_back}}
+#' @export
+ggml_cross_entropy_loss <- function(ctx, a, b) {
+  .Call("R_ggml_cross_entropy_loss", ctx, a, b, PACKAGE = "ggmlR")
+}
+
+#' Cross-Entropy Loss Backward (Graph)
+#'
+#' Gradient node for \code{\link{ggml_cross_entropy_loss}}.
+#'
+#' \code{ggml_build_backward_expand()} inserts this automatically, so it is
+#' rarely needed directly; it is exposed for hand-built backward graphs.
+#'
+#' @param ctx GGML context
+#' @param a Upstream gradient
+#' @param b Logits from the forward pass
+#' @param c Labels from the forward pass
+#' @return Gradient w.r.t. the logits
+#' @seealso \code{\link{ggml_cross_entropy_loss}}
+#' @export
+ggml_cross_entropy_loss_back <- function(ctx, a, b, c) {
+  .Call("R_ggml_cross_entropy_loss_back", ctx, a, b, c, PACKAGE = "ggmlR")
+}
+
+#' Cumulative Sum (Graph)
+#'
+#' Creates a graph node computing the cumulative sum along the first dimension.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @return Tensor of the same shape holding the running sum
+#' @export
+ggml_cumsum <- function(ctx, a) {
+  .Call("R_ggml_cumsum", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Multi-RoPE Backward (Graph)
+#'
+#' Gradient node for \code{\link{ggml_rope_multi}}.  Takes the same geometry
+#' arguments as the forward op, which is what makes the rotation invertible.
+#'
+#' @inheritParams ggml_rope_multi
+#' @return Gradient w.r.t. the rotated input
+#' @seealso \code{\link{ggml_rope_multi}}
+#' @export
+ggml_rope_multi_back <- function(ctx, a, b, c = NULL,
+                                 n_dims, sections = c(0L, 0L, 0L, 0L),
+                                 mode = 0L, n_ctx_orig = 0L,
+                                 freq_base = 10000.0, freq_scale = 1.0,
+                                 ext_factor = 0.0, attn_factor = 1.0,
+                                 beta_fast = 32.0, beta_slow = 1.0) {
+  .Call("R_ggml_rope_multi_back", ctx, a, b, c,
+        as.integer(n_dims), as.integer(sections), as.integer(mode),
+        as.integer(n_ctx_orig), as.numeric(freq_base), as.numeric(freq_scale),
+        as.numeric(ext_factor), as.numeric(attn_factor),
+        as.numeric(beta_fast), as.numeric(beta_slow),
+        PACKAGE = "ggmlR")
+}
+
+#' Set Flash-Attention Precision
+#'
+#' Sets the precision a \code{ggml_flash_attn_ext()} node computes in.
+#' \code{GGML_PREC_F32} raises accuracy at some cost in speed.
+#'
+#' @param tensor A flash-attention node
+#' @param prec Precision constant
+#' @return The tensor (for chaining)
+#' @seealso \code{\link{ggml_flash_attn_ext_get_prec}}
+#' @export
+ggml_flash_attn_ext_set_prec <- function(tensor, prec) {
+  .Call("R_ggml_flash_attn_ext_set_prec", tensor, as.integer(prec),
+        PACKAGE = "ggmlR")
+}
+
+#' Get Flash-Attention Precision
+#'
+#' @param tensor A flash-attention node
+#' @return The precision constant currently set on the node
+#' @seealso \code{\link{ggml_flash_attn_ext_set_prec}}
+#' @export
+ggml_flash_attn_ext_get_prec <- function(tensor) {
+  .Call("R_ggml_flash_attn_ext_get_prec", tensor, PACKAGE = "ggmlR")
+}
+
+#' Attach Attention Sinks to a Flash-Attention Node
+#'
+#' Adds per-head "sink" logits, an always-available extra key that lets a query
+#' attend to nothing in particular.
+#'
+#' @param tensor A flash-attention node
+#' @param sinks Sink logits, one per head
+#' @return The tensor (for chaining)
+#' @seealso \code{\link{ggml_soft_max_add_sinks}}
+#' @export
+ggml_flash_attn_ext_add_sinks <- function(tensor, sinks) {
+  .Call("R_ggml_flash_attn_ext_add_sinks", tensor, sinks, PACKAGE = "ggmlR")
+}
+
+#' Attach Attention Sinks to a Softmax Node
+#'
+#' The \code{\link{ggml_soft_max_ext}} counterpart of
+#' \code{\link{ggml_flash_attn_ext_add_sinks}}.
+#'
+#' @param tensor A softmax node
+#' @param sinks Sink logits, one per head
+#' @return The tensor (for chaining)
+#' @export
+ggml_soft_max_add_sinks <- function(tensor, sinks) {
+  .Call("R_ggml_soft_max_add_sinks", tensor, sinks, PACKAGE = "ggmlR")
+}
+
+#' Raw Data Pointer of a Tensor
+#'
+#' Returns the address of the tensor's data buffer as a numeric value.  Useful
+#' for checking whether two tensors alias the same memory -- a view and its
+#' source share a pointer.
+#'
+#' @param tensor Tensor pointer
+#' @return The data address, as a double
+#' @export
+ggml_tensor_data_ptr <- function(tensor) {
+  .Call("R_ggml_tensor_data_ptr", tensor, PACKAGE = "ggmlR")
+}
+
+#' Backward Pass of the RWKV-6 WKV Recurrence
+#'
+#' Gradients of \code{\link{ggml_rwkv_wkv6}} with respect to all six of its
+#' inputs, given \code{grad}, the gradient of the loss with respect to the
+#' recurrence's packed forward result.
+#'
+#' Training reaches this automatically through the backward graph; it is
+#' exported so the gradient can be checked against a numeric one.
+#'
+#' @section Packed result:
+#' All six gradients come back in one flat tensor, in the order the forward op
+#' takes its inputs: \code{[d_k | d_v | d_r | d_tf | d_td | d_state]}.
+#'
+#' @param ctx GGML context
+#' @param k,v,r,tf,td,state The tensors passed to the forward recurrence
+#' @param grad Gradient w.r.t. the packed forward result
+#' @return A flat tensor holding the six gradients, concatenated
+#' @seealso \code{\link{ggml_rwkv_wkv6}}
+#' @export
+#' @family state-space
+ggml_rwkv_wkv6_back <- function(ctx, k, v, r, tf, td, state, grad) {
+  .Call("R_ggml_rwkv_wkv6_back", ctx, k, v, r, tf, td, state, grad,
+        PACKAGE = "ggmlR")
+}
+
+#' Backward Pass of the RWKV-7 WKV Recurrence
+#'
+#' Gradients of \code{\link{ggml_rwkv_wkv7}} with respect to all seven of its
+#' inputs, packed in forward source order:
+#' \code{[d_r | d_w | d_k | d_v | d_a | d_b | d_state]}.
+#'
+#' @param ctx GGML context
+#' @param r,w,k,v,a,b,state The tensors passed to the forward recurrence
+#' @param grad Gradient w.r.t. the packed forward result
+#' @return A flat tensor holding the seven gradients, concatenated
+#' @seealso \code{\link{ggml_rwkv_wkv7}}
+#' @export
+#' @family state-space
+ggml_rwkv_wkv7_back <- function(ctx, r, w, k, v, a, b, state, grad) {
+  .Call("R_ggml_rwkv_wkv7_back", ctx, r, w, k, v, a, b, state, grad,
+        PACKAGE = "ggmlR")
+}
+
+#' Backward Pass of Gated Linear Attention
+#'
+#' Gradients of \code{\link{ggml_gated_linear_attn}}, packed in forward source
+#' order: \code{[d_k | d_v | d_q | d_g | d_state]}.
+#'
+#' @param ctx GGML context
+#' @param k,v,q,g,state The tensors passed to the forward op
+#' @param grad Gradient w.r.t. the packed forward result
+#' @param scale The scale the forward op was built with
+#' @return A flat tensor holding the five gradients, concatenated
+#' @seealso \code{\link{ggml_gated_linear_attn}}
+#' @export
+#' @family state-space
+ggml_gated_linear_attn_back <- function(ctx, k, v, q, g, state, grad, scale) {
+  .Call("R_ggml_gated_linear_attn_back", ctx, k, v, q, g, state, grad,
+        as.numeric(scale), PACKAGE = "ggmlR")
 }

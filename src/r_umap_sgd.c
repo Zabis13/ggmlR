@@ -19,6 +19,7 @@
 #include <Rinternals.h>
 #include <math.h>
 #include <stdint.h>
+#include <string.h>  // memcpy
 
 // PCG hash -> uint32, identical to pcg_hash() in umap_sgd.comp and
 // .ggmlr_pcg_hash() in R. Native uint32 wraparound gives the mod-2^32 arithmetic

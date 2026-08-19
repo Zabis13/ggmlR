@@ -822,6 +822,23 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_ssm_conv_f32;
         }
         return nullptr;
+    case GGML_OP_SSM_CONV_BACK:
+        // ggmlR extension: backward of ssm_conv.
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_ssm_conv_back_f32;
+        }
+        return nullptr;
+    case GGML_OP_OUT_PROD:
+        if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 &&
+            dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_out_prod_f32;
+        }
+        return nullptr;
+    case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_cross_entropy_loss_back_f32;
+        }
+        return nullptr;
     case GGML_OP_OPT_STEP_ADAMW:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_opt_step_adamw_f32;

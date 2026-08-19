@@ -66,6 +66,56 @@ ggml_opt_loss_type_weighted_mse <- function() {
   .Call("R_ggml_opt_loss_type_weighted_mse")
 }
 
+#' Loss type: Mean Absolute Error
+#'
+#' Returns the constant for MAE (L1) loss, \code{mean(|pred - y|)}.  Its
+#' gradient is \code{sgn(pred - y)}, so a far-off datapoint pulls no harder than
+#' a near one -- which is what makes it more robust to outliers than MSE, at the
+#' cost of a gradient that does not vanish as the fit improves.
+#'
+#' @return Integer constant for MAE loss
+#' @export
+#' @family optimization
+ggml_opt_loss_type_mae <- function() {
+  .Call("R_ggml_opt_loss_type_mae")
+}
+
+#' Loss type: Huber (smooth L1)
+#'
+#' Returns the constant for the Huber loss with \code{delta = 1}:
+#' \code{0.5 * e^2} where \code{|e| <= 1} and \code{|e| - 0.5} beyond it.
+#' Quadratic near zero, so unlike MAE the gradient vanishes at the optimum, and
+#' linear far out, so unlike MSE a single outlier cannot dominate the batch.
+#'
+#' \code{delta} is fixed at 1, the usual default.
+#'
+#' @return Integer constant for Huber loss
+#' @export
+#' @family optimization
+ggml_opt_loss_type_huber <- function() {
+  .Call("R_ggml_opt_loss_type_huber")
+}
+
+#' Loss type: Binary Cross-Entropy
+#'
+#' Returns the constant for element-wise binary cross-entropy,
+#' \code{mean(-[y*log(p) + (1-y)*log(1-p)])}.
+#'
+#' Unlike \code{\link{ggml_opt_loss_type_cross_entropy}}, which softmaxes its
+#' own input across a class axis and therefore expects logits, this one treats
+#' every output as an independent Bernoulli and expects \emph{probabilities} --
+#' so the model's last layer should end in a sigmoid.  It is the loss for
+#' multi-label targets and for a single-unit binary output.  Inputs are clamped
+#' away from 0 and 1 internally, since \code{log(0)} would otherwise poison the
+#' whole batch.
+#'
+#' @return Integer constant for binary cross-entropy loss
+#' @export
+#' @family optimization
+ggml_opt_loss_type_binary_cross_entropy <- function() {
+  .Call("R_ggml_opt_loss_type_binary_cross_entropy")
+}
+
 # ============================================================================
 # Optimizer Type Constants
 # ============================================================================
@@ -343,6 +393,70 @@ ggml_opt_ncorrect <- function(opt_ctx) {
   .Call("R_ggml_opt_ncorrect", opt_ctx)
 }
 
+#' Number of output heads in an optimizer context
+#'
+#' @param opt_ctx External pointer to optimizer context
+#' @return Integer number of output heads (1 for single-output models)
+#' @export
+#' @family optimization
+ggml_opt_n_loss <- function(opt_ctx) {
+  .Call("R_ggml_opt_n_loss", opt_ctx)
+}
+
+#' Get one output head's tensors from an optimizer context
+#'
+#' Per-head counterparts of \code{ggml_opt_outputs()} and friends, for
+#' multi-output models. \code{ihead} is 1-based; head 1 is what the
+#' single-head accessors return.
+#'
+#' @param opt_ctx External pointer to optimizer context
+#' @param ihead Output head index, 1-based
+#' @return External pointer to the tensor, or NULL if this head has none
+#' @export
+#' @family optimization
+ggml_opt_outputs_i <- function(opt_ctx, ihead) {
+  .Call("R_ggml_opt_outputs_i", opt_ctx, as.integer(ihead))
+}
+
+#' @rdname ggml_opt_outputs_i
+#' @export
+ggml_opt_labels_i <- function(opt_ctx, ihead) {
+  .Call("R_ggml_opt_labels_i", opt_ctx, as.integer(ihead))
+}
+
+#' @rdname ggml_opt_outputs_i
+#' @export
+ggml_opt_loss_weights_i <- function(opt_ctx, ihead) {
+  .Call("R_ggml_opt_loss_weights_i", opt_ctx, as.integer(ihead))
+}
+
+#' @rdname ggml_opt_outputs_i
+#' @export
+ggml_opt_pred_i <- function(opt_ctx, ihead) {
+  .Call("R_ggml_opt_pred_i", opt_ctx, as.integer(ihead))
+}
+
+#' @rdname ggml_opt_outputs_i
+#' @export
+ggml_opt_ncorrect_i <- function(opt_ctx, ihead) {
+  .Call("R_ggml_opt_ncorrect_i", opt_ctx, as.integer(ihead))
+}
+
+#' Get one head's loss scalar, before weighting
+#'
+#' Returns the head's own loss, before it is multiplied by its
+#' \code{loss_weights} entry and summed into the total. \code{ggml_opt_loss()}
+#' returns the weighted total that is actually optimized.
+#'
+#' @param opt_ctx External pointer to optimizer context
+#' @param ihead Output head index, 1-based
+#' @return External pointer to the head's loss tensor
+#' @export
+#' @family optimization
+ggml_opt_loss_i <- function(opt_ctx, ihead) {
+  .Call("R_ggml_opt_loss_i", opt_ctx, as.integer(ihead))
+}
+
 #' Get optimizer type from context
 #'
 #' @param opt_ctx External pointer to optimizer context
@@ -428,6 +542,44 @@ ggml_opt_result_accuracy <- function(result) {
   .Call("R_ggml_opt_result_accuracy", result)
 }
 
+#' Number of output heads accumulated in a result
+#'
+#' Zero before the first epoch has run, so callers must treat a freshly reset
+#' result as holding no per-head data yet.
+#'
+#' @param result External pointer to result object
+#' @return Integer number of heads
+#' @export
+#' @family optimization
+ggml_opt_result_n_loss <- function(result) {
+  .Call("R_ggml_opt_result_n_loss", result)
+}
+
+#' Get one output head's loss or accuracy from a result
+#'
+#' Per-head counterparts of \code{ggml_opt_result_loss()} and
+#' \code{ggml_opt_result_accuracy()}, which report the weighted total the
+#' optimizer minimizes. These report a single head on its own, before
+#' weighting, for the training history. \code{ihead} is 1-based.
+#'
+#' Heads whose loss is not cross-entropy have no accuracy; those return
+#' \code{NA}.
+#'
+#' @param result External pointer to result object
+#' @param ihead Output head index, 1-based
+#' @return Named numeric vector with the value and its 'uncertainty'
+#' @export
+#' @family optimization
+ggml_opt_result_loss_i <- function(result, ihead) {
+  .Call("R_ggml_opt_result_loss_i", result, as.integer(ihead))
+}
+
+#' @rdname ggml_opt_result_loss_i
+#' @export
+ggml_opt_result_accuracy_i <- function(result, ihead) {
+  .Call("R_ggml_opt_result_accuracy_i", result, as.integer(ihead))
+}
+
 # ============================================================================
 # Computation Functions
 # ============================================================================
@@ -505,6 +657,89 @@ ggml_opt_fit <- function(sched, ctx_compute, inputs, outputs, dataset,
                   as.integer(loss_type), as.integer(optimizer),
                   as.numeric(nepoch), as.numeric(nbatch_logical),
                   as.numeric(val_split), as.logical(silent)))
+}
+
+#' Fit a multi-output model
+#'
+#' Trains a model with several output heads. Each head has its own labels,
+#' loss type and weight; the optimized total is
+#' \code{sum(loss_weights[i] * loss_i)}.
+#'
+#' All heads share the dataset's datapoints. The dataset's labels hold every
+#' head's labels concatenated along the first dimension: head \code{i} occupies
+#' \code{labels_offs[i] + seq_len(width_i)} of each label row.
+#'
+#' @param sched Backend scheduler
+#' @param ctx_compute Compute context holding the model graph
+#' @param inputs Input tensor
+#' @param outputs List of output tensors, one per head
+#' @param dataset Dataset with data and concatenated labels
+#' @param loss_types Integer vector of loss type constants, one per head
+#' @param loss_weights Numeric vector of head weights (default: all 1)
+#' @param labels_offs Numeric vector of label offsets, 0-based, one per head
+#' @param optimizer Optimizer type constant
+#' @param nepoch Number of epochs
+#' @param nbatch_logical Logical batch size
+#' @param val_split Fraction of the data used for validation
+#' @param silent Suppress progress output
+#' @return Named list with train_loss, train_accuracy, val_loss, val_accuracy,
+#'   head_loss (a nepoch x nhead matrix of unweighted per-head losses) and
+#'   head_accuracy (same shape; NA for heads whose loss is not cross-entropy)
+#' @seealso \code{\link{ggml_fit_opt_multi}}, which this wraps and which adds
+#'   callbacks and shuffling control
+#' @export
+#' @family optimization
+ggml_opt_fit_multi <- function(sched, ctx_compute, inputs, outputs, dataset,
+                               loss_types,
+                               loss_weights = rep(1, length(outputs)),
+                               labels_offs = NULL,
+                               optimizer = ggml_opt_optimizer_type_adamw(),
+                               nepoch = 1, nbatch_logical = 32,
+                               val_split = 0.0, silent = FALSE) {
+  # Thin wrapper: ggml_fit_opt_multi() is the single implementation. Argument
+  # checking and the labels_offs default live there, so the two paths cannot
+  # drift apart again. The only behavioural difference kept here is the legacy
+  # shuffling contract -- the whole dataset once, never the training portion
+  # per epoch -- which is what the C loop this used to call did.
+  hist <- ggml_fit_opt_multi(
+    sched = sched, ctx_compute = ctx_compute, inputs = inputs,
+    outputs = outputs, dataset = dataset,
+    loss_types = loss_types, loss_weights = loss_weights,
+    labels_offs = labels_offs, optimizer = optimizer,
+    nepoch = nepoch, nbatch_logical = nbatch_logical,
+    val_split = val_split,
+    shuffle = FALSE, shuffle_all = TRUE,
+    callbacks = list(), silent = silent
+  )
+
+  list(train_loss     = hist$train_loss,
+       train_accuracy = hist$train_accuracy,
+       val_loss       = hist$val_loss,
+       val_accuracy   = hist$val_accuracy,
+       head_loss      = attr(hist, "head_loss"),
+       head_accuracy  = attr(hist, "head_accuracy"))
+}
+
+#' Get one output head's slice of a batch's labels
+#'
+#' Multi-output counterpart of \code{ggml_opt_dataset_get_batch()}. The
+#' dataset's labels hold every head's labels concatenated along the first
+#' dimension; this copies just the slice belonging to one head.
+#'
+#' @param dataset Dataset pointer
+#' @param data_batch Input batch tensor, or NULL to copy only the labels
+#'   (the caller copies the inputs once, with the first head)
+#' @param labels_batch This head's labels batch tensor
+#' @param labels_off Offset of this head within a label row, 0-based, in elements
+#' @param ibatch Batch index, 0-based
+#' @return NULL, invisibly
+#' @export
+#' @family optimization
+ggml_opt_dataset_get_batch_head <- function(dataset, data_batch, labels_batch,
+                                            labels_off, ibatch) {
+  invisible(.Call("R_ggml_opt_dataset_get_batch_head",
+                  dataset, data_batch, labels_batch,
+                  as.numeric(labels_off), as.numeric(ibatch)))
 }
 
 # ============================================================================
@@ -612,6 +847,37 @@ ggml_opt_init_for_fit <- function(sched, loss_type, optimizer = ggml_opt_optimiz
                                    inputs = NULL, outputs = NULL) {
   .Call("R_ggml_opt_init_for_fit",
         sched, as.integer(loss_type), as.integer(optimizer), as.integer(opt_period),
+        ctx_compute, inputs, outputs)
+}
+
+#' Initialize a multi-output optimizer context for an R-side epoch loop
+#'
+#' Multi-output counterpart of \code{ggml_opt_init_for_fit()}. Returns the same
+#' \code{opt_ctx}/\code{lr_ud} pair, so \code{ggml_opt_set_lr()} and hence LR
+#' schedulers work identically; in addition it records each head's loss type,
+#' weight and label offset, which \code{ggml_opt_fit_multi()} would otherwise
+#' set internally.
+#'
+#' @param sched Backend scheduler
+#' @param loss_types Integer vector of loss type constants, one per head
+#' @param loss_weights Numeric vector of head weights, one per head
+#' @param labels_offs Numeric vector of 0-based label offsets, one per head
+#' @param optimizer Optimizer type constant
+#' @param opt_period Gradient accumulation period
+#' @param ctx_compute Compute context holding the model graph
+#' @param inputs Input tensor
+#' @param outputs List of output tensors, one per head
+#' @return List with elements `opt_ctx` and `lr_ud`
+#' @export
+#' @family optimization
+ggml_opt_init_for_fit_multi <- function(sched, loss_types, loss_weights, labels_offs,
+                                        optimizer = ggml_opt_optimizer_type_adamw(),
+                                        opt_period = 1L, ctx_compute = NULL,
+                                        inputs = NULL, outputs = NULL) {
+  if (!is.list(outputs)) outputs <- list(outputs)
+  .Call("R_ggml_opt_init_for_fit_multi",
+        sched, as.integer(loss_types), as.numeric(loss_weights), as.numeric(labels_offs),
+        as.integer(optimizer), as.integer(opt_period),
         ctx_compute, inputs, outputs)
 }
 
@@ -749,6 +1015,11 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
   hist <- vector("list", nepoch)
 
   for (epoch in seq_len(nepoch)) {
+    # Pick up a ggml_set_n_threads() issued after the scheduler was built --
+    # the single C entry points sync once before their loop, an R loop has no
+    # equivalent moment.
+    .ggml_sched_sync_threads(sched)
+
     # shuffle training portion (leaves the validation tail untouched)
     if (shuffle && nbatch_logical < idata_split) {
       ggml_opt_dataset_shuffle(opt_ctx, dataset, idata_split)
@@ -818,6 +1089,326 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
                       val_accuracy = numeric(0)))
   }
   do.call(rbind.data.frame, lapply(filled, function(x) as.data.frame(as.list(x))))
+}
+
+# ============================================================================
+# High-level: ggml_fit_opt_multi() -- multi-output R epoch loop with callbacks
+# ============================================================================
+
+#' Fit a multi-output model with an R-side epoch loop and callbacks
+#'
+#' Multi-output counterpart of \code{ggml_fit_opt()}. Each output head has its
+#' own labels, loss type and weight; the optimized total is
+#' \code{sum(loss_weights[i] * loss_i)}. Because the epoch loop runs in R, this
+#' path supports callbacks (early stopping, LR schedulers) and the
+#' \code{shuffle}/\code{shuffle_all} controls, which the single C call
+#' \code{ggml_opt_fit_multi()} cannot offer.
+#'
+#' All heads share the dataset's datapoints. The dataset's labels hold every
+#' head's labels concatenated along the first dimension: head \code{i} occupies
+#' \code{labels_offs[i] + seq_len(width_i)} of each label row.
+#'
+#' @param sched Backend scheduler
+#' @param ctx_compute Compute context holding the model graph
+#' @param inputs Input tensor with shape [ne_datapoint, batch_size]
+#' @param outputs List of output tensors, one per head
+#' @param dataset Dataset with data and concatenated labels
+#' @param loss_types Integer vector of loss type constants, one per head
+#' @param loss_weights Numeric vector of head weights (default: all 1)
+#' @param labels_offs Numeric vector of 0-based label offsets, one per head.
+#'   Defaults to laying the heads out back to back in head order, using each
+#'   head's \code{ne[0]} as its width.
+#' @param head_names Character vector naming the heads, one per head, used for
+#'   the per-head keys in \code{logs} and as the column names of the returned
+#'   matrices. Defaults to \code{head_1}, \code{head_2}, ... Callers that have
+#'   real output names should pass them, so a callback's \code{monitor=} matches
+#'   what the training history shows.
+#' @param optimizer Optimizer type (default: AdamW)
+#' @param nepoch Number of epochs
+#' @param nbatch_logical Logical batch size (for gradient accumulation)
+#' @param val_split Fraction of data for validation (0.0 to 1.0)
+#' @param shuffle Shuffle the training portion each epoch (default
+#'   \code{TRUE}).  Set to \code{FALSE} for time series or to make a run
+#'   exactly reproducible.
+#' @param shuffle_all Shuffle the whole dataset once before the
+#'   train/validation split is taken, so the validation portion is a random
+#'   sample rather than the tail of the input.  Defaults to \code{shuffle}.
+#' @param callbacks List of callback lists, as for \code{ggml_fit_opt()}. Each
+#'   element may have `on_epoch_begin(epoch, logs, state)` and/or
+#'   `on_epoch_end(epoch, logs, state)`. `state` is a mutable environment with
+#'   `stop`, `lr_ud` and `nepoch`. `logs` carries the aggregate metrics
+#'   (`train_loss`, `train_accuracy`, `val_loss`, `val_accuracy`) and, for each
+#'   head, `train_<head>_loss`, `train_<head>_accuracy`, `val_<head>_loss` and
+#'   `val_<head>_accuracy` -- so a scheduler or early stopping can monitor one
+#'   head rather than the total. Both phases are prefixed, so a head named
+#'   `val_x` cannot collide with another head's validation key. Per-head
+#'   validation keys are `NA` when `val_split` is 0, and accuracy keys are `NA`
+#'   for heads whose loss is not cross-entropy.
+#' @param silent Whether to suppress per-epoch progress output
+#' @return Data frame with columns epoch, train_loss, train_accuracy, val_loss,
+#'   val_accuracy -- one row per epoch actually run, so a callback that stops
+#'   early shortens it. The per-head metrics come as attributes rather than
+#'   columns, since they are matrices, each [nepoch_run x n_head] with columns
+#'   named after the heads: \code{attr(h, "head_loss")},
+#'   \code{attr(h, "head_accuracy")}, \code{attr(h, "val_head_loss")} and
+#'   \code{attr(h, "val_head_accuracy")}, plus \code{attr(h, "head_names")}.
+#' @export
+#' @family optimization
+#' @examples
+#' if (FALSE) {
+#' history <- ggml_fit_opt_multi(sched, ctx_compute, inputs, list(out_a, out_b),
+#'   dataset, loss_types = c(ggml_opt_loss_type_mse(), ggml_opt_loss_type_mse()),
+#'   nepoch = 50, val_split = 0.2,
+#'   callbacks = list(ggml_callback_early_stopping(monitor = "val_loss", patience = 5)))
+#' attr(history, "head_loss")
+#' }
+ggml_fit_opt_multi <- function(sched, ctx_compute, inputs, outputs, dataset,
+                               loss_types,
+                               loss_weights = rep(1, length(outputs)),
+                               labels_offs = NULL,
+                               head_names  = NULL,
+                               optimizer   = ggml_opt_optimizer_type_adamw(),
+                               nepoch      = 10L,
+                               nbatch_logical = 32L,
+                               val_split   = 0.0,
+                               shuffle     = TRUE,
+                               shuffle_all = shuffle,
+                               callbacks   = list(),
+                               silent      = FALSE) {
+
+  if (!is.list(outputs)) outputs <- list(outputs)
+  n_head <- length(outputs)
+  if (n_head < 1L) {
+    stop("'outputs' must contain at least one output head.")
+  }
+  if (length(loss_types) != n_head) {
+    stop(sprintf("'loss_types' must have one entry per output head (%d given, %d expected).",
+                 length(loss_types), n_head))
+  }
+  if (length(loss_weights) != n_head) {
+    stop(sprintf("'loss_weights' must have one entry per output head (%d given, %d expected).",
+                 length(loss_weights), n_head))
+  }
+
+  # Default layout: heads laid out back to back in the label rows, in order.
+  # Widths come from each head's ne[0], matching how the caller must have built
+  # the concatenated labels.
+  if (is.null(labels_offs)) {
+    widths      <- vapply(outputs, function(o) ggml_tensor_shape(o)[1L], numeric(1))
+    labels_offs <- c(0, cumsum(widths))[seq_len(n_head)]
+  }
+  if (length(labels_offs) != n_head) {
+    stop(sprintf("'labels_offs' must have one entry per output head (%d given, %d expected).",
+                 length(labels_offs), n_head))
+  }
+
+  # Names the per-head metrics are reported under in `logs`. The caller passes
+  # the model's output names so a callback's monitor= matches what the training
+  # history shows; standing alone, the heads are just numbered.
+  if (is.null(head_names)) {
+    head_names <- paste0("head_", seq_len(n_head))
+  }
+  head_names <- as.character(head_names)
+  if (length(head_names) != n_head) {
+    stop(sprintf("'head_names' must have one entry per output head (%d given, %d expected).",
+                 length(head_names), n_head))
+  }
+  if (anyNA(head_names) || any(!nzchar(head_names))) {
+    stop("'head_names' must not contain NA or empty strings.")
+  }
+  if (anyDuplicated(head_names)) {
+    stop("'head_names' must be unique: ",
+         paste(unique(head_names[duplicated(head_names)]), collapse = ", "))
+  }
+
+  nepoch <- as.integer(nepoch)
+
+  # --- batching parameters (same derivation as ggml_fit_opt) ---
+  ndata <- as.integer(ggml_opt_dataset_ndata(dataset))
+  nbatch_physical <- .ggml_input_batch_size(inputs, dataset)
+  nbatch_logical  <- as.integer(max(nbatch_logical, nbatch_physical))
+  opt_period      <- as.integer(max(1L, nbatch_logical %/% nbatch_physical))
+  nbatches_logical <- ndata %/% nbatch_logical
+  ibatch_split    <- as.integer(floor((1.0 - val_split) * nbatches_logical) * opt_period)
+  idata_split     <- min(as.integer(ibatch_split * nbatch_physical), ndata)
+
+  # --- init optimizer context (preserves momentum across epochs) ---
+  ctx_list <- ggml_opt_init_for_fit_multi(
+    sched, loss_types, loss_weights, labels_offs,
+    optimizer, opt_period, ctx_compute, inputs, outputs
+  )
+  opt_ctx <- ctx_list$opt_ctx
+  lr_ud   <- ctx_list$lr_ud
+  on.exit({
+    ggml_opt_free(opt_ctx)
+  }, add = TRUE)
+
+  # --- shuffle all data once at start, before the train/val split ---
+  if (shuffle_all && nbatch_logical < ndata) {
+    ggml_opt_dataset_shuffle(opt_ctx, dataset, -1)
+  }
+
+  result_train <- ggml_opt_result_init()
+  result_eval  <- ggml_opt_result_init()
+  on.exit({
+    ggml_opt_result_free(result_train)
+    ggml_opt_result_free(result_eval)
+  }, add = TRUE)
+
+  # --- mutable state shared with callbacks ---
+  state <- new.env(parent = emptyenv())
+  state$stop   <- FALSE
+  state$lr_ud  <- lr_ud
+  state$nepoch <- nepoch
+
+  hist <- vector("list", nepoch)
+  # [epoch x head], columns named after the heads. Validation matrices stay
+  # all-NA when val_split is 0.
+  new_head_mat <- function() {
+    matrix(NA_real_, nrow = nepoch, ncol = n_head,
+           dimnames = list(NULL, head_names))
+  }
+  head_loss_mat     <- new_head_mat()
+  head_acc_mat      <- new_head_mat()
+  val_head_loss_mat <- new_head_mat()
+  val_head_acc_mat  <- new_head_mat()
+  epochs_run        <- 0L
+
+  for (epoch in seq_len(nepoch)) {
+    # See ggml_fit_opt(): an R-side loop re-syncs the thread count itself.
+    .ggml_sched_sync_threads(sched)
+
+    # shuffle training portion (leaves the validation tail untouched)
+    if (shuffle && nbatch_logical < idata_split) {
+      ggml_opt_dataset_shuffle(opt_ctx, dataset, idata_split)
+    }
+
+    ggml_opt_result_reset(result_train)
+    ggml_opt_result_reset(result_eval)
+
+    logs <- list()
+
+    for (cb in callbacks) {
+      if (is.function(cb$on_epoch_begin))
+        cb$on_epoch_begin(epoch, logs, state)
+      if (isTRUE(state$stop)) break
+    }
+    if (isTRUE(state$stop)) break
+
+    if (!silent) message(sprintf("Epoch %d/%d", epoch, nepoch))
+
+    cb_progress <- if (silent) FALSE else TRUE
+    ggml_opt_epoch(opt_ctx, dataset, result_train, result_eval,
+                   idata_split,
+                   callback_train = cb_progress,
+                   callback_eval  = cb_progress)
+
+    train_loss_res <- ggml_opt_result_loss(result_train)
+    train_acc_res  <- ggml_opt_result_accuracy(result_train)
+
+    logs$train_loss     <- train_loss_res[["loss"]]
+    logs$train_accuracy <- train_acc_res[["accuracy"]]
+
+    if (val_split > 0) {
+      val_loss_res <- ggml_opt_result_loss(result_eval)
+      val_acc_res  <- ggml_opt_result_accuracy(result_eval)
+      logs$val_loss     <- val_loss_res[["loss"]]
+      logs$val_accuracy <- val_acc_res[["accuracy"]]
+    } else {
+      logs$val_loss     <- NA_real_
+      logs$val_accuracy <- NA_real_
+    }
+
+    # Per-head metrics, for the history matrices and for `logs`, so a callback
+    # can monitor an individual head. A result holds heads only once an epoch
+    # has accumulated into it, so guard on its own head count rather than
+    # n_head. Both phases carry an explicit prefix -- "train_<head>_loss" and
+    # "val_<head>_loss" -- so a head named "val_x" cannot collide with the
+    # validation key of a head named "x".
+    n_res_train <- ggml_opt_result_n_loss(result_train)
+    n_res_val   <- if (val_split > 0) ggml_opt_result_n_loss(result_eval) else 0L
+    for (i in seq_len(n_head)) {
+      nm <- head_names[i]
+      if (i <= n_res_train) {
+        head_loss_mat[epoch, i] <- ggml_opt_result_loss_i(result_train, i)[["loss"]]
+        head_acc_mat[epoch, i]  <- ggml_opt_result_accuracy_i(result_train, i)[["accuracy"]]
+      }
+      # unname(): the matrices carry the head names as column names, which a
+      # scalar subset would drag along into `logs` -- callbacks compare these
+      # against plain numbers, so they must stay bare.
+      logs[[paste0("train_", nm, "_loss")]]     <- unname(head_loss_mat[epoch, i])
+      logs[[paste0("train_", nm, "_accuracy")]] <- unname(head_acc_mat[epoch, i])
+
+      if (i <= n_res_val) {
+        val_head_loss_mat[epoch, i] <- ggml_opt_result_loss_i(result_eval, i)[["loss"]]
+        val_head_acc_mat[epoch, i]  <- ggml_opt_result_accuracy_i(result_eval, i)[["accuracy"]]
+      }
+      logs[[paste0("val_", nm, "_loss")]]     <- unname(val_head_loss_mat[epoch, i])
+      logs[[paste0("val_", nm, "_accuracy")]] <- unname(val_head_acc_mat[epoch, i])
+    }
+
+    # The data frame keeps only the aggregate columns -- the per-head metrics
+    # are matrices and ride as attributes -- so `hist` is built from the
+    # aggregates rather than from all of `logs`.
+    hist[[epoch]] <- c(epoch = epoch, logs[c("train_loss", "train_accuracy",
+                                             "val_loss", "val_accuracy")])
+    epochs_run    <- epoch
+
+    if (!silent) {
+      message(sprintf("  train_loss=%.4f  train_acc=%.4f  val_loss=%s  val_acc=%s",
+                      logs$train_loss, logs$train_accuracy,
+                      if (is.na(logs$val_loss)) "NA" else sprintf("%.4f", logs$val_loss),
+                      if (is.na(logs$val_accuracy)) "NA" else sprintf("%.4f", logs$val_accuracy)))
+    }
+
+    for (cb in callbacks) {
+      if (is.function(cb$on_epoch_end))
+        cb$on_epoch_end(epoch, logs, state)
+      if (isTRUE(state$stop)) break
+    }
+    if (isTRUE(state$stop)) break
+  }
+
+  filled <- Filter(Negate(is.null), hist)
+  if (length(filled) == 0) {
+    empty <- data.frame(epoch = integer(0), train_loss = numeric(0),
+                        train_accuracy = numeric(0), val_loss = numeric(0),
+                        val_accuracy = numeric(0))
+    none <- matrix(NA_real_, nrow = 0, ncol = n_head,
+                   dimnames = list(NULL, head_names))
+    attr(empty, "head_loss")         <- none
+    attr(empty, "head_accuracy")     <- none
+    attr(empty, "val_head_loss")     <- none
+    attr(empty, "val_head_accuracy") <- none
+    attr(empty, "head_names")        <- head_names
+    return(empty)
+  }
+
+  df <- do.call(rbind.data.frame, lapply(filled, function(x) as.data.frame(as.list(x))))
+  # The per-head metrics are matrices, so they ride as attributes rather than
+  # columns; a callback that stopped early trims them to the epochs actually run.
+  keep <- seq_len(epochs_run)
+  attr(df, "head_loss")         <- head_loss_mat[keep, , drop = FALSE]
+  attr(df, "head_accuracy")     <- head_acc_mat[keep, , drop = FALSE]
+  attr(df, "val_head_loss")     <- val_head_loss_mat[keep, , drop = FALSE]
+  attr(df, "val_head_accuracy") <- val_head_acc_mat[keep, , drop = FALSE]
+  attr(df, "head_names")        <- head_names
+  df
+}
+
+# Internal helper: re-apply the current ggml_set_n_threads() setting to the
+# scheduler's CPU backends.
+#
+# A backend gets the thread count when it is created, and the single C entry
+# points (ggml_opt_fit, ggml_opt_fit_multi) re-sync once before their loop. An
+# R-side epoch loop has no such moment, so it calls this before each epoch:
+# without it, a ggml_set_n_threads() issued after the scheduler was built --
+# or between building the model and training it -- would be silently ignored
+# for the whole run. Cheap: it walks the scheduler's backends, a handful at
+# most, once per epoch.
+.ggml_sched_sync_threads <- function(sched) {
+  if (is.null(sched)) return(invisible(NULL))
+  invisible(.Call("R_ggml_sched_sync_threads", sched))
 }
 
 # Internal helper: how many datapoints the input tensor holds per forward pass.

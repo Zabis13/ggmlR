@@ -50,6 +50,8 @@ Other quantization:
 \code{\link{quantize_q2_K}()},
 \code{\link{quantize_q4_0}()},
 \code{\link{quantize_row_mxfp4_ref}()},
+\code{\link{quantize_row_nvfp4_ref}()},
+\code{\link{quantize_row_q1_0_ref}()},
 \code{\link{quantize_row_q2_K_ref}()},
 \code{\link{quantize_row_q4_0_ref}()},
 \code{\link{quantize_row_tq1_0_ref}()},

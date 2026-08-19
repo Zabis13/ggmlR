@@ -92,6 +92,8 @@ void ggml_compute_forward_flash_attn_back(
         const bool masked,
         struct ggml_tensor * dst);
 void ggml_compute_forward_ssm_conv(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_ssm_conv_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_ssm_scan_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_ssm_scan(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_win_part(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_win_unpart(const struct ggml_compute_params * params, struct ggml_tensor * dst);
@@ -100,6 +102,9 @@ void ggml_compute_forward_glu(const struct ggml_compute_params * params, struct 
 void ggml_compute_forward_get_rel_pos(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_add_rel_pos(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_rwkv_wkv6(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_rwkv_wkv6_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_rwkv_wkv7_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_gla_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_rwkv_wkv7(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_solve_tri(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_gated_delta_net(const struct ggml_compute_params * params, struct ggml_tensor * dst);

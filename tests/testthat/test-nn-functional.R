@@ -1505,3 +1505,31 @@ test_that("multi-input save/load round-trip preserves predictions", {
   p2 <- ggml_predict(m2, list(x1, x2), batch_size = 32L)
   expect_equal(p1, p2)
 })
+
+test_that("requested regression metrics are computed on the functional path", {
+  # The functional evaluate() computed these already; they were unreachable
+  # because ggml_compile() rejected the names. Both APIs now share one helper,
+  # so a metric means the same thing in each.
+  skip_on_cran()
+  set.seed(9)
+  n <- 64L
+  x <- matrix(runif(n * 4L, -1, 1), nrow = n)
+  y <- matrix(rowSums(x[, 1:2]), ncol = 1L)
+
+  inp <- ggml_input(shape = 4L)
+  out <- inp |> ggml_layer_dense(8L, activation = "relu") |>
+    ggml_layer_dense(1L)
+  m <- ggml_model(inputs = inp, outputs = out)
+  m <- ggml_compile(m, optimizer = "adam", loss = "mse",
+                    metrics = c("mae", "mse", "rmse"), backend = "cpu")
+  m <- ggml_fit(m, x, y, epochs = 5L, batch_size = 16L, verbose = 0L)
+
+  ev <- ggml_evaluate(m, x, y, batch_size = 16L)
+  p  <- ggml_predict(m, x, batch_size = 16L)
+
+  expect_equal(ev$mae,  mean(abs(y - p)),      tolerance = 1e-5)
+  expect_equal(ev$mse,  mean((y - p)^2),       tolerance = 1e-5)
+  expect_equal(ev$rmse, sqrt(mean((y - p)^2)), tolerance = 1e-5)
+
+  cleanup_functional_model(m)
+})

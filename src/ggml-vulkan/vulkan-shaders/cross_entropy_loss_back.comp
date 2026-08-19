@@ -1,0 +1,87 @@
+#version 450
+
+// ggmlR extension: GGML_OP_CROSS_ENTROPY_LOSS_BACK on the GPU. Upstream ggml
+// has no Vulkan shader for it, so a classification model's loss gradient left
+// the GPU on every training step.
+//
+// Matching ggml_compute_forward_cross_entropy_loss_back_f32:
+//     dst[row] = (softmax(src0f[row]) - src1f[row]) * grad[0] / nrows
+//
+// src0f are the logits, src1f the labels, and grad is the scalar gradient of
+// the loss node. One workgroup owns one row and does the softmax reduction in
+// shared memory, the same shape as soft_max.comp.
+//
+// The two passes over the row (max, then sum of exp) are the standard numerically
+// stable softmax: subtracting the row max keeps exp() from overflowing on large
+// logits, which is exactly the case where an untrained model starts out.
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout (push_constant) uniform parameter {
+    uint nc;        // elements per row
+    uint nr;        // number of rows
+    float inv_nr;   // 1/nr, folded in on the host
+} p;
+
+layout(constant_id = 0) const uint BLOCK_SIZE = 32;
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer G  { float grad[]; };    // scalar
+layout (binding = 1) readonly buffer S0 { float src0f[]; };   // logits
+layout (binding = 2) readonly buffer S1 { float src1f[]; };   // labels
+layout (binding = 3) writeonly buffer D { float dst[]; };
+
+shared float vals[BLOCK_SIZE];
+
+void main() {
+    const uint tid  = gl_LocalInvocationID.x;
+    const uint row  = gl_WorkGroupID.x;
+
+    if (row >= p.nr) {
+        return;
+    }
+
+    const uint base = row * p.nc;
+
+    // --- row max, for numerical stability ---
+    float rmax = -1.0 / 0.0;   // -inf
+    for (uint c = tid; c < p.nc; c += BLOCK_SIZE) {
+        rmax = max(rmax, src0f[base + c]);
+    }
+    vals[tid] = rmax;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            vals[tid] = max(vals[tid], vals[tid + s]);
+        }
+        barrier();
+    }
+    const float row_max = vals[0];
+    barrier();
+
+    // --- sum of exp(x - max) ---
+    float rsum = 0.0;
+    for (uint c = tid; c < p.nc; c += BLOCK_SIZE) {
+        rsum += exp(src0f[base + c] - row_max);
+    }
+    vals[tid] = rsum;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            vals[tid] += vals[tid + s];
+        }
+        barrier();
+    }
+    const float row_sum = vals[0];
+    barrier();
+
+    // --- (softmax - labels) * grad / nr ---
+    // grad is a scalar tensor; every row scales by the same value.
+    const float d_by_nr = grad[0] * p.inv_nr;
+    const float inv_sum = 1.0 / row_sum;
+
+    for (uint c = tid; c < p.nc; c += BLOCK_SIZE) {
+        const float sm = exp(src0f[base + c] - row_max) * inv_sum;
+        dst[base + c] = (sm - src1f[base + c]) * d_by_nr;
+    }
+}

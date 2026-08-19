@@ -59,6 +59,22 @@ for (i in seq_len(n_dev)) {
 
 Full example: `inst/examples/device_discovery.R`
 
+`ggml_vulkan_status()` prints a summary and also *returns* it invisibly, as
+`list(available, n_devices, devices)` — so a script can branch on the result
+without re-querying with `ggml_vulkan_available()` and
+`ggml_vulkan_device_count()`.
+
+```{r}
+st <- ggml_vulkan_status()
+if (st$available && st$n_devices > 0) {
+  # Each entry is a list: index, name, free_memory, total_memory
+  nm <- vapply(st$devices, function(d) d$name, character(1))
+  cat("Vulkan devices:", paste(nm, collapse = ", "), "\n")
+} else {
+  cat("No Vulkan device — CPU only\n")
+}
+```
+
 ---
 
 ## 3. Autograd device selection

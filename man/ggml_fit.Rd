@@ -50,10 +50,22 @@ is reshuffled each epoch while the validation portion stays fixed.  Set to
 \code{FALSE} for time series or exactly reproducible runs.}
 
 \item{callbacks}{List of callback objects, e.g.
-\code{\link{ggml_callback_early_stopping}} or an LR scheduler.  Each is a
-list with \code{on_epoch_begin(epoch, logs, state)} and/or
-\code{on_epoch_end(epoch, logs, state)}; setting \code{state$stop <- TRUE}
-stops training.}
+  \code{\link{ggml_callback_early_stopping}} or an LR scheduler.  Each is a
+  list with \code{on_epoch_begin(epoch, logs, state)} and/or
+  \code{on_epoch_end(epoch, logs, state)}; setting \code{state$stop <- TRUE}
+  stops training.  \code{logs} holds \code{train_loss},
+  \code{train_accuracy}, \code{val_loss} and \code{val_accuracy}, and for a
+  multi-output model also \code{train_<output>_loss},
+  \code{train_<output>_accuracy}, \code{val_<output>_loss} and
+  \code{val_<output>_accuracy}, so a callback can monitor one head rather
+  than the total.  These are the same names \code{model$history} uses, so a
+  \code{monitor=} naming one of them matches a column there.
+
+  Both phases carry a prefix on purpose: it keeps an output named
+  \code{val_x} from colliding with another output's validation key.
+  \code{\link{ggml_evaluate}} reports the same per-head quantities under the
+  bare \code{<output>_loss}, since a single evaluation has no train/val
+  phases to tell apart.}
 
 \item{...}{Arguments passed to the appropriate implementation.}
 }

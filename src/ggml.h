@@ -585,6 +585,15 @@ extern "C" {
 
         GGML_OP_GATED_DELTA_NET,
 
+        // ggmlR extension: backward pass for the state-space convolution.
+        // Appended at the end so no existing op number shifts -- those are
+        // serialized into GGUF and relied on by llamaR / sd2R.
+        GGML_OP_SSM_CONV_BACK,
+        GGML_OP_SSM_SCAN_BACK,
+        GGML_OP_RWKV_WKV6_BACK,
+        GGML_OP_RWKV_WKV7_BACK,
+        GGML_OP_GATED_LINEAR_ATTN_BACK,
+
         GGML_OP_COUNT,
     };
 
@@ -2436,6 +2445,63 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * sx,
             struct ggml_tensor  * c);
+
+    // ggmlR extension: backward pass for ggml_ssm_conv (absent upstream).
+    // Returns the two input gradients concatenated: [d_sx | d_c].
+    GGML_API struct ggml_tensor * ggml_ssm_conv_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * sx,
+            struct ggml_tensor  * c,
+            struct ggml_tensor  * grad);
+
+    // ggmlR extension: backward pass for ggml_ssm_scan (absent upstream).
+    // Returns all six input gradients concatenated, in ggml_ssm_scan() source
+    // order: [d_s | d_x | d_dt | d_A | d_B | d_C]. `ids` is integer, no grad.
+    GGML_API struct ggml_tensor * ggml_ssm_scan_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * s,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * dt,
+            struct ggml_tensor  * A,
+            struct ggml_tensor  * B,
+            struct ggml_tensor  * C,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * grad);
+
+    // ggmlR extension: backward passes for the RWKV-family recurrences
+    // (absent upstream). Each returns every input gradient concatenated, in the
+    // source order of the matching forward op, with the initial-state gradient
+    // last.
+    GGML_API struct ggml_tensor * ggml_rwkv_wkv6_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * r,
+            struct ggml_tensor  * tf,
+            struct ggml_tensor  * td,
+            struct ggml_tensor  * state,
+            struct ggml_tensor  * grad);
+
+    GGML_API struct ggml_tensor * ggml_rwkv_wkv7_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * r,
+            struct ggml_tensor  * w,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * state,
+            struct ggml_tensor  * grad);
+
+    GGML_API struct ggml_tensor * ggml_gated_linear_attn_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * state,
+            struct ggml_tensor  * grad,
+            float                 scale);
 
     GGML_API struct ggml_tensor * ggml_ssm_scan(
             struct ggml_context * ctx,

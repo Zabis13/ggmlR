@@ -13,8 +13,17 @@ ggml_graph_reset(graph)
 No return value, called for side effects
 }
 \description{
-Resets the computation graph for a new backward pass.
-NOTE: This function requires the graph to have gradients allocated
-(used for training/backpropagation). For inference-only graphs,
-this function will cause an error.
+Zeroes every gradient in the graph and seeds the loss node's own gradient
+with 1 -- the value the chain rule starts from.  \strong{Call this after
+\code{\link{ggml_build_backward_expand}} and before
+\code{\link{ggml_graph_compute}}}: without it every gradient computes as
+zero, since the backward pass multiplies through a seed that was never set.
+}
+\details{
+Requires a graph built by \code{\link{ggml_build_forward_expand_grads}};
+an inference-only graph has no gradients to reset and is rejected.
+}
+\seealso{
+\code{\link{ggml_build_backward_expand}},
+  \code{\link{ggml_build_forward_expand_grads}}
 }

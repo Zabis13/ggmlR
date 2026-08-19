@@ -1996,6 +1996,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_ssm_conv(params, tensor);
             } break;
+        case GGML_OP_SSM_CONV_BACK:
+            {
+                ggml_compute_forward_ssm_conv_back(params, tensor);
+            } break;
+        case GGML_OP_SSM_SCAN_BACK:
+            {
+                ggml_compute_forward_ssm_scan_back(params, tensor);
+            } break;
         case GGML_OP_SSM_SCAN:
             {
                 ggml_compute_forward_ssm_scan(params, tensor);
@@ -2027,6 +2035,18 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_RWKV_WKV6:
             {
                 ggml_compute_forward_rwkv_wkv6(params, tensor);
+            } break;
+        case GGML_OP_RWKV_WKV6_BACK:
+            {
+                ggml_compute_forward_rwkv_wkv6_back(params, tensor);
+            } break;
+        case GGML_OP_RWKV_WKV7_BACK:
+            {
+                ggml_compute_forward_rwkv_wkv7_back(params, tensor);
+            } break;
+        case GGML_OP_GATED_LINEAR_ATTN_BACK:
+            {
+                ggml_compute_forward_gla_back(params, tensor);
             } break;
         case GGML_OP_GATED_LINEAR_ATTN:
             {
@@ -2376,6 +2396,11 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_FLASH_ATTN_EXT:
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
+        case GGML_OP_SSM_CONV_BACK:
+        case GGML_OP_SSM_SCAN_BACK:
+        case GGML_OP_RWKV_WKV6_BACK:
+        case GGML_OP_RWKV_WKV7_BACK:
+        case GGML_OP_GATED_LINEAR_ATTN_BACK:
         case GGML_OP_SSM_SCAN:
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_GATED_LINEAR_ATTN:

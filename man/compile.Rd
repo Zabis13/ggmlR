@@ -27,9 +27,12 @@
 
 \item{optimizer}{Character: \code{"adam"}, \code{"adamw"}, or \code{"sgd"}.}
 
-\item{loss}{Character: \code{"categorical_crossentropy"} or \code{"mse"}.}
+\item{loss}{Character: \code{"categorical_crossentropy"}, \code{"mse"},
+\code{"mae"}, \code{"huber"} or \code{"binary_crossentropy"}.  For a
+multi-output model, a list with one loss per head.}
 
-\item{metrics}{Character vector of metrics (default \code{"accuracy"}).}
+\item{metrics}{Character vector of metrics (default \code{"accuracy"}); see
+\code{\link{ggml_compile}} for the full list.}
 
 \item{...}{Additional arguments passed to \code{\link{ggml_compile}}.}
 }

@@ -1,0 +1,87 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+#include "types.glsl"
+
+// ggmlR extension: backward pass of GGML_OP_SSM_CONV on the GPU.
+//
+// Forward is a depthwise causal correlation over a sliding window:
+//     y[i1, t, s] = sum_{i0 < nc} sx[t + i0, i1, s] * c[i0, i1]
+// so with g = dL/dy,
+//     d_sx[t + i0, i1, s] += g[i1, t, s] * c[i0, i1]
+//     d_c [i0, i1]        += sum_{t, s} g[i1, t, s] * sx[t + i0, i1, s]
+//
+// One invocation owns one channel i1 and loops over both time and sequences.
+// That is what keeps this shader free of atomics: d_sx rows and d_c columns
+// both belong to a single channel, so no two invocations ever write the same
+// address -- the same reason the CPU kernel splits its threads over channels.
+// d_c sums over sequences too, which is why the sequence loop lives here rather
+// than on the dispatch grid.
+//
+// Strides arrive as byte counts and are divided by 4 here, following ssm_conv.
+
+layout(constant_id = 0) const uint BLOCK_SIZE = 256;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer Src0 { float sx[]; };    // {ncs, nr, n_s}
+layout(binding = 1) readonly buffer Src1 { float c[]; };     // {nc, nr}
+layout(binding = 2) readonly buffer Src2 { float grad[]; };  // {nr, n_t, n_s}
+layout(binding = 3) buffer Dst { float dst[]; };             // [d_sx | d_c]
+
+layout(push_constant) uniform PushConstants {
+    uint nb01; uint nb02;        // sx   strides, bytes
+    uint nb11;                   // c    stride,  bytes
+    uint g_nb1; uint g_nb2;      // grad strides, bytes
+    uint nc;                     // d_conv
+    uint ncs;                    // d_conv - 1 + n_t
+    uint nr;                     // d_inner
+    uint n_t;                    // tokens per sequence
+    uint n_s;                    // sequences
+    uint d_c_off;                // element offset of the d_c half in dst
+};
+
+// d_conv is 4 in Mamba and small in every other configuration; keeping the
+// kernel-sized accumulator in registers avoids a read-modify-write to global
+// memory per tap. Configurations wider than this fall back to the CPU (see
+// ggml_backend_vk_device_supports_op).
+#define MAX_D_CONV 8
+
+void main() {
+    const uint i1 = gl_GlobalInvocationID.x;   // channel
+    if (i1 >= nr) {
+        return;
+    }
+
+    float dc[MAX_D_CONV];
+    [[unroll]] for (uint i0 = 0; i0 < MAX_D_CONV; ++i0) {
+        dc[i0] = 0.0;
+    }
+
+    const uint c_row = i1 * (nb11 / 4);
+
+    for (uint i3 = 0; i3 < n_s; ++i3) {
+        const uint sx_row  = i3 * (nb02 / 4) + i1 * (nb01 / 4);
+        const uint dsx_row = i3 * ncs * nr + i1 * ncs;
+
+        // d_sx is built locally: every position is touched only by the taps of
+        // this channel, so zero the row first and accumulate into it.
+        for (uint k = 0; k < ncs; ++k) {
+            dst[dsx_row + k] = 0.0;
+        }
+
+        for (uint i2 = 0; i2 < n_t; ++i2) {
+            const float gv = grad[i3 * (g_nb2 / 4) + i2 * (g_nb1 / 4) + i1];
+
+            for (uint i0 = 0; i0 < nc; ++i0) {
+                dst[dsx_row + i2 + i0] += gv * c[c_row + i0];
+                dc[i0]                 += gv * sx[sx_row + i2 + i0];
+            }
+        }
+    }
+
+    for (uint i0 = 0; i0 < nc; ++i0) {
+        dst[d_c_off + i0 + i1 * nc] = dc[i0];
+    }
+}

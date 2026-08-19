@@ -18,14 +18,25 @@ mk_fun <- function() {
 }
 
 test_that("unsupported loss is rejected, not silently substituted", {
-  # binary_crossentropy is not implemented; it used to train as categorical CE.
-  expect_error(ggml_compile(mk_seq(), loss = "binary_crossentropy"),
-               "Unsupported loss")
-  expect_error(ggml_compile(mk_seq(), loss = "binary_crossentropy"),
-               "binary_crossentropy is not implemented")
+  # binary_crossentropy used to be the example here: it was unimplemented and
+  # trained as categorical CE. It is a real loss now, so the check needs names
+  # that are still unknown -- the point of the test is the rejection, not which
+  # name does the rejecting.
   expect_error(ggml_compile(mk_seq(), loss = "typo_here"), "Unsupported loss")
-  expect_error(ggml_compile(mk_fun(), loss = "binary_crossentropy"),
-               "Unsupported loss")
+  expect_error(ggml_compile(mk_seq(), loss = "hinge"), "Unsupported loss")
+  expect_error(ggml_compile(mk_fun(), loss = "typo_here"), "Unsupported loss")
+})
+
+test_that("binary cross-entropy is accepted now that it is implemented", {
+  # The counterpart of the test above: a loss that IS implemented must compile,
+  # otherwise the rejection list would silently grow to cover working losses.
+  # expect_no_error rather than expect_silent: ggml_compile() reports the
+  # backend it selected the first time it runs, which is a message, not a fault.
+  for (l in c("binary_crossentropy", "mae", "huber")) {
+    expect_no_error(suppressMessages(ggml_compile(mk_seq(), loss = l)))
+  }
+  expect_no_error(suppressMessages(
+    ggml_compile(mk_fun(), loss = "binary_crossentropy")))
 })
 
 test_that("unsupported optimizer is rejected", {
@@ -41,6 +52,15 @@ test_that("unsupported metrics warn rather than being silently ignored", {
   # The supported metric, and no metrics at all, must stay quiet.
   expect_silent(ggml_compile(mk_seq(), metrics = "accuracy"))
   expect_silent(ggml_compile(mk_seq(), metrics = NULL))
+})
+
+test_that("the regression metrics compile without a warning", {
+  # These were rejected as "unsupported" while ggml_evaluate() already knew how
+  # to compute them, so the working code was unreachable.
+  for (m in c("mae", "mean_absolute_error", "mse", "mean_squared_error",
+              "rmse", "acc")) {
+    expect_no_warning(suppressMessages(ggml_compile(mk_seq(), metrics = m)))
+  }
 })
 
 test_that("every supported optimizer/loss combination still compiles", {
@@ -82,7 +102,9 @@ test_that("a hand-modified compilation is caught at fit() time", {
   y <- matrix(0, n, 2); y[cbind(1:n, sample(1:2, n, TRUE))] <- 1
 
   m <- ggml_compile(mk_seq(), loss = "categorical_crossentropy")
-  m$compilation$loss <- "binary_crossentropy"
+  # An unknown name, not merely an unimplemented one: binary_crossentropy used
+  # to serve here and now compiles for real.
+  m$compilation$loss <- "not_a_loss"
   expect_error(ggml_fit(m, x, y, epochs = 1L, batch_size = 16L, verbose = 0),
                "Unsupported loss")
 

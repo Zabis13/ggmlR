@@ -1,4 +1,5 @@
 #include "ops.h"
+#include <vector>
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
@@ -29,13 +30,41 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    // DIVERGENCE from upstream: the zeroing and its barrier were placed AFTER
+    // the `ith >= HEADS` early return below, so with more threads than heads
+    // the surplus threads left without reaching ggml_barrier() while the rest
+    // waited on them forever -- a hard deadlock, not a slowdown. The barrier is
+    // collective, so every thread must reach it; the early return now happens
+    // after it. Reproduced with HEADS=2 on 4 threads.
+    if (ith == 0) {
+        memset(dst_data, 0, T * C * sizeof(float));
+    }
+    ggml_barrier(params->threadpool);
+
     if (ith >= HEADS) {
         return;
     }
 
-    const int h_start = (HEADS * ith) / nth;
-    const int h_end = ((HEADS * (ith + 1)) / nth < HEADS) ?
-                (HEADS * (ith + 1)) / nth : HEADS;
+    // DIVERGENCE from upstream: the per-sequence length is derived as
+    // T / n_seqs with an integer division that upstream never checks. An
+    // indivisible pair (e.g. 3 tokens over 2 sequences) walks off the state
+    // buffer and segfaults, and T < n_seqs divides by zero. Assert instead of
+    // corrupting memory.
+    GGML_ASSERT(n_seqs > 0 && "rwkv_wkv6: state must hold at least one sequence");
+    GGML_ASSERT(T % n_seqs == 0 &&
+        "rwkv_wkv6: n_tokens must be a multiple of n_seqs");
+
+    // DIVERGENCE from upstream: the original range was
+    //     h_start = HEADS*ith/nth, h_end = min(HEADS*(ith+1)/nth, HEADS)
+    // which only covers every head when nth <= HEADS. With more threads than
+    // heads it hands thread 0 the empty range [0,0) while every other thread
+    // leaves through the `ith >= HEADS` check above, so NO thread computes
+    // anything and the output stays zero -- silently wrong, neither a crash nor
+    // a hang. Reproduced with HEADS=1 on 2 threads. A block split covers the
+    // heads for any thread count.
+    const int hpt = (HEADS + nth - 1) / nth;
+    const int h_start = hpt * ith;
+    const int h_end = (h_start + hpt < HEADS) ? h_start + hpt : HEADS;
 
     float * k =          (float *) dst->src[0]->data;
     float * v =          (float *) dst->src[1]->data;
@@ -48,11 +77,6 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
     size_t h_stride = C / HEADS;
     GGML_ASSERT(C % HEADS == 0); // C must be divisible by HEADS
     size_t h_stride_2d = head_size * head_size;
-
-    if (ith == 0) {
-        memset(dst_data, 0, T * C * sizeof(float));
-    }
-    ggml_barrier(params->threadpool);
 
 
     #if defined(__AVX__) && !defined(__AVX512F__)
@@ -210,6 +234,175 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
 }
 
 
+// ggml_compute_forward_rwkv_wkv6_back
+//
+// ggmlR extension: backward pass for ggml_rwkv_wkv6, absent upstream.
+//
+// Forward, per head and per state cell (i,j):
+//     kv        = k[i]*v[j]
+//     y[j]     += r[i]*(kv*tf[i] + S[i,j])
+//     S[i,j]    = S[i,j]*td[i] + kv
+//
+// Walking back, each cell feeds the loss twice: through y at this token, and
+// through the state carried into the next one. Both terms are summed into the
+// gradient that flows to the previous token -- dropping either still trains,
+// just towards the wrong optimum.
+//
+// The forward keeps only the final state, so this replays the recurrence into a
+// scratch buffer and then walks it backwards. Gradients land in one packed
+// output, in forward source order: [d_k | d_v | d_r | d_tf | d_td | d_state].
+//
+// Single-threaded on purpose: d_tf is shared by every token of a head and d_v
+// is accumulated across the i loop, so splitting over heads alone would race.
+// The early return sits AFTER the barrier -- the deadlock fixed in this same
+// file came from having it before.
+static void ggml_compute_forward_rwkv_wkv6_back_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src_k  = dst->src[0];
+    const ggml_tensor * src_v  = dst->src[1];
+    const ggml_tensor * src_r  = dst->src[2];
+    const ggml_tensor * src_tf = dst->src[3];
+    const ggml_tensor * src_td = dst->src[4];
+    const ggml_tensor * src_s  = dst->src[5];
+    const ggml_tensor * src_g  = dst->src[6];
+
+    const int64_t S        = src_k->ne[0];
+    const int64_t H        = src_k->ne[1];
+    const int64_t T        = src_k->ne[2];
+    const int64_t n_seqs   = src_s->ne[1];
+    const int64_t C        = S * H;
+    const int64_t seq_len  = T / n_seqs;
+
+    GGML_ASSERT(n_seqs > 0 && "rwkv_wkv6_back: state must hold at least one sequence");
+    GGML_ASSERT(T % n_seqs == 0 &&
+        "rwkv_wkv6_back: n_tokens must be a multiple of n_seqs");
+
+    const int ith = params->ith;
+
+    if (ith == 0) {
+        memset(dst->data, 0, ggml_nbytes(dst));
+    }
+    ggml_barrier(params->threadpool);
+
+    if (ith != 0) {
+        return;
+    }
+
+    const float * k  = (const float *) src_k->data;
+    const float * v  = (const float *) src_v->data;
+    const float * r  = (const float *) src_r->data;
+    const float * tf = (const float *) src_tf->data;
+    const float * td = (const float *) src_td->data;
+    const float * s0 = (const float *) src_s->data;
+
+    // The forward result is [S*H, T + S*n_seqs]: outputs, then the final state.
+    const float * g_y = (const float *) src_g->data;
+    const float * g_s = g_y + C * T;
+
+    float * d_k  = (float *) dst->data;
+    float * d_v  = d_k  + ggml_nelements(src_k);
+    float * d_r  = d_v  + ggml_nelements(src_v);
+    float * d_tf = d_r  + ggml_nelements(src_r);
+    float * d_td = d_tf + ggml_nelements(src_tf);
+    float * d_s  = d_td + ggml_nelements(src_td);
+
+    // Scratch for the replayed states of one head: seq_len+1 snapshots.
+    std::vector<float> St((size_t)(seq_len + 1) * S * S);
+    std::vector<float> gs((size_t) S * S);
+
+    for (int64_t seq = 0; seq < n_seqs; ++seq) {
+        for (int64_t h = 0; h < H; ++h) {
+            const size_t sb = (size_t) seq * S * S * H + (size_t) h * S * S;
+
+            // --- replay forward, keeping every state ---
+            for (int64_t ij = 0; ij < S * S; ++ij) {
+                St[ij] = s0[sb + ij];
+            }
+            for (int64_t t = 0; t < seq_len; ++t) {
+                const int64_t tt = seq * seq_len + t;
+                const float * prev = &St[(size_t) t * S * S];
+                float * cur = &St[(size_t)(t + 1) * S * S];
+                for (int64_t i = 0; i < S; ++i) {
+                    const float kv_i = k[tt*C + h*S + i];
+                    const float tdv  = td[tt*C + h*S + i];
+                    for (int64_t j = 0; j < S; ++j) {
+                        cur[i*S + j] = prev[i*S + j]*tdv + kv_i*v[tt*C + h*S + j];
+                    }
+                }
+            }
+
+            // --- walk back ---
+            for (int64_t ij = 0; ij < S * S; ++ij) {
+                gs[ij] = g_s[(size_t) seq * S * C + (size_t) h * S * S + ij];
+            }
+
+            for (int64_t t = seq_len - 1; t >= 0; --t) {
+                const int64_t tt = seq * seq_len + t;
+                const float * prev = &St[(size_t) t * S * S];
+
+                for (int64_t i = 0; i < S; ++i) {
+                    const float k_i  = k[tt*C + h*S + i];
+                    const float r_i  = r[tt*C + h*S + i];
+                    const float tf_i = tf[h*S + i];
+                    const float td_i = td[tt*C + h*S + i];
+
+                    float gk_i = 0.0f, gr_i = 0.0f, gtf_i = 0.0f, gtd_i = 0.0f;
+
+                    for (int64_t j = 0; j < S; ++j) {
+                        const float v_j  = v[tt*C + h*S + j];
+                        const float kv   = k_i * v_j;
+                        const float pv   = prev[i*S + j];
+                        const float gy_j = g_y[tt*C + h*S + j];
+
+                        // through y
+                        gr_i  += gy_j * (kv*tf_i + pv);
+                        gtf_i += gy_j * r_i * kv;
+                        float gkv   = gy_j * r_i * tf_i;
+                        float gprev = gy_j * r_i;
+
+                        // through the carried state
+                        const float gsn = gs[i*S + j];
+                        gtd_i += gsn * pv;
+                        gkv   += gsn;
+                        gprev += gsn * td_i;
+
+                        gk_i += gkv * v_j;
+                        d_v[tt*C + h*S + j] += gkv * k_i;
+
+                        gs[i*S + j] = gprev;
+                    }
+
+                    d_k [tt*C + h*S + i] += gk_i;
+                    d_r [tt*C + h*S + i] += gr_i;
+                    d_tf[h*S + i]        += gtf_i;
+                    d_td[tt*C + h*S + i] += gtd_i;
+                }
+            }
+
+            // What remains in gs is the gradient of the initial state.
+            for (int64_t ij = 0; ij < S * S; ++ij) {
+                d_s[sb + ij] = gs[ij];
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_rwkv_wkv6_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_rwkv_wkv6_back_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 void ggml_compute_forward_rwkv_wkv6(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -246,13 +439,35 @@ static void ggml_compute_forward_gla_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    // DIVERGENCE from upstream: same two defects as ggml_compute_forward_rwkv_wkv6_f32
+    // above -- the barrier sat after the `ith >= HEADS` early return (deadlock
+    // whenever there are more threads than heads), and T / n_seqs was an
+    // unchecked integer division (out-of-bounds state access when the two do
+    // not divide). See the comments there.
+    if (ith == 0) {
+        memset(dst_data, 0, T * C * sizeof(float));
+    }
+    ggml_barrier(params->threadpool);
+
     if (ith >= HEADS) {
         return;
     }
 
-    const int h_start = (HEADS * ith) / nth;
-    const int h_end = ((HEADS * (ith + 1)) / nth < HEADS) ?
-                (HEADS * (ith + 1)) / nth : HEADS;
+    GGML_ASSERT(n_seqs > 0 && "gated_linear_attn: state must hold at least one sequence");
+    GGML_ASSERT(T % n_seqs == 0 &&
+        "gated_linear_attn: n_tokens must be a multiple of n_seqs");
+
+    // DIVERGENCE from upstream: the original range was
+    //     h_start = HEADS*ith/nth, h_end = min(HEADS*(ith+1)/nth, HEADS)
+    // which only covers every head when nth <= HEADS. With more threads than
+    // heads it hands thread 0 the empty range [0,0) while every other thread
+    // leaves through the `ith >= HEADS` check above, so NO thread computes
+    // anything and the output stays zero -- silently wrong, neither a crash nor
+    // a hang. Reproduced with HEADS=1 on 2 threads. A block split covers the
+    // heads for any thread count.
+    const int hpt = (HEADS + nth - 1) / nth;
+    const int h_start = hpt * ith;
+    const int h_end = (h_start + hpt < HEADS) ? h_start + hpt : HEADS;
 
     float * k = (float *) dst->src[0]->data;
     float * v = (float *) dst->src[1]->data;
@@ -264,11 +479,6 @@ static void ggml_compute_forward_gla_f32(
     size_t h_stride = C / HEADS;
     GGML_ASSERT(C % HEADS == 0); // C must be divisible by HEADS
     size_t h_stride_2d = head_size * head_size;
-
-    if (ith == 0) {
-        memset(dst_data, 0, T * C * sizeof(float));
-    }
-    ggml_barrier(params->threadpool);
 
 
     #if defined(__AVX__) && !defined(__AVX512F__)
@@ -414,6 +624,146 @@ static void ggml_compute_forward_gla_f32(
     #endif
 }
 
+
+// ggml_compute_forward_gla_back
+//
+// ggmlR extension: backward pass for ggml_gated_linear_attn, absent upstream.
+//
+// Forward, per head and channel i:
+//     S[i,j] = S[i,j]*g[i] + k[i]*v[j]
+//     y[j]  += S[i,j]*(q[i]*scale)
+//
+// Note the order: the state is updated BEFORE it is read into y, so y sees the
+// new state, not the previous one -- unlike wkv6, where y reads the carried
+// state. Getting that backwards shifts every gradient by one token.
+//
+// Packed output, in forward source order: [d_k | d_v | d_q | d_g | d_state].
+static void ggml_compute_forward_gla_back_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src_k = dst->src[0];
+    const ggml_tensor * src_v = dst->src[1];
+    const ggml_tensor * src_q = dst->src[2];
+    const ggml_tensor * src_g = dst->src[3];
+    const ggml_tensor * src_s = dst->src[4];
+    const ggml_tensor * src_d = dst->src[5];
+
+    const float scale = ggml_get_op_params_f32(dst, 0);
+
+    const int64_t S       = src_k->ne[0];
+    const int64_t H       = src_k->ne[1];
+    const int64_t T       = src_k->ne[2];
+    const int64_t n_seqs  = src_s->ne[1];
+    const int64_t C       = S * H;
+    const int64_t seq_len = T / n_seqs;
+
+    GGML_ASSERT(n_seqs > 0 && "gated_linear_attn_back: state must hold at least one sequence");
+    GGML_ASSERT(T % n_seqs == 0 &&
+        "gated_linear_attn_back: n_tokens must be a multiple of n_seqs");
+
+    const int ith = params->ith;
+    if (ith == 0) {
+        memset(dst->data, 0, ggml_nbytes(dst));
+    }
+    ggml_barrier(params->threadpool);
+    if (ith != 0) {
+        return;
+    }
+
+    const float * k  = (const float *) src_k->data;
+    const float * v  = (const float *) src_v->data;
+    const float * q  = (const float *) src_q->data;
+    const float * g  = (const float *) src_g->data;
+    const float * s0 = (const float *) src_s->data;
+
+    const float * g_y = (const float *) src_d->data;
+    const float * g_s = g_y + C * T;
+
+    float * d_k = (float *) dst->data;
+    float * d_v = d_k + ggml_nelements(src_k);
+    float * d_q = d_v + ggml_nelements(src_v);
+    float * d_g = d_q + ggml_nelements(src_q);
+    float * d_s = d_g + ggml_nelements(src_g);
+
+    std::vector<float> St((size_t)(seq_len + 1) * S * S);
+    std::vector<float> gs((size_t) S * S);
+
+    for (int64_t seq = 0; seq < n_seqs; ++seq) {
+        for (int64_t h = 0; h < H; ++h) {
+            const size_t sb = (size_t) seq * S * S * H + (size_t) h * S * S;
+
+            for (int64_t ij = 0; ij < S * S; ++ij) {
+                St[ij] = s0[sb + ij];
+            }
+            for (int64_t t = 0; t < seq_len; ++t) {
+                const int64_t tt = seq * seq_len + t;
+                const float * prev = &St[(size_t) t * S * S];
+                float * cur = &St[(size_t)(t + 1) * S * S];
+                for (int64_t i = 0; i < S; ++i) {
+                    const float g_i = g[tt*C + h*S + i];
+                    const float k_i = k[tt*C + h*S + i];
+                    for (int64_t j = 0; j < S; ++j) {
+                        cur[i*S + j] = prev[i*S + j]*g_i + k_i*v[tt*C + h*S + j];
+                    }
+                }
+            }
+
+            for (int64_t ij = 0; ij < S * S; ++ij) {
+                gs[ij] = g_s[(size_t) seq * S * C + (size_t) h * S * S + ij];
+            }
+
+            for (int64_t t = seq_len - 1; t >= 0; --t) {
+                const int64_t tt = seq * seq_len + t;
+                const float * prev = &St[(size_t) t * S * S];
+                const float * cur  = &St[(size_t)(t + 1) * S * S];
+
+                for (int64_t i = 0; i < S; ++i) {
+                    const float g_i = g[tt*C + h*S + i];
+                    const float k_i = k[tt*C + h*S + i];
+                    const float qv  = q[tt*C + h*S + i] * scale;
+                    float gg_i = 0.0f, gk_i = 0.0f;
+
+                    for (int64_t j = 0; j < S; ++j) {
+                        const float gy_j = g_y[tt*C + h*S + j];
+
+                        // y reads the NEW state, so d_q uses cur, not prev.
+                        d_q[tt*C + h*S + i] += gy_j * cur[i*S + j] * scale;
+
+                        const float g_cur = gs[i*S + j] + gy_j * qv;
+
+                        gg_i += g_cur * prev[i*S + j];
+                        gk_i += g_cur * v[tt*C + h*S + j];
+                        d_v[tt*C + h*S + j] += g_cur * k_i;
+
+                        gs[i*S + j] = g_cur * g_i;
+                    }
+
+                    d_g[tt*C + h*S + i] += gg_i;
+                    d_k[tt*C + h*S + i] += gk_i;
+                }
+            }
+
+            for (int64_t ij = 0; ij < S * S; ++ij) {
+                d_s[sb + ij] = gs[ij];
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_gla_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_gla_back_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
 
 void ggml_compute_forward_gla(
         const ggml_compute_params * params,
@@ -710,13 +1060,42 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    // DIVERGENCE from upstream: wkv6 and gla zero dst before computing, but
+    // this kernel never did -- and its SIMD path needs that, because the
+    // leftover loop after GGML_F32_VEC_REDUCE accumulates with `+=` into what
+    // is otherwise uninitialised memory. With more threads than heads the heads
+    // nobody computes also keep whatever was in the buffer. Both show up as
+    // NaN/Inf in the output on a perfectly ordinary input (reproduced with
+    // HEADS=1 on 2 threads, finite inputs, while 1 thread gave correct values).
+    // The barrier must be reached by every thread, so the zeroing goes before
+    // the early return below.
+    if (ith == 0) {
+        memset(dst_data, 0, T * C * sizeof(float));
+    }
+    ggml_barrier(params->threadpool);
+
     if (ith >= HEADS) {
         return;
     }
 
-    const int h_start = (HEADS * ith) / nth;
-    const int h_end = ((HEADS * (ith + 1)) / nth < HEADS) ?
-                (HEADS * (ith + 1)) / nth : HEADS;
+    // DIVERGENCE from upstream: T / n_seqs is an unchecked integer division, so
+    // an indivisible pair walks off the state buffer, and T < n_seqs divides by
+    // zero.
+    GGML_ASSERT(n_seqs > 0 && "rwkv_wkv7: state must hold at least one sequence");
+    GGML_ASSERT(T % n_seqs == 0 &&
+        "rwkv_wkv7: n_tokens must be a multiple of n_seqs");
+
+    // DIVERGENCE from upstream: the original range was
+    //     h_start = HEADS*ith/nth, h_end = min(HEADS*(ith+1)/nth, HEADS)
+    // which only covers every head when nth <= HEADS. With more threads than
+    // heads it hands thread 0 the empty range [0,0) while every other thread
+    // leaves through the `ith >= HEADS` check above, so NO thread computes
+    // anything and the output stays zero -- silently wrong, neither a crash nor
+    // a hang. Reproduced with HEADS=1 on 2 threads. A block split covers the
+    // heads for any thread count.
+    const int hpt = (HEADS + nth - 1) / nth;
+    const int h_start = hpt * ith;
+    const int h_end = (h_start + hpt < HEADS) ? h_start + hpt : HEADS;
 
     float * r = (float *) dst->src[0]->data;
     float * w = (float *) dst->src[1]->data;
@@ -774,6 +1153,59 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                 }
             }
         #else
+            // DIVERGENCE from upstream: the vector loops below step by
+            // GGML_F32_STEP (32 floats under AVX) and are entered whenever
+            // head_size > 0, with no remainder handling -- so any head_size not
+            // a multiple of GGML_F32_STEP reads past the end of a, r, w, k, b
+            // and the state. The garbage that comes back turns the whole output
+            // into NaN. Real RWKV models use head_size 64, which is why upstream
+            // never hits it; anything smaller does, every time.
+            //
+            // Run the scalar arithmetic instead when the vector width does not
+            // divide head_size. Correctness first: it is the same computation,
+            // just without the vector loads that would run off the end.
+            if (head_size % GGML_F32_STEP != 0) {
+                for (int64_t t = 0; t < T; t++) {
+                    int64_t t_offset = t * t_stride;
+                    int64_t state_offset = head_size * C * (t / (T / n_seqs));
+                    float * state_cur = state + state_offset;
+                    float * state_prev = t % (T / n_seqs) ? state_cur : (float*)dst->src[6]->data + state_offset;
+
+                    for (int64_t h = h_start; h < h_end; h++) {
+                        int64_t h_offset = h * h_stride;
+                        int64_t t_h_offset = t_offset + h_offset;
+                        int64_t h_2d_offset = h * h_stride_2d;
+
+                        for (int64_t i = 0; i < head_size; i++) {
+                            int64_t t_h_i_offset = t_h_offset + i;
+                            int64_t h_2d_i_offset = h_2d_offset + i * h_stride;
+
+                            float v_val = v[t_h_i_offset];
+
+                            float sa = 0, result = 0;
+                            for (int64_t j = 0; j < head_size; j++) {
+                                sa += a[t_h_offset + j] * state_prev[h_2d_i_offset + j];
+                            }
+
+                            for (int64_t j = 0; j < head_size; j++) {
+                                int64_t t_h_j_offset = t_h_offset + j;
+                                int64_t h_2d_i_j_offset = h_2d_i_offset + j;
+
+                                float r_val = r[t_h_j_offset];
+                                float w_val = w[t_h_j_offset];
+                                float k_val = k[t_h_j_offset];
+                                float b_val = b[t_h_j_offset];
+                                float kv_val = v_val * k_val;
+                                float prev_state_val = state_prev[h_2d_i_j_offset];
+                                state_cur[h_2d_i_j_offset] = prev_state_val * w_val + kv_val + sa * b_val;
+                                result += state_cur[h_2d_i_j_offset] * r_val;
+                            }
+                            dst_data[t_h_i_offset] = result;
+                        }
+                    }
+                }
+                return;
+            }
             for (int64_t t = 0; t < T; t++) {
                 int64_t t_offset = t * t_stride;
                 int64_t state_offset = head_size * C * (t / (T / n_seqs));
@@ -895,6 +1327,172 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
     #endif
 }
 
+
+// ggml_compute_forward_rwkv_wkv7_back
+//
+// ggmlR extension: backward pass for ggml_rwkv_wkv7, absent upstream.
+//
+// Forward, per head and channel i (state row i):
+//     sa[i]   = sum_j a[j]*S[i,j]
+//     S[i,j]  = S[i,j]*w[j] + v[i]*k[j] + sa[i]*b[j]
+//     y[i]    = sum_j S[i,j]*r[j]
+//
+// Harder than wkv6 because sa couples the whole row: the gradient reaching
+// S[i,j] arrives by two routes -- directly through w, and again through sa,
+// which every j of that row contributed to. Both are accumulated before the
+// row's gradient is carried to the previous token.
+//
+// Packed output, in forward source order:
+//     [d_r | d_w | d_k | d_v | d_a | d_b | d_state]
+//
+// Single-threaded and with the early return after the barrier, for the same
+// reasons as the wkv6 backward above.
+static void ggml_compute_forward_rwkv_wkv7_back_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src_r = dst->src[0];
+    const ggml_tensor * src_w = dst->src[1];
+    const ggml_tensor * src_k = dst->src[2];
+    const ggml_tensor * src_v = dst->src[3];
+    const ggml_tensor * src_a = dst->src[4];
+    const ggml_tensor * src_b = dst->src[5];
+    const ggml_tensor * src_s = dst->src[6];
+    const ggml_tensor * src_g = dst->src[7];
+
+    const int64_t S       = src_k->ne[0];
+    const int64_t H       = src_k->ne[1];
+    const int64_t T       = src_k->ne[2];
+    const int64_t n_seqs  = src_s->ne[1];
+    const int64_t C       = S * H;
+    const int64_t seq_len = T / n_seqs;
+
+    GGML_ASSERT(n_seqs > 0 && "rwkv_wkv7_back: state must hold at least one sequence");
+    GGML_ASSERT(T % n_seqs == 0 &&
+        "rwkv_wkv7_back: n_tokens must be a multiple of n_seqs");
+
+    const int ith = params->ith;
+    if (ith == 0) {
+        memset(dst->data, 0, ggml_nbytes(dst));
+    }
+    ggml_barrier(params->threadpool);
+    if (ith != 0) {
+        return;
+    }
+
+    const float * r  = (const float *) src_r->data;
+    const float * w  = (const float *) src_w->data;
+    const float * k  = (const float *) src_k->data;
+    const float * v  = (const float *) src_v->data;
+    const float * a  = (const float *) src_a->data;
+    const float * b  = (const float *) src_b->data;
+    const float * s0 = (const float *) src_s->data;
+
+    const float * g_y = (const float *) src_g->data;
+    const float * g_s = g_y + C * T;
+
+    float * d_r = (float *) dst->data;
+    float * d_w = d_r + ggml_nelements(src_r);
+    float * d_k = d_w + ggml_nelements(src_w);
+    float * d_v = d_k + ggml_nelements(src_k);
+    float * d_a = d_v + ggml_nelements(src_v);
+    float * d_b = d_a + ggml_nelements(src_a);
+    float * d_s = d_b + ggml_nelements(src_b);
+
+    std::vector<float> St((size_t)(seq_len + 1) * S * S);
+    std::vector<float> SA((size_t) seq_len * S);
+    std::vector<float> gs((size_t) S * S);
+
+    for (int64_t seq = 0; seq < n_seqs; ++seq) {
+        for (int64_t h = 0; h < H; ++h) {
+            const size_t sb = (size_t) seq * S * S * H + (size_t) h * S * S;
+
+            // --- replay forward, keeping states and the sa of each token ---
+            for (int64_t ij = 0; ij < S * S; ++ij) {
+                St[ij] = s0[sb + ij];
+            }
+            for (int64_t t = 0; t < seq_len; ++t) {
+                const int64_t tt = seq * seq_len + t;
+                const float * prev = &St[(size_t) t * S * S];
+                float * cur = &St[(size_t)(t + 1) * S * S];
+                for (int64_t i = 0; i < S; ++i) {
+                    float sa = 0.0f;
+                    for (int64_t j = 0; j < S; ++j) {
+                        sa += a[tt*C + h*S + j] * prev[i*S + j];
+                    }
+                    SA[(size_t) t * S + i] = sa;
+                    for (int64_t j = 0; j < S; ++j) {
+                        cur[i*S + j] = prev[i*S + j]*w[tt*C + h*S + j]
+                                     + v[tt*C + h*S + i]*k[tt*C + h*S + j]
+                                     + sa*b[tt*C + h*S + j];
+                    }
+                }
+            }
+
+            // --- walk back ---
+            for (int64_t ij = 0; ij < S * S; ++ij) {
+                gs[ij] = g_s[(size_t) seq * S * C + (size_t) h * S * S + ij];
+            }
+
+            for (int64_t t = seq_len - 1; t >= 0; --t) {
+                const int64_t tt = seq * seq_len + t;
+                const float * prev = &St[(size_t) t * S * S];
+                const float * cur  = &St[(size_t)(t + 1) * S * S];
+
+                for (int64_t i = 0; i < S; ++i) {
+                    const float gy_i = g_y[tt*C + h*S + i];
+                    const float sa_i = SA[(size_t) t * S + i];
+                    float gsa = 0.0f;
+                    float gv_i = 0.0f;
+
+                    for (int64_t j = 0; j < S; ++j) {
+                        const float r_j = r[tt*C + h*S + j];
+
+                        d_r[tt*C + h*S + j] += gy_i * cur[i*S + j];
+
+                        // Through y at this token, and through the carry.
+                        const float g_cur = gs[i*S + j] + gy_i * r_j;
+
+                        d_w[tt*C + h*S + j] += g_cur * prev[i*S + j];
+                        d_k[tt*C + h*S + j] += g_cur * v[tt*C + h*S + i];
+                        gv_i                += g_cur * k[tt*C + h*S + j];
+                        d_b[tt*C + h*S + j] += g_cur * sa_i;
+                        gsa                 += g_cur * b[tt*C + h*S + j];
+
+                        gs[i*S + j] = g_cur * w[tt*C + h*S + j];
+                    }
+
+                    d_v[tt*C + h*S + i] += gv_i;
+
+                    // sa[i] = sum_j a[j]*prev[i,j] -- feeds both a and the
+                    // previous state, on top of the direct path above.
+                    for (int64_t j = 0; j < S; ++j) {
+                        d_a[tt*C + h*S + j] += gsa * prev[i*S + j];
+                        gs[i*S + j]         += gsa * a[tt*C + h*S + j];
+                    }
+                }
+            }
+
+            for (int64_t ij = 0; ij < S * S; ++ij) {
+                d_s[sb + ij] = gs[ij];
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_rwkv_wkv7_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_rwkv_wkv7_back_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
 
 void ggml_compute_forward_rwkv_wkv7(
         const ggml_compute_params * params,

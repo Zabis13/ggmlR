@@ -4,7 +4,13 @@
 \alias{ggml_dense}
 \title{Create a Dense Layer Object}
 \usage{
-ggml_dense(units, activation = NULL, name = NULL, trainable = TRUE)
+ggml_dense(
+  units,
+  activation = NULL,
+  name = NULL,
+  trainable = TRUE,
+  time_distributed = FALSE
+)
 }
 \arguments{
 \item{units}{Number of output units.}
@@ -14,6 +20,13 @@ ggml_dense(units, activation = NULL, name = NULL, trainable = TRUE)
 \item{name}{Optional character name.}
 
 \item{trainable}{Logical; whether weights are updated during training.}
+
+\item{time_distributed}{Logical; apply the kernel independently at every
+position of a sequence input rather than flattening it (default
+\code{FALSE}).  A \code{c(seq_len, features)} parent then yields
+\code{c(seq_len, units)} instead of a flat \code{units}, which is what a
+transformer's position-wise feed-forward sublayer needs.  See
+\code{\link{ggml_layer_dense}} for details.}
 }
 \value{
 A \code{ggml_layer} object.

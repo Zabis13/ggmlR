@@ -7,8 +7,8 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "r_ptr_check.h"
-
-extern int ggmlR_get_n_threads(void);
+#include "r_sched_threads.h"
+#include <stdlib.h>  // malloc/free; previously arrived transitively
 
 // r_interface_custom.c -- CPU-only guard for GGML_OP_CUSTOM nodes.
 extern const char * ggmlR_custom_check_sched(struct ggml_cgraph * graph,
@@ -267,18 +267,6 @@ SEXP R_ggml_backend_sched_alloc_graph(SEXP sched_ptr, SEXP graph_ptr) {
     return ScalarLogical(success);
 }
 
-// Update all CPU backends in scheduler with current ggmlR thread setting
-static void sched_sync_cpu_threads(ggml_backend_sched_t sched) {
-    int n_threads = ggmlR_get_n_threads();
-    int n = ggml_backend_sched_get_n_backends(sched);
-    for (int i = 0; i < n; i++) {
-        ggml_backend_t b = ggml_backend_sched_get_backend(sched, i);
-        if (ggml_backend_is_cpu(b)) {
-            ggml_backend_cpu_set_n_threads(b, n_threads);
-        }
-    }
-}
-
 // Compute graph using scheduler (distributes work across backends)
 // Per-node tracing for debugging backend divergence.
 //
@@ -356,7 +344,7 @@ SEXP R_ggml_backend_sched_graph_compute(SEXP sched_ptr, SEXP graph_ptr) {
               "Include a CPU backend when creating the scheduler.", bad);
     }
 
-    sched_sync_cpu_threads(sched);
+    r_sched_sync_cpu_threads(sched);
     enum ggml_status status = ggml_backend_sched_graph_compute(sched, graph);
 
     return ScalarInteger((int)status);
@@ -381,7 +369,7 @@ SEXP R_ggml_backend_sched_graph_compute_async(SEXP sched_ptr, SEXP graph_ptr) {
               "Include a CPU backend when creating the scheduler.", bad);
     }
 
-    sched_sync_cpu_threads(sched);
+    r_sched_sync_cpu_threads(sched);
     enum ggml_status status = ggml_backend_sched_graph_compute_async(sched, graph);
 
     return ScalarInteger((int)status);

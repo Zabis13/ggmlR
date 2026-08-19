@@ -629,6 +629,32 @@ quantize_row_mxfp4_ref <- function(src_data, n_elements) {
   .Call("R_quantize_row_mxfp4_ref", as.numeric(src_data), as.numeric(n_elements))
 }
 
+#' Quantize Row to Q1_0 (Reference)
+#'
+#' Basic row-level Q1_0 quantization.
+#'
+#' @param src_data Numeric vector of float values to quantize
+#' @param n_elements Number of elements to quantize
+#' @return Raw vector of quantized data
+#' @export
+#' @family quantization
+quantize_row_q1_0_ref <- function(src_data, n_elements) {
+  .Call("R_quantize_row_q1_0_ref", as.numeric(src_data), as.numeric(n_elements))
+}
+
+#' Quantize Row to NVFP4 (Reference)
+#'
+#' Basic row-level NVFP4 quantization.
+#'
+#' @param src_data Numeric vector of float values to quantize
+#' @param n_elements Number of elements to quantize
+#' @return Raw vector of quantized data
+#' @export
+#' @family quantization
+quantize_row_nvfp4_ref <- function(src_data, n_elements) {
+  .Call("R_quantize_row_nvfp4_ref", as.numeric(src_data), as.numeric(n_elements))
+}
+
 # ============================================================================
 # IQ Init/Free Functions
 # ============================================================================

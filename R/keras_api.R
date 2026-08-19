@@ -58,8 +58,11 @@ keras_batch_size <- function(batch_size, default = 32L) {
 #' @param object A model object (e.g. \code{ggml_sequential_model} or
 #'   \code{ggml_functional_model}).
 #' @param optimizer Character: \code{"adam"}, \code{"adamw"}, or \code{"sgd"}.
-#' @param loss Character: \code{"categorical_crossentropy"} or \code{"mse"}.
-#' @param metrics Character vector of metrics (default \code{"accuracy"}).
+#' @param loss Character: \code{"categorical_crossentropy"}, \code{"mse"},
+#'   \code{"mae"}, \code{"huber"} or \code{"binary_crossentropy"}.  For a
+#'   multi-output model, a list with one loss per head.
+#' @param metrics Character vector of metrics (default \code{"accuracy"}); see
+#'   \code{\link{ggml_compile}} for the full list.
 #' @param ... Additional arguments passed to \code{\link{ggml_compile}}.
 #' @return The compiled model (invisibly).
 #' @export

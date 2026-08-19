@@ -21,3 +21,20 @@ Tensor with values clamped to [min_val, max_val]
 \description{
 Creates a graph node for clamping values to a range: clamp(x, min, max)
 }
+\section{Inference only}{
+
+\code{GGML_OP_CLAMP} has no backward pass, and the node it builds is a view
+of its input.  A graph containing it therefore cannot be differentiated: the
+backward pass aborts with \emph{"inplace operations are currently not
+supported"} rather than returning an error.  This matters inside
+\code{\link{ggml_layer_custom}}, whose gradients flow only through
+operations that implement a backward pass.
+
+For a trainable equivalent, express the clamp with operations that do:
+\code{min(x, hi)} is \code{x - ggml_relu(ctx, x - hi)} and \code{max(x, lo)}
+is \code{lo + ggml_relu(ctx, x - lo)}.
+}
+
+\seealso{
+\code{\link{ggml_relu}} for the differentiable formulation above.
+}

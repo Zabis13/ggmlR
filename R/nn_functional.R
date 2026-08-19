@@ -50,6 +50,12 @@ nn_auto_name <- function(type) {
 #' @param activation Activation function name or NULL.
 #' @param name Optional character name.
 #' @param trainable Logical; whether weights are updated during training.
+#' @param time_distributed Logical; apply the kernel independently at every
+#'   position of a sequence input rather than flattening it (default
+#'   \code{FALSE}).  A \code{c(seq_len, features)} parent then yields
+#'   \code{c(seq_len, units)} instead of a flat \code{units}, which is what a
+#'   transformer's position-wise feed-forward sublayer needs.  See
+#'   \code{\link{ggml_layer_dense}} for details.
 #' @return A \code{ggml_layer} object.
 #' @export
 #' @examples
@@ -60,14 +66,16 @@ nn_auto_name <- function(type) {
 #' out1 <- x1 |> ggml_apply(encoder)
 #' out2 <- x2 |> ggml_apply(encoder)  # shared weights
 #' }
-ggml_dense <- function(units, activation = NULL, name = NULL, trainable = TRUE) {
+ggml_dense <- function(units, activation = NULL, name = NULL, trainable = TRUE,
+                       time_distributed = FALSE) {
   if (is.null(name)) name <- nn_auto_name("dense")
   structure(
     list(
       layer_id  = nn_next_layer_id(),
       node_type = "dense",
       name      = name,
-      config    = list(units = as.integer(units), activation = activation),
+      config    = list(units = as.integer(units), activation = activation,
+                       time_distributed = isTRUE(time_distributed)),
       trainable = trainable
     ),
     class = "ggml_layer"
@@ -276,6 +284,97 @@ ggml_gru <- function(units, return_sequences = FALSE,
   )
 }
 
+#' Create a Multi-Head Attention Layer Object
+#'
+#' Returns a reusable layer object for use with \code{\link{ggml_apply}}, the
+#' scaled dot-product attention of \emph{Attention Is All You Need} with
+#' \code{n_heads} heads computed in parallel.  Applying the same object to
+#' several tensor nodes shares one set of projection weights, which is how an
+#' encoder block is reused across a stack.
+#'
+#' For the pipe-style form that appends attention to a graph
+#' (\code{x |> ggml_layer_attention(...)}), see
+#' \code{\link{ggml_layer_attention}}.
+#'
+#' @section Shapes:
+#' The parent must be a sequence node of shape \code{c(seq_len, d_model)} --
+#' the same layout \code{\link{ggml_layer_lstm}} takes -- and the output has
+#' that same shape, so attention blocks stack directly.
+#'
+#' @section Self- and cross-attention:
+#' Applied to a single node the layer is self-attention: queries, keys and
+#' values all come from that node.  Applied to a list of two nodes,
+#' \code{ggml_apply(list(query, context), attn)}, it is cross-attention:
+#' queries come from the first, keys and values from the second, which may
+#' have a different sequence length (but must share \code{d_model}).  This is
+#' the decoder-to-encoder path of a full transformer.
+#'
+#' @section Weights:
+#' Four projections \code{W_q}, \code{W_k}, \code{W_v}, \code{W_o}, each
+#' \code{d_model x d_model}, plus an output bias \code{b_o} when
+#' \code{bias = TRUE}. Glorot-uniform initialised, zero bias.
+#'
+#' @param d_model Integer, model width. Must be divisible by \code{n_heads}
+#'   and must match the parent's feature dimension.
+#' @param n_heads Integer, number of attention heads (default 1).
+#' @param causal Logical: mask out positions after the current one, so a query
+#'   attends only to keys at or before it (default \code{FALSE}). This is what
+#'   makes a decoder autoregressive. Only meaningful for self-attention --
+#'   masking a cross-attention score matrix by position compares indices in two
+#'   unrelated sequences, so it is rejected rather than silently applied.
+#' @param bias Logical: add a bias to the output projection (default
+#'   \code{TRUE}).
+#' @param name Optional character name.
+#' @param trainable Logical; whether weights are updated during training.
+#' @return A \code{ggml_layer} object.
+#' @seealso \code{\link{ggml_layer_attention}}, \code{\link{ggml_apply}}
+#' @export
+#' @examples
+#' \donttest{
+#' # One attention block shared between two sequences.
+#' attn <- ggml_attention(d_model = 32L, n_heads = 4L)
+#' x1   <- ggml_input(shape = c(10L, 32L))
+#' x2   <- ggml_input(shape = c(10L, 32L))
+#' o1   <- ggml_apply(x1, attn)
+#' o2   <- ggml_apply(x2, attn)          # shared weights
+#' stopifnot(identical(o1$layer_id, o2$layer_id))
+#'
+#' # Cross-attention: queries from x1, keys/values from a longer context.
+#' ctx  <- ggml_input(shape = c(15L, 32L))
+#' o3   <- ggml_apply(list(x1, ctx), ggml_attention(32L, 4L))
+#' }
+ggml_attention <- function(d_model, n_heads = 1L, causal = FALSE, bias = TRUE,
+                           name = NULL, trainable = TRUE) {
+  d_model <- as.integer(d_model)
+  n_heads <- as.integer(n_heads)
+  if (is.na(d_model) || d_model < 1L) {
+    stop("'d_model' must be a positive integer.", call. = FALSE)
+  }
+  if (is.na(n_heads) || n_heads < 1L) {
+    stop("'n_heads' must be a positive integer.", call. = FALSE)
+  }
+  # Every head takes an equal slice of the feature axis, so an indivisible
+  # d_model would leave a remainder with nowhere to go.
+  if (d_model %% n_heads != 0L) {
+    stop("'d_model' (", d_model, ") must be divisible by 'n_heads' (", n_heads,
+         ").", call. = FALSE)
+  }
+  if (is.null(name)) name <- nn_auto_name("attention")
+  structure(
+    list(
+      layer_id  = nn_next_layer_id(),
+      node_type = "attention",
+      name      = name,
+      config    = list(d_model = d_model,
+                       n_heads = n_heads,
+                       causal  = isTRUE(causal),
+                       bias    = isTRUE(bias)),
+      trainable = trainable
+    ),
+    class = "ggml_layer"
+  )
+}
+
 # ============================================================================
 # ggml_apply() -- apply a ggml_layer object to a tensor node
 # ============================================================================
@@ -303,11 +402,31 @@ ggml_gru <- function(units, return_sequences = FALSE,
 #'                     outputs = list(out1, out2))
 #' }
 ggml_apply <- function(tensor, layer) {
-  if (!inherits(tensor, "ggml_tensor_node")) {
-    stop("'tensor' must be a ggml_tensor_node (from ggml_input() or a layer call).")
-  }
   if (!inherits(layer, "ggml_layer")) {
     stop("'layer' must be a ggml_layer object (from ggml_dense(), ggml_lstm(), etc.).")
+  }
+  # A list of nodes is how a layer taking several inputs is applied -- currently
+  # cross-attention, ggml_apply(list(query, context), attn). A bare node stays
+  # the single-parent form every other layer uses.
+  parents <- if (inherits(tensor, "ggml_tensor_node")) {
+    list(tensor)
+  } else if (is.list(tensor) &&
+             length(tensor) > 0L &&
+             all(vapply(tensor, inherits, logical(1), "ggml_tensor_node"))) {
+    tensor
+  } else {
+    stop("'tensor' must be a ggml_tensor_node (from ggml_input() or a layer ",
+         "call), or a list of them for a layer taking several inputs.",
+         call. = FALSE)
+  }
+  if (length(parents) > 1L && !identical(layer$node_type, "attention")) {
+    stop("'", layer$node_type, "' takes a single input; a list of ",
+         length(parents), " was given.", call. = FALSE)
+  }
+  if (identical(layer$node_type, "attention") && length(parents) > 2L) {
+    stop("attention takes one input (self-attention) or two ",
+         "(cross-attention: query, context); ", length(parents), " were given.",
+         call. = FALSE)
   }
   structure(
     list(
@@ -316,7 +435,7 @@ ggml_apply <- function(tensor, layer) {
       layer_id  = layer$layer_id,   # sharing key -- identity of the layer object
       trainable = layer$trainable,
       config    = c(layer$config, list(name = layer$name)),
-      parents   = list(tensor)
+      parents   = parents
     ),
     class = "ggml_tensor_node"
   )
@@ -417,6 +536,71 @@ ggml_model <- function(inputs, outputs) {
     ),
     class = c("ggml_functional_model", "list")
   )
+}
+
+# ============================================================================
+# ggml_layer_attention()
+# ============================================================================
+
+#' Add a Multi-Head Attention Layer
+#'
+#' Scaled dot-product attention with \code{n_heads} heads, in the pipe-style
+#' form that appends a layer to a functional graph.  For the reusable
+#' \emph{layer object} that shares one set of weights between several
+#' applications -- how an encoder block is reused across a stack -- see
+#' \code{\link{ggml_attention}}.
+#'
+#' @section Shapes:
+#' \code{x} must be a sequence node of shape \code{c(seq_len, d_model)}, the
+#' same layout \code{\link{ggml_layer_lstm}} takes.  The output has that same
+#' shape, so attention blocks stack directly and a residual connection
+#' (\code{ggml_layer_add(list(x, attn_out))}) needs no reshaping.
+#'
+#' @section How it is computed:
+#' All heads are computed in one batched pass rather than in a loop: the
+#' projections are reshaped to \code{[d_head, n_heads, seq, batch]} and
+#' permuted so that \code{ggml_mul_mat()} batches over the head and batch axes.
+#' The node count is therefore independent of \code{n_heads}.
+#'
+#' @section Cross-attention:
+#' Pass a list of two nodes, \code{ggml_layer_attention(list(query, context),
+#' ...)}, to take queries from the first and keys/values from the second.  The
+#' two may differ in sequence length but must share \code{d_model}.  A single
+#' node is self-attention.
+#'
+#' @param x A \code{ggml_tensor_node} of shape \code{c(seq_len, d_model)}, or a
+#'   list of two such nodes \code{list(query, context)} for cross-attention.
+#' @param d_model Integer, model width. Must be divisible by \code{n_heads} and
+#'   match the parent's feature dimension.
+#' @param n_heads Integer, number of attention heads (default 1).
+#' @param causal Logical: mask out positions after the current one, making the
+#'   layer autoregressive (default \code{FALSE}). Self-attention only.
+#' @param bias Logical: add a bias to the output projection (default
+#'   \code{TRUE}).
+#' @param name Optional layer name.
+#' @param trainable Logical.
+#' @return A new \code{ggml_tensor_node} of shape \code{c(seq_len, d_model)}.
+#' @seealso \code{\link{ggml_attention}} for the shared-weights layer object.
+#' @export
+#' @examples
+#' \donttest{
+#' # A transformer encoder block: attention + residual, then a feed-forward
+#' # sublayer + residual.
+#' x    <- ggml_input(shape = c(10L, 32L))
+#' attn <- x |> ggml_layer_attention(d_model = 32L, n_heads = 4L)
+#' h    <- ggml_layer_add(list(x, attn))
+#' ff   <- h |> ggml_layer_dense(32L, activation = "relu")
+#' out  <- ggml_layer_add(list(h, ff))
+#'
+#' # GPT-style causal self-attention.
+#' dec <- x |> ggml_layer_attention(32L, n_heads = 4L, causal = TRUE)
+#' }
+ggml_layer_attention <- function(x, d_model, n_heads = 1L, causal = FALSE,
+                                 bias = TRUE, name = NULL, trainable = TRUE) {
+  # Built from the layer object so the two forms cannot validate differently.
+  layer <- ggml_attention(d_model = d_model, n_heads = n_heads, causal = causal,
+                          bias = bias, name = name, trainable = trainable)
+  ggml_apply(x, layer)
 }
 
 # ============================================================================
@@ -593,7 +777,69 @@ ggml_layer_custom <- function(forward, name = NULL, output_shape = NULL) {
 # Topological sort
 # ============================================================================
 
+# Loss of one output head, computed on the R side for evaluate(). Mirrors the
+# formulas the ggml graph uses, so evaluate() and fit() report comparable
+# numbers for the same loss name.
+nn_head_loss <- function(loss_name, preds_mat, y) {
+  if (nn_loss_is_ce(loss_name)) {
+    eps <- 1e-7
+    preds_clipped <- pmax(pmin(preds_mat, 1 - eps), eps)
+    -mean(rowSums(y * log(preds_clipped)))
+  } else if (loss_name %in% c("mse", "mean_squared_error")) {
+    mean(rowSums((y - preds_mat)^2) / ncol(y))
+  } else if (loss_name %in% c("mae", "mean_absolute_error")) {
+    mean(abs(y - preds_mat))
+  } else if (loss_name %in% c("huber", "huber_loss")) {
+    # delta = 1, matching the training graph: quadratic inside the unit
+    # interval, linear outside it.
+    e <- abs(y - preds_mat)
+    mean(ifelse(e <= 1, 0.5 * e^2, e - 0.5))
+  } else if (loss_name %in% c("binary_crossentropy", "binary_cross_entropy")) {
+    # Element-wise, so the mean is over every element rather than over rows --
+    # the same normalisation the training graph uses.
+    eps <- 1e-7
+    p <- pmax(pmin(preds_mat, 1 - eps), eps)
+    -mean(y * log(p) + (1 - y) * log(1 - p))
+  } else {
+    NA_real_
+  }
+}
+
+# Append the requested regression metrics to an evaluate() result.
+#
+# Accuracy is handled separately: it is reported for multi-class outputs whether
+# or not it was asked for. These are computed only on request, and are shared by
+# the sequential and functional evaluate() paths so both report the same number
+# under the same name.
+#
+# Unknown names are dropped silently here -- ggml_compile() has already warned
+# about them, and warning again at every evaluate() would be noise.
+nn_add_extra_metrics <- function(out, metrics, preds_mat, y) {
+  extra <- setdiff(as.character(metrics), c("accuracy", "acc"))
+  for (m in extra) {
+    val <- switch(m,
+      "mae"  = , "mean_absolute_error" = mean(abs(y - preds_mat)),
+      "mse"  = , "mean_squared_error"  = mean((y - preds_mat)^2),
+      "rmse" = sqrt(mean((y - preds_mat)^2)),
+      NULL
+    )
+    if (!is.null(val)) out[[m]] <- val
+  }
+  out
+}
+
+# Names of a functional model's output heads, used to match `loss`/`loss_weights`
+# entries by name and to label the per-head training history. Falls back to the
+# node id when a layer was created without an explicit name.
+nn_output_names <- function(model) {
+  vapply(model$outputs, function(n) {
+    nm <- n$config$name
+    if (is.null(nm) || !nzchar(nm)) n$id else nm
+  }, character(1))
+}
+
 #' Topologically sort nodes reachable from output nodes
+#'
 #' @param outputs List of output ggml_tensor_node objects
 #' @return Named list: nodes in topological order (inputs first, outputs last)
 #' @export
@@ -618,19 +864,184 @@ nn_topo_sort <- function(outputs) {
 # Build functional graph (analogous to nn_build_graph for Sequential)
 # ============================================================================
 
+#' Estimate the scheduler graph size a functional model needs
+#'
+#' The backend scheduler sizes its hash set once, before the graph exists, and
+#' aborts inside ggml if the graph turns out larger. Most layers contribute a
+#' handful of nodes, but a recurrent layer unrolls per timestep, so the count
+#' has to follow the sequence length rather than the layer count.
+#'
+#' Generous on purpose: the cost of overshooting is a slightly larger hash set,
+#' the cost of undershooting is a crash with no R-level error to catch.
+#'
+#' @return A double, the graph size to allocate.
+#' @keywords internal
+nn_functional_graph_size <- function(model) {
+  nodes <- nn_topo_sort(model$outputs)
+
+  shapes <- list()
+  total  <- 0
+  for (node in nodes) {
+    parent_shapes <- lapply(node$parents, function(p) shapes[[p$id]])
+
+    # Sizing the scheduler is not the place to validate the model. A bad axis
+    # or a mismatched shape has to surface from the build, with the build's
+    # message and its backtrace -- so an inference failure here just falls back
+    # to the default and lets the real check downstream report it.
+    shape <- tryCatch(nn_functional_output_shape(node, parent_shapes),
+                      error = function(e) NULL)
+    if (is.null(shape)) return(2048)
+    shapes[[node$id]] <- shape
+
+    total <- total + switch(node$node_type,
+      # One unrolled block per timestep, plus the gate arithmetic inside it.
+      "lstm" = ,
+      "gru"  = {
+        psh <- if (length(parent_shapes) > 0) parent_shapes[[1]] else NULL
+        seq_len <- if (length(psh) >= 1) as.numeric(psh[1]) else 1
+        seq_len * 40 + 32
+      },
+      # All heads are computed in one batched pass, so the node count is fixed
+      # rather than proportional to n_heads: three projections with their
+      # reshape/permute, the two score matmuls, the softmax and the output
+      # projection, rounded up.
+      "attention" = 48,
+      32       # everything else: a few nodes, rounded up for backward
+    )
+  }
+
+  # Backward roughly doubles the node count; 2048 stays the floor so nothing
+  # that used to fit is given less than it was.
+  max(2048, total * 3)
+}
+
+# Features one dense kernel maps from, given its parent's shape.
+#
+# An ordinary dense layer flattens its input, so a c(seq_len, d_model) parent
+# contributes seq_len*d_model features and the sequence axis disappears. A
+# time-distributed one applies the same kernel at every position instead, so it
+# maps from d_model alone and the sequence survives -- which is what a
+# transformer's position-wise feed-forward sublayer needs.
+#
+# Shared by the shape inference, the weight sizing, the builder and the weight
+# initialisation, so the four cannot disagree about the kernel's width.
+nn_dense_fan_in <- function(node, psh) {
+  if (isTRUE(node$config$time_distributed) && length(psh) >= 2L) {
+    as.numeric(psh[length(psh)])
+  } else if (length(psh) == 1L) {
+    as.numeric(psh)
+  } else {
+    prod(as.numeric(psh))
+  }
+}
+
+#' Count the weight elements a functional node will allocate
+#'
+#' Mirrors the tensor shapes \code{nn_build_functional_node} creates in
+#' \code{ctx_weights}, so the context can be sized before the tensors exist.
+#' Weights do not scale with the batch, which is what makes this a separate
+#' count from the activations rather than a factor applied to them.
+#'
+#' Returns a double: a wide dense layer can exceed integer range on its own.
+#'
+#' @return A double, the number of float elements the node's weights occupy.
+#' @keywords internal
+nn_functional_weight_elements <- function(node, parent_shapes) {
+  psh    <- if (length(parent_shapes) > 0) parent_shapes[[1]] else NULL
+  fan_in <- if (is.null(psh)) 0 else prod(as.numeric(psh))
+
+  switch(node$node_type,
+    "dense" = {
+      units <- as.numeric(node$config$units)
+      nn_dense_fan_in(node, psh) * units + units    # kernel + bias
+    },
+    "embedding" = as.numeric(node$config$dim) * as.numeric(node$config$vocab_size),
+    "batch_norm" = 2 * fan_in,                     # gamma + beta
+    "attention" = {
+      # Four d_model x d_model projections (q, k, v, out) plus the output bias.
+      d <- as.numeric(node$config$d_model)
+      4 * d * d + if (isTRUE(node$config$bias)) d else 0
+    },
+    "conv_2d" = {
+      k  <- as.numeric(node$config$kernel_size)
+      ic <- if (length(psh) >= 3) as.numeric(psh[3]) else 1
+      oc <- as.numeric(node$config$filters)
+      k[1] * k[2] * ic * oc + oc
+    },
+    "conv_1d" = {
+      k  <- as.numeric(node$config$kernel_size)
+      ic <- if (length(psh) >= 2) as.numeric(psh[2]) else 1
+      oc <- as.numeric(node$config$filters)
+      k * ic * oc + oc
+    },
+    "lstm" = {
+      units <- as.numeric(node$config$units)
+      isz   <- if (length(psh) >= 2) as.numeric(psh[2]) else fan_in
+      isz * 4 * units + units * 4 * units + 4 * units + 2 * units
+    },
+    "gru" = {
+      units <- as.numeric(node$config$units)
+      isz   <- if (length(psh) >= 2) as.numeric(psh[2]) else fan_in
+      isz * 2 * units + units * 2 * units + 2 * units +
+        isz * units + units * units + units + units
+    },
+    0                                              # input, flatten, dropout, ...
+  )
+}
+
 #' Infer output shape of a functional node given its parent shapes
 #' @return An integer vector with the inferred output shape (excluding the batch dimension).
 #' @keywords internal
 nn_functional_output_shape <- function(node, parent_shapes) {
   switch(node$node_type,
     "input" = node$config$shape,
-    "dense" = as.integer(node$config$units),
+    "dense" = {
+      # An ordinary dense layer flattens, so its output is just `units`. A
+      # time-distributed one keeps the sequence axis and replaces only the
+      # feature axis: c(seq_len, d_in) -> c(seq_len, units).
+      if (isTRUE(node$config$time_distributed)) {
+        psh <- parent_shapes[[1]]
+        if (length(psh) != 2L) {
+          stop("dense(time_distributed = TRUE) expects a sequence input of ",
+               "shape c(seq_len, features); got a shape with ", length(psh),
+               " dimension(s).", call. = FALSE)
+        }
+        as.integer(c(psh[1], node$config$units))
+      } else {
+        as.integer(node$config$units)
+      }
+    },
     "flatten" = {
       psh <- parent_shapes[[1]]
       as.integer(prod(psh))
     },
     "batch_norm" = parent_shapes[[1]],
     "add" = parent_shapes[[1]],
+    "attention" = {
+      # Queries decide the output length, so cross-attention returns the query
+      # sequence's length with the context's contribution folded in. The width
+      # is d_model either way -- the output projection maps back to it.
+      psh <- parent_shapes[[1]]
+      if (length(psh) != 2L) {
+        stop("attention expects a sequence input of shape c(seq_len, d_model); ",
+             "got a shape with ", length(psh), " dimension(s).", call. = FALSE)
+      }
+      d_model <- node$config$d_model
+      if (psh[2] != d_model) {
+        stop("attention: 'd_model' is ", d_model, " but the input has ",
+             psh[2], " features.", call. = FALSE)
+      }
+      # Keys and values must live in the same space as the queries: the same
+      # W_k/W_v project both, and the scores are a dot product between them.
+      if (length(parent_shapes) > 1L) {
+        ksh <- parent_shapes[[2]]
+        if (length(ksh) != 2L || ksh[2] != d_model) {
+          stop("attention: the context input must be c(seq_len, ", d_model,
+               "); got c(", paste(ksh, collapse = ", "), ").", call. = FALSE)
+        }
+      }
+      as.integer(c(psh[1], d_model))
+    },
     "custom" = {
       osh <- node$config$output_shape
       if (is.null(osh)) {
@@ -768,8 +1179,9 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       parent_id <- node$parents[[1]]$id
       input_t   <- built_tensors[[parent_id]]
       psh       <- built_shapes[[parent_id]]
-      fan_in    <- if (length(psh) == 1L) psh else prod(psh)
+      fan_in    <- as.integer(nn_dense_fan_in(node, psh))
       units     <- node$config$units
+      td        <- isTRUE(node$config$time_distributed)
 
       if (!is.null(reuse_weights)) {
         W <- reuse_weights$weight
@@ -782,7 +1194,21 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
         ggml_set_name(b, paste0(nm, "_bias"))
       }
 
+      # Time-distributed: one kernel applied at every position, sharing weights
+      # across the sequence. ggml_mul_mat contracts ne[0], so feeding it
+      # [fan_in, seq, N] against a [fan_in, units] kernel already batches over
+      # the sequence and batch axes -- no loop, and the sequence axis survives
+      # as [units, seq, N]. A parent that arrived flat gets its axes back first.
+      if (td) {
+        seq_len_i <- as.integer(psh[1])
+        if (length(ggml_tensor_shape(input_t)) == 2L) {
+          input_t <- ggml_reshape_3d(ctx_compute, input_t, fan_in, seq_len_i, batch_size)
+        }
+      }
+
       out <- ggml_mul_mat(ctx_compute, W, input_t)
+      # ggml_add broadcasts the [units] bias over the trailing axes, so the same
+      # call covers both the flat and the time-distributed case.
       out <- ggml_add(ctx_compute, out, b)
       out <- nn_apply_activation(ctx_compute, out, node$config$activation)
 
@@ -826,6 +1252,124 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       out <- ggml_add(ctx_compute, out, beta_r)
 
       list(tensor = out, weights = list(gamma = gamma, beta = beta))
+    },
+
+    "attention" = {
+      # Multi-head scaled dot-product attention, all heads in one batched pass.
+      #
+      # Shapes, in ggml order (ne[0] innermost). The parent is a sequence node
+      # c(seq_len, d_model) in R order, so its tensor is [d_model, seq, N].
+      # Every head owns d_head = d_model / n_heads contiguous features, which is
+      # what makes the split a reshape rather than a gather.
+      q_id    <- node$parents[[1]]$id
+      q_in    <- built_tensors[[q_id]]
+      q_psh   <- built_shapes[[q_id]]
+      # Self-attention reads keys and values from the query node; cross-
+      # attention from the second parent, which may have a different length.
+      kv_id   <- if (length(node$parents) > 1L) node$parents[[2]]$id else q_id
+      kv_in   <- built_tensors[[kv_id]]
+      kv_psh  <- built_shapes[[kv_id]]
+
+      d_model <- as.integer(node$config$d_model)
+      n_heads <- as.integer(node$config$n_heads)
+      d_head  <- d_model %/% n_heads
+      seq_q   <- as.integer(q_psh[1])
+      seq_kv  <- as.integer(kv_psh[1])
+      causal  <- isTRUE(node$config$causal)
+      use_b   <- isTRUE(node$config$bias)
+      nm      <- if (!is.null(node$config$name)) node$config$name else node$id
+
+      # Masking by position compares a query index against a key index, which
+      # only means anything when the two come from the same sequence.
+      if (causal && !identical(q_id, kv_id)) {
+        stop("attention: 'causal' applies to self-attention; a cross-attention ",
+             "layer has two unrelated sequences to compare positions in.",
+             call. = FALSE)
+      }
+
+      if (!is.null(reuse_weights)) {
+        W_q <- reuse_weights$W_q; W_k <- reuse_weights$W_k
+        W_v <- reuse_weights$W_v; W_o <- reuse_weights$W_o
+        b_o <- reuse_weights$b_o
+      } else {
+        W_q <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, d_model, d_model)
+        W_k <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, d_model, d_model)
+        W_v <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, d_model, d_model)
+        W_o <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, d_model, d_model)
+        b_o <- if (use_b) ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, d_model) else NULL
+        ggml_set_name(W_q, paste0(nm, "_W_q"))
+        ggml_set_name(W_k, paste0(nm, "_W_k"))
+        ggml_set_name(W_v, paste0(nm, "_W_v"))
+        ggml_set_name(W_o, paste0(nm, "_W_o"))
+        if (use_b) ggml_set_name(b_o, paste0(nm, "_b_o"))
+      }
+
+      # A parent that came out of a dense/flatten layer is [d_model*seq, N];
+      # give it back its sequence axis before projecting.
+      as_seq3d <- function(t, seq_len_i) {
+        if (length(ggml_tensor_shape(t)) == 2L) {
+          ggml_reshape_3d(ctx_compute, t, d_model, seq_len_i, batch_size)
+        } else {
+          t
+        }
+      }
+      q_3d  <- as_seq3d(q_in,  seq_q)
+      kv_3d <- as_seq3d(kv_in, seq_kv)
+
+      # Project: [d_model, d_model] x [d_model, seq, N] -> [d_model, seq, N].
+      Q <- ggml_mul_mat(ctx_compute, W_q, q_3d)
+      K <- ggml_mul_mat(ctx_compute, W_k, kv_3d)
+      V <- ggml_mul_mat(ctx_compute, W_v, kv_3d)
+
+      # Split the feature axis into heads and move the head axis out to dim 2,
+      # where mul_mat batches over it: [d_model, seq, N] -> [d_head, seq, n_heads, N].
+      # ggml_permute()'s arguments are DESTINATION positions: source axis 1
+      # (n_heads) goes to position 2, source axis 2 (seq) to position 1.
+      to_heads <- function(t, seq_len_i) {
+        t4 <- ggml_reshape_4d(ctx_compute, t, d_head, n_heads, seq_len_i, batch_size)
+        ggml_cont(ctx_compute, ggml_permute(ctx_compute, t4, 0L, 2L, 1L, 3L))
+      }
+      Qh <- to_heads(Q, seq_q)    # [d_head, seq_q,  n_heads, N]
+      Kh <- to_heads(K, seq_kv)   # [d_head, seq_kv, n_heads, N]
+      Vh <- to_heads(V, seq_kv)   # [d_head, seq_kv, n_heads, N]
+
+      # scores[j, i] = <k_j, q_i>: ggml_mul_mat(A, B) contracts ne[0] of both,
+      # so this is [seq_kv, seq_q, n_heads, N] -- one row per query, holding
+      # that query's score against every key.
+      scores <- ggml_mul_mat(ctx_compute, Kh, Qh)
+
+      # Causal mask: -Inf above the diagonal, so query i cannot see key j > i.
+      # Applied before the softmax, which then gives those positions weight 0.
+      if (causal) {
+        scores <- ggml_diag_mask_inf(ctx_compute, scores, 0L)
+      }
+
+      # Softmax runs over ne[0] = the key axis, which is exactly the axis each
+      # query's weights must sum over. The 1/sqrt(d_head) scaling is fused in
+      # rather than applied as a separate node.
+      attn <- ggml_soft_max_ext(ctx_compute, scores, NULL,
+                                scale = 1.0 / sqrt(d_head), max_bias = 0.0)
+
+      # Weighted sum of values. mul_mat contracts ne[0], and attn's ne[0] is the
+      # key axis, so V has to present its key axis there: transpose Vh to
+      # [seq_kv, d_head, n_heads, N] and contract against attn's seq_kv.
+      # Result: [d_head, seq_q, n_heads, N].
+      Vt  <- ggml_cont(ctx_compute, ggml_transpose(ctx_compute, Vh))
+      ctx_heads <- ggml_mul_mat(ctx_compute, Vt, attn)
+
+      # Merge the heads back into one feature axis, undoing to_heads(): move
+      # the head axis back beside d_head, then flatten the two.
+      merged <- ggml_cont(ctx_compute,
+                          ggml_permute(ctx_compute, ctx_heads, 0L, 2L, 1L, 3L))
+      merged <- ggml_reshape_3d(ctx_compute, merged, d_model, seq_q, batch_size)
+
+      # Output projection, back to [d_model, seq_q, N].
+      out <- ggml_mul_mat(ctx_compute, W_o, merged)
+      if (use_b) out <- ggml_add(ctx_compute, out, b_o)
+
+      list(tensor = out,
+           weights = c(list(W_q = W_q, W_k = W_k, W_v = W_v, W_o = W_o),
+                       if (use_b) list(b_o = b_o) else list()))
     },
 
     "flatten" = {
@@ -1185,9 +1729,26 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
   # nodes are R lists, so editing the local `model` copy leaves the caller's
   # model definition (and therefore inference) untouched. Node identity is by
   # $id, which is preserved.
-  if (logits_output) {
-    model$outputs <- lapply(model$outputs, function(n) {
-      if (identical(n$config$activation, "softmax")) n$config$activation <- NULL
+  #
+  # logits_output may be a single flag for every output, or one flag per output
+  # head: a multi-output model can mix a cross-entropy head (needs logits) with
+  # an MSE head (must keep its activation), so the softmax is stripped per head.
+  if (any(logits_output)) {
+    lo <- if (length(logits_output) == 1L) {
+      rep(as.logical(logits_output), length(model$outputs))
+    } else {
+      as.logical(logits_output)
+    }
+    if (length(lo) != length(model$outputs)) {
+      stop("'logits_output' must be length 1 or one flag per output (",
+           length(logits_output), " given, ", length(model$outputs),
+           " outputs).", call. = FALSE)
+    }
+    model$outputs <- lapply(seq_along(model$outputs), function(i) {
+      n <- model$outputs[[i]]
+      if (lo[[i]] && identical(n$config$activation, "softmax")) {
+        n$config$activation <- NULL
+      }
       n
     })
   }
@@ -1200,15 +1761,24 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
   shapes <- list()  # node_id -> R-order shape
 
   # First pass: compute shapes
+  weight_elements <- 0    # double: a wide dense layer overflows integer here
   for (node in nodes_sorted) {
     parent_shapes <- lapply(node$parents, function(p) shapes[[p$id]])
     out_shape <- nn_functional_output_shape(node, parent_shapes)
     shapes[[node$id]] <- out_shape
     total_elements <- total_elements + prod(out_shape) * batch_size
+    weight_elements <- weight_elements +
+      nn_functional_weight_elements(node, parent_shapes)
   }
 
-  mem_size <- max((total_elements + 1000L) * 4L + length(nodes_sorted) * 2048L,
-                  2L * 1024L * 1024L)
+  # ctx_weights holds the weights, so its size has to be estimated from the
+  # weights. Sizing it from the activations instead makes it depend on
+  # batch_size, which the weights do not, and a small batch then starves a
+  # layer whose kernel is large -- a 1024-unit dense layer on a 1536-wide input
+  # needs 6 MB of kernel however few rows are pushed through it.
+  mem_size <- max((total_elements + weight_elements + 1000) * 4 +
+                    length(nodes_sorted) * 2048,
+                  2 * 1024 * 1024)
 
   ctx_weights <- ggml_init(mem_size, no_alloc = TRUE)
 
@@ -1229,7 +1799,7 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
     is_shareable <- !is.null(layer_id) &&
                     node$node_type %in% c("dense", "batch_norm",
                                           "conv_2d", "conv_1d", "embedding",
-                                          "lstm", "gru")
+                                          "lstm", "gru", "attention")
 
     reuse_w <- if (is_shareable && !is.null(shared_weight_cache[[layer_id]])) {
       shared_weight_cache[[layer_id]]
@@ -1285,14 +1855,14 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
     is_shareable <- !is.null(layer_id) &&
                     node$node_type %in% c("dense", "batch_norm",
                                           "conv_2d", "conv_1d", "embedding",
-                                          "lstm", "gru")
+                                          "lstm", "gru", "attention")
     if (is_shareable && layer_id %in% initialized_layer_ids) {
       next  # weights already initialized and params set by primary occurrence
     }
 
     if (node$node_type == "dense") {
       psh    <- shapes[[node$parents[[1]]$id]]
-      fan_in <- if (length(psh) == 1L) psh else prod(psh)
+      fan_in <- nn_dense_fan_in(node, psh)
       fan_out <- node$config$units
 
       if (!is.null(sw$weight)) {
@@ -1436,6 +2006,35 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
       }
       if (is_shareable) initialized_layer_ids <- c(initialized_layer_ids, layer_id)
 
+    } else if (node$node_type == "attention") {
+      d_model <- node$config$d_model
+      if (!is.null(sw$W_q)) {
+        for (k in c("W_q", "W_k", "W_v", "W_o")) {
+          ggml_backend_tensor_set_data(w[[k]], ggml_backend_tensor_get_data(sw[[k]]))
+        }
+        if (!is.null(w$b_o) && !is.null(sw$b_o)) {
+          ggml_backend_tensor_set_data(w$b_o, ggml_backend_tensor_get_data(sw$b_o))
+        }
+      } else if (!is.null(swd$W_q)) {
+        for (k in c("W_q", "W_k", "W_v", "W_o")) {
+          ggml_backend_tensor_set_data(w[[k]], swd[[k]])
+        }
+        if (!is.null(w$b_o) && !is.null(swd$b_o)) {
+          ggml_backend_tensor_set_data(w$b_o, swd$b_o)
+        }
+      } else {
+        # Every projection is square, so fan_in and fan_out are both d_model.
+        for (k in c("W_q", "W_k", "W_v", "W_o")) {
+          nn_init_glorot_uniform(w[[k]], d_model, d_model)
+        }
+        if (!is.null(w$b_o)) nn_init_zeros(w$b_o)
+      }
+      if (trainable) {
+        for (k in c("W_q", "W_k", "W_v", "W_o")) ggml_set_param(w[[k]])
+        if (!is.null(w$b_o)) ggml_set_param(w$b_o)
+      }
+      if (is_shareable) initialized_layer_ids <- c(initialized_layer_ids, layer_id)
+
     } else if (node$node_type == "dropout" && !is.null(w$mask)) {
       # Stochastic dropout: initialize mask to all-ones (identity until first epoch update)
       n <- ggml_nelements(w$mask)
@@ -1491,8 +2090,14 @@ ggml_compile.ggml_functional_model <- function(model,
                                                 optimizer = "adam",
                                                 loss = "categorical_crossentropy",
                                                 metrics = c("accuracy"),
-                                                backend = "auto") {
+                                                backend = "auto",
+                                                loss_weights = NULL) {
   nn_validate_compilation(optimizer, loss, metrics)
+
+  # Resolve loss/loss_weights against the output heads now, so a mismatch is
+  # reported at compile time rather than part-way into training.
+  output_names <- nn_output_names(model)
+  loss_spec    <- nn_resolve_losses(loss, loss_weights, output_names)
 
   # Backend selection (same logic as Sequential)
   use_vulkan <- FALSE
@@ -1507,9 +2112,18 @@ ggml_compile.ggml_functional_model <- function(model,
     stop("Unknown backend: '", backend, "'. Use 'auto', 'cpu', or 'vulkan'.")
   }
 
+  # The scheduler's hash set has to be big enough for the graph it will be
+  # handed, and the graph is not built yet -- but the layers that will build it
+  # are. A recurrent layer unrolls one block of nodes per timestep, so a
+  # 96-step LSTM alone outgrows the 2048 default and aborts inside ggml with an
+  # assert on hash_set.size. Estimating from the layers keeps that from being a
+  # fixed ceiling on sequence length.
+  sched_size <- nn_functional_graph_size(model)
+
   if (use_vulkan) {
     gpu_backend <- ggml_vulkan_init(0L)
-    sched       <- ggml_backend_sched_new(list(gpu_backend), parallel = FALSE)
+    sched       <- ggml_backend_sched_new(list(gpu_backend), parallel = FALSE,
+                                          graph_size = sched_size)
     cpu_backend <- ggml_backend_cpu_init()
     if (!isTRUE(.ggmlr_state$backend_msg_shown)) {
       message("Using Vulkan GPU backend: ", ggml_vulkan_device_description(0L))
@@ -1517,7 +2131,8 @@ ggml_compile.ggml_functional_model <- function(model,
     }
   } else {
     cpu_backend <- ggml_backend_cpu_init()
-    sched       <- ggml_backend_sched_new(list(cpu_backend), parallel = FALSE)
+    sched       <- ggml_backend_sched_new(list(cpu_backend), parallel = FALSE,
+                                          graph_size = sched_size)
     if (!isTRUE(.ggmlr_state$backend_msg_shown)) {
       message("Using CPU backend")
       .ggmlr_state$backend_msg_shown <- TRUE
@@ -1531,10 +2146,14 @@ ggml_compile.ggml_functional_model <- function(model,
     model$compilation$backend <- cpu_backend
   }
 
-  model$compilation$sched     <- sched
-  model$compilation$optimizer <- optimizer
-  model$compilation$loss      <- loss
-  model$compilation$metrics   <- metrics
+  model$compilation$sched        <- sched
+  model$compilation$optimizer    <- optimizer
+  model$compilation$loss         <- loss
+  model$compilation$metrics      <- metrics
+  # Per-head resolution of loss/loss_weights (one entry per output).
+  model$compilation$loss_spec    <- loss_spec
+  model$compilation$loss_weights <- loss_weights
+  model$compilation$output_names <- output_names
   # Record requested vs actually-used backend so a silent "auto" -> CPU
   # fallback is inspectable later (see ggml_model_backend()).
   model$compilation$backend_requested <- backend
@@ -1633,6 +2252,35 @@ nn_gather_labels <- function(y_ggml, ne_label, samp_idx) {
   }), use.names = FALSE)
 }
 
+# As nn_gather_labels(), but taking only one head's columns out of each label
+# row. On the multi-output path `y` is the heads concatenated column-wise, so a
+# head owns the `width` columns starting at `off` (0-based); each head has its
+# own labels tensor and is filled from its own slice. `off = 0` with
+# `width = ne_label` reduces to nn_gather_labels().
+nn_gather_labels_head <- function(y_ggml, ne_label, samp_idx, off, width) {
+  if (off == 0 && width == ne_label) {
+    return(nn_gather_labels(y_ggml, ne_label, samp_idx))
+  }
+  unlist(lapply(samp_idx, function(s) {
+    base <- s * ne_label + off
+    y_ggml[(base + 1L):(base + width)]
+  }), use.names = FALSE)
+}
+
+# Fill every head's labels tensor for one batch of 0-based sample indices.
+# Each head owns `widths[i]` columns of a label row starting at `offs[i]`, so a
+# single-head model (offs = 0, widths = ne_label) writes the whole row into the
+# one tensor. Every loss type reachable from ggml_compile() -- MSE and cross
+# entropy -- has labels, so a NULL tensor here would mean the context was built
+# with fewer heads than the model has, which is a bug rather than a case to skip.
+nn_fill_labels_idx <- function(y_ggml, ne_label, labels_tensors, offs, widths, samp_idx) {
+  for (i in seq_along(labels_tensors)) {
+    ggml_backend_tensor_set_data(
+      labels_tensors[[i]],
+      nn_gather_labels_head(y_ggml, ne_label, samp_idx, offs[[i]], widths[[i]]))
+  }
+}
+
 # ============================================================================
 # Fit -- S3 method for ggml_functional_model
 # ============================================================================
@@ -1654,7 +2302,19 @@ nn_gather_labels <- function(y_ggml, ne_label, samp_idx) {
 #'   \code{\link{ggml_callback_early_stopping}} or an LR scheduler.  Each is a
 #'   list with \code{on_epoch_begin(epoch, logs, state)} and/or
 #'   \code{on_epoch_end(epoch, logs, state)}; setting \code{state$stop <- TRUE}
-#'   stops training.
+#'   stops training.  \code{logs} holds \code{train_loss},
+#'   \code{train_accuracy}, \code{val_loss} and \code{val_accuracy}, and for a
+#'   multi-output model also \code{train_<output>_loss},
+#'   \code{train_<output>_accuracy}, \code{val_<output>_loss} and
+#'   \code{val_<output>_accuracy}, so a callback can monitor one head rather
+#'   than the total.  These are the same names \code{model$history} uses, so a
+#'   \code{monitor=} naming one of them matches a column there.
+#'
+#'   Both phases carry a prefix on purpose: it keeps an output named
+#'   \code{val_x} from colliding with another output's validation key.
+#'   \code{\link{ggml_evaluate}} reports the same per-head quantities under the
+#'   bare \code{<output>_loss}, since a single evaluation has no train/val
+#'   phases to tell apart.
 #' @param ... Additional arguments (ignored).
 #' @export
 ggml_fit.ggml_functional_model <- function(model, x, y,
@@ -1676,6 +2336,69 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
   x_ggml        <- xp$x_ggml
   ne_per_input  <- xp$ne_per_input
   ne_datapoint  <- sum(ne_per_input)   # total elements per sample across all inputs
+
+  # Multi-output: `y` arrives as a list of matrices, one per head. They are
+  # concatenated column-wise into the single label matrix the dataset holds;
+  # each head's slice is then addressed by an offset (see ggml_opt_fit_multi).
+  loss_spec <- model$compilation$loss_spec
+  n_head    <- if (is.null(loss_spec)) 1L else length(loss_spec)
+
+  # A plain matrix `y` on a multi-output model keeps the historical meaning:
+  # only the last output is a trained head, the earlier ones are intermediate
+  # activations exposed for inspection through ggml_predict(). Training every
+  # head requires one `y` per head, i.e. a list.
+  if (n_head > 1L && !is.list(y)) {
+    loss_spec <- loss_spec[n_head]
+    n_head    <- 1L
+    trained_output_idx <- length(model$outputs)
+
+    # `y` describes the trained head only, so its width has to match that head.
+    # Without this the labels tensor and the loss node disagree and ggml aborts
+    # the process from ggml_opt_dataset_get_batch instead of reporting an error.
+    trained_units <- tryCatch(
+      nn_functional_output_shape(model$outputs[[trained_output_idx]],
+                                 lapply(model$outputs[[trained_output_idx]]$parents,
+                                        function(p) NULL)),
+      error = function(e) NULL)
+    if (!is.null(trained_units) && length(trained_units) == 1L &&
+        !is.na(trained_units) && ncol(y) != trained_units) {
+      stop("'y' has ", ncol(y), " column(s) but the trained output ('",
+           nn_output_names(model)[[trained_output_idx]], "') has ",
+           trained_units, ". With a plain matrix 'y' only the last output is ",
+           "trained; pass a list with one 'y' per output to train them all.",
+           call. = FALSE)
+    }
+  } else {
+    trained_output_idx <- NULL
+  }
+
+  if (n_head > 1L) {
+    if (length(y) != n_head) {
+      stop("'y' must have one entry per output (", length(y), " given, ",
+           n_head, " expected).", call. = FALSE)
+    }
+    ynames <- names(y)
+    if (!is.null(ynames) && !any(ynames == "")) {
+      onames  <- vapply(loss_spec, function(s) s$name, character(1))
+      unknown <- setdiff(ynames, onames)
+      if (length(unknown) > 0L) {
+        stop("'y' names do not match model outputs: ",
+             paste(unknown, collapse = ", "), ". Model outputs: ",
+             paste(onames, collapse = ", "), call. = FALSE)
+      }
+      y <- y[match(onames, ynames)]
+    }
+    y <- lapply(y, function(yi) if (is.matrix(yi)) yi else as.matrix(yi))
+    nrows <- vapply(y, nrow, integer(1))
+    if (length(unique(nrows)) != 1L) {
+      stop("All entries of 'y' must have the same number of rows (got ",
+           paste(nrows, collapse = ", "), ").", call. = FALSE)
+    }
+    head_widths <- vapply(y, ncol, integer(1))
+    y <- do.call(cbind, y)
+  } else {
+    head_widths <- NULL
+  }
 
   # Handle validation_data
   # Shuffling before the split is only safe when the split is a fraction we
@@ -1731,21 +2454,33 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
     "sgd"  = ggml_opt_optimizer_type_sgd(),
     stop("Unsupported optimizer: ", model$compilation$optimizer, call. = FALSE)
   )
-  loss_type <- switch(model$compilation$loss,
-    "categorical_crossentropy" = , "crossentropy" = , "cross_entropy" = ggml_opt_loss_type_cross_entropy(),
-    "mse" = , "mean_squared_error" = ggml_opt_loss_type_mse(),
-    stop("Unsupported loss: ", model$compilation$loss, call. = FALSE)
-  )
+  # Per-head loss types and weights, resolved at compile time.
+  loss_types   <- vapply(loss_spec, function(s) s$loss_type, integer(1))
+  loss_weights <- vapply(loss_spec, function(s) s$weight,    numeric(1))
+  loss_type    <- loss_types[[1L]]  # single-head path below uses this
 
-  # Must agree with the switch above: cross-entropy training needs logits
-  # because ggml_cross_entropy_loss() softmaxes its own input.
-  use_ce_loss <- model$compilation$loss %in%
-    c("categorical_crossentropy", "crossentropy", "cross_entropy")
+  # Cross-entropy training needs logits, because ggml_cross_entropy_loss()
+  # softmaxes its own input.
+  # One flag per model output: only the cross-entropy heads get their softmax
+  # stripped, so a CE head and an MSE head can coexist in the same model.
+  ce_flags <- vapply(loss_spec, function(s) s$is_ce, logical(1))
+  if (is.null(trained_output_idx)) {
+    use_ce_loss <- ce_flags
+  } else {
+    # Legacy single-y path: only the trained output is affected; the exposed
+    # intermediate outputs keep their activations for ggml_predict().
+    use_ce_loss <- rep(FALSE, length(model$outputs))
+    use_ce_loss[trained_output_idx] <- ce_flags[[1L]]
+  }
 
   train_loss_vec <- numeric(epochs)
   train_acc_vec  <- numeric(epochs)
   val_loss_vec   <- numeric(epochs)
   val_acc_vec    <- numeric(epochs)
+  head_loss_mat  <- NULL   # [epochs x n_head], filled on the multi-output path
+  head_acc_mat   <- NULL   # [epochs x n_head], NA for heads without accuracy
+  val_head_loss_mat <- NULL  # same, for the validation portion
+  val_head_acc_mat  <- NULL
 
   if (!is_multi) {
     # -----------------------------------------------------------------------
@@ -1766,11 +2501,65 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
     graph_info <- nn_build_functional_graph(model, batch_size, training = TRUE,
                                             logits_output = use_ce_loss)
     fit_input  <- graph_info$inputs[[1L]]
-    fit_output <- graph_info$outputs[[length(graph_info$outputs)]]
+    # Every output head is trained, not just the last one. graph_info$outputs is
+    # in the same order as model$outputs, hence as loss_spec.
+    fit_outputs <- graph_info$outputs
+    # trained_output_idx is set only on the legacy single-y path, where just one
+    # of several outputs is trained.
+    fit_output  <- if (is.null(trained_output_idx)) {
+      fit_outputs[[length(fit_outputs)]]
+    } else {
+      fit_outputs[[trained_output_idx]]
+    }
 
     has_stochastic_dropout <- length(graph_info$dropout_masks) > 0L
 
-    if (!has_stochastic_dropout) {
+    if (n_head > 1L) {
+      if (length(fit_outputs) != n_head) {
+        stop("Model has ", n_head, " compiled output heads but the built graph ",
+             "produced ", length(fit_outputs), ".", call. = FALSE)
+      }
+      if (has_stochastic_dropout && verbose > 0L) {
+        message("Note: per-batch dropout resampling is not applied on the ",
+                "multi-output training path.")
+      }
+      # Offsets of each head inside the concatenated label rows, 0-based.
+      labels_offs <- c(0, cumsum(head_widths))[seq_len(n_head)]
+
+      history_raw <- ggml_fit_opt_multi(
+        sched          = model$compilation$sched,
+        ctx_compute    = graph_info$ctx_compute,
+        inputs         = fit_input,
+        outputs        = fit_outputs,
+        dataset        = dataset,
+        loss_types     = loss_types,
+        loss_weights   = loss_weights,
+        labels_offs    = labels_offs,
+        # The heads keep their output-layer names, so a callback monitoring
+        # e.g. "val_<output>_loss" uses the same key the history reports.
+        head_names     = vapply(loss_spec, function(s) s$name, character(1)),
+        optimizer      = optimizer_type,
+        nepoch         = epochs,
+        nbatch_logical = batch_size,
+        val_split      = validation_split,
+        shuffle        = shuffle,
+        shuffle_all    = shuffle_all,
+        callbacks      = callbacks,
+        silent         = (verbose == 0L)
+      )
+      train_loss_vec <- history_raw$train_loss
+      train_acc_vec  <- history_raw$train_accuracy
+      val_loss_vec   <- history_raw$val_loss
+      val_acc_vec    <- history_raw$val_accuracy
+      head_loss_mat  <- attr(history_raw, "head_loss")
+      head_acc_mat   <- attr(history_raw, "head_accuracy")
+      val_head_loss_mat <- attr(history_raw, "val_head_loss")
+      val_head_acc_mat  <- attr(history_raw, "val_head_accuracy")
+      # One row per epoch actually run: a callback stopping early shortens it.
+      epochs_run     <- nrow(history_raw)
+
+    } else if (!has_stochastic_dropout) {
+
       # R-side epoch loop (ggml_fit_opt), not the single C call (ggml_opt_fit),
       # so callbacks get a hook between epochs.
       history_raw <- ggml_fit_opt(
@@ -1844,6 +2633,8 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
           mask_vals <- as.numeric(runif(dm$ne) < keep_prob)
           ggml_backend_tensor_set_data(dm$mask, mask_vals)
         }
+        # See ggml_fit_opt(): an R-side loop re-syncs the thread count itself.
+        .ggml_sched_sync_threads(model$compilation$sched)
         if (verbose > 0L) cat(sprintf("Epoch %d/%d:\n", ep, epochs))
         ggml_opt_result_reset(result_train)
         ggml_opt_result_reset(result_val)
@@ -1904,19 +2695,72 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
 
     graph_info <- nn_build_functional_graph(model, batch_size, training = TRUE,
                                             logits_output = use_ce_loss)
-    fit_output <- graph_info$outputs[[length(graph_info$outputs)]]
+    fit_output <- if (is.null(trained_output_idx)) {
+      graph_info$outputs[[length(graph_info$outputs)]]
+    } else {
+      graph_info$outputs[[trained_output_idx]]
+    }
 
-    init_info <- ggml_opt_init_for_fit(
-      sched       = model$compilation$sched,
-      loss_type   = loss_type,
-      optimizer   = optimizer_type,
-      opt_period  = 1L,
-      ctx_compute = graph_info$ctx_compute,
-      inputs      = graph_info$inputs[[1L]],
-      outputs     = fit_output
-    )
+    if (n_head > 1L) {
+      if (length(graph_info$outputs) != n_head) {
+        stop("Model has ", n_head, " compiled output heads but the built graph ",
+             "produced ", length(graph_info$outputs), ".", call. = FALSE)
+      }
+      # Offsets of each head inside the concatenated label rows, 0-based --
+      # the same layout the single-input path builds. There is no
+      # ggml_opt_dataset here to slice, so the offsets are used by the batch
+      # loop below when it fills each head's labels tensor; they are still
+      # handed to the context so it carries the same description of the label
+      # layout as the dataset-driven path.
+      labels_offs <- c(0, cumsum(head_widths))[seq_len(n_head)]
+
+      init_info <- ggml_opt_init_for_fit_multi(
+        sched        = model$compilation$sched,
+        loss_types   = loss_types,
+        loss_weights = loss_weights,
+        labels_offs  = labels_offs,
+        optimizer    = optimizer_type,
+        opt_period   = 1L,
+        ctx_compute  = graph_info$ctx_compute,
+        inputs       = graph_info$inputs[[1L]],
+        outputs      = graph_info$outputs
+      )
+    } else {
+      labels_offs <- 0
+      init_info <- ggml_opt_init_for_fit(
+        sched       = model$compilation$sched,
+        loss_type   = loss_type,
+        optimizer   = optimizer_type,
+        opt_period  = 1L,
+        ctx_compute = graph_info$ctx_compute,
+        inputs      = graph_info$inputs[[1L]],
+        outputs     = fit_output
+      )
+    }
     opt_ctx      <- init_info$opt_ctx
-    labels_tensor <- ggml_opt_labels(opt_ctx)
+    # One labels tensor per head. For a single head this is ggml_opt_labels().
+    labels_tensors <- if (n_head > 1L) {
+      lapply(seq_len(n_head), function(i) ggml_opt_labels_i(opt_ctx, i))
+    } else {
+      list(ggml_opt_labels(opt_ctx))
+    }
+    # Width of each head's slice of a label row; a single head owns the row.
+    label_widths <- if (n_head > 1L) head_widths else ne_label
+
+    # Per-head metric matrices, [epochs x n_head], with the same shape and
+    # column names ggml_fit_opt_multi() returns, so the history assembly at the
+    # end of ggml_fit() treats both paths alike.
+    if (n_head > 1L) {
+      head_names <- vapply(loss_spec, function(s) s$name, character(1))
+      new_head_mat <- function() {
+        matrix(NA_real_, nrow = epochs, ncol = n_head,
+               dimnames = list(NULL, head_names))
+      }
+      head_loss_mat     <- new_head_mat()
+      head_acc_mat      <- new_head_mat()
+      val_head_loss_mat <- new_head_mat()
+      val_head_acc_mat  <- new_head_mat()
+    }
 
     result_train <- ggml_opt_result_init()
     result_val   <- ggml_opt_result_init()
@@ -1962,6 +2806,9 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
         ggml_backend_tensor_set_data(dm$mask, mask_vals)
       }
 
+      # See ggml_fit_opt(): an R-side loop re-syncs the thread count itself.
+      .ggml_sched_sync_threads(model$compilation$sched)
+
       if (verbose > 0L) cat(sprintf("Epoch %d/%d:\n", ep, epochs))
 
       ggml_opt_result_reset(result_train)
@@ -1971,8 +2818,8 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
       for (ib in seq_len(n_batches_train)) {
         idx <- perm[(ib - 1L) * batch_size + seq_len(batch_size)]
         nn_fill_inputs_idx(x_ggml, ne_per_input, graph_info$inputs, idx)
-        ggml_backend_tensor_set_data(labels_tensor,
-                                     nn_gather_labels(y_ggml, ne_label, idx))
+        nn_fill_labels_idx(y_ggml, ne_label, labels_tensors,
+                           labels_offs, label_widths, idx)
 
         ggml_opt_alloc(opt_ctx, backward = TRUE)
         ggml_opt_eval(opt_ctx, result_train)
@@ -1983,8 +2830,8 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
         for (ib in seq_len(n_batches_val)) {
           idx <- perm[n_train_samples + (ib - 1L) * batch_size + seq_len(batch_size)]
           nn_fill_inputs_idx(x_ggml, ne_per_input, graph_info$inputs, idx)
-          ggml_backend_tensor_set_data(labels_tensor,
-                                       nn_gather_labels(y_ggml, ne_label, idx))
+          nn_fill_labels_idx(y_ggml, ne_label, labels_tensors,
+                             labels_offs, label_widths, idx)
 
           ggml_opt_alloc(opt_ctx, backward = FALSE)
           ggml_opt_eval(opt_ctx, result_val)
@@ -2015,6 +2862,36 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
       logs$train_accuracy <- train_acc_vec[ep]
       logs$val_loss       <- val_loss_vec[ep]
       logs$val_accuracy   <- val_acc_vec[ep]
+
+      # Per-head metrics, same keys and semantics as ggml_fit_opt_multi():
+      # both phases carry an explicit prefix so a head named "val_x" cannot
+      # collide with another head's validation key. A result only holds heads
+      # once an epoch has accumulated into it, so its own head count decides
+      # what can be read rather than n_head.
+      if (n_head > 1L) {
+        n_res_train <- ggml_opt_result_n_loss(result_train)
+        n_res_val   <- if (n_batches_val > 0L) ggml_opt_result_n_loss(result_val) else 0L
+        for (i in seq_len(n_head)) {
+          nm <- head_names[i]
+          if (i <= n_res_train) {
+            head_loss_mat[ep, i] <- ggml_opt_result_loss_i(result_train, i)[["loss"]]
+            head_acc_mat[ep, i]  <- ggml_opt_result_accuracy_i(result_train, i)[["accuracy"]]
+          }
+          # unname(): the matrices carry the head names as column names, which a
+          # scalar subset would drag into `logs` -- callbacks compare these
+          # against plain numbers, so they must stay bare.
+          logs[[paste0("train_", nm, "_loss")]]     <- unname(head_loss_mat[ep, i])
+          logs[[paste0("train_", nm, "_accuracy")]] <- unname(head_acc_mat[ep, i])
+
+          if (i <= n_res_val) {
+            val_head_loss_mat[ep, i] <- ggml_opt_result_loss_i(result_val, i)[["loss"]]
+            val_head_acc_mat[ep, i]  <- ggml_opt_result_accuracy_i(result_val, i)[["accuracy"]]
+          }
+          logs[[paste0("val_", nm, "_loss")]]     <- unname(val_head_loss_mat[ep, i])
+          logs[[paste0("val_", nm, "_accuracy")]] <- unname(val_head_acc_mat[ep, i])
+        }
+      }
+
       for (cb in callbacks) {
         if (is.function(cb$on_epoch_end)) cb$on_epoch_end(ep, logs, cb_state)
         if (isTRUE(cb_state$stop)) break
@@ -2043,16 +2920,44 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
 
   # Length of the metric vectors, not `epochs`: a callback may have stopped
   # training early, in which case every branch above truncated them.
-  model$history <- structure(
-    list(
-      train_loss     = train_loss_vec,
-      train_accuracy = train_acc_vec,
-      val_loss       = val_loss_vec,
-      val_accuracy   = val_acc_vec,
-      epochs         = seq_along(train_loss_vec)
-    ),
-    class = "ggml_history"
+  hist_list <- list(
+    train_loss     = train_loss_vec,
+    train_accuracy = train_acc_vec,
+    val_loss       = val_loss_vec,
+    val_accuracy   = val_acc_vec,
+    epochs         = seq_along(train_loss_vec)
   )
+
+  # Per-head metrics, named after the output layers ("train_<output>_loss",
+  # "val_<output>_loss"), so it is visible which head is not learning -- the
+  # aggregate train_loss can fall while one head stalls. These are the same
+  # keys the callbacks see in `logs`, so a monitor= naming one of them matches
+  # a column here. Both phases are prefixed, so an output named "val_x" cannot
+  # collide with another output's validation column.
+  if (n_head > 1L && !is.null(head_loss_mat)) {
+    n_ep <- length(train_loss_vec)
+    # A column is reported only if it holds something: accuracy exists for
+    # cross-entropy heads only, and the validation columns are all-NA without a
+    # validation split.
+    # unname(): the matrices carry the head names as column names, and a
+    # single-epoch subset would keep one as the vector's name -- so the columns
+    # would be named for epochs = 1 and bare otherwise.
+    put_col <- function(key, mat, i) {
+      if (is.null(mat)) return(invisible(NULL))
+      col <- unname(mat[seq_len(n_ep), i])
+      if (all(is.na(col))) return(invisible(NULL))
+      hist_list[[key]] <<- col
+    }
+    for (i in seq_len(n_head)) {
+      nm <- loss_spec[[i]]$name
+      hist_list[[paste0("train_", nm, "_loss")]] <- unname(head_loss_mat[seq_len(n_ep), i])
+      put_col(paste0("train_", nm, "_accuracy"),   head_acc_mat,      i)
+      put_col(paste0("val_", nm, "_loss"),         val_head_loss_mat, i)
+      put_col(paste0("val_", nm, "_accuracy"),     val_head_acc_mat,  i)
+    }
+  }
+
+  model$history <- structure(hist_list, class = "ggml_history")
 
   invisible(model)
 }
@@ -2068,24 +2973,67 @@ ggml_evaluate.ggml_functional_model <- function(model, x, y,
                                                   batch_size = 32L, ...) {
   if (!model$compiled) stop("Model must be compiled before evaluation.")
 
+  loss_spec <- model$compilation$loss_spec
+  n_head    <- if (is.null(loss_spec)) 1L else length(loss_spec)
+
+  # Multi-output: evaluate each head against its own y, then report the
+  # weighted total that training actually optimizes, plus the per-head values.
+  # As in ggml_fit(): a plain matrix means only the last output is scored,
+  # the earlier ones being intermediate activations.
+  if (n_head > 1L && !is.list(y)) {
+    loss_spec <- loss_spec[n_head]
+    n_head    <- 1L
+  }
+
+  if (n_head > 1L) {
+    if (length(y) != n_head) {
+      stop("This model has ", n_head, " outputs, so 'y' must be a list of ",
+           n_head, " matrices (one per output).", call. = FALSE)
+    }
+    onames <- vapply(loss_spec, function(s) s$name, character(1))
+    ynames <- names(y)
+    if (!is.null(ynames) && !any(ynames == "")) {
+      y <- y[match(onames, ynames)]
+    }
+    y <- lapply(y, function(yi) if (is.matrix(yi)) yi else as.matrix(yi))
+
+    preds <- ggml_predict(model, x, batch_size = batch_size)
+    if (!is.list(preds)) preds <- list(preds)
+
+    out <- list(loss = 0, n_samples = nrow(y[[1L]]))
+    total <- 0
+    for (i in seq_len(n_head)) {
+      pm <- preds[[i]]
+      yi <- y[[i]]
+      li <- nn_head_loss(loss_spec[[i]]$loss, pm, yi)
+      out[[paste0(onames[[i]], "_loss")]] <- li
+      total <- total + loss_spec[[i]]$weight * li
+      if (ncol(yi) > 1L) {
+        out[[paste0(onames[[i]], "_accuracy")]] <- mean(max.col(pm) == max.col(yi))
+      }
+    }
+    out$loss <- total
+    # Head-1 accuracy under the plain name, so callers that expect `accuracy`
+    # still find one; the per-head values above are the unambiguous ones.
+    acc1 <- out[[paste0(onames[[1L]], "_accuracy")]]
+    out$accuracy <- if (is.null(acc1)) NA_real_ else acc1
+    return(out)
+  }
+
   n_samples <- nrow(y)
   ne_label  <- ncol(y)
 
   # Get predictions for ALL samples (no truncation)
   preds <- ggml_predict(model, x, batch_size = batch_size)
-  preds_mat <- if (is.matrix(preds)) preds else preds[[1L]]
+  # With several outputs and a plain `y` it is the LAST output that is scored
+  # (the earlier ones are exposed intermediates), matching ggml_fit().
+  preds_mat <- if (is.matrix(preds)) preds else preds[[length(preds)]]
 
-  # Compute loss
+  # Compute loss through the shared per-head implementation, so the single- and
+  # multi-output paths agree and a newly added loss is not silently NA here.
   loss_name <- model$compilation$loss
-  if (loss_name %in% c("categorical_crossentropy", "crossentropy", "cross_entropy")) {
-    eps <- 1e-7
-    preds_clipped <- pmax(pmin(preds_mat, 1 - eps), eps)
-    loss_val <- -mean(rowSums(y * log(preds_clipped)))
-  } else if (loss_name %in% c("mse", "mean_squared_error")) {
-    loss_val <- mean(rowSums((y - preds_mat)^2) / ne_label)
-  } else {
-    loss_val <- NA_real_
-  }
+  if (is.list(loss_name)) loss_name <- loss_name[[1L]]
+  loss_val <- nn_head_loss(loss_name, preds_mat, y)
 
   # Compute accuracy (classification: argmax match)
   if (ne_label > 1L) {
@@ -2099,17 +3047,7 @@ ggml_evaluate.ggml_functional_model <- function(model, x, y,
   out <- list(loss = loss_val, accuracy = acc_val, n_samples = n_samples)
 
   # Additional metrics
-  extra_metrics <- setdiff(model$compilation$metrics, c("accuracy", "acc"))
-  if (length(extra_metrics) > 0L) {
-    for (m in extra_metrics) {
-      out[[m]] <- switch(m,
-        "mae"  = , "mean_absolute_error" = mean(abs(y - preds_mat)),
-        "mse"  = , "mean_squared_error"  = mean((y - preds_mat)^2),
-        "rmse" = sqrt(mean((y - preds_mat)^2)),
-        NULL
-      )
-    }
-  }
+  out <- nn_add_extra_metrics(out, model$compilation$metrics, preds_mat, y)
   out
 }
 

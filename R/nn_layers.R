@@ -414,12 +414,33 @@ ggml_layer_batch_norm <- function(model, eps = 1e-5, name = NULL, trainable = TR
 
 #' Add Dense (Fully Connected) Layer
 #'
+#' @section Time-distributed application:
+#' By default a dense layer flattens its input, so a sequence node of shape
+#' \code{c(seq_len, features)} becomes a single vector of \code{units} and the
+#' sequence axis is gone.  With \code{time_distributed = TRUE} the same kernel
+#' is applied independently at every position instead, sharing one set of
+#' weights across the sequence, and the output keeps its length:
+#' \code{c(seq_len, units)}.  This is the semantics of Keras'
+#' \code{TimeDistributed}, and it is what the position-wise feed-forward
+#' sublayer of a transformer block needs -- without it, a dense layer after
+#' \code{\link{ggml_layer_attention}} would collapse every position into one
+#' vector.
+#'
+#' It is computed as a single batched \code{ggml_mul_mat()} over the combined
+#' position/batch axes, not as a loop over positions.
+#'
+#' Functional API only: a sequential model carries a flat running shape, so
+#' there is no sequence axis to distribute over.
+#'
 #' @param model A ggml_sequential_model object
 #' @param units Number of output units
 #' @param activation Activation function name: "relu", "sigmoid", "tanh", "softmax", or NULL
 #' @param input_shape Integer or integer vector specifying the input shape (only needed for the first layer)
 #' @param name Optional character name for the layer.
 #' @param trainable Logical; whether the layer weights are updated during training.
+#' @param time_distributed Logical; apply the kernel per position of a sequence
+#'   input rather than flattening it (default \code{FALSE}). See
+#'   \emph{Time-distributed application}.
 #' @return The model object with the dense layer appended (invisibly).
 #' @export
 #' @examples
@@ -429,9 +450,14 @@ ggml_layer_batch_norm <- function(model, eps = 1e-5, name = NULL, trainable = TR
 #'                      input_shape = c(28, 28, 1)) |>
 #'   ggml_layer_flatten() |>
 #'   ggml_layer_dense(128, activation = "relu")
+#'
+#' # Position-wise feed-forward, as in a transformer block.
+#' x  <- ggml_input(shape = c(10L, 32L))
+#' ff <- x |> ggml_layer_dense(64L, activation = "relu", time_distributed = TRUE)
 #' }
 ggml_layer_dense <- function(model, units, activation = NULL, input_shape = NULL,
-                              name = NULL, trainable = TRUE) {
+                              name = NULL, trainable = TRUE,
+                              time_distributed = FALSE) {
   # Functional API: model is a tensor node
   if (inherits(model, "ggml_tensor_node")) {
     node <- model
@@ -441,12 +467,20 @@ ggml_layer_dense <- function(model, units, activation = NULL, input_shape = NULL
       node_type = "dense",
       trainable = trainable,
       config    = list(
-        units      = as.integer(units),
-        activation = activation,
-        name       = name
+        units            = as.integer(units),
+        activation       = activation,
+        time_distributed = isTRUE(time_distributed),
+        name             = name
       ),
       parents = list(node)
     ), class = "ggml_tensor_node"))
+  }
+  # Sequential models carry a running flat shape, so there is no sequence axis
+  # for a time-distributed kernel to be applied along.
+  if (isTRUE(time_distributed)) {
+    stop("'time_distributed' applies to the functional API, where a layer is ",
+         "applied to a sequence node; a sequential model has no sequence axis ",
+         "to distribute over.", call. = FALSE)
   }
 
   if (is.null(name)) name <- nn_layer_name(model, "dense")

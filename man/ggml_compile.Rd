@@ -11,7 +11,8 @@
   optimizer = "adam",
   loss = "categorical_crossentropy",
   metrics = c("accuracy"),
-  backend = "auto"
+  backend = "auto",
+  loss_weights = NULL
 )
 
 ggml_compile(
@@ -19,7 +20,8 @@ ggml_compile(
   optimizer = "adam",
   loss = "categorical_crossentropy",
   metrics = c("accuracy"),
-  backend = "auto"
+  backend = "auto",
+  loss_weights = NULL
 )
 
 \method{ggml_compile}{ggml_sequential_model}(
@@ -27,7 +29,8 @@ ggml_compile(
   optimizer = "adam",
   loss = "categorical_crossentropy",
   metrics = c("accuracy"),
-  backend = "auto"
+  backend = "auto",
+  loss_weights = NULL
 )
 }
 \arguments{
@@ -35,11 +38,28 @@ ggml_compile(
 
 \item{optimizer}{Optimizer name: "adam" or "sgd"}
 
-\item{loss}{Loss function name: "categorical_crossentropy" or "mse"}
+\item{loss}{Loss function name: \code{"categorical_crossentropy"} (expects a
+softmax output), \code{"mse"}, \code{"mae"}, \code{"huber"} (smooth L1,
+delta 1) or \code{"binary_crossentropy"} (expects a sigmoid output, one
+independent label per unit).  \code{"mean_squared_error"},
+\code{"mean_absolute_error"}, \code{"huber_loss"} and
+\code{"binary_cross_entropy"} are accepted as aliases.
+For a multi-output functional model, a list or character vector with one
+loss per output -- named after the output layers, or positional:
+\code{loss = list(policy = "categorical_crossentropy", value = "mse")}.}
 
-\item{metrics}{Character vector of metrics (currently "accuracy")}
+\item{metrics}{Character vector of metrics to report from
+\code{\link{ggml_evaluate}}.  \code{"accuracy"} is reported for
+multi-class outputs whether or not it is requested; \code{"mae"},
+\code{"mse"} and \code{"rmse"} (and the long forms
+\code{"mean_absolute_error"}, \code{"mean_squared_error"}) are computed
+only when asked for.  Any other name is dropped with a warning.}
 
 \item{backend}{Backend to use: "auto" (GPU if available, else CPU), "cpu", or "vulkan"}
+
+\item{loss_weights}{Optional per-output weights for a multi-output model;
+the optimized total is \code{sum(loss_weights[i] * loss_i)}. Named after
+the output layers or positional. Default: all outputs weighted 1.}
 }
 \value{
 The compiled model (invisibly).

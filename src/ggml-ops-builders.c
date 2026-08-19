@@ -3697,6 +3697,49 @@ struct ggml_tensor * ggml_ssm_conv(
     return result;
 }
 
+// ggml_ssm_conv_back
+//
+// ggmlR extension: backward pass for ggml_ssm_conv, absent upstream. Without
+// it a graph containing an ssm_conv cannot be differentiated at all, so the
+// convolution branch of a Mamba block is inference-only.
+//
+// One op computes BOTH input gradients and returns them concatenated,
+// [d_sx | d_c], because a ggml op yields a single tensor and running the
+// convolution twice to split them would double the work. ggml_build_backward
+// then views each half (see GGML_OP_SSM_CONV_BACK in ggml-graph.c).
+
+struct ggml_tensor * ggml_ssm_conv_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * sx,
+        struct ggml_tensor  * c,
+        struct ggml_tensor  * grad) {
+    GGML_ASSERT(ggml_is_3d(sx));
+    GGML_ASSERT(ggml_is_matrix(c));
+    GGML_ASSERT(ggml_is_3d(grad));
+
+    const int64_t d_conv  = c->ne[0];
+    const int64_t d_inner = c->ne[1];
+    const int64_t n_t     = sx->ne[0] - d_conv + 1;
+    const int64_t n_s     = sx->ne[2];
+
+    GGML_ASSERT(sx->ne[1] == d_inner);
+    GGML_ASSERT(n_t >= 0);
+    // grad has the shape ggml_ssm_conv produced: [d_inner, n_t, n_s].
+    GGML_ASSERT(grad->ne[0] == d_inner);
+    GGML_ASSERT(grad->ne[1] == n_t);
+    GGML_ASSERT(grad->ne[2] == n_s);
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32,
+        ggml_nelements(sx) + ggml_nelements(c));
+
+    result->op     = GGML_OP_SSM_CONV_BACK;
+    result->src[0] = sx;
+    result->src[1] = c;
+    result->src[2] = grad;
+
+    return result;
+}
+
 // ggml_ssm_scan
 
 struct ggml_tensor * ggml_ssm_scan(
@@ -3758,6 +3801,224 @@ struct ggml_tensor * ggml_ssm_scan(
     result->src[4] = B;
     result->src[5] = C;
     result->src[6] = ids;
+
+    return result;
+}
+
+// ggml_ssm_scan_back
+//
+// ggmlR extension: backward pass for ggml_ssm_scan, absent upstream.
+//
+// The forward recurrence (Mamba-2 form; Mamba-1 differs only in dA being a
+// vector rather than a scalar per head) is
+//     dt' = softplus(dt);  dA = exp(dt' * A);  x_dt = x * dt'
+//     s[t] = s[t-1] * dA + B * x_dt
+//     y[t] = sum_state s[t] * C
+// so the backward pass walks time in reverse, and dt' reaches the loss by TWO
+// routes -- through dA and through x_dt -- which both contribute to d_dt.
+//
+// The op returns all six input gradients concatenated in the source order of
+// ggml_ssm_scan(): [d_s | d_x | d_dt | d_A | d_B | d_C]. `ids` is integer and
+// has no gradient. A ggml op yields one tensor, and packing them keeps the
+// recurrence from being replayed once per input.
+//
+// `grad` is the gradient of the packed forward result, so it carries both the
+// output gradients and the final-state gradient, exactly as ggml_ssm_scan()
+// laid them out.
+
+struct ggml_tensor * ggml_ssm_scan_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * s,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * dt,
+        struct ggml_tensor  * A,
+        struct ggml_tensor  * B,
+        struct ggml_tensor  * C,
+        struct ggml_tensor  * ids,
+        struct ggml_tensor  * grad) {
+    GGML_ASSERT(ggml_is_contiguous(s));
+    GGML_ASSERT(ggml_is_contiguous(dt));
+    GGML_ASSERT(ggml_is_contiguous(A));
+    GGML_ASSERT(ggml_are_same_shape(B, C));
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+
+    const int64_t d_state  = s->ne[0];
+    const int64_t head_dim = x->ne[0];
+    const int64_t n_head   = x->ne[1];
+    const int64_t n_seqs   = x->ne[3];
+
+    GGML_ASSERT(dt->ne[0] == n_head);
+    GGML_ASSERT(s->ne[1]  == head_dim);
+    GGML_ASSERT(s->ne[2]  == n_head);
+    GGML_ASSERT(B->ne[0]  == d_state);
+    GGML_ASSERT(ids->ne[0] == n_seqs);
+    GGML_ASSERT(A->ne[1]  == n_head);
+    GGML_ASSERT(A->ne[0] == 1 || A->ne[0] == d_state);
+    // The forward result is nelements(x) outputs plus one state block per seq.
+    GGML_ASSERT(ggml_nelements(grad) ==
+        ggml_nelements(x) + d_state*head_dim*n_head*n_seqs);
+
+    const int64_t n_out =
+        d_state*head_dim*n_head*n_seqs +   // d_s (only the rows ids selects)
+        ggml_nelements(x)  +               // d_x
+        ggml_nelements(dt) +               // d_dt
+        ggml_nelements(A)  +               // d_A
+        ggml_nelements(B)  +               // d_B
+        ggml_nelements(C);                 // d_C
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_out);
+
+    result->op     = GGML_OP_SSM_SCAN_BACK;
+    result->src[0] = s;
+    result->src[1] = x;
+    result->src[2] = dt;
+    result->src[3] = A;
+    result->src[4] = B;
+    result->src[5] = C;
+    result->src[6] = ids;
+    result->src[7] = grad;
+
+    return result;
+}
+
+// ggml_rwkv_wkv6_back / ggml_rwkv_wkv7_back / ggml_gated_linear_attn_back
+//
+// ggmlR extension: backward passes for the RWKV-family recurrences, absent
+// upstream. Each returns every differentiable input's gradient concatenated, in
+// the source order of the matching forward op, plus the gradient of the initial
+// state -- one op yields one tensor, and packing avoids replaying the
+// recurrence once per input.
+
+struct ggml_tensor * ggml_rwkv_wkv6_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * r,
+        struct ggml_tensor  * tf,
+        struct ggml_tensor  * td,
+        struct ggml_tensor  * state,
+        struct ggml_tensor  * grad) {
+    GGML_ASSERT(ggml_is_contiguous(k));
+    GGML_ASSERT(ggml_is_contiguous(v));
+    GGML_ASSERT(ggml_is_contiguous(r));
+    GGML_ASSERT(ggml_is_contiguous(tf));
+    GGML_ASSERT(ggml_is_contiguous(td));
+    GGML_ASSERT(ggml_is_contiguous(state));
+
+    const int64_t S = k->ne[0];
+    const int64_t H = k->ne[1];
+    const int64_t n_tokens = k->ne[2];
+    const int64_t n_seqs = state->ne[1];
+
+    GGML_ASSERT(v->ne[0] == S && v->ne[1] == H && v->ne[2] == n_tokens);
+    GGML_ASSERT(r->ne[0] == S && r->ne[1] == H && r->ne[2] == n_tokens);
+    GGML_ASSERT(td->ne[0] == S && td->ne[1] == H && td->ne[2] == n_tokens);
+    GGML_ASSERT(ggml_nelements(state) == S * S * H * n_seqs);
+    // The forward packs outputs then final state; grad follows that layout.
+    GGML_ASSERT(ggml_nelements(grad) == S * H * (n_tokens + S * n_seqs));
+
+    const int64_t n_out =
+        ggml_nelements(k) + ggml_nelements(v) + ggml_nelements(r) +
+        ggml_nelements(tf) + ggml_nelements(td) + ggml_nelements(state);
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_out);
+
+    result->op     = GGML_OP_RWKV_WKV6_BACK;
+    result->src[0] = k;
+    result->src[1] = v;
+    result->src[2] = r;
+    result->src[3] = tf;
+    result->src[4] = td;
+    result->src[5] = state;
+    result->src[6] = grad;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_rwkv_wkv7_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * r,
+        struct ggml_tensor  * w,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * state,
+        struct ggml_tensor  * grad) {
+    GGML_ASSERT(ggml_is_contiguous(r));
+    GGML_ASSERT(ggml_is_contiguous(w));
+    GGML_ASSERT(ggml_is_contiguous(k));
+    GGML_ASSERT(ggml_is_contiguous(v));
+    GGML_ASSERT(ggml_is_contiguous(a));
+    GGML_ASSERT(ggml_is_contiguous(b));
+    GGML_ASSERT(ggml_is_contiguous(state));
+
+    const int64_t S = k->ne[0];
+    const int64_t H = k->ne[1];
+    const int64_t n_tokens = k->ne[2];
+    const int64_t n_seqs = state->ne[1];
+
+    GGML_ASSERT(ggml_nelements(state) == S * S * H * n_seqs);
+    GGML_ASSERT(ggml_nelements(grad) == S * H * (n_tokens + S * n_seqs));
+
+    const int64_t n_out =
+        ggml_nelements(r) + ggml_nelements(w) + ggml_nelements(k) +
+        ggml_nelements(v) + ggml_nelements(a) + ggml_nelements(b) +
+        ggml_nelements(state);
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_out);
+
+    result->op     = GGML_OP_RWKV_WKV7_BACK;
+    result->src[0] = r;
+    result->src[1] = w;
+    result->src[2] = k;
+    result->src[3] = v;
+    result->src[4] = a;
+    result->src[5] = b;
+    result->src[6] = state;
+    result->src[7] = grad;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_gated_linear_attn_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * state,
+        struct ggml_tensor  * grad,
+        float                 scale) {
+    GGML_ASSERT(ggml_is_contiguous(k));
+    GGML_ASSERT(ggml_is_contiguous(v));
+    GGML_ASSERT(ggml_is_contiguous(q));
+    GGML_ASSERT(ggml_is_contiguous(g));
+    GGML_ASSERT(ggml_is_contiguous(state));
+
+    const int64_t S = k->ne[0];
+    const int64_t H = k->ne[1];
+    const int64_t n_tokens = k->ne[2];
+    const int64_t n_seqs = state->ne[1];
+
+    GGML_ASSERT(ggml_nelements(state) == S * S * H * n_seqs);
+    GGML_ASSERT(ggml_nelements(grad) == S * H * (n_tokens + S * n_seqs));
+
+    const int64_t n_out =
+        ggml_nelements(k) + ggml_nelements(v) + ggml_nelements(q) +
+        ggml_nelements(g) + ggml_nelements(state);
+
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_out);
+
+    ggml_set_op_params_f32(result, 0, scale);
+
+    result->op     = GGML_OP_GATED_LINEAR_ATTN_BACK;
+    result->src[0] = k;
+    result->src[1] = v;
+    result->src[2] = q;
+    result->src[3] = g;
+    result->src[4] = state;
+    result->src[5] = grad;
 
     return result;
 }
