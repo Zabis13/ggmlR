@@ -329,7 +329,14 @@ step_grads <- function(p, batch) {
 
 # One learning rate for both sizes: the loss is a mean, so the gradient no
 # longer grows with d_inner and the size-dependent fudge factor is gone.
-lr      <- 0.05
+#
+# The value looks large only because the loss is a mean over 65536 elements:
+# that divides every gradient by the same factor, leaving them around 1e-5 at
+# these sizes (the trace below prints them). At lr = 0.05 a step would move each
+# weight by roughly five millionths of its own size, which is why an earlier
+# version of this demo fell by 4% in 60 epochs and called it training. lr = 40
+# puts the step near 1% of the parameter, which is an ordinary SGD step.
+lr      <- 40
 n_epoch <- if (small) 40L else 60L
 
 cat("Training a Mamba-style block (ssm_conv -> ssm_scan)\n")
@@ -375,7 +382,13 @@ train_once <- function(label) {
         # to throw a 16-element vector of ~0.5 values clean out of range in a
         # single step.
         gn  <- sqrt(sum(g^2))
-        cap <- 1
+        # Sized against the gradients this problem actually produces, whose
+        # norms sit near 1e-3 at the start (the trace prints them). A cap of 1
+        # would be a comment rather than a safeguard -- it could never trigger.
+        # This one is loose enough not to touch an ordinary step and tight
+        # enough to catch the recurrence amplifying one, which is what the cap
+        # is for.
+        cap <- 0.05
         if (gn > cap) g <- g * (cap / gn)
         params[[nm]] <- params[[nm]] - lr * g
       }

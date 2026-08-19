@@ -158,11 +158,15 @@ Vulkan telemetry logging. Two messages are emitted:
    ```
 
 2. A per-graph summary of any ops the Vulkan backend could not run and fell back
-   to CPU (e.g. `OUT_PROD`, `CROSS_ENTROPY_LOSS_BACK` during training):
+   to CPU (e.g. `GET_ROWS_BACK`, the backward of an embedding table):
 
    ```
-   ggml_vulkan: 12 op(s) not supported on GPU during graph compute, ran on CPU (per-type: OUT_PROD=12)
+   ggml_vulkan: 12 op(s) not supported on GPU during graph compute, ran on CPU (per-type: GET_ROWS_BACK=12)
    ```
+
+   This is worth turning on before trusting a training benchmark: a fallback
+   changes only the speed, never the result, so it is otherwise invisible.
+   `inst/examples/backward_gpu_demo.R` checks the backward ops one at a time.
 
 Both are **off by default** so they do not clutter output (notably during
 tests, where many contexts and training graphs are created). Enable them to
@@ -1231,9 +1235,17 @@ out <- ggml_rwkv_output(ctx, w, k)              # [S*H, n_tokens]
 st2 <- ggml_rwkv_state(ctx, w, k, st)           # [S*H, S*n_seqs]
 ```
 
-**Inference only** — none of these ops has a backward pass in ggml, so a graph
-containing one cannot be trained. `ggml_gated_linear_attn()` is additionally
-CPU-only (no Vulkan shader); the other four run on both CPU and Vulkan.
+**Trainable** — upstream ggml has no backward pass for any of these, which made
+them inference-only; ggmlR adds one for all five, so a Mamba or RWKV block
+trains end to end. `ggml_ssm_conv()` and `ggml_ssm_scan()` also have backward
+Vulkan shaders, so a state-space block trains entirely on the GPU (`d_state`
+128 or 256, Mamba-2 shapes; other shapes compute the backward on the CPU). The
+RWKV and GLA backward kernels are CPU-only, as is `ggml_gated_linear_attn()` in
+the forward direction.
+
+See `inst/examples/mamba_train_demo.R` for a block trained end to end on both
+backends, and `inst/examples/backward_gpu_demo.R` for which backward ops run
+where.
 
 ## GGUF Pre-trained Weights
 
