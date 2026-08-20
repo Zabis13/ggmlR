@@ -2411,6 +2411,41 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
     }
     x_val <- validation_data[[1]]
     y_val <- validation_data[[2]]
+    # Multi-output: the training `y` was already concatenated column-wise into
+    # one label matrix above, so the validation labels must be flattened the
+    # same way and in the same head order. Left as a list, the rbind() below
+    # produces a list-matrix and the batch-boundary truncation then fails.
+    if (n_head > 1L) {
+      if (!is.list(y_val)) {
+        stop("This model has ", n_head, " outputs, so the validation labels ",
+             "must be a list of ", n_head, " matrices (one per output).",
+             call. = FALSE)
+      }
+      if (length(y_val) != n_head) {
+        stop("validation_data labels must have one entry per output (",
+             length(y_val), " given, ", n_head, " expected).", call. = FALSE)
+      }
+      # Reorder by name when named, matching how the training `y` was ordered.
+      yv_names <- names(y_val)
+      if (!is.null(yv_names) && !any(yv_names == "")) {
+        onames  <- vapply(loss_spec, function(s) s$name, character(1))
+        unknown <- setdiff(yv_names, onames)
+        if (length(unknown) > 0L) {
+          stop("validation_data label names do not match model outputs: ",
+               paste(unknown, collapse = ", "), ". Model outputs: ",
+               paste(onames, collapse = ", "), call. = FALSE)
+        }
+        y_val <- y_val[match(onames, yv_names)]
+      }
+      y_val <- lapply(y_val, function(yi) if (is.matrix(yi)) yi else as.matrix(yi))
+      vwidths <- vapply(y_val, ncol, integer(1))
+      if (!identical(as.integer(vwidths), as.integer(head_widths))) {
+        stop("validation_data labels have widths (",
+             paste(vwidths, collapse = ", "), ") but the training labels have (",
+             paste(head_widths, collapse = ", "), ").", call. = FALSE)
+      }
+      y_val <- do.call(cbind, y_val)
+    }
     xp_val <- nn_prepare_x(model, x_val)
     n_val   <- length(xp_val$x_ggml) %/% ne_datapoint
     n_train <- length(x_ggml)         %/% ne_datapoint

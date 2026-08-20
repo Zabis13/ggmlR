@@ -796,3 +796,125 @@ test_that("a CE head and an MSE head mix on the multi-input path", {
 
   cleanup_mo_model(m)
 })
+
+# ---------------------------------------------------------------------------
+# validation_data (as opposed to validation_split) on the multi-output path
+# ---------------------------------------------------------------------------
+# Regression guard: the training `y` is concatenated column-wise into one label
+# matrix, but an explicit validation_data list used to be rbind()ed onto it
+# unchanged. rbind(matrix, list) yields a *list-matrix* with the whole list
+# folded into a single row, which then either aborts the batch-boundary
+# truncation with "subscript out of bounds" or, when the row count happens to
+# divide evenly by batch_size, trains on silently corrupted labels.
+
+test_that("multi-output accepts validation_data as a list of matrices", {
+  skip_on_cran()
+  d  <- make_xy(n = 64L)
+  dv <- make_xy(n = 32L)
+
+  set.seed(1L)
+  model <- build_two_head()
+  model <- ggml_compile(model, optimizer = "adam", loss = "mse", backend = "cpu")
+  model <- ggml_fit(model, d$x, list(head_a = d$ya, head_b = d$yb),
+                    epochs = 4L, batch_size = 16L,
+                    validation_data = list(dv$x, list(head_a = dv$ya,
+                                                      head_b = dv$yb)),
+                    verbose = 0L)
+
+  h <- model$history
+  # Per-head validation keys exist and are real numbers, not NaN from a
+  # mis-shaped label matrix.
+  expect_true(!is.null(h$val_head_a_loss))
+  expect_true(!is.null(h$val_head_b_loss))
+  expect_true(all(is.finite(h$val_head_a_loss)))
+  expect_true(all(is.finite(h$val_head_b_loss)))
+  expect_true(all(is.finite(h$train_head_a_loss)))
+  expect_true(all(is.finite(h$train_head_b_loss)))
+
+  cleanup_mo_model(model)
+})
+
+test_that("validation_data survives a row count that needs truncation", {
+  skip_on_cran()
+  # 50 + 22 = 72 rows total; batch_size 16 leaves 8 rows over, so the
+  # truncation branch -- where the list-matrix used to blow up -- is taken.
+  d  <- make_xy(n = 50L)
+  dv <- make_xy(n = 22L)
+  expect_gt((50L + 22L) %% 16L, 0L)
+
+  set.seed(1L)
+  model <- build_two_head()
+  model <- ggml_compile(model, optimizer = "adam", loss = "mse", backend = "cpu")
+  model <- ggml_fit(model, d$x, list(head_a = d$ya, head_b = d$yb),
+                    epochs = 3L, batch_size = 16L,
+                    validation_data = list(dv$x, list(head_a = dv$ya,
+                                                      head_b = dv$yb)),
+                    verbose = 0L)
+
+  h <- model$history
+  expect_true(all(is.finite(h$train_head_a_loss)))
+  expect_true(all(is.finite(h$val_head_a_loss)))
+
+  cleanup_mo_model(model)
+})
+
+test_that("validation_data heads are matched by name, not by position", {
+  skip_on_cran()
+  d  <- make_xy(n = 64L)
+  dv <- make_xy(n = 32L)
+
+  # head_a is 2 columns and head_b is 1, so a positional read of a reversed
+  # list would mis-slice the labels; by name the order must not matter.
+  set.seed(1L)
+  m1 <- build_two_head()
+  m1 <- ggml_compile(m1, optimizer = "adam", loss = "mse", backend = "cpu")
+  m1 <- ggml_fit(m1, d$x, list(head_a = d$ya, head_b = d$yb),
+                 epochs = 3L, batch_size = 16L,
+                 validation_data = list(dv$x, list(head_a = dv$ya,
+                                                   head_b = dv$yb)),
+                 verbose = 0L)
+
+  set.seed(1L)
+  m2 <- build_two_head()
+  m2 <- ggml_compile(m2, optimizer = "adam", loss = "mse", backend = "cpu")
+  m2 <- ggml_fit(m2, d$x, list(head_a = d$ya, head_b = d$yb),
+                 epochs = 3L, batch_size = 16L,
+                 validation_data = list(dv$x, list(head_b = dv$yb,
+                                                   head_a = dv$ya)),
+                 verbose = 0L)
+
+  expect_equal(m1$history$val_head_a_loss, m2$history$val_head_a_loss,
+               tolerance = 1e-6)
+  expect_equal(m1$history$val_head_b_loss, m2$history$val_head_b_loss,
+               tolerance = 1e-6)
+
+  cleanup_mo_model(m1)
+  cleanup_mo_model(m2)
+})
+
+test_that("malformed multi-output validation_data is rejected, not aborted", {
+  skip_on_cran()
+  d  <- make_xy(n = 64L)
+  dv <- make_xy(n = 32L)
+
+  fit_with <- function(y_val) {
+    set.seed(1L)
+    model <- build_two_head()
+    model <- ggml_compile(model, optimizer = "adam", loss = "mse",
+                          backend = "cpu")
+    on.exit(cleanup_mo_model(model), add = TRUE)
+    ggml_fit(model, d$x, list(head_a = d$ya, head_b = d$yb),
+             epochs = 2L, batch_size = 16L,
+             validation_data = list(dv$x, y_val), verbose = 0L)
+  }
+
+  # A bare matrix cannot say which head it belongs to.
+  expect_error(fit_with(dv$ya), "must be a list")
+  # Too few heads.
+  expect_error(fit_with(list(dv$ya)), "one entry per output")
+  # Right count, wrong widths: head_a is 2 columns and head_b is 1.
+  expect_error(fit_with(list(dv$yb, dv$ya)), "widths")
+  # Names that match no output.
+  expect_error(fit_with(list(nope = dv$ya, head_b = dv$yb)),
+               "do not match model outputs")
+})
