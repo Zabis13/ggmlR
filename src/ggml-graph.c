@@ -349,6 +349,17 @@ static void ggml_compute_backward(
                 ggml_add_or_set(ctx, cgraph, isrc0, ggml_rms_norm_back(ctx, grad, src0, eps));
             }
         } break;
+        // DIVERGENCE from upstream: ggml has no backward for NORM, so upstream
+        // leaves LayerNorm inference-only and aborts here. LayerNorm is the
+        // normalization of the original transformer, so a graph using it has to
+        // be trainable -- hence ggml_norm_back() and its CPU/Vulkan kernels.
+        case GGML_OP_NORM: {
+            if (src0_needs_grads) {
+                float eps;
+                memcpy(&eps, tensor->op_params, sizeof(float));
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_norm_back(ctx, grad, src0, eps));
+            }
+        } break;
         case GGML_OP_MUL_MAT: {
             // https://cs231n.github.io/optimization-2/#staged
             // # forward pass

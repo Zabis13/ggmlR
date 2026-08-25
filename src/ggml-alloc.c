@@ -41,6 +41,8 @@ bool ggml_op_can_inplace(enum ggml_op op) {
         case GGML_OP_SILU_BACK:
         case GGML_OP_RMS_NORM:
         case GGML_OP_RMS_NORM_BACK:
+        // DIVERGENCE from upstream: LayerNorm backward, see ggml_norm_back().
+        case GGML_OP_NORM_BACK:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_MAX_BACK:
             return true;

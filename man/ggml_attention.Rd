@@ -9,6 +9,9 @@ ggml_attention(
   n_heads = 1L,
   causal = FALSE,
   bias = TRUE,
+  rope = FALSE,
+  rope_base = 10000,
+  dropout = 0,
   name = NULL,
   trainable = TRUE
 )
@@ -27,6 +30,12 @@ unrelated sequences, so it is rejected rather than silently applied.}
 
 \item{bias}{Logical: add a bias to the output projection (default
 \code{TRUE}).}
+
+\item{rope}{Logical: apply rotary position embedding to queries and keys
+(default \code{FALSE}). Weightless and relative, so it generalises to
+unseen sequence lengths. Needs an even \code{d_model / n_heads}.}
+
+\item{rope_base}{Rotation base for \code{rope} (default 10000).}
 
 \item{name}{Optional character name.}
 

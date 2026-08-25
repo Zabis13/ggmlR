@@ -1,3 +1,12 @@
+# ggmlR 0.8.5
+
+* **LayerNorm trains** — new `GGML_OP_NORM_BACK` (CPU and Vulkan), so `ggml_norm()` is no longer inference-only.
+* New `ggml_layer_transformer_block()`: a pre-LN encoder block in one call.
+* New layers `ggml_layer_rms_norm()`, `ggml_layer_layer_norm()`, `ggml_layer_positional_embedding()`, `ggml_layer_sequence_pooling()`.
+* `ggml_layer_attention()` gains `mask` (padding masks, unequal lengths), `rope`, `dropout` and `context`.
+* Fixed `ggml_layer_batch_norm()` aborting on sequence input.
+* Fixed multi-input functional models producing `NaN` on sequence input, and `ggml_predict()` failing on them.
+
 # ggmlR 0.8.4
 
 * Mamba backward on the GPU: `SSM_CONV_BACK` and `SSM_SCAN_BACK` now have Vulkan shaders, so state-space blocks train entirely on the GPU (`inst/examples/mamba_train_demo.R`: 21.7s -> 7.7s). Requires `d_state` 128 or 256 and Mamba-2 shapes; other shapes fall back to the CPU.

@@ -302,12 +302,17 @@ preds <- ggml_predict(model, x_new)
 | MaxPooling2D | `ggml_layer_max_pooling_2d(pool_size)` |
 | GlobalAvgPool2D | `ggml_layer_global_average_pooling_2d()` |
 | BatchNorm | `ggml_layer_batch_norm()` (RMS-normalizes, then scales/shifts) |
+| RMSNorm | `ggml_layer_rms_norm()` |
+| LayerNorm | `ggml_layer_layer_norm()` (centres as well as scales) |
 | Flatten | `ggml_layer_flatten()` |
+| SequencePooling | `ggml_layer_sequence_pooling(mode)` — `c(seq, d_model)` to `d_model` |
 | Dropout | `ggml_layer_dropout(rate)` |
 | Embedding | `ggml_layer_embedding(vocab_size, dim)` |
+| PositionalEmbedding | `ggml_layer_positional_embedding()` |
 | LSTM | `ggml_layer_lstm(units, return_sequences)` |
 | GRU | `ggml_layer_gru(units, return_sequences)` |
-| Attention | `ggml_layer_attention(d_model, n_heads, causal)` (functional API) |
+| Attention | `ggml_layer_attention(d_model, n_heads, causal, mask, rope, dropout)` (functional API) |
+| TransformerBlock | `ggml_layer_transformer_block(d_model, n_heads, ...)` (functional API) |
 
 ### Available losses
 
@@ -452,28 +457,56 @@ one dense kernel per position — the position-wise feed-forward sublayer.
 ```r
 inp <- ggml_input(shape = c(64L, 128L))         # c(seq_len, d_model)
 
-attn <- inp |> ggml_layer_attention(d_model = 128L, n_heads = 8L)
-h    <- ggml_layer_add(list(inp, attn))          # residual 1
+h <- inp |> ggml_layer_positional_embedding()
+for (i in 1:4) h <- h |> ggml_layer_transformer_block(128L, n_heads = 8L)
 
-ff   <- h  |> ggml_layer_dense(512L, activation = "relu", time_distributed = TRUE)
-ff   <- ff |> ggml_layer_dense(128L, time_distributed = TRUE)
-h2   <- ggml_layer_add(list(h, ff))              # residual 2
-
-out <- h2 |> ggml_layer_flatten() |>
+out <- h |> ggml_layer_sequence_pooling() |>
   ggml_layer_dense(2L, activation = "softmax")
 
 m <- ggml_model(inputs = inp, outputs = out)
 ```
 
-`causal = TRUE` masks keys after the query (GPT-style decoder). Cross-attention
-takes queries from one node and keys/values from another, which may have a
-different length:
+`ggml_layer_sequence_pooling()` collapses the sequence into one vector, so the
+head's width is `d_model` however long the sequence is — unlike
+`ggml_layer_flatten()`, whose output grows with it. `mode = "first"` takes
+position 1 instead of the mean, the CLS-token convention.
+
+`ggml_layer_transformer_block()` is the pre-LN block — normalize, attend,
+residual, normalize, feed-forward, residual — assembled from the layers below,
+so a block that needs to differ can still be wired by hand. `norm = "layer"`
+swaps RMSNorm for `ggml_layer_layer_norm()`, which centres as well as scales:
 
 ```r
-dec <- inp |> ggml_layer_attention(128L, n_heads = 8L, causal = TRUE)
+attn <- inp |> ggml_layer_rms_norm() |>
+  ggml_layer_attention(d_model = 128L, n_heads = 8L)
+h    <- ggml_layer_add(list(inp, attn))          # residual 1
+
+ff   <- h  |> ggml_layer_rms_norm() |>
+  ggml_layer_dense(512L, activation = "silu", time_distributed = TRUE)
+ff   <- ff |> ggml_layer_dense(128L, time_distributed = TRUE)
+h2   <- ggml_layer_add(list(h, ff))              # residual 2
+```
+
+Note that `activation = "gelu"` cannot be trained: ggml has no backward rule
+for it, so the graph builds and `ggml_fit()` then aborts. Use `"silu"`.
+
+`causal = TRUE` masks keys after the query (GPT-style decoder); `mask` takes an
+explicit additive mask of shape `c(seq_q, seq_kv)` — 0 where a key may be
+attended to, a large negative where it may not — which is how padding is
+excluded from a batch of unequal lengths. `rope = TRUE` applies rotary position
+embedding to queries and keys, encoding relative position without weights.
+`dropout` drops query-key links while training and is the identity at inference.
+Cross-attention takes queries from one node and keys/values from another, which
+may have a different length:
+
+```r
+dec <- inp |> ggml_layer_attention(128L, n_heads = 8L, causal = TRUE, rope = TRUE)
+
+pad <- ggml_input(shape = c(64L, 64L))
+enc <- inp |> ggml_layer_attention(128L, n_heads = 8L, mask = pad)
 
 ctx <- ggml_input(shape = c(96L, 128L))
-x   <- ggml_apply(list(dec, ctx), ggml_attention(128L, n_heads = 8L))
+x   <- dec |> ggml_layer_attention(128L, n_heads = 8L, context = ctx)
 ```
 
 `ggml_attention()` returns a reusable layer object — applying it to several

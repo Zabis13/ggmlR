@@ -531,6 +531,12 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_rms_norm_back_f32;
         }
         return nullptr;
+    // DIVERGENCE from upstream: LayerNorm backward, see ggml_norm_back().
+    case GGML_OP_NORM_BACK:
+        if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_norm_back_f32;
+        }
+        return nullptr;
     case GGML_OP_L2_NORM:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_l2_norm_f32;

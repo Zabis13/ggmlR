@@ -593,6 +593,7 @@ extern "C" {
         GGML_OP_RWKV_WKV6_BACK,
         GGML_OP_RWKV_WKV7_BACK,
         GGML_OP_GATED_LINEAR_ATTN_BACK,
+        GGML_OP_NORM_BACK,
 
         GGML_OP_COUNT,
     };
@@ -1430,9 +1431,20 @@ extern "C" {
             struct ggml_tensor  * a,
             float                 eps);
 
-    // a - x
-    // b - dy
+    // a - dy (gradient w.r.t. the forward output)
+    // b - x  (the forward input)
+    // NB: this is the order both ggml-graph.c and the CPU kernel use; the
+    // comment here used to say the opposite.
     GGML_API struct ggml_tensor * ggml_rms_norm_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            float                 eps);
+
+    // Backward pass of ggml_norm (LayerNorm over ne0, no gamma/beta).
+    // a - dy (gradient w.r.t. the forward output)
+    // b - x  (the forward input)
+    GGML_API struct ggml_tensor * ggml_norm_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,

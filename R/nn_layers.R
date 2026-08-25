@@ -412,6 +412,239 @@ ggml_layer_batch_norm <- function(model, eps = 1e-5, name = NULL, trainable = TR
   model
 }
 
+#' Add RMS Normalization Layer
+#'
+#' Normalizes each sample by the root mean square of its features, then scales
+#' by gamma and shifts by beta (both learnable). Unlike
+#' \code{\link{ggml_layer_batch_norm}} it does not subtract the mean and keeps
+#' no running statistics, so it behaves identically in training and inference
+#' and does not couple the samples in a batch. This is the normalization used
+#' by transformer blocks.
+#'
+#' @param model A \code{ggml_sequential_model} or a \code{ggml_tensor_node}
+#'   (functional API).
+#' @param eps Small constant for numerical stability (default 1e-5)
+#' @param name Optional character name for the layer.
+#' @param trainable Logical; whether the layer weights are updated during training.
+#' @return The model with the layer appended, or a new \code{ggml_tensor_node}
+#'   in the functional API.
+#' @seealso \code{\link{ggml_layer_batch_norm}}
+#' @export
+#' @examples
+#' \donttest{
+#' # Functional API: the normalization of a transformer block.
+#' x <- ggml_input(shape = c(10L, 32L))
+#' h <- x |> ggml_layer_rms_norm()
+#' h <- h |> ggml_layer_attention(d_model = 32L, n_heads = 4L)
+#' }
+ggml_layer_rms_norm <- function(model, eps = 1e-5, name = NULL,
+                                trainable = TRUE) {
+  # Functional API
+  if (inherits(model, "ggml_tensor_node")) {
+    node <- model
+    if (is.null(name)) name <- paste0("rms_norm_", node$id)
+    return(structure(list(
+      id        = nn_next_node_id(),
+      node_type = "rms_norm",
+      trainable = trainable,
+      config    = list(eps = eps, name = name),
+      parents   = list(node)
+    ), class = "ggml_tensor_node"))
+  }
+
+  if (is.null(name)) name <- nn_layer_name(model, "rms_norm")
+
+  layer <- list(
+    type = "rms_norm",
+    name = name,
+    trainable = trainable,
+    config = list(eps = eps),
+    input_shape = NULL,
+    output_shape = NULL,
+    weights = list(gamma = NULL, beta = NULL)
+  )
+
+  model$layers <- c(model$layers, list(layer))
+  model
+}
+
+#' Add Layer Normalization Layer
+#'
+#' Normalizes each sample over its own features -- subtract the mean, divide by
+#' the standard deviation -- then scales by gamma and shifts by beta (both
+#' learnable). Like \code{\link{ggml_layer_rms_norm}} it keeps no running
+#' statistics and does not couple the samples in a batch, but unlike it, it does
+#' centre the input. This is the normalization of the original transformer.
+#'
+#' @param model A \code{ggml_sequential_model} or a \code{ggml_tensor_node}
+#'   (functional API).
+#' @param eps Small constant for numerical stability (default 1e-5)
+#' @param name Optional character name for the layer.
+#' @param trainable Logical; whether the layer weights are updated during training.
+#' @return The model with the layer appended, or a new \code{ggml_tensor_node}
+#'   in the functional API.
+#' @seealso \code{\link{ggml_layer_rms_norm}}, \code{\link{ggml_layer_batch_norm}}
+#' @export
+#' @examples
+#' \donttest{
+#' x <- ggml_input(shape = c(10L, 32L))
+#' h <- x |> ggml_layer_layer_norm()
+#' h <- h |> ggml_layer_attention(d_model = 32L, n_heads = 4L)
+#' }
+ggml_layer_layer_norm <- function(model, eps = 1e-5, name = NULL,
+                                  trainable = TRUE) {
+  # Functional API
+  if (inherits(model, "ggml_tensor_node")) {
+    node <- model
+    if (is.null(name)) name <- paste0("layer_norm_", node$id)
+    return(structure(list(
+      id        = nn_next_node_id(),
+      node_type = "layer_norm",
+      trainable = trainable,
+      config    = list(eps = eps, name = name),
+      parents   = list(node)
+    ), class = "ggml_tensor_node"))
+  }
+
+  if (is.null(name)) name <- nn_layer_name(model, "layer_norm")
+
+  layer <- list(
+    type = "layer_norm",
+    name = name,
+    trainable = trainable,
+    config = list(eps = eps),
+    input_shape = NULL,
+    output_shape = NULL,
+    weights = list(gamma = NULL, beta = NULL)
+  )
+
+  model$layers <- c(model$layers, list(layer))
+  model
+}
+
+#' Add a Learned Positional Embedding
+#'
+#' Adds a learned vector to each position of a sequence, so that attention --
+#' which is order-blind on its own -- can tell one position from another. The
+#' table is \code{[d_model, seq_len]}, one row per position, added to the input
+#' and broadcast over the batch.
+#'
+#' Unlike \code{\link{ggml_layer_embedding}} there are no indices to look up:
+#' the position IS the place in the sequence, so this layer takes the sequence
+#' itself and returns it with the positional term added. The shape is
+#' unchanged.
+#'
+#' @param model A \code{ggml_sequential_model} or a \code{ggml_tensor_node}
+#'   carrying a sequence of shape \code{c(seq_len, d_model)}.
+#' @param name Optional character name for the layer.
+#' @param trainable Logical; whether the table is updated during training.
+#' @return The model with the layer appended, or a new \code{ggml_tensor_node}
+#'   of the same shape as the input.
+#' @seealso \code{\link{ggml_layer_attention}}, \code{\link{ggml_layer_embedding}}
+#' @export
+#' @examples
+#' \donttest{
+#' # Without this the encoder cannot distinguish "ab" from "ba".
+#' x <- ggml_input(shape = c(10L, 32L))
+#' h <- x |> ggml_layer_positional_embedding()
+#' h <- h |> ggml_layer_attention(d_model = 32L, n_heads = 4L)
+#' }
+ggml_layer_positional_embedding <- function(model, name = NULL,
+                                            trainable = TRUE) {
+  # Functional API
+  if (inherits(model, "ggml_tensor_node")) {
+    node <- model
+    if (is.null(name)) name <- paste0("pos_embed_", node$id)
+    return(structure(list(
+      id        = nn_next_node_id(),
+      node_type = "positional_embedding",
+      trainable = trainable,
+      config    = list(name = name),
+      parents   = list(node)
+    ), class = "ggml_tensor_node"))
+  }
+
+  if (is.null(name)) name <- nn_layer_name(model, "positional_embedding")
+
+  layer <- list(
+    type = "positional_embedding",
+    name = name,
+    trainable = trainable,
+    config = list(),
+    input_shape = NULL,
+    output_shape = NULL,
+    weights = list(pos = NULL)
+  )
+
+  model$layers <- c(model$layers, list(layer))
+  model
+}
+
+#' Pool a Sequence Down to One Vector
+#'
+#' Collapses the sequence axis, turning \code{c(seq_len, d_model)} into
+#' \code{d_model}: the step that lets a classification or regression head sit
+#' on top of an encoder. \code{ggml_layer_flatten()} also produces a flat
+#' vector, but keeps every position separately (\code{seq_len * d_model}
+#' features), so its width -- and the head above it -- depends on the sequence
+#' length. Pooling does not.
+#'
+#' \code{mode = "mean"} averages over the positions; every position
+#' contributes equally, which is the usual choice for an encoder without a
+#' dedicated summary token. \code{mode = "first"} takes position 1 and ignores
+#' the rest -- the CLS-token convention, where attention is expected to have
+#' gathered what matters into that position.
+#'
+#' @param model A \code{ggml_sequential_model} or a \code{ggml_tensor_node}
+#'   carrying a sequence of shape \code{c(seq_len, d_model)}.
+#' @param mode \code{"mean"} (default) or \code{"first"}.
+#' @param name Optional character name for the layer.
+#' @return The model with the layer appended, or a new \code{ggml_tensor_node}
+#'   of shape \code{d_model}.
+#' @seealso \code{\link{ggml_layer_flatten}}, \code{\link{ggml_layer_attention}}
+#' @export
+#' @examples
+#' \donttest{
+#' # An encoder with a regression head: the head's width is d_model, whatever
+#' # the sequence length turns out to be.
+#' x <- ggml_input(shape = c(10L, 32L))
+#' h <- x |> ggml_layer_attention(d_model = 32L, n_heads = 4L)
+#' h <- h |> ggml_layer_sequence_pooling()
+#' y <- h |> ggml_layer_dense(1L)
+#' }
+ggml_layer_sequence_pooling <- function(model, mode = c("mean", "first"),
+                                        name = NULL) {
+  mode <- match.arg(mode)
+
+  # Functional API
+  if (inherits(model, "ggml_tensor_node")) {
+    node <- model
+    if (is.null(name)) name <- paste0("seq_pool_", node$id)
+    return(structure(list(
+      id        = nn_next_node_id(),
+      node_type = "sequence_pooling",
+      trainable = FALSE,
+      config    = list(mode = mode, name = name),
+      parents   = list(node)
+    ), class = "ggml_tensor_node"))
+  }
+
+  if (is.null(name)) name <- nn_layer_name(model, "sequence_pooling")
+
+  layer <- list(
+    type = "sequence_pooling",
+    name = name,
+    trainable = FALSE,
+    config = list(mode = mode),
+    input_shape = NULL,
+    output_shape = NULL,
+    weights = list()
+  )
+
+  model$layers <- c(model$layers, list(layer))
+  model
+}
+
 #' Add Dense (Fully Connected) Layer
 #'
 #' @section Time-distributed application:
@@ -718,6 +951,12 @@ nn_infer_shapes <- function(model) {
       },
       "batch_norm" = {
         current_shape  # batch_norm doesn't change shape
+      },
+      "rms_norm" = {
+        current_shape  # rms_norm doesn't change shape
+      },
+      "layer_norm" = {
+        current_shape  # layer_norm doesn't change shape
       },
       "dropout" = {
         current_shape  # dropout doesn't change shape
@@ -1118,6 +1357,79 @@ nn_build_batch_norm <- function(ctx, input_tensor, layer, training = TRUE) {
   ggml_add(ctx, out, beta_r)
 }
 
+#' Is this a normalization layer carrying learnable gamma/beta?
+#'
+#' The three of them are allocated, restored, counted and saved the same way;
+#' only batch_norm additionally keeps running statistics.
+#'
+#' @param type A layer type string.
+#' @return \code{TRUE} for the gamma/beta normalization layers.
+#' @keywords internal
+nn_is_norm_type <- function(type) {
+  type %in% c("batch_norm", "rms_norm", "layer_norm")
+}
+
+#' Layer-normalize over the feature axis
+#'
+#' \code{ggml_norm()} normalizes over ne[0] -- the feature axis for every input
+#' rank the layers use -- keeping the sequence and batch axes, so one call
+#' covers flat and sequence inputs alike. Upstream ggml has no backward rule for
+#' it; ggmlR adds \code{GGML_OP_NORM_BACK} (CPU and Vulkan kernels), so a graph
+#' using this is trainable.
+#'
+#' @param ctx A \code{ggml_context}.
+#' @param x A \code{ggml_tensor} whose features lie along ne[0].
+#' @param eps Small constant added to the variance.
+#' @return A \code{ggml_tensor} of the same shape as \code{x}.
+#' @keywords internal
+nn_layer_norm_core <- function(ctx, x, eps) {
+  ggml_norm(ctx, x, eps = eps)
+}
+
+#' Reshape 1-D gamma/beta so they broadcast along the feature axis
+#'
+#' The feature axis moves with the input rank: an image is ggml
+#' \code{[W, H, C, N]} (channels at ne[2]), a sequence is \code{[size, seq, N]}
+#' (features at ne[0]), and a flat input needs no reshape at all.
+#'
+#' @param ctx A \code{ggml_context}.
+#' @param w A 1-D \code{ggml_tensor} of per-feature weights.
+#' @param input_shape The layer's input shape, in R order.
+#' @return \code{w}, reshaped to broadcast.
+#' @keywords internal
+nn_norm_broadcast <- function(ctx, w, input_shape) {
+  if (length(input_shape) == 3) {
+    ggml_reshape_4d(ctx, w, 1L, 1L, as.integer(input_shape[3]), 1L)
+  } else if (length(input_shape) == 2) {
+    ggml_reshape_3d(ctx, w, as.integer(input_shape[2]), 1L, 1L)
+  } else {
+    w
+  }
+}
+
+#' Build layer normalization forward pass
+#' @return A \code{ggml_tensor}.
+#' @keywords internal
+nn_build_layer_norm <- function(ctx, input_tensor, layer) {
+  normed  <- nn_layer_norm_core(ctx, input_tensor, layer$config$eps)
+  gamma_r <- nn_norm_broadcast(ctx, layer$weights$gamma, layer$input_shape)
+  beta_r  <- nn_norm_broadcast(ctx, layer$weights$beta,  layer$input_shape)
+  ggml_add(ctx, ggml_mul(ctx, normed, gamma_r), beta_r)
+}
+
+#' Build RMS normalization forward pass
+#'
+#' RMS-normalize, then scale by gamma and shift by beta. No batch statistics
+#' are involved, so training and inference build the same graph.
+#' @return A \code{ggml_tensor}.
+#' @keywords internal
+nn_build_rms_norm <- function(ctx, input_tensor, layer) {
+  normed  <- ggml_rms_norm(ctx, input_tensor, eps = layer$config$eps)
+  gamma_r <- nn_norm_broadcast(ctx, layer$weights$gamma, layer$input_shape)
+  beta_r  <- nn_norm_broadcast(ctx, layer$weights$beta,  layer$input_shape)
+  ggml_add(ctx, ggml_mul(ctx, normed, gamma_r), beta_r)
+}
+
 #' Build dropout forward pass
 #' @return A \code{ggml_tensor}: scaled input during training, the input unchanged when \code{training = FALSE}.
 #' @keywords internal
@@ -1158,6 +1470,8 @@ nn_build_layer <- function(ctx, input_tensor, layer, training = TRUE,
     "flatten" = nn_build_flatten(ctx, input_tensor, layer),
     "dense" = nn_build_dense(ctx, input_tensor, layer),
     "batch_norm" = nn_build_batch_norm(ctx, input_tensor, layer, training),
+    "rms_norm" = nn_build_rms_norm(ctx, input_tensor, layer),
+    "layer_norm" = nn_build_layer_norm(ctx, input_tensor, layer),
     "dropout" = nn_build_dropout(ctx, input_tensor, layer, training),
     "embedding" = nn_build_embedding(ctx_weights, ctx, input_tensor, layer),
     "lstm" = nn_build_lstm(ctx, input_tensor, layer, batch_size = NULL),

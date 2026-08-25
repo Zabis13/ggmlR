@@ -1,0 +1,77 @@
+#version 450
+
+#include "generic_head.glsl"
+#include "types.glsl"
+
+#extension GL_EXT_control_flow_attributes : enable
+#define BLOCK_SIZE 512
+
+layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer G {A_TYPE data_a[];};
+layout (binding = 1) readonly buffer X {B_TYPE data_b[];};
+layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
+
+shared FLOAT_TYPE sum_x[BLOCK_SIZE];
+shared FLOAT_TYPE sum_dd[BLOCK_SIZE];
+shared FLOAT_TYPE sum_dz[BLOCK_SIZE];
+shared FLOAT_TYPE sum_dzd[BLOCK_SIZE];
+
+void main() {
+    const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint tid = gl_LocalInvocationID.x;
+
+    // Backward of y = (x - mean(x)) / sqrt(var(x) + eps):
+    //     dL/dx = (dz - mean(dz) - y * mean(dz * y)) / sigma
+    // The mean of x is needed before the other three sums can be formed, so the
+    // row is reduced twice: once for the mean, once for the rest.
+
+    sum_x[tid] = FLOAT_TYPE(0.0f);
+    [[unroll]] for (uint col = tid; col < p.KX; col += BLOCK_SIZE) {
+        sum_x[tid] += FLOAT_TYPE(data_b[row*p.KX + col]);
+    }
+
+    barrier();
+    [[unroll]] for (int s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sum_x[tid] += sum_x[tid + s];
+        }
+        barrier();
+    }
+
+    const FLOAT_TYPE mu = sum_x[0] / FLOAT_TYPE(p.KX);
+
+    sum_dd[tid]  = FLOAT_TYPE(0.0f);
+    sum_dz[tid]  = FLOAT_TYPE(0.0f);
+    sum_dzd[tid] = FLOAT_TYPE(0.0f);
+
+    [[unroll]] for (uint col = tid; col < p.KX; col += BLOCK_SIZE) {
+        const FLOAT_TYPE gi = FLOAT_TYPE(data_a[row*p.KX + col]);
+        const FLOAT_TYPE di = FLOAT_TYPE(data_b[row*p.KX + col]) - mu;
+        sum_dd[tid]  += di * di;
+        sum_dz[tid]  += gi;
+        sum_dzd[tid] += gi * di;
+    }
+
+    barrier();
+    [[unroll]] for (int s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sum_dd[tid]  += sum_dd[tid + s];
+            sum_dz[tid]  += sum_dz[tid + s];
+            sum_dzd[tid] += sum_dzd[tid + s];
+        }
+        barrier();
+    }
+
+    const FLOAT_TYPE eps      = FLOAT_TYPE(p.param1);
+    const FLOAT_TYPE var      = sum_dd[0] / FLOAT_TYPE(p.KX);
+    const FLOAT_TYPE inv_sig  = inversesqrt(var + eps);
+    const FLOAT_TYPE mean_dz  = sum_dz[0] / FLOAT_TYPE(p.KX);
+    const FLOAT_TYPE mean_dzy = (sum_dzd[0] / FLOAT_TYPE(p.KX)) * inv_sig;
+
+    [[unroll]] for (uint col = tid; col < p.KX; col += BLOCK_SIZE) {
+        const FLOAT_TYPE gi = FLOAT_TYPE(data_a[row*p.KX + col]);
+        const FLOAT_TYPE y  = (FLOAT_TYPE(data_b[row*p.KX + col]) - mu) * inv_sig;
+        data_d[row*p.KX + col] = D_TYPE((gi - mean_dz - y * mean_dzy) * inv_sig);
+    }
+}

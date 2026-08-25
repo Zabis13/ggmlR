@@ -9,9 +9,9 @@ ggml_rms_norm_back(ctx, a, b, eps = 1e-05)
 \arguments{
 \item{ctx}{GGML context}
 
-\item{a}{Input tensor (x from forward pass)}
+\item{a}{Gradient tensor (dy from the forward output)}
 
-\item{b}{Gradient tensor (dy)}
+\item{b}{Input tensor (x from the forward pass)}
 
 \item{eps}{Epsilon for numerical stability (default 1e-5)}
 }

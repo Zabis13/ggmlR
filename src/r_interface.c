@@ -844,6 +844,7 @@ SEXP R_ggml_group_norm_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP n_groups, SEXP eps
 SEXP R_ggml_l2_norm(SEXP ctx_ptr, SEXP a_ptr, SEXP eps);
 SEXP R_ggml_l2_norm_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP eps);
 SEXP R_ggml_rms_norm_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP eps);
+SEXP R_ggml_norm_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP eps);
 SEXP R_ggml_soft_max(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_soft_max_inplace(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_soft_max_ext(SEXP ctx_ptr, SEXP a_ptr, SEXP mask_ptr, SEXP scale, SEXP max_bias);
@@ -1392,6 +1393,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_l2_norm",        (DL_FUNC) &R_ggml_l2_norm,        3},
     {"R_ggml_l2_norm_inplace",(DL_FUNC) &R_ggml_l2_norm_inplace,3},
     {"R_ggml_rms_norm_back",  (DL_FUNC) &R_ggml_rms_norm_back,  4},
+    {"R_ggml_norm_back",      (DL_FUNC) &R_ggml_norm_back,      4},
 
     // Softmax
     {"R_ggml_soft_max",             (DL_FUNC) &R_ggml_soft_max,             2},

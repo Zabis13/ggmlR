@@ -1809,6 +1809,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_rms_norm_back(params, tensor);
             } break;
+        // DIVERGENCE from upstream: LayerNorm backward, see ggml_norm_back().
+        case GGML_OP_NORM_BACK:
+            {
+                ggml_compute_forward_norm_back(params, tensor);
+            } break;
         case GGML_OP_GROUP_NORM:
             {
                 ggml_compute_forward_group_norm(params, tensor);
@@ -2322,6 +2327,8 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_NORM:
         case GGML_OP_RMS_NORM:
         case GGML_OP_RMS_NORM_BACK:
+        // DIVERGENCE from upstream: LayerNorm backward, see ggml_norm_back().
+        case GGML_OP_NORM_BACK:
         case GGML_OP_L2_NORM:
         case GGML_OP_GROUP_NORM:
         case GGML_OP_CONCAT:

@@ -632,7 +632,7 @@ nn_build_graph <- function(model, batch_size, training = TRUE,
       ggml_set_name(layer$weights$weight, paste0("dense_", i, "_weight"))
       ggml_set_name(layer$weights$bias, paste0("dense_", i, "_bias"))
 
-    } else if (layer$type == "batch_norm") {
+    } else if (nn_is_norm_type(layer$type)) {
       # Determine number of features for gamma/beta
       n_features <- if (length(layer$input_shape) == 1) layer$input_shape
                     else if (length(layer$input_shape) == 2) layer$input_shape[2]
@@ -640,15 +640,19 @@ nn_build_graph <- function(model, batch_size, training = TRUE,
 
       layer$weights$gamma <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_features)
       layer$weights$beta <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_features)
-      ggml_set_name(layer$weights$gamma, paste0("bn_", i, "_gamma"))
-      ggml_set_name(layer$weights$beta, paste0("bn_", i, "_beta"))
+      pfx <- switch(layer$type, rms_norm = "rmsn_", layer_norm = "ln_", "bn_")
+      ggml_set_name(layer$weights$gamma, paste0(pfx, i, "_gamma"))
+      ggml_set_name(layer$weights$beta, paste0(pfx, i, "_beta"))
 
       # Running estimates used at inference time. Not parameters: they are
-      # updated by an EMA during training, never by the optimizer.
-      layer$weights$running_mean <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_features)
-      layer$weights$running_var  <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_features)
-      ggml_set_name(layer$weights$running_mean, paste0("bn_", i, "_running_mean"))
-      ggml_set_name(layer$weights$running_var, paste0("bn_", i, "_running_var"))
+      # updated by an EMA during training, never by the optimizer. RMS norm has
+      # no batch statistics, so it needs none of this.
+      if (layer$type == "batch_norm") {
+        layer$weights$running_mean <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_features)
+        layer$weights$running_var  <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_features)
+        ggml_set_name(layer$weights$running_mean, paste0("bn_", i, "_running_mean"))
+        ggml_set_name(layer$weights$running_var, paste0("bn_", i, "_running_var"))
+      }
 
     } else if (layer$type == "lstm") {
       # input_shape: c(seq_len, input_size)
@@ -781,7 +785,7 @@ nn_build_graph <- function(model, batch_size, training = TRUE,
         ggml_set_param(layer$weights$bias)
       }
 
-    } else if (layer$type == "batch_norm") {
+    } else if (nn_is_norm_type(layer$type)) {
       if (has_weights_data && !is.null(old_layer$weights_data$gamma)) {
         ggml_backend_tensor_set_data(layer$weights$gamma, old_layer$weights_data$gamma)
         ggml_backend_tensor_set_data(layer$weights$beta, old_layer$weights_data$beta)
@@ -798,19 +802,22 @@ nn_build_graph <- function(model, batch_size, training = TRUE,
       }
 
       # Running estimates: restore when available, else start from the identity
-      # transform (mean 0, variance 1), matching ag_batch_norm().
-      nbn <- ggml_nelements(layer$weights$running_mean)
-      if (has_weights_data && !is.null(old_layer$weights_data$running_mean)) {
-        ggml_backend_tensor_set_data(layer$weights$running_mean, old_layer$weights_data$running_mean)
-        ggml_backend_tensor_set_data(layer$weights$running_var, old_layer$weights_data$running_var)
-      } else if (has_trained_weights && !is.null(old_layer$weights$running_mean)) {
-        ggml_backend_tensor_set_data(layer$weights$running_mean,
-          ggml_backend_tensor_get_data(old_layer$weights$running_mean))
-        ggml_backend_tensor_set_data(layer$weights$running_var,
-          ggml_backend_tensor_get_data(old_layer$weights$running_var))
-      } else {
-        nn_init_zeros(layer$weights$running_mean)
-        ggml_backend_tensor_set_data(layer$weights$running_var, rep(1.0, nbn))
+      # transform (mean 0, variance 1), matching ag_batch_norm(). RMS norm keeps
+      # no batch statistics, so it has no such tensors to restore.
+      if (!is.null(layer$weights$running_mean)) {
+        nbn <- ggml_nelements(layer$weights$running_mean)
+        if (has_weights_data && !is.null(old_layer$weights_data$running_mean)) {
+          ggml_backend_tensor_set_data(layer$weights$running_mean, old_layer$weights_data$running_mean)
+          ggml_backend_tensor_set_data(layer$weights$running_var, old_layer$weights_data$running_var)
+        } else if (has_trained_weights && !is.null(old_layer$weights$running_mean)) {
+          ggml_backend_tensor_set_data(layer$weights$running_mean,
+            ggml_backend_tensor_get_data(old_layer$weights$running_mean))
+          ggml_backend_tensor_set_data(layer$weights$running_var,
+            ggml_backend_tensor_get_data(old_layer$weights$running_var))
+        } else {
+          nn_init_zeros(layer$weights$running_mean)
+          ggml_backend_tensor_set_data(layer$weights$running_var, rep(1.0, nbn))
+        }
       }
 
       if (isTRUE(layer$trainable)) {
@@ -1642,7 +1649,7 @@ ggml_save_weights <- function(model, path) {
         layer_weights$weight <- ggml_backend_tensor_get_data(layer$weights$weight)
         layer_weights$bias <- ggml_backend_tensor_get_data(layer$weights$bias)
       }
-    } else if (layer$type == "batch_norm") {
+    } else if (nn_is_norm_type(layer$type)) {
       if (!is.null(layer$weights$gamma)) {
         layer_weights$gamma <- ggml_backend_tensor_get_data(layer$weights$gamma)
         layer_weights$beta <- ggml_backend_tensor_get_data(layer$weights$beta)
@@ -1865,7 +1872,7 @@ nn_count_layer_params <- function(layer) {
       fan_in <- if (length(layer$input_shape) == 1) layer$input_shape else prod(layer$input_shape)
       fan_in * layer$config$units + layer$config$units
     } else 0
-  } else if (layer$type == "batch_norm") {
+  } else if (nn_is_norm_type(layer$type)) {
     if (!is.null(layer$input_shape)) {
       n <- if (length(layer$input_shape) == 1) layer$input_shape
            else if (length(layer$input_shape) == 2) layer$input_shape[2]
@@ -2006,7 +2013,8 @@ ggml_save_model.ggml_sequential_model <- function(model, path) {
     } else if (l$type == "dense" && !is.null(l$weights$weight)) {
       wdata$weight <- ggml_backend_tensor_get_data(l$weights$weight)
       wdata$bias   <- ggml_backend_tensor_get_data(l$weights$bias)
-    } else if (l$type == "batch_norm" && !is.null(l$weights$gamma)) {
+    } else if (nn_is_norm_type(l$type) &&
+               !is.null(l$weights$gamma)) {
       wdata$gamma <- ggml_backend_tensor_get_data(l$weights$gamma)
       wdata$beta  <- ggml_backend_tensor_get_data(l$weights$beta)
       # Running estimates are part of the model: without them a reloaded model

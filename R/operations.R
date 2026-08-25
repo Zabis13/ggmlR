@@ -838,13 +838,31 @@ ggml_l2_norm_inplace <- function(ctx, a, eps = 1e-5) {
 #' Used in training for computing gradients.
 #'
 #' @param ctx GGML context
-#' @param a Input tensor (x from forward pass)
-#' @param b Gradient tensor (dy)
+#' @param a Gradient tensor (dy from the forward output)
+#' @param b Input tensor (x from the forward pass)
 #' @param eps Epsilon for numerical stability (default 1e-5)
 #' @return Tensor representing the gradient with respect to input
 #' @export
 ggml_rms_norm_back <- function(ctx, a, b, eps = 1e-5) {
   .Call("R_ggml_rms_norm_back", ctx, a, b, as.numeric(eps), PACKAGE = "ggmlR")
+}
+
+#' Layer Norm Backward (Graph)
+#'
+#' Creates a graph node for the backward pass of \code{\link{ggml_norm}}, i.e.
+#' of LayerNorm without gamma/beta. Upstream ggml has no backward for
+#' \code{GGML_OP_NORM}; ggmlR adds it with CPU and Vulkan kernels, which is what
+#' makes \code{\link{ggml_layer_layer_norm}} trainable.
+#'
+#' @param ctx GGML context
+#' @param a Gradient tensor (dy from the forward output)
+#' @param b Input tensor (x from the forward pass)
+#' @param eps Epsilon for numerical stability (default 1e-5)
+#' @return Tensor representing the gradient with respect to input
+#' @seealso \code{\link{ggml_norm}}, \code{\link{ggml_rms_norm_back}}
+#' @export
+ggml_norm_back <- function(ctx, a, b, eps = 1e-5) {
+  .Call("R_ggml_norm_back", ctx, a, b, as.numeric(eps), PACKAGE = "ggmlR")
 }
 
 # ============================================================================

@@ -650,9 +650,9 @@ if (identical(best$kind, "ssm")) {
 }
 survived  <- as.integer(prob_test[, 1] > 0.5)
 
-submission <- file.path(tempdir(), "submission.csv")
-write.csv(data.frame(PassengerId = test_data$PassengerId, Survived = survived),
-          submission, row.names = FALSE)
-
-cat(sprintf("Submission: %d rows -> %s  (survival rate %.1f%%)\n",
-            length(survived), submission, 100 * mean(survived)))
+write.csv(
+  data.frame(PassengerId = test_data$PassengerId, Survived = survived),
+  "submission.csv", row.names = FALSE
+)
+cat(sprintf("Submission (%s): %d rows -> submission.csv  (survival rate %.1f%%)\n",
+            best_nm, length(survived), 100 * mean(survived)))

@@ -3987,6 +3987,103 @@ void ggml_compute_forward_rms_norm_back(
     }
 }
 
+// ggml_compute_forward_norm_back
+//
+// Backward pass of ggml_norm, i.e. of LayerNorm without gamma/beta:
+//
+//     mu    = mean(x)
+//     var   = mean((x - mu)^2)
+//     sigma = sqrt(var + eps)
+//     y     = (x - mu) / sigma
+//
+// Differentiating, with dz = dL/dy:
+//
+//     dL/dx = (dz - mean(dz) - y * mean(dz * y)) / sigma
+//
+// The two means couple every element of a row, which is why the row is reduced
+// twice before anything is written. Checked against finite differences.
+
+static void ggml_compute_forward_norm_back_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0]; // gradients from forward pass output
+    const ggml_tensor * src1 = dst->src[1]; // src1 from forward pass
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst) && ggml_are_same_shape(src0, src1));
+
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                // src1 is same shape as src0 => same indices
+                const int64_t i11 = i01;
+                const int64_t i12 = i02;
+                const int64_t i13 = i03;
+
+                const float * dz = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                const float * x  = (float *) ((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13);
+                float       * dx = (float *) ((char *)  dst->data + i01*nb1  + i02*nb2  + i03*nb3);
+
+                ggml_float sum_x = 0.0;
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    sum_x += (ggml_float)x[i00];
+                }
+                const float mu = (float)(sum_x/ne00);
+
+                ggml_float sum_dd = 0.0;   // sum (x - mu)^2
+                ggml_float sum_dz = 0.0;   // sum dz
+                ggml_float sum_dzd = 0.0;  // sum dz * (x - mu)
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    const float d = x[i00] - mu;
+                    sum_dd  += (ggml_float)(d*d);
+                    sum_dz  += (ggml_float)dz[i00];
+                    sum_dzd += (ggml_float)(dz[i00]*d);
+                }
+
+                const float var     = (float)(sum_dd/ne00);
+                const float inv_sig = 1.0f/sqrtf(var + eps);
+                const float mean_dz = (float)(sum_dz/ne00);
+                // mean(dz * y) with y = (x - mu) * inv_sig, folded into one pass
+                const float mean_dzy = (float)(sum_dzd/ne00)*inv_sig;
+
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    const float y = (x[i00] - mu)*inv_sig;
+                    dx[i00] = (dz[i00] - mean_dz - y*mean_dzy)*inv_sig;
+                }
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_norm_back(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_norm_back_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_group_norm
 
 static void ggml_compute_forward_group_norm_f32(

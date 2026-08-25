@@ -1258,6 +1258,24 @@ struct ggml_tensor * ggml_rms_norm_back(
     return result;
 }
 
+// ggml_norm_back
+
+struct ggml_tensor * ggml_norm_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        float                 eps) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params(result, &eps, sizeof(eps));
+
+    result->op     = GGML_OP_NORM_BACK;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
 // ggml_group_norm
 
 static struct ggml_tensor * ggml_group_norm_impl(

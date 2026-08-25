@@ -637,6 +637,26 @@ SEXP R_ggml_rms_norm_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP eps) {
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+// Layer Norm backward - for training
+SEXP R_ggml_norm_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP eps) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+    float epsilon = (float) asReal(eps);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+
+    struct ggml_tensor * result = ggml_norm_back(ctx, a, b, epsilon);
+
+    if (result == NULL) {
+        error("Failed to create norm_back operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // ============================================================================
 // Softmax
 // ============================================================================

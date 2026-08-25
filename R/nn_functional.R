@@ -324,6 +324,10 @@ ggml_gru <- function(units, return_sequences = FALSE,
 #'   unrelated sequences, so it is rejected rather than silently applied.
 #' @param bias Logical: add a bias to the output projection (default
 #'   \code{TRUE}).
+#' @param rope Logical: apply rotary position embedding to queries and keys
+#'   (default \code{FALSE}). Weightless and relative, so it generalises to
+#'   unseen sequence lengths. Needs an even \code{d_model / n_heads}.
+#' @param rope_base Rotation base for \code{rope} (default 10000).
 #' @param name Optional character name.
 #' @param trainable Logical; whether weights are updated during training.
 #' @return A \code{ggml_layer} object.
@@ -344,6 +348,7 @@ ggml_gru <- function(units, return_sequences = FALSE,
 #' o3   <- ggml_apply(list(x1, ctx), ggml_attention(32L, 4L))
 #' }
 ggml_attention <- function(d_model, n_heads = 1L, causal = FALSE, bias = TRUE,
+                           rope = FALSE, rope_base = 10000, dropout = 0,
                            name = NULL, trainable = TRUE) {
   d_model <- as.integer(d_model)
   n_heads <- as.integer(n_heads)
@@ -359,16 +364,25 @@ ggml_attention <- function(d_model, n_heads = 1L, causal = FALSE, bias = TRUE,
     stop("'d_model' (", d_model, ") must be divisible by 'n_heads' (", n_heads,
          ").", call. = FALSE)
   }
+  # RoPE rotates the head's features in pairs, so an odd head width would
+  # leave one feature without a partner to rotate against.
+  if (isTRUE(rope) && (d_model %/% n_heads) %% 2L != 0L) {
+    stop("'rope' needs an even head width, but d_model / n_heads = ",
+         d_model %/% n_heads, " is odd.", call. = FALSE)
+  }
   if (is.null(name)) name <- nn_auto_name("attention")
   structure(
     list(
       layer_id  = nn_next_layer_id(),
       node_type = "attention",
       name      = name,
-      config    = list(d_model = d_model,
-                       n_heads = n_heads,
-                       causal  = isTRUE(causal),
-                       bias    = isTRUE(bias)),
+      config    = list(d_model   = d_model,
+                       n_heads   = n_heads,
+                       causal    = isTRUE(causal),
+                       bias      = isTRUE(bias),
+                       rope      = isTRUE(rope),
+                       rope_base = as.numeric(rope_base)),
+                       dropout   = as.numeric(dropout),
       trainable = trainable
     ),
     class = "ggml_layer"
@@ -423,10 +437,10 @@ ggml_apply <- function(tensor, layer) {
     stop("'", layer$node_type, "' takes a single input; a list of ",
          length(parents), " was given.", call. = FALSE)
   }
-  if (identical(layer$node_type, "attention") && length(parents) > 2L) {
-    stop("attention takes one input (self-attention) or two ",
-         "(cross-attention: query, context); ", length(parents), " were given.",
-         call. = FALSE)
+  if (identical(layer$node_type, "attention") && length(parents) > 3L) {
+    stop("attention takes one input (self-attention), two (cross-attention: ",
+         "query, context) or three (query, context, mask); ", length(parents),
+         " were given.", call. = FALSE)
   }
   structure(
     list(
@@ -575,6 +589,26 @@ ggml_model <- function(inputs, outputs) {
 #' @param n_heads Integer, number of attention heads (default 1).
 #' @param causal Logical: mask out positions after the current one, making the
 #'   layer autoregressive (default \code{FALSE}). Self-attention only.
+#' @param context Optional \code{ggml_tensor_node} to take keys and values
+#'   from, making the layer cross-attention: \code{x} supplies the queries and
+#'   decides the output length, \code{context} the keys and values. The two may
+#'   differ in sequence length but must share \code{d_model}. Equivalent to
+#'   passing \code{list(query, context)} as \code{x}.
+#' @param mask Optional \code{ggml_tensor_node} of shape
+#'   \code{c(seq_q, seq_kv)} -- one row per query, holding that query's entry
+#'   for every key -- added to the scores before the softmax: use \code{0}
+#'   where a key may be attended to and a large negative value
+#'   (\code{-1e9}) where it may not. This is how padding is excluded when a
+#'   batch holds sequences of different lengths. Combines with \code{causal}.
+#' @param rope Logical: apply rotary position embedding to the queries and keys
+#'   (default \code{FALSE}). Unlike
+#'   \code{\link{ggml_layer_positional_embedding}} this has no weights and
+#'   encodes RELATIVE position -- the score between two tokens depends on the
+#'   distance between them -- so it carries over to sequence lengths the model
+#'   was not trained on. Needs an even \code{d_model / n_heads}.
+#' @param rope_base Rotation base for \code{rope} (default 10000, the value
+#'   used by LLaMA-family models). Larger values stretch the rotation over
+#'   longer contexts.
 #' @param bias Logical: add a bias to the output projection (default
 #'   \code{TRUE}).
 #' @param name Optional layer name.
@@ -594,13 +628,134 @@ ggml_model <- function(inputs, outputs) {
 #'
 #' # GPT-style causal self-attention.
 #' dec <- x |> ggml_layer_attention(32L, n_heads = 4L, causal = TRUE)
+#'
+#' # Padding mask, fed as a second input alongside the sequence.
+#' pad <- ggml_input(shape = c(10L, 10L), name = "mask")
+#' enc <- x |> ggml_layer_attention(32L, n_heads = 4L, mask = pad)
 #' }
 ggml_layer_attention <- function(x, d_model, n_heads = 1L, causal = FALSE,
-                                 bias = TRUE, name = NULL, trainable = TRUE) {
+                                 context = NULL, mask = NULL, rope = FALSE,
+                                 rope_base = 10000, dropout = 0, bias = TRUE,
+                                 name = NULL, trainable = TRUE) {
   # Built from the layer object so the two forms cannot validate differently.
   layer <- ggml_attention(d_model = d_model, n_heads = n_heads, causal = causal,
-                          bias = bias, name = name, trainable = trainable)
-  ggml_apply(x, layer)
+                          bias = bias, rope = rope, rope_base = rope_base,
+                          dropout = dropout,
+                          name = name, trainable = trainable)
+
+  # Queries and keys/values, however they were given: `context` names them,
+  # a list of two is the older positional form.
+  parents <- if (!is.null(context)) {
+    if (!inherits(x, "ggml_tensor_node")) {
+      stop("attention: give the query as a single node when using 'context'.",
+           call. = FALSE)
+    }
+    list(x, context)
+  } else if (inherits(x, "ggml_tensor_node")) {
+    if (is.null(mask)) return(ggml_apply(x, layer))
+    # The mask rides along as a third parent, so self-attention needs the
+    # query repeated in the context slot to keep the positions unambiguous.
+    list(x, x)
+  } else {
+    x
+  }
+
+  if (length(parents) != 2L) {
+    stop("attention: 'x' must be one node, list(query, context), or a query ",
+         "with 'context' given separately.", call. = FALSE)
+  }
+  if (is.null(mask)) ggml_apply(parents, layer)
+  else ggml_apply(c(parents, list(mask)), layer)
+}
+
+#' Add a Transformer Encoder Block
+#'
+#' The standard pre-LN encoder block, in one call: normalize, attend, add the
+#' residual, normalize again, run the position-wise feed-forward, add the
+#' second residual. Composed from the existing layers -- there is no new node
+#' type -- so the pieces can still be wired by hand when a block needs to
+#' differ.
+#'
+#' @section Pre-LN vs post-LN:
+#' Normalization comes BEFORE each sublayer, not after, which is what makes
+#' deep stacks trainable without a warmup schedule: the residual path stays
+#' un-normalized from input to output, so the gradient reaches the early layers
+#' undiminished. The original 2017 transformer normalized after; every large
+#' model since does it this way.
+#'
+#' @param x A \code{ggml_tensor_node} of shape \code{c(seq_len, d_model)}.
+#' @param d_model Integer, model width. Must match the input's feature
+#'   dimension and be divisible by \code{n_heads}.
+#' @param n_heads Integer, number of attention heads (default 1).
+#' @param ff_dim Integer, width of the feed-forward hidden layer. Defaults to
+#'   \code{4 * d_model}, the usual ratio.
+#' @param activation Feed-forward activation (default \code{"silu"}).
+#'   NB: \code{"gelu"}, \code{"hardsigmoid"} and \code{"hardswish"} have no
+#'   backward rule in ggml: the graph builds, then training aborts. Use
+#'   \code{"silu"} (the smooth one that does have a gradient), \code{"relu"},
+#'   \code{"tanh"} or \code{"sigmoid"}.
+#' @param norm \code{"rms"} (default) or \code{"layer"}: which normalization to
+#'   put in front of each sublayer.
+#' @param causal Logical: causal self-attention (default \code{FALSE}).
+#' @param mask Optional attention mask node, \code{c(seq_q, seq_kv)}; see
+#'   \code{\link{ggml_layer_attention}}.
+#' @param rope Logical: rotary position embedding on queries and keys
+#'   (default \code{FALSE}).
+#' @param dropout Dropout rate applied to each sublayer's output before it is
+#'   added back to the residual (default 0, meaning no dropout).
+#' @param name Optional prefix for the layers inside the block.
+#' @return A new \code{ggml_tensor_node} of shape \code{c(seq_len, d_model)},
+#'   so blocks stack directly.
+#' @seealso \code{\link{ggml_layer_attention}},
+#'   \code{\link{ggml_layer_sequence_pooling}}
+#' @export
+#' @examples
+#' \donttest{
+#' # A two-block encoder with a pooled regression head.
+#' x <- ggml_input(shape = c(10L, 32L))
+#' h <- x |> ggml_layer_positional_embedding()
+#' for (i in 1:2) h <- h |> ggml_layer_transformer_block(32L, n_heads = 4L)
+#' y <- h |> ggml_layer_sequence_pooling() |> ggml_layer_dense(1L)
+#' }
+ggml_layer_transformer_block <- function(x, d_model, n_heads = 1L,
+                                         ff_dim = NULL, activation = "silu",
+                                         norm = c("rms", "layer"),
+                                         causal = FALSE, mask = NULL,
+                                         rope = FALSE, dropout = 0,
+                                         attn_dropout = dropout,
+                                         name = NULL) {
+  norm <- match.arg(norm)
+  d_model <- as.integer(d_model)
+  if (is.null(ff_dim)) ff_dim <- 4L * d_model
+  ff_dim <- as.integer(ff_dim)
+  if (is.null(name)) name <- nn_auto_name("transformer_block")
+
+  nm <- function(suffix) paste0(name, "_", suffix)
+  norm_layer <- function(node, suffix) {
+    if (identical(norm, "rms")) ggml_layer_rms_norm(node, name = nm(suffix))
+    else ggml_layer_layer_norm(node, name = nm(suffix))
+  }
+  # A rate of 0 would still build a scale node that does nothing.
+  maybe_dropout <- function(node, suffix) {
+    if (dropout > 0) ggml_layer_dropout(node, rate = dropout, name = nm(suffix))
+    else node
+  }
+
+  # Attention sublayer.
+  h <- norm_layer(x, "norm1")
+  h <- ggml_layer_attention(h, d_model, n_heads = n_heads, causal = causal,
+                            mask = mask, rope = rope,
+                            dropout = attn_dropout, name = nm("attn"))
+  h <- maybe_dropout(h, "drop1")
+  h <- ggml_layer_add(list(x, h), name = nm("res1"))
+
+  # Feed-forward sublayer, applied at every position with shared weights.
+  f <- norm_layer(h, "norm2")
+  f <- ggml_layer_dense(f, ff_dim, activation = activation,
+                        time_distributed = TRUE, name = nm("ff1"))
+  f <- ggml_layer_dense(f, d_model, time_distributed = TRUE, name = nm("ff2"))
+  f <- maybe_dropout(f, "drop2")
+  ggml_layer_add(list(h, f), name = nm("res2"))
 }
 
 # ============================================================================
@@ -957,6 +1112,10 @@ nn_functional_weight_elements <- function(node, parent_shapes) {
     },
     "embedding" = as.numeric(node$config$dim) * as.numeric(node$config$vocab_size),
     "batch_norm" = 2 * fan_in,                     # gamma + beta
+    "rms_norm"   = 2 * fan_in,                     # gamma + beta
+    "layer_norm" = 2 * fan_in,                     # gamma + beta
+    "positional_embedding" = fan_in,               # d_model per position = prod(psh)
+    "sequence_pooling" = 0,                        # no weights
     "attention" = {
       # Four d_model x d_model projections (q, k, v, out) plus the output bias.
       d <- as.numeric(node$config$d_model)
@@ -1016,6 +1175,21 @@ nn_functional_output_shape <- function(node, parent_shapes) {
       as.integer(prod(psh))
     },
     "batch_norm" = parent_shapes[[1]],
+    "rms_norm"   = parent_shapes[[1]],
+    "layer_norm" = parent_shapes[[1]],
+    "positional_embedding" = parent_shapes[[1]],
+    "sequence_pooling" = {
+      # The seq axis is collapsed and d_model is left. Checked here rather than
+      # only in the build: a flat parent would give NA and the graph-size
+      # estimate downstream would ask for an absurd allocation.
+      psh <- parent_shapes[[1]]
+      if (length(psh) != 2L) {
+        stop("sequence_pooling expects a sequence input of shape ",
+             "c(seq_len, d_model); got a shape with ", length(psh),
+             " dimension(s).", call. = FALSE)
+      }
+      as.integer(psh[2])
+    },
     "add" = parent_shapes[[1]],
     "attention" = {
       # Queries decide the output length, so cross-attention returns the query
@@ -1215,7 +1389,13 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       list(tensor = out, weights = list(weight = W, bias = b))
     },
 
-    "batch_norm" = {
+    # Both share one implementation because the functional batch_norm has always
+    # been RMS-normalization (ggml_rms_norm below), not the mean/variance
+    # normalization its sequential namesake does. rms_norm is the honest name;
+    # batch_norm stays as an alias so existing graphs keep building.
+    "batch_norm" = ,
+    "layer_norm" = ,
+    "rms_norm" = {
       parent_id <- node$parents[[1]]$id
       input_t   <- built_tensors[[parent_id]]
       psh       <- built_shapes[[parent_id]]
@@ -1235,18 +1415,18 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       }
 
       eps    <- node$config$eps
-      normed <- ggml_rms_norm(ctx_compute, input_t, eps = eps)
-
-      if (length(psh) == 3L) {
-        gamma_r <- ggml_reshape_4d(ctx_compute, gamma, 1L, 1L, as.integer(psh[3]), 1L)
-        beta_r  <- ggml_reshape_4d(ctx_compute, beta,  1L, 1L, as.integer(psh[3]), 1L)
-      } else if (length(psh) == 2L) {
-        gamma_r <- ggml_reshape_3d(ctx_compute, gamma, 1L, as.integer(psh[2]), 1L)
-        beta_r  <- ggml_reshape_3d(ctx_compute, beta,  1L, as.integer(psh[2]), 1L)
+      normed <- if (node$node_type == "layer_norm") {
+        nn_layer_norm_core(ctx_compute, input_t, eps)
       } else {
-        gamma_r <- gamma
-        beta_r  <- beta
+        ggml_rms_norm(ctx_compute, input_t, eps = eps)
       }
+
+      # gamma/beta sit on the feature axis and broadcast over the rest. That
+      # axis moves with the rank: R [H, W, C] becomes ggml [W, H, C, N]
+      # (channels at ne2), R [seq, features] becomes [features, seq, N]
+      # (features at ne0) -- see the "input" branch above.
+      gamma_r <- nn_norm_broadcast(ctx_compute, gamma, psh)
+      beta_r  <- nn_norm_broadcast(ctx_compute, beta,  psh)
 
       out <- ggml_mul(ctx_compute, normed, gamma_r)
       out <- ggml_add(ctx_compute, out, beta_r)
@@ -1269,6 +1449,12 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       kv_id   <- if (length(node$parents) > 1L) node$parents[[2]]$id else q_id
       kv_in   <- built_tensors[[kv_id]]
       kv_psh  <- built_shapes[[kv_id]]
+      # An optional third parent is an additive mask over the scores, the way
+      # padding is excluded from attention: 0 where a key may be attended to,
+      # -Inf (or a large negative) where it may not.
+      mask_id <- if (length(node$parents) > 2L) node$parents[[3]]$id else NULL
+      mask_in <- if (!is.null(mask_id)) built_tensors[[mask_id]] else NULL
+      mask_psh <- if (!is.null(mask_id)) built_shapes[[mask_id]] else NULL
 
       d_model <- as.integer(node$config$d_model)
       n_heads <- as.integer(node$config$n_heads)
@@ -1277,6 +1463,9 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       seq_kv  <- as.integer(kv_psh[1])
       causal  <- isTRUE(node$config$causal)
       use_b   <- isTRUE(node$config$bias)
+      use_rope <- isTRUE(node$config$rope)
+      use_rope_base <- if (is.null(node$config$rope_base)) 10000
+                       else as.numeric(node$config$rope_base)
       nm      <- if (!is.null(node$config$name)) node$config$name else node$id
 
       # Masking by position compares a query index against a key index, which
@@ -1285,6 +1474,18 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
         stop("attention: 'causal' applies to self-attention; a cross-attention ",
              "layer has two unrelated sequences to compare positions in.",
              call. = FALSE)
+      }
+
+      # The mask is added to the scores, so it has to line up with them. In R
+      # order that is c(seq_q, seq_kv) -- one row per query, holding that
+      # query's entry for every key -- because R's second axis is ggml's ne0,
+      # and scores' ne0 is the key axis.
+      if (!is.null(mask_psh) &&
+          !identical(as.integer(mask_psh),
+                     c(as.integer(q_psh[1]), as.integer(kv_psh[1])))) {
+        stop("attention: mask shape must be c(seq_q, seq_kv) = c(",
+             q_psh[1], ", ", kv_psh[1], "), but it is c(",
+             paste(mask_psh, collapse = ", "), ").", call. = FALSE)
       }
 
       if (!is.null(reuse_weights)) {
@@ -1321,17 +1522,44 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       K <- ggml_mul_mat(ctx_compute, W_k, kv_3d)
       V <- ggml_mul_mat(ctx_compute, W_v, kv_3d)
 
+      # Positions 0..seq-1 for RoPE. ggml_rope() indexes them by ne[2], which
+      # is the sequence axis of the reshaped-but-not-yet-permuted tensor below,
+      # so the rotation goes in there and costs no extra permute. They are a
+      # constant, not a parameter: created once in ctx_weights and never
+      # trained. Query and key sequences may differ (cross-attention), so each
+      # length gets its own vector.
+      pos_cache <- list()
+      pos_for <- function(seq_len_i) {
+        key <- as.character(seq_len_i)
+        if (is.null(pos_cache[[key]])) {
+          p <- ggml_new_tensor_1d(ctx_weights, GGML_TYPE_I32, seq_len_i)
+          ggml_set_name(p, paste0(nm, "_rope_pos", seq_len_i))
+          pos_cache[[key]] <<- p
+        }
+        pos_cache[[key]]
+      }
+
       # Split the feature axis into heads and move the head axis out to dim 2,
       # where mul_mat batches over it: [d_model, seq, N] -> [d_head, seq, n_heads, N].
       # ggml_permute()'s arguments are DESTINATION positions: source axis 1
       # (n_heads) goes to position 2, source axis 2 (seq) to position 1.
-      to_heads <- function(t, seq_len_i) {
+      to_heads <- function(t, seq_len_i, rotate = FALSE) {
         t4 <- ggml_reshape_4d(ctx_compute, t, d_head, n_heads, seq_len_i, batch_size)
+        if (rotate) {
+          t4 <- ggml_rope_ext(ctx_compute, t4, pos_for(seq_len_i), NULL,
+                              n_dims = d_head, mode = GGML_ROPE_TYPE_NORM,
+                              n_ctx_orig = seq_len_i,
+                              freq_base = use_rope_base, freq_scale = 1.0,
+                              ext_factor = 0.0, attn_factor = 1.0,
+                              beta_fast = 32.0, beta_slow = 1.0)
+        }
         ggml_cont(ctx_compute, ggml_permute(ctx_compute, t4, 0L, 2L, 1L, 3L))
       }
-      Qh <- to_heads(Q, seq_q)    # [d_head, seq_q,  n_heads, N]
-      Kh <- to_heads(K, seq_kv)   # [d_head, seq_kv, n_heads, N]
-      Vh <- to_heads(V, seq_kv)   # [d_head, seq_kv, n_heads, N]
+      # Only queries and keys are rotated: RoPE works by making the score
+      # <q_i, k_j> depend on i - j, and values carry no position of their own.
+      Qh <- to_heads(Q, seq_q,  rotate = use_rope)   # [d_head, seq_q,  n_heads, N]
+      Kh <- to_heads(K, seq_kv, rotate = use_rope)   # [d_head, seq_kv, n_heads, N]
+      Vh <- to_heads(V, seq_kv)                      # [d_head, seq_kv, n_heads, N]
 
       # scores[j, i] = <k_j, q_i>: ggml_mul_mat(A, B) contracts ne[0] of both,
       # so this is [seq_kv, seq_q, n_heads, N] -- one row per query, holding
@@ -1347,8 +1575,34 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       # Softmax runs over ne[0] = the key axis, which is exactly the axis each
       # query's weights must sum over. The 1/sqrt(d_head) scaling is fused in
       # rather than applied as a separate node.
-      attn <- ggml_soft_max_ext(ctx_compute, scores, NULL,
+      #
+      # soft_max_ext adds the mask to the scaled scores and wants it as
+      # [seq_kv, seq_q, ne12, ne13] with ne02 % ne12 == 0, so the head axis is
+      # broadcast: the mask arrives as [seq_kv, seq_q, N] and is reshaped to
+      # [seq_kv, seq_q, 1, N] to sit beside scores' [.., .., n_heads, N].
+      mask_t <- if (!is.null(mask_in)) {
+        ggml_reshape_4d(ctx_compute, mask_in,
+                        seq_kv, seq_q, 1L, batch_size)
+      } else {
+        NULL
+      }
+      attn <- ggml_soft_max_ext(ctx_compute, scores, mask_t,
                                 scale = 1.0 / sqrt(d_head), max_bias = 0.0)
+
+      # Attention dropout drops whole query-key links, so a head cannot come to
+      # rely on a single connection. Inverted dropout with a resampled 0/1 mask,
+      # the same scheme as the dropout layer -- NOT the deterministic
+      # expected-value scaling that layer falls back to, which here would only
+      # shrink weights that softmax just normalised to sum to 1.
+      attn_drop <- if (is.null(node$config$dropout)) 0 else node$config$dropout
+      attn_mask_w <- NULL
+      if (attn_drop > 0 && isTRUE(training)) {
+        attn_mask_w <- ggml_new_tensor_4d(ctx_weights, GGML_TYPE_F32,
+                                          seq_kv, seq_q, n_heads, batch_size)
+        ggml_set_name(attn_mask_w, paste0(nm, "_attn_drop_mask"))
+        attn <- ggml_mul(ctx_compute, attn, attn_mask_w)
+        attn <- ggml_scale(ctx_compute, attn, 1.0 / (1.0 - attn_drop))
+      }
 
       # Weighted sum of values. mul_mat contracts ne[0], and attn's ne[0] is the
       # key axis, so V has to present its key axis there: transpose Vh to
@@ -1367,9 +1621,15 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       out <- ggml_mul_mat(ctx_compute, W_o, merged)
       if (use_b) out <- ggml_add(ctx_compute, out, b_o)
 
+      # The RoPE position vectors travel with the weights so the init pass can
+      # fill them; they are constants and never get ggml_set_param().
       list(tensor = out,
            weights = c(list(W_q = W_q, W_k = W_k, W_v = W_v, W_o = W_o),
-                       if (use_b) list(b_o = b_o) else list()))
+                       if (use_b) list(b_o = b_o) else list(),
+                       if (length(pos_cache)) list(rope_pos = pos_cache) else list(),
+                       if (!is.null(attn_mask_w))
+                         list(attn_drop_mask = attn_mask_w, attn_drop_rate = attn_drop)
+                       else list()))
     },
 
     "flatten" = {
@@ -1383,6 +1643,34 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       # be read off the channel axis instead.
       bs <- as.integer(ggml_nelements(input_t) / n_features)
       out <- ggml_reshape_2d(ctx_compute, input_t, n_features, bs)
+      list(tensor = out, weights = list())
+    },
+
+    "sequence_pooling" = {
+      parent_id <- node$parents[[1]]$id
+      input_t   <- built_tensors[[parent_id]]
+      psh       <- built_shapes[[parent_id]]
+      if (length(psh) != 2L) {
+        stop("sequence_pooling expects a sequence input of shape ",
+             "c(seq_len, d_model); got a shape with ", length(psh),
+             " dimension(s).", call. = FALSE)
+      }
+      seq_len <- as.integer(psh[1]); d_model <- as.integer(psh[2])
+
+      out <- if (identical(node$config$mode, "first")) {
+        # Position 1 of each sample. In [d_model, seq, N] the samples are
+        # d_model * seq apart, so a 2-D view with that stride picks the first
+        # position out of every one of them.
+        ggml_cont(ctx_compute,
+                  ggml_view_2d(ctx_compute, input_t, d_model, batch_size,
+                               as.numeric(d_model) * seq_len * 4, 0))
+      } else {
+        # ggml_mean reduces over ne0, so transpose the sequence into ne0 first:
+        # [d_model, seq, N] -> [seq, d_model, N] -> [1, d_model, N].
+        tt <- ggml_cont(ctx_compute, ggml_transpose(ctx_compute, input_t))
+        ggml_reshape_2d(ctx_compute, ggml_mean(ctx_compute, tt),
+                        d_model, batch_size)
+      }
       list(tensor = out, weights = list())
     },
 
@@ -1570,6 +1858,31 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       # Reshape to [dim, seq_len, N]
       out <- ggml_reshape_3d(ctx_compute, flat, dim, seq_len, batch_size)
       list(tensor = out, weights = list(weight = E))
+    },
+
+    "positional_embedding" = {
+      parent_id <- node$parents[[1]]$id
+      input_t   <- built_tensors[[parent_id]]
+      psh       <- built_shapes[[parent_id]]
+      if (length(psh) != 2L) {
+        stop("positional_embedding expects a sequence input of shape ",
+             "c(seq_len, d_model); got a shape with ", length(psh),
+             " dimension(s).", call. = FALSE)
+      }
+      seq_len <- as.integer(psh[1]); d_model <- as.integer(psh[2])
+
+      # One learned vector per position: [d_model, seq_len] in ggml order,
+      # which ggml_add broadcasts over the batch axis of [d_model, seq_len, N].
+      if (!is.null(reuse_weights)) {
+        P <- reuse_weights$pos
+      } else {
+        P  <- ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, d_model, seq_len)
+        nm <- if (!is.null(node$config$name)) node$config$name else node$id
+        ggml_set_name(P, paste0(nm, "_pos"))
+      }
+
+      list(tensor = ggml_add(ctx_compute, input_t, P),
+           weights = list(pos = P))
     },
 
     "lstm" = {
@@ -1797,7 +2110,8 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
   for (node in nodes_sorted) {
     layer_id     <- node$layer_id  # NULL for non-shared nodes
     is_shareable <- !is.null(layer_id) &&
-                    node$node_type %in% c("dense", "batch_norm",
+                    node$node_type %in% c("dense", "batch_norm", "rms_norm", "layer_norm",
+                                          "positional_embedding",
                                           "conv_2d", "conv_1d", "embedding",
                                           "lstm", "gru", "attention")
 
@@ -1853,7 +2167,8 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
     # Skip init for secondary applications of a shared layer (by layer_id).
     layer_id     <- node$layer_id
     is_shareable <- !is.null(layer_id) &&
-                    node$node_type %in% c("dense", "batch_norm",
+                    node$node_type %in% c("dense", "batch_norm", "rms_norm", "layer_norm",
+                                          "positional_embedding",
                                           "conv_2d", "conv_1d", "embedding",
                                           "lstm", "gru", "attention")
     if (is_shareable && layer_id %in% initialized_layer_ids) {
@@ -1881,7 +2196,7 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
       }
       if (is_shareable) initialized_layer_ids <- c(initialized_layer_ids, layer_id)
 
-    } else if (node$node_type == "batch_norm") {
+    } else if (nn_is_norm_type(node$node_type)) {
       if (!is.null(sw$gamma)) {
         ggml_backend_tensor_set_data(w$gamma, ggml_backend_tensor_get_data(sw$gamma))
         ggml_backend_tensor_set_data(w$beta,  ggml_backend_tensor_get_data(sw$beta))
@@ -1897,6 +2212,22 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
         ggml_set_param(w$gamma)
         ggml_set_param(w$beta)
       }
+      if (is_shareable) initialized_layer_ids <- c(initialized_layer_ids, layer_id)
+
+    } else if (node$node_type == "positional_embedding") {
+      if (!is.null(sw$pos)) {
+        ggml_backend_tensor_set_data(w$pos, ggml_backend_tensor_get_data(sw$pos))
+      } else if (!is.null(swd$pos)) {
+        ggml_backend_tensor_set_data(w$pos, swd$pos)
+      } else {
+        # Small random values, the usual start for a learned position table:
+        # zeros would leave every position identical and the symmetry unbroken
+        # until the first gradient, and a wide init would swamp the input it is
+        # added to.
+        n <- ggml_nelements(w$pos)
+        ggml_backend_tensor_set_data(w$pos, stats::rnorm(n, 0, 0.02))
+      }
+      if (trainable) ggml_set_param(w$pos)
       if (is_shareable) initialized_layer_ids <- c(initialized_layer_ids, layer_id)
 
     } else if (node$node_type == "conv_2d") {
@@ -2033,6 +2364,19 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
         for (k in c("W_q", "W_k", "W_v", "W_o")) ggml_set_param(w[[k]])
         if (!is.null(w$b_o)) ggml_set_param(w$b_o)
       }
+      # RoPE positions: 0..seq-1, a constant the rotation reads. Never a
+      # parameter, and always filled -- an unwritten I32 tensor would rotate by
+      # whatever happened to be in the buffer.
+      for (p in w$rope_pos) {
+        ggml_backend_tensor_set_data(p, seq_len(ggml_nelements(p)) - 1L)
+      }
+      # Attention-dropout mask: sampled here and resampled per batch alongside
+      # the dropout layers' masks. All-ones until then, i.e. the identity.
+      if (!is.null(w$attn_drop_mask)) {
+        n <- ggml_nelements(w$attn_drop_mask)
+        ggml_backend_tensor_set_data(w$attn_drop_mask,
+          as.numeric(stats::runif(n) >= w$attn_drop_rate))
+      }
       if (is_shareable) initialized_layer_ids <- c(initialized_layer_ids, layer_id)
 
     } else if (node$node_type == "dropout" && !is.null(w$mask)) {
@@ -2062,6 +2406,17 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
           mask = w$mask,
           rate = node$config$rate,
           ne   = ggml_nelements(w$mask)
+        )
+      }
+    }
+    # An attention layer's own dropout mask is resampled the same way.
+    if (node$node_type == "attention") {
+      w <- node_weights[[node$id]]
+      if (!is.null(w$attn_drop_mask)) {
+        dropout_masks[[node$id]] <- list(
+          mask = w$attn_drop_mask,
+          rate = w$attn_drop_rate,
+          ne   = ggml_nelements(w$attn_drop_mask)
         )
       }
     }
@@ -2202,16 +2557,27 @@ nn_prepare_x <- function(model, x) {
     stop("x has ", length(x), " elements but model has ", n_inputs, " inputs.")
 
   ne_per_input <- vapply(model$inputs, function(inp) as.integer(prod(inp$config$shape)), integer(1))
-  # Each xi must be a matrix [N, ne_i].  t(xi) is [ne_i, N] (column-major),
-  # which matches the layout ggml_backend_tensor_set_data expects for a
-  # [ne_i, batch] tensor.
-  N <- nrow(as.matrix(x[[1]]))
-  # cbind of transposed mats -> [ne_total, N], then as.vector = column-major
+  # Each xi arrives as a matrix [N, ne_i] or, for a sequence/image input, as an
+  # array [N, ...] in R order. The axes have to be reordered the same way the
+  # single-input branch does it, because a [seq, features] sample is laid out as
+  # [features, seq] in ggml -- feeding it unpermuted silently trains on
+  # transposed data and the loss comes out NaN.
+  # The sample count is the FIRST axis of whatever xi is: as.matrix() on a
+  # [N, seq, features] array folds it to a single column and would report
+  # N * seq * features samples.
+  N <- if (is.null(dim(x[[1]]))) length(x[[1]]) else dim(x[[1]])[1L]
+  # rbind of transposed mats -> [ne_total, N], then as.vector = column-major
   x_ggml <- as.numeric(do.call(rbind, lapply(seq_len(n_inputs), function(i) {
-    xi  <- x[[i]]
-    ne_i <- ne_per_input[i]
-    xi_mat <- matrix(as.numeric(xi), nrow = N, ncol = ne_i)
-    t(xi_mat)   # [ne_i, N]
+    xi    <- x[[i]]
+    ne_i  <- ne_per_input[i]
+    shp_i <- model$inputs[[i]]$config$shape
+    if (length(shp_i) == 3L && length(dim(xi)) == 4L) {
+      matrix(as.vector(aperm(xi, c(3L, 2L, 4L, 1L))), ne_i, N)
+    } else if (length(shp_i) == 2L && length(dim(xi)) == 3L) {
+      matrix(as.vector(aperm(xi, c(3L, 2L, 1L))), ne_i, N)
+    } else {
+      t(matrix(as.numeric(xi), nrow = N, ncol = ne_i))   # [ne_i, N]
+    }
   })))   # result: [ne_total, N] column-major = ne_total * N values
   list(x_ggml = x_ggml, ne_per_input = ne_per_input, is_multi = TRUE)
 }
@@ -3101,9 +3467,11 @@ ggml_predict.ggml_functional_model <- function(model, x, batch_size = 32L, ...) 
   ne_per_input <- xp$ne_per_input
   ne_datapoint <- sum(ne_per_input)
 
-  # Determine n_samples_orig before possible padding
+  # Determine n_samples_orig before possible padding. The sample count is the
+  # FIRST axis: as.matrix() on a [N, seq, features] array folds it to a single
+  # column and would report N * seq * features samples.
   n_samples_orig <- if (is_multi) {
-    nrow(as.matrix(x[[1L]]))
+    if (is.null(dim(x[[1L]]))) length(x[[1L]]) else dim(x[[1L]])[1L]
   } else if (is.matrix(x)) {
     nrow(x)
   } else {
@@ -3119,9 +3487,16 @@ ggml_predict.ggml_functional_model <- function(model, x, batch_size = 32L, ...) 
   if (remainder != 0L) {
     n_pad <- batch_size - remainder
     if (is_multi) {
+      # An input may be a matrix [N, ne] or an array [N, ...]; flattening the
+      # latter to a matrix would lose the axes nn_prepare_x() permutes by.
       x <- lapply(x, function(xi) {
-        xi_mat <- matrix(as.numeric(xi), nrow = n_samples_orig)
-        rbind(xi_mat, matrix(0.0, nrow = n_pad, ncol = ncol(xi_mat)))
+        if (length(dim(xi)) > 2L) {
+          pad_dims <- dim(xi); pad_dims[1L] <- n_pad
+          abind_first(xi, array(0.0, dim = pad_dims))
+        } else {
+          xi_mat <- matrix(as.numeric(xi), nrow = n_samples_orig)
+          rbind(xi_mat, matrix(0.0, nrow = n_pad, ncol = ncol(xi_mat)))
+        }
       })
     } else if (is.matrix(x)) {
       x <- rbind(x, matrix(0.0, nrow = n_pad, ncol = ncol(x)))

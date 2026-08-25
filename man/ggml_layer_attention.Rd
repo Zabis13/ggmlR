@@ -9,6 +9,11 @@ ggml_layer_attention(
   d_model,
   n_heads = 1L,
   causal = FALSE,
+  context = NULL,
+  mask = NULL,
+  rope = FALSE,
+  rope_base = 10000,
+  dropout = 0,
   bias = TRUE,
   name = NULL,
   trainable = TRUE
@@ -25,6 +30,30 @@ match the parent's feature dimension.}
 
 \item{causal}{Logical: mask out positions after the current one, making the
 layer autoregressive (default \code{FALSE}). Self-attention only.}
+
+\item{context}{Optional \code{ggml_tensor_node} to take keys and values
+from, making the layer cross-attention: \code{x} supplies the queries and
+decides the output length, \code{context} the keys and values. The two may
+differ in sequence length but must share \code{d_model}. Equivalent to
+passing \code{list(query, context)} as \code{x}.}
+
+\item{mask}{Optional \code{ggml_tensor_node} of shape
+\code{c(seq_q, seq_kv)} -- one row per query, holding that query's entry
+for every key -- added to the scores before the softmax: use \code{0}
+where a key may be attended to and a large negative value
+(\code{-1e9}) where it may not. This is how padding is excluded when a
+batch holds sequences of different lengths. Combines with \code{causal}.}
+
+\item{rope}{Logical: apply rotary position embedding to the queries and keys
+(default \code{FALSE}). Unlike
+\code{\link{ggml_layer_positional_embedding}} this has no weights and
+encodes RELATIVE position -- the score between two tokens depends on the
+distance between them -- so it carries over to sequence lengths the model
+was not trained on. Needs an even \code{d_model / n_heads}.}
+
+\item{rope_base}{Rotation base for \code{rope} (default 10000, the value
+used by LLaMA-family models). Larger values stretch the rotation over
+longer contexts.}
 
 \item{bias}{Logical: add a bias to the output projection (default
 \code{TRUE}).}
@@ -79,6 +108,10 @@ out  <- ggml_layer_add(list(h, ff))
 
 # GPT-style causal self-attention.
 dec <- x |> ggml_layer_attention(32L, n_heads = 4L, causal = TRUE)
+
+# Padding mask, fed as a second input alongside the sequence.
+pad <- ggml_input(shape = c(10L, 10L), name = "mask")
+enc <- x |> ggml_layer_attention(32L, n_heads = 4L, mask = pad)
 }
 }
 \seealso{

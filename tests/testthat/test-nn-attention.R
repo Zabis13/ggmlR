@@ -115,8 +115,10 @@ test_that("ggml_apply rejects a list for a layer taking one input", {
   x2 <- ggml_input(shape = 8L)
   expect_error(ggml_apply(list(x1, x2), ggml_dense(4L)),
                "takes a single input")
-  expect_error(ggml_apply(list(x1, x2, x1), ggml_attention(8L)),
-               "one input .* or two")
+  # Attention takes up to three: query, context, mask.
+  x3 <- ggml_input(shape = 8L)
+  expect_error(ggml_apply(list(x1, x2, x1, x3), ggml_attention(8L)),
+               "one input .* two .* or three")
 })
 
 # ---------------------------------------------------------------------------
