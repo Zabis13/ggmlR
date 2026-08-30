@@ -305,6 +305,8 @@ preds <- ggml_predict(model, x_new)
 | RMSNorm | `ggml_layer_rms_norm()` |
 | LayerNorm | `ggml_layer_layer_norm()` (centres as well as scales) |
 | Flatten | `ggml_layer_flatten()` |
+| Permute | `ggml_layer_permute(dims)` — reorder a sample's axes, `aperm()` order |
+| Reshape | `ggml_layer_reshape(shape)` — one axis may be `-1` |
 | SequencePooling | `ggml_layer_sequence_pooling(mode)` — `c(seq, d_model)` to `d_model` |
 | Dropout | `ggml_layer_dropout(rate)` |
 | Embedding | `ggml_layer_embedding(vocab_size, dim)` |
@@ -327,6 +329,11 @@ preds <- ggml_predict(model, x_new)
 `"mean_squared_error"`, `"mean_absolute_error"`, `"huber_loss"` and
 `"binary_cross_entropy"` are accepted as aliases. In a multi-output model each
 head takes its own loss — see [Multi-output model](#multi-output-model).
+
+`ggml_fit(sample_weight = )` takes a vector of one weight per sample, or — for
+`"mse"` — an `nrow(x)` by `ncol(y)` matrix acting as a per-output mask. A mask
+trains only the outputs whose weight is non-zero, which is what a Q-model
+needs: 1 on the action that has a target, 0 elsewhere.
 
 ### CNN example (MNIST)
 

@@ -2,21 +2,38 @@
 % Please edit documentation in R/optimizer.R
 \name{ggml_opt_dataset_weights}
 \alias{ggml_opt_dataset_weights}
-\title{Get dataset per-datapoint weights tensor}
+\title{Get dataset loss weights tensor}
 \usage{
-ggml_opt_dataset_weights(dataset)
+ggml_opt_dataset_weights(dataset, ne0 = 1L)
 }
 \arguments{
 \item{dataset}{External pointer to dataset}
+
+\item{ne0}{Width of the weight tensor: 1 for per-datapoint weights, or the
+label width for a per-output mask.}
 }
 \value{
 External pointer to weights tensor
 }
 \description{
-Returns the (lazily allocated) per-datapoint weights tensor with shape
-[1, ndata]. The first call allocates it; fill it via
+Returns the (lazily allocated) loss weights tensor with shape
+\code{[ne0, ndata]}. The first call allocates it; fill it via
 \code{ggml_backend_tensor_set_data()}. Used together with
 \code{\link{ggml_opt_loss_type_weighted_mse}}.
+}
+\details{
+\code{ne0 = 1} gives one weight per datapoint, broadcast over the outputs --
+the original behaviour. \code{ne0 = ne_label} gives a per-output-element
+mask, which is what a Q-model needs: weight 1 on the action that has a
+TD target, 0 elsewhere, so only that coordinate is trained.
+
+The mask does not change the denominator: the loss stays
+\code{sum(w * (pred - y)^2) / nelements(pred)}, so zeroed elements drop out
+of the numerator without renormalising over the active coordinates.
+
+Calling this again with a different \code{ne0} than the allocation is an
+error rather than a silent return of the cached tensor -- both shapes
+broadcast, so a mismatch would otherwise weight the wrong thing unnoticed.
 }
 \seealso{
 Other optimization: 

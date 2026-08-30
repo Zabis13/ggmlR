@@ -11,7 +11,8 @@ ggml_opt_init_for_fit(
   opt_period = 1L,
   ctx_compute = NULL,
   inputs = NULL,
-  outputs = NULL
+  outputs = NULL,
+  loss_mask_ne0 = NULL
 )
 }
 \arguments{
@@ -28,6 +29,10 @@ ggml_opt_init_for_fit(
 \item{inputs}{Input tensor (for static graphs)}
 
 \item{outputs}{Output tensor (for static graphs)}
+
+\item{loss_mask_ne0}{Width of the weighted-MSE weight tensor: \code{NULL} or
+1 for per-datapoint weights, or the output width for a per-output mask.
+Ignored by every other loss type.}
 }
 \value{
 List with elements `opt_ctx` and `lr_ud`

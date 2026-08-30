@@ -54,8 +54,15 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_opt_dataset_data  (ggml_opt_dataset_t dataset); // shape = [ne_datapoint, ndata]
     GGML_API struct ggml_tensor * ggml_opt_dataset_labels(ggml_opt_dataset_t dataset); // shape = [nd_label,     ndata]
 
-    // per-datapoint loss weights, lazily allocated on first call (ggmlR extension); shape = [1, ndata]
-    GGML_API struct ggml_tensor * ggml_opt_dataset_weights(ggml_opt_dataset_t dataset);
+    // Loss weights for WEIGHTED_MEAN_SQUARED_ERROR, lazily allocated on the
+    // first call (ggmlR extension); shape = [ne0, ndata].
+    //   ne0 == 1        : one weight per datapoint, broadcast over the outputs.
+    //   ne0 == ne_label : a mask with one weight per output element.
+    // Only those two widths are accepted at the graph boundary. Calling this
+    // again with a different ne0 than the allocation is an error rather than a
+    // silent return of the cached tensor: the shapes stay broadcastable, so a
+    // mismatch would otherwise build a mathematically wrong loss unnoticed.
+    GGML_API struct ggml_tensor * ggml_opt_dataset_weights(ggml_opt_dataset_t dataset, int64_t ne0);
 
     // shuffle idata first datapoints from dataset with RNG from opt_ctx, shuffle all datapoints if idata is negative
     GGML_API void ggml_opt_dataset_shuffle(ggml_opt_context_t opt_ctx, ggml_opt_dataset_t dataset, int64_t idata);
@@ -87,7 +94,7 @@ extern "C" {
     // copy weights batch using the same permutation/ibatch as ggml_opt_dataset_get_batch (ggmlR extension)
     GGML_API void ggml_opt_dataset_get_batch_weights(
             ggml_opt_dataset_t   dataset,
-            struct ggml_tensor * weights_batch, // shape = [1, ndata_batch]
+            struct ggml_tensor * weights_batch, // shape = [ne0, ndata_batch], ne0 as allocated
             int64_t              ibatch);
 
     // ====== Model / Context ======
@@ -159,6 +166,13 @@ extern "C" {
         struct ggml_tensor    * const * outputs_multi; // [n_loss]
         const enum ggml_opt_loss_type * loss_type_multi; // [n_loss]
         const float                   * loss_w;      // [n_loss], NULL = all 1.0f
+
+        // Width of the WEIGHTED_MEAN_SQUARED_ERROR weight tensor (ggmlR
+        // extension). 0 or 1 keeps the per-datapoint behaviour ([1, nbatch],
+        // broadcast over the outputs); a head's own ne[0] selects the
+        // per-output mask ([ne_label, nbatch]). Any other value is rejected
+        // when the graph is built. Ignored by every other loss type.
+        int64_t loss_mask_ne0;
 
         int32_t opt_period; // after how many gradient accumulation steps an optimizer step should be done
 

@@ -217,19 +217,34 @@ ggml_opt_dataset_labels <- function(dataset) {
   .Call("R_ggml_opt_dataset_labels", dataset)
 }
 
-#' Get dataset per-datapoint weights tensor
+#' Get dataset loss weights tensor
 #'
-#' Returns the (lazily allocated) per-datapoint weights tensor with shape
-#' [1, ndata]. The first call allocates it; fill it via
+#' Returns the (lazily allocated) loss weights tensor with shape
+#' \code{[ne0, ndata]}. The first call allocates it; fill it via
 #' \code{ggml_backend_tensor_set_data()}. Used together with
 #' \code{\link{ggml_opt_loss_type_weighted_mse}}.
 #'
+#' \code{ne0 = 1} gives one weight per datapoint, broadcast over the outputs --
+#' the original behaviour. \code{ne0 = ne_label} gives a per-output-element
+#' mask, which is what a Q-model needs: weight 1 on the action that has a
+#' TD target, 0 elsewhere, so only that coordinate is trained.
+#'
+#' The mask does not change the denominator: the loss stays
+#' \code{sum(w * (pred - y)^2) / nelements(pred)}, so zeroed elements drop out
+#' of the numerator without renormalising over the active coordinates.
+#'
+#' Calling this again with a different \code{ne0} than the allocation is an
+#' error rather than a silent return of the cached tensor -- both shapes
+#' broadcast, so a mismatch would otherwise weight the wrong thing unnoticed.
+#'
 #' @param dataset External pointer to dataset
+#' @param ne0 Width of the weight tensor: 1 for per-datapoint weights, or the
+#'   label width for a per-output mask.
 #' @return External pointer to weights tensor
 #' @export
 #' @family optimization
-ggml_opt_dataset_weights <- function(dataset) {
-  .Call("R_ggml_opt_dataset_weights", dataset)
+ggml_opt_dataset_weights <- function(dataset, ne0 = 1L) {
+  .Call("R_ggml_opt_dataset_weights", dataset, as.numeric(ne0))
 }
 
 #' Shuffle dataset
@@ -839,15 +854,20 @@ ggml_opt_epoch <- function(opt_ctx, dataset, result_train = NULL, result_eval = 
 #' @param ctx_compute Compute context (for static graphs)
 #' @param inputs Input tensor (for static graphs)
 #' @param outputs Output tensor (for static graphs)
+#' @param loss_mask_ne0 Width of the weighted-MSE weight tensor: \code{NULL} or
+#'   1 for per-datapoint weights, or the output width for a per-output mask.
+#'   Ignored by every other loss type.
 #' @return List with elements `opt_ctx` and `lr_ud`
 #' @export
 #' @family optimization
 ggml_opt_init_for_fit <- function(sched, loss_type, optimizer = ggml_opt_optimizer_type_adamw(),
                                    opt_period = 1L, ctx_compute = NULL,
-                                   inputs = NULL, outputs = NULL) {
+                                   inputs = NULL, outputs = NULL,
+                                   loss_mask_ne0 = NULL) {
   .Call("R_ggml_opt_init_for_fit",
         sched, as.integer(loss_type), as.integer(optimizer), as.integer(opt_period),
-        ctx_compute, inputs, outputs)
+        ctx_compute, inputs, outputs,
+        if (is.null(loss_mask_ne0)) NULL else as.numeric(loss_mask_ne0))
 }
 
 #' Initialize a multi-output optimizer context for an R-side epoch loop
@@ -942,6 +962,9 @@ ggml_opt_get_lr <- function(lr_ud) {
 #'   `state` is a mutable environment with fields:
 #'   `stop` (set TRUE to stop training), `lr_ud`, `nepoch`.
 #' @param silent Whether to suppress per-epoch progress output
+#' @param loss_mask_ne0 Width of the weighted-MSE weight tensor: \code{NULL} or
+#'   1 for per-datapoint weights, or the output width for a per-output mask.
+#'   Ignored by every other loss type.
 #' @return Data frame with columns epoch, train_loss, train_accuracy, val_loss, val_accuracy
 #' @export
 #' @family optimization
@@ -963,7 +986,8 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
                      shuffle     = TRUE,
                      shuffle_all = shuffle,
                      callbacks   = list(),
-                     silent      = FALSE) {
+                     silent      = FALSE,
+                     loss_mask_ne0 = NULL) {
 
   # --- compute parameters (same as R_ggml_opt_fit) ---
   ndata <- as.integer(ggml_opt_dataset_ndata(dataset))
@@ -983,7 +1007,7 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
   # --- init optimizer context (preserves momentum across epochs) ---
   ctx_list <- ggml_opt_init_for_fit(
     sched, loss_type, optimizer, opt_period,
-    ctx_compute, inputs, outputs
+    ctx_compute, inputs, outputs, loss_mask_ne0
   )
   opt_ctx <- ctx_list$opt_ctx
   lr_ud   <- ctx_list$lr_ud

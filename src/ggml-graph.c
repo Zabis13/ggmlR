@@ -938,6 +938,16 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, dsigmoid));
                     }
                 } break;
+                // DIVERGENCE (ggmlR): upstream has no backward for GELU, so
+                // ggml_compile(activation = "gelu") built a forward graph and
+                // then aborted here in ggml_fit. GELU_QUICK and GELU_ERF are
+                // different functions with different derivatives and stay
+                // unsupported.
+                case GGML_UNARY_OP_GELU: {
+                    if (src0_needs_grads) {
+                        ggml_add_or_set(ctx, cgraph, isrc0, ggml_gelu_back(ctx, grad, src0));
+                    }
+                } break;
                 default: {
                     fprintf(stderr, "%s: unsupported unary op for backward pass: %s\n",
                         __func__, ggml_unary_op_name(ggml_get_unary_op(tensor)));

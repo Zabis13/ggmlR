@@ -31,10 +31,10 @@ dimension and be divisible by \code{n_heads}.}
 \code{4 * d_model}, the usual ratio.}
 
 \item{activation}{Feed-forward activation (default \code{"silu"}).
-NB: \code{"gelu"}, \code{"hardsigmoid"} and \code{"hardswish"} have no
-backward rule in ggml: the graph builds, then training aborts. Use
-\code{"silu"} (the smooth one that does have a gradient), \code{"relu"},
-\code{"tanh"} or \code{"sigmoid"}.}
+\code{"gelu"} is trainable too, so a model ported from a GELU-based
+configuration keeps its activation. NB: \code{"hardsigmoid"} and
+\code{"hardswish"} still have no backward rule in ggml -- the graph
+builds, then training aborts.}
 
 \item{norm}{\code{"rms"} (default) or \code{"layer"}: which normalization to
 put in front of each sublayer.}

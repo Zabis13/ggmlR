@@ -246,6 +246,268 @@ ggml_layer_max_pooling_2d <- function(model, pool_size = c(2L, 2L), strides = NU
   model
 }
 
+#' Add Permute Layer
+#'
+#' Reorder a sample's axes. The batch axis is not part of \code{dims} and is
+#' never moved -- \code{dims} indexes the per-sample shape, exactly as
+#' \code{input_shape} does.
+#'
+#' @section Argument order:
+#' \code{dims} follows base R's \code{\link[base]{aperm}}: \code{dims[i]} names
+#' the \emph{source} axis that ends up at position \code{i}. So
+#' \code{dims = c(2, 1)} means "the new first axis is the old second one".
+#'
+#' This is deliberately the inverse of the underlying
+#' \code{\link{ggml_permute}}, whose arguments are \emph{destination}
+#' positions; the layer converts between the two so that callers can think in
+#' the R idiom. Read \code{ggml_permute} itself as "source axis \code{i} goes
+#' to position \code{p_i}" -- mixing the two conventions up silently inverts
+#' every non-trivial permutation.
+#'
+#' @section Typical use:
+#' Reordering a sample's axes to match what the next layer reads: a
+#' \code{c(features, seq_len)} tensor into the \code{c(seq_len, features)} that
+#' attention and the recurrent layers expect, or the reverse.
+#'
+#' Note that \code{\link{ggml_layer_embedding}} does \strong{not} need this --
+#' it already reports \code{c(seq_len, dim)} and feeds attention, GRU and LSTM
+#' directly. Adding a permute there transposes the underlying tensor and breaks
+#' the graph.
+#'
+#' @param model A ggml_sequential_model object, or a \code{ggml_tensor_node}
+#'   for the functional API.
+#' @param dims Integer vector, a permutation of \code{seq_along(input_shape)}.
+#'   Must not include the batch axis.
+#' @param input_shape Input shape, required for the first layer only.
+#' @param name Optional character name for the layer.
+#' @param trainable Logical; reserved for API consistency (no weights).
+#' @return The model object with the permute layer appended (invisibly), or a
+#'   \code{ggml_tensor_node} in the functional API.
+#' @seealso \code{\link{ggml_permute}} for the low-level op and its
+#'   destination-position convention.
+#' @export
+#' @examples
+#' \donttest{
+#' # Swap a c(features, seq_len) sample into c(seq_len, features).
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_permute(c(2, 1), input_shape = c(32, 16))
+#' }
+ggml_layer_permute <- function(model, dims, input_shape = NULL, name = NULL,
+                                trainable = TRUE) {
+  dims <- nn_check_permute_dims(dims)
+
+  # Functional API
+  if (inherits(model, "ggml_tensor_node")) {
+    node <- model
+    if (is.null(name)) name <- paste0("permute_", node$id)
+    return(structure(list(
+      id        = nn_next_node_id(),
+      node_type = "permute",
+      trainable = trainable,
+      config    = list(dims = dims, name = name),
+      parents   = list(node)
+    ), class = "ggml_tensor_node"))
+  }
+
+  if (is.null(name)) name <- nn_layer_name(model, "permute")
+
+  layer <- list(
+    type = "permute",
+    name = name,
+    trainable = trainable,
+    config = list(dims = dims),
+    input_shape = input_shape,
+    output_shape = NULL,
+    weights = list()
+  )
+
+  model$layers <- c(model$layers, list(layer))
+
+  if (!is.null(input_shape) && is.null(model$input_shape)) {
+    model$input_shape <- as.integer(input_shape)
+  }
+
+  model
+}
+
+#' Validate a permute layer's `dims`
+#'
+#' Checked at layer-construction time rather than at build time so a typo
+#' surfaces where it was written, not several layers later.
+#'
+#' @param dims Candidate permutation.
+#' @return `dims` as an integer vector.
+#' @keywords internal
+nn_check_permute_dims <- function(dims) {
+  if (!is.numeric(dims) || anyNA(dims)) {
+    stop("'dims' must be a numeric vector free of NA.", call. = FALSE)
+  }
+  dims <- as.integer(dims)
+  if (!setequal(dims, seq_along(dims))) {
+    stop("'dims' must be a permutation of 1:", length(dims),
+         "; got c(", paste(dims, collapse = ", "), ").", call. = FALSE)
+  }
+  dims
+}
+
+#' Apply a permute layer's `dims` to a per-sample shape
+#'
+#' Shared by the sequential and functional shape passes so the two cannot
+#' disagree.
+#'
+#' @param dims Permutation in `aperm` (source) order.
+#' @param shape Per-sample input shape.
+#' @return The permuted per-sample shape.
+#' @keywords internal
+nn_permute_output_shape <- function(dims, shape) {
+  if (length(dims) != length(shape)) {
+    stop("'dims' has ", length(dims), " entry/entries but the layer input is ",
+         length(shape), "-dimensional; they must agree.", call. = FALSE)
+  }
+  as.integer(shape[dims])
+}
+
+#' Add Reshape Layer
+#'
+#' Reinterpret a sample's shape without moving any data. The batch axis is not
+#' part of \code{shape} and is never reshaped -- \code{shape} describes one
+#' sample, exactly as \code{input_shape} does.
+#'
+#' @section Inferred axis:
+#' One entry of \code{shape} may be \code{-1}, in which case it is computed
+#' from the element count: \code{ggml_layer_reshape(c(-1, 32))} on a
+#' \code{c(4, 8, 16)} input gives \code{c(16, 32)}. At most one axis may be
+#' \code{-1}, and the remaining sizes must divide the element count exactly.
+#'
+#' @section Reshape versus permute:
+#' Reshape only relabels the axes; the elements keep their memory order. To
+#' actually reorder axes -- swapping \code{c(a, b)} into \code{c(b, a)}, say --
+#' use \code{\link{ggml_layer_permute}}. Using reshape for that silently
+#' interleaves the data instead.
+#'
+#' @section Non-contiguous input:
+#' \code{ggml_reshape_*()} requires contiguous data, and a permuted tensor is
+#' not contiguous. The layer inserts \code{\link{ggml_cont}} when needed, so it
+#' works after a permute; the cost is one copy.
+#'
+#' @param model A ggml_sequential_model object, or a \code{ggml_tensor_node}
+#'   for the functional API.
+#' @param shape Integer vector, the new per-sample shape. At most one entry may
+#'   be \code{-1} to have it inferred. Must not include the batch axis.
+#' @param input_shape Input shape, required for the first layer only.
+#' @param name Optional character name for the layer.
+#' @param trainable Logical; reserved for API consistency (no weights).
+#' @return The model object with the reshape layer appended (invisibly), or a
+#'   \code{ggml_tensor_node} in the functional API.
+#' @seealso \code{\link{ggml_layer_permute}} to reorder axes,
+#'   \code{\link{ggml_layer_flatten}} to collapse them all.
+#' @export
+#' @examples
+#' \donttest{
+#' # Split a flat feature vector into a sequence of 32-wide steps.
+#' model <- ggml_model_sequential() |>
+#'   ggml_layer_dense(512, input_shape = 128) |>
+#'   ggml_layer_reshape(c(-1, 32))
+#' }
+ggml_layer_reshape <- function(model, shape, input_shape = NULL, name = NULL,
+                                trainable = TRUE) {
+  shape <- nn_check_reshape_shape(shape)
+
+  # Functional API
+  if (inherits(model, "ggml_tensor_node")) {
+    node <- model
+    if (is.null(name)) name <- paste0("reshape_", node$id)
+    return(structure(list(
+      id        = nn_next_node_id(),
+      node_type = "reshape",
+      trainable = trainable,
+      config    = list(shape = shape, name = name),
+      parents   = list(node)
+    ), class = "ggml_tensor_node"))
+  }
+
+  if (is.null(name)) name <- nn_layer_name(model, "reshape")
+
+  layer <- list(
+    type = "reshape",
+    name = name,
+    trainable = trainable,
+    config = list(shape = shape),
+    input_shape = input_shape,
+    output_shape = NULL,
+    weights = list()
+  )
+
+  model$layers <- c(model$layers, list(layer))
+
+  if (!is.null(input_shape) && is.null(model$input_shape)) {
+    model$input_shape <- as.integer(input_shape)
+  }
+
+  model
+}
+
+#' Validate a reshape layer's target `shape`
+#'
+#' Checked at layer-construction time so a typo surfaces where it was written.
+#' The element count cannot be checked yet -- the input shape is unknown until
+#' the shape pass -- so that half lives in [nn_reshape_output_shape()].
+#'
+#' @param shape Candidate per-sample shape.
+#' @return `shape` as an integer vector.
+#' @keywords internal
+nn_check_reshape_shape <- function(shape) {
+  if (!is.numeric(shape) || anyNA(shape) || length(shape) == 0L) {
+    stop("'shape' must be a non-empty numeric vector free of NA.", call. = FALSE)
+  }
+  shape <- as.integer(shape)
+  if (sum(shape == -1L) > 1L) {
+    stop("'shape' may contain at most one -1; got ", sum(shape == -1L), ".",
+         call. = FALSE)
+  }
+  if (any(shape < 1L & shape != -1L)) {
+    stop("'shape' entries must be positive, or -1 to be inferred; got c(",
+         paste(shape, collapse = ", "), ").", call. = FALSE)
+  }
+  shape
+}
+
+#' Resolve a reshape layer's target shape against its input
+#'
+#' Fills in a `-1` axis and checks that the element count is preserved. Shared
+#' by the sequential and functional shape passes so the two cannot disagree.
+#'
+#' This check is not cosmetic: `ggml_reshape_*()` enforces the element count
+#' with a `GGML_ASSERT`, which aborts the process rather than raising an R
+#' error, so a bad shape would take the whole session down.
+#'
+#' @param shape Target per-sample shape, possibly containing one `-1`.
+#' @param input_shape Per-sample input shape.
+#' @return The resolved per-sample shape, with no `-1` left.
+#' @keywords internal
+nn_reshape_output_shape <- function(shape, input_shape) {
+  n_in <- prod(as.numeric(input_shape))
+
+  if (any(shape == -1L)) {
+    known <- prod(as.numeric(shape[shape != -1L]))
+    if (known <= 0 || n_in %% known != 0) {
+      stop("cannot infer the -1 axis: an input of ", format(n_in),
+           " element(s) is not divisible by ", format(known), ".",
+           call. = FALSE)
+    }
+    shape[shape == -1L] <- as.integer(n_in / known)
+  }
+
+  n_out <- prod(as.numeric(shape))
+  if (n_out != n_in) {
+    stop("'shape' c(", paste(shape, collapse = ", "), ") has ", format(n_out),
+         " element(s) but the layer input has ", format(n_in),
+         "; a reshape must preserve the element count.", call. = FALSE)
+  }
+
+  as.integer(shape)
+}
+
 #' Add Flatten Layer
 #'
 #' Flattens the spatial dimensions into a single vector per sample.
@@ -816,12 +1078,17 @@ ggml_layer_dropout <- function(model, rate, stochastic = FALSE, name = NULL,
 #' integer matrix of 0-based indices in \code{[0, vocab_size - 1]} (use
 #' \code{ggml_input(shape, dtype = "int32")} in Functional mode).
 #'
-#' @section Axis order (ggml vs Keras):
-#' ggml stores tensors in column-major order, so the output shape is
-#' \code{[dim, seq_len]} per sample (ggml convention) rather than
-#' \code{[seq_len, dim]} as in Keras.  When you call \code{ggml_layer_flatten()}
-#' after embedding the result is the same flattened vector regardless of order,
-#' but if you access raw output tensors be aware of this transposition.
+#' @section Axis order:
+#' The layer's output shape is \code{c(seq_len, dim)} -- one row per position,
+#' as in Keras -- which is the same convention a declared sequence input
+#' (\code{ggml_input(shape = c(seq_len, features))}) uses. So the output feeds
+#' \code{\link{ggml_layer_attention}}, \code{\link{ggml_layer_gru}} and
+#' \code{\link{ggml_layer_lstm}} directly, with no axis juggling in between.
+#'
+#' The underlying tensor is \code{[dim, seq_len, N]}: ggml is column-major, so
+#' an R shape \code{c(a, b)} is the tensor \code{[b, a, N]} throughout the
+#' package. That matters only when reading raw output tensors --
+#' \code{ggml_layer_flatten()} gives the same vector either way.
 #'
 #' @section Index validation:
 #' Indices must be in \code{[0, vocab_size - 1]}.  Out-of-range values cause
@@ -946,6 +1213,12 @@ nn_infer_shapes <- function(model) {
       "flatten" = {
         as.integer(prod(current_shape))
       },
+      "permute" = {
+        nn_permute_output_shape(layer$config$dims, current_shape)
+      },
+      "reshape" = {
+        nn_reshape_output_shape(layer$config$shape, current_shape)
+      },
       "dense" = {
         as.integer(layer$config$units)
       },
@@ -962,9 +1235,11 @@ nn_infer_shapes <- function(model) {
         current_shape  # dropout doesn't change shape
       },
       "embedding" = {
-        # input shape: c(seq_len) -> output: c(dim, seq_len)
+        # input shape: c(seq_len) -> output: c(seq_len, dim).
+        # Matches the functional branch and the package's R-to-ggml rule
+        # (R c(a, b) is the tensor [b, a, N]); the build emits [dim, seq_len, N].
         seq_len <- if (length(current_shape) == 1L) current_shape else prod(current_shape)
-        as.integer(c(layer$config$dim, seq_len))
+        as.integer(c(seq_len, layer$config$dim))
       },
       "lstm" = {
         # input: c(seq_len, input_size)
@@ -1163,6 +1438,112 @@ nn_build_global_average_pooling_2d <- function(ctx, input_tensor, layer) {
                           k0 = W, k1 = H, s0 = W, s1 = H,
                           p0 = 0L, p1 = 0L)
   ggml_reshape_2d(ctx, pooled, C, N)
+}
+
+#' Build permute forward pass
+#'
+#' Shared by the sequential and functional builds.
+#'
+#' The R per-sample shape maps onto ggml axes in order -- R axis \code{i} is
+#' \code{ne[i - 1]} -- with the batch on the axis just past the sample's, so a
+#' permutation of the sample's axes leaves the batch where it is.
+#'
+#' Two conversions happen here, and both are easy to get backwards:
+#' \enumerate{
+#'   \item 1-based R axes become 0-based ggml axes.
+#'   \item \code{dims} arrives in \code{aperm} (source) order, while
+#'     \code{ggml_permute()} takes destination positions: the argument at
+#'     position \code{i} says where source axis \code{i} lands. Inverting the
+#'     permutation is what bridges the two. A self-inverse permutation (a plain
+#'     two-axis swap, the common case) is unchanged by this step, which is
+#'     precisely why an error here can go unnoticed -- see the test on a 3-D
+#'     non-symmetric permutation.
+#' }
+#'
+#' The result is passed through \code{ggml_cont()}: \code{ggml_permute()}
+#' returns a non-contiguous view, and downstream ops (matmul, reshape) require
+#' contiguous data.
+#'
+#' @param ctx Compute context.
+#' @param input_tensor Input \code{ggml_tensor}.
+#' @param dims Permutation in `aperm` (source) order, over the sample's axes.
+#' @param input_shape Per-sample input shape, used only to count the axes.
+#' @return A contiguous \code{ggml_tensor} with the axes reordered.
+#' @keywords internal
+nn_build_permute_op <- function(ctx, input_tensor, dims, input_shape) {
+  n <- length(input_shape)
+  if (length(dims) != n) {
+    stop("'dims' has ", length(dims), " entry/entries but the layer input is ",
+         n, "-dimensional; they must agree.", call. = FALSE)
+  }
+
+  # aperm (source) order -> ggml destination positions.
+  dest <- integer(n)
+  dest[dims] <- seq_len(n)
+
+  # 0-based, and pad the untouched axes (batch and beyond) with identity:
+  # ggml_permute() always takes four.
+  axes <- as.integer(c(dest - 1L, seq.int(from = n, to = 3L)))
+
+  out <- ggml_permute(ctx, input_tensor, axes[1], axes[2], axes[3], axes[4])
+  ggml_cont(ctx, out)
+}
+
+#' Build permute forward pass (sequential API)
+#' @return A contiguous \code{ggml_tensor} with the sample's axes reordered.
+#' @keywords internal
+nn_build_permute <- function(ctx, input_tensor, layer) {
+  nn_build_permute_op(ctx, input_tensor, layer$config$dims, layer$input_shape)
+}
+
+#' Build reshape forward pass
+#'
+#' Shared by the sequential and functional builds.
+#'
+#' The batch is appended as the trailing ggml axis, and is derived from the
+#' element count rather than from \code{ggml_n_dims()}: ggml reports a trailing
+#' unit dimension as absent, so a batch of 1 would otherwise be read off a real
+#' axis (the same reasoning as in [nn_build_flatten()]).
+#'
+#' \code{ggml_reshape_*()} asserts that its input is contiguous, and an assert
+#' aborts the process instead of raising an R error, so a non-contiguous input
+#' (a permute that was not followed by \code{ggml_cont()}, say) is made
+#' contiguous first.
+#'
+#' @param ctx Compute context.
+#' @param input_tensor Input \code{ggml_tensor}.
+#' @param shape Resolved per-sample output shape (no `-1` left).
+#' @param input_shape Per-sample input shape.
+#' @return A \code{ggml_tensor} viewing the input under the new shape.
+#' @keywords internal
+nn_build_reshape_op <- function(ctx, input_tensor, shape, input_shape) {
+  shape <- nn_reshape_output_shape(shape, input_shape)
+
+  batch_size <- as.integer(ggml_nelements(input_tensor) / prod(as.numeric(shape)))
+
+  if (!ggml_is_contiguous(input_tensor)) {
+    input_tensor <- ggml_cont(ctx, input_tensor)
+  }
+
+  ne <- c(as.integer(shape), batch_size)
+  if (length(ne) > 4L) {
+    stop("a reshape layer supports at most 3 per-sample axes (plus the batch); ",
+         "got ", length(shape), ".", call. = FALSE)
+  }
+
+  switch(length(ne),
+    stop("unreachable: reshape needs at least one axis plus the batch"),
+    ggml_reshape_2d(ctx, input_tensor, ne[1], ne[2]),
+    ggml_reshape_3d(ctx, input_tensor, ne[1], ne[2], ne[3]),
+    ggml_reshape_4d(ctx, input_tensor, ne[1], ne[2], ne[3], ne[4])
+  )
+}
+
+#' Build reshape forward pass (sequential API)
+#' @return A \code{ggml_tensor} viewing the input under the new shape.
+#' @keywords internal
+nn_build_reshape <- function(ctx, input_tensor, layer) {
+  nn_build_reshape_op(ctx, input_tensor, layer$config$shape, layer$input_shape)
 }
 
 #' Build flatten forward pass
@@ -1468,6 +1849,8 @@ nn_build_layer <- function(ctx, input_tensor, layer, training = TRUE,
     "global_max_pooling_2d"     = nn_build_global_max_pooling_2d(ctx, input_tensor, layer),
     "global_average_pooling_2d" = nn_build_global_average_pooling_2d(ctx, input_tensor, layer),
     "flatten" = nn_build_flatten(ctx, input_tensor, layer),
+    "permute" = nn_build_permute(ctx, input_tensor, layer),
+    "reshape" = nn_build_reshape(ctx, input_tensor, layer),
     "dense" = nn_build_dense(ctx, input_tensor, layer),
     "batch_norm" = nn_build_batch_norm(ctx, input_tensor, layer, training),
     "rms_norm" = nn_build_rms_norm(ctx, input_tensor, layer),
@@ -1702,6 +2085,44 @@ ggml_layer_gru <- function(model, units, return_sequences = FALSE,
   model
 }
 
+#' Stack a recurrent layer's per-step outputs into a sequence tensor
+#'
+#' Shared by the LSTM and GRU builds for \code{return_sequences = TRUE}.
+#'
+#' Each step is \code{[units, N]}, and the result has to be
+#' \code{[units, seq_len, N]} -- the layout every sequence consumer expects.
+#' Concatenating the steps directly along dim 1 does \strong{not} give that: it
+#' produces \code{[units, seq_len * N]}, folding the batch into the sequence
+#' axis. Nothing complains at build time, and a consumer that only reads
+#' \code{ne[0]} (attention) still works, so the mistake surfaces far away --
+#' \code{sequence_pooling} reduces the wrong axis and its
+#' \code{ggml_reshape_2d()} aborts the process on the element count.
+#'
+#' Giving each step an explicit unit sequence axis first (\code{[units, 1, N]})
+#' makes the concatenation grow that axis instead, which is the intended
+#' result.
+#'
+#' @param ctx ggml compute context.
+#' @param h_steps List of per-step tensors, each \code{[units, N]}.
+#' @param units Integer, the hidden width.
+#' @param batch_size Integer, N.
+#' @return A tensor \code{[units, seq_len, N]}.
+#' @keywords internal
+nn_stack_time_steps <- function(ctx, h_steps, units, batch_size) {
+  units      <- as.integer(units)
+  batch_size <- as.integer(batch_size)
+
+  stepped <- lapply(h_steps, function(h) {
+    ggml_reshape_3d(ctx, h, units, 1L, batch_size)
+  })
+
+  out <- stepped[[1]]
+  for (t in seq_along(stepped)[-1L]) {
+    out <- ggml_concat(ctx, out, stepped[[t]], dim = 1L)
+  }
+  out
+}
+
 #' Build one LSTM step
 #'
 #' @param ctx ggml compute context
@@ -1865,12 +2286,9 @@ nn_build_lstm <- function(ctx, input_tensor, layer, batch_size) {
   }
 
   if (ret_seq) {
-    # Stack all h_steps: [units, seq_len, N]
-    out <- h_steps[[1]]
-    for (t in seq(2L, seq_len)) {
-      out <- ggml_concat(ctx, out, h_steps[[t]], dim = 1L)
-    }
-    out
+    # Stack all h_steps into [units, seq_len, N] -- see nn_stack_time_steps()
+    # for why the steps cannot simply be concatenated along dim 1.
+    nn_stack_time_steps(ctx, h_steps, units, N)
   } else {
     h_t  # last hidden state [units, N]
   }
@@ -1917,11 +2335,9 @@ nn_build_gru <- function(ctx, input_tensor, layer, batch_size) {
   }
 
   if (ret_seq) {
-    out <- h_steps[[1]]
-    for (t in seq(2L, seq_len)) {
-      out <- ggml_concat(ctx, out, h_steps[[t]], dim = 1L)
-    }
-    out
+    # [units, seq_len, N] -- see nn_stack_time_steps() for why a plain concat
+    # along dim 1 folds the batch into the sequence axis instead.
+    nn_stack_time_steps(ctx, h_steps, units, N)
   } else {
     h_t
   }

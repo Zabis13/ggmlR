@@ -43,13 +43,16 @@ struct ggml_opt_dataset {
     struct ggml_tensor    * data   = nullptr;
     struct ggml_tensor    * labels = nullptr;
 
-    // Optional per-datapoint loss weights [1, ndata], lazily allocated in a
+    // Optional loss weights [ne0_weights, ndata], lazily allocated in a
     // separate ctx/buffer so ggml_opt_dataset_init() and its buffer stay
     // untouched. Used by GGML_OPT_LOSS_TYPE_WEIGHTED_MEAN_SQUARED_ERROR.
+    // ne0_weights == 1 is the per-datapoint case (broadcast over the outputs);
+    // ne0_weights == ne_label is a per-output-element mask.
     struct ggml_context   * ctx_weights = nullptr;
     ggml_backend_buffer_t   buf_weights = nullptr;
     struct ggml_tensor    * weights     = nullptr;
     size_t                  nbs_weights = 0;
+    int64_t                 ne0_weights = 0;
 
     int64_t ndata       = -1;
     int64_t ndata_shard = -1;
@@ -90,6 +93,7 @@ struct ggml_opt_context {
     std::vector<struct ggml_tensor *>    labels;
     std::vector<struct ggml_tensor *>    loss_weights; // per-datapoint weights for weighted MSE
     std::vector<float>                   loss_w;       // per-head weight in the total loss
+    int64_t                              loss_mask_ne0 = 0; // weighted-MSE weight width; 0/1 = per-datapoint
     std::vector<struct ggml_tensor *>    losses;       // per-head scalars, before reduction
     std::vector<bool>                    loss_per_datapoint_head;
 
@@ -205,7 +209,9 @@ void ggml_opt_dataset_free(ggml_opt_dataset_t dataset) {
     delete dataset;
 }
 
-struct ggml_tensor * ggml_opt_dataset_weights(ggml_opt_dataset_t dataset) {
+struct ggml_tensor * ggml_opt_dataset_weights(ggml_opt_dataset_t dataset, int64_t ne0) {
+    GGML_ASSERT(ne0 > 0 && "loss weight width must be positive");
+
     if (!dataset->weights) {
         struct ggml_init_params params = {
             /*.mem_size   =*/ ggml_tensor_overhead(),
@@ -213,10 +219,17 @@ struct ggml_tensor * ggml_opt_dataset_weights(ggml_opt_dataset_t dataset) {
             /*.no_alloc   =*/ true,
         };
         dataset->ctx_weights = ggml_init(params);
-        dataset->weights     = ggml_new_tensor_2d(dataset->ctx_weights, GGML_TYPE_F32, 1, dataset->ndata);
+        dataset->weights     = ggml_new_tensor_2d(dataset->ctx_weights, GGML_TYPE_F32, ne0, dataset->ndata);
         dataset->nbs_weights = ggml_nbytes(dataset->weights) * dataset->ndata_shard/dataset->ndata;
+        dataset->ne0_weights = ne0;
         dataset->buf_weights = ggml_backend_alloc_ctx_tensors_from_buft(
             dataset->ctx_weights, ggml_backend_cpu_buffer_type());
+    } else {
+        // Returning the cached tensor under a different width would stay
+        // broadcastable in ggml_mul() and silently weight the wrong thing, so
+        // a mismatch has to be loud.
+        GGML_ASSERT(dataset->ne0_weights == ne0 &&
+            "ggml_opt_dataset_weights() called with a different width than the allocation");
     }
     return dataset->weights;
 }
@@ -224,6 +237,11 @@ struct ggml_tensor * ggml_opt_dataset_weights(ggml_opt_dataset_t dataset) {
 void ggml_opt_dataset_get_batch_weights(ggml_opt_dataset_t dataset, struct ggml_tensor * weights_batch, int64_t ibatch) {
     GGML_ASSERT(weights_batch && ggml_is_contiguous(weights_batch));
     GGML_ASSERT(dataset->weights && "ggml_opt_dataset_weights() must be called first");
+    // The batch tensor must be as wide as the dataset's weights, otherwise the
+    // shard arithmetic below would slice rectangular blocks of the wrong shape
+    // while still copying a byte count that happens to divide evenly.
+    GGML_ASSERT(weights_batch->ne[0] == dataset->weights->ne[0] &&
+        "weights batch width does not match the dataset's loss weights");
 
     const size_t nb_weights_batch = ggml_nbytes(weights_batch);
     GGML_ASSERT(nb_weights_batch % dataset->nbs_weights == 0);
@@ -434,6 +452,7 @@ struct ggml_opt_params ggml_opt_default_params(
         /*outputs_multi   =*/ nullptr,
         /*loss_type_multi =*/ nullptr,
         /*loss_w          =*/ nullptr,
+        /*loss_mask_ne0   =*/ 0,
         /*opt_period      =*/ 1,
         /*get_opt_pars    =*/ ggml_opt_get_default_optimizer_params,
         /*get_opt_pars_ud =*/ nullptr,
@@ -519,10 +538,14 @@ static ggml_cgraph * dup_graph(ggml_context * ctx, ggml_cgraph * src) {
 
 // Build the loss scalar for a single output head.
 //
-// Writes the head's labels / per-datapoint weights into *labels_out and
+// Writes the head's labels / loss weights into *labels_out and
 // *loss_weights_out (left as nullptr for loss types that need neither) and
 // returns the resulting scalar. The caller owns the reduction over heads and
 // is the only one allowed to call ggml_set_loss (see ggml_opt_context::loss).
+//
+// mask_ne0 is the width of the weighted-MSE weight tensor: 0 or 1 for the
+// per-datapoint case, outputs->ne[0] for a per-output mask. Other loss types
+// ignore it.
 //
 // `suffix` is appended to every node name so that heads stay distinguishable
 // in graph dumps; it must be "" for the single-head case to keep the node
@@ -532,6 +555,7 @@ static struct ggml_tensor * build_one_loss(
         struct ggml_tensor       * outputs,
         enum ggml_opt_loss_type    loss_type,
         int32_t                    opt_period,
+        int64_t                    mask_ne0,
         const std::string        & suffix,
         struct ggml_tensor      ** labels_out,
         struct ggml_tensor      ** loss_weights_out,
@@ -590,15 +614,23 @@ static struct ggml_tensor * build_one_loss(
             break;
         }
         case GGML_OPT_LOSS_TYPE_WEIGHTED_MEAN_SQUARED_ERROR: {
-            // sum( w * (out - y)^2 ) / (opt_period * nelements), with a
-            // per-datapoint weight w broadcast over the output dimension.
+            // sum( w * (out - y)^2 ) / (opt_period * nelements).
+            //
+            // w is either one scalar per datapoint, broadcast over the output
+            // dimension, or a full per-output-element mask. Note that the
+            // denominator is the output's element count either way: a mask
+            // zeroes terms out of the numerator but does NOT renormalise by
+            // the number of active coordinates.
             labels = ggml_dup_tensor(ctx_results, outputs);
             ggml_set_input(labels);
             name(labels, "labels");
 
-            // weights: [1, batch] (one scalar per datapoint), broadcast over ne[0].
+            // weights: [1, batch] (broadcast over ne[0]) or [ne0, batch] (mask).
             const int64_t nbatch = outputs->ne[ggml_n_dims(outputs) - 1];
-            loss_weights = ggml_new_tensor_2d(ctx_results, GGML_TYPE_F32, 1, nbatch);
+            const int64_t ne0    = mask_ne0 <= 0 ? 1 : mask_ne0;
+            GGML_ASSERT((ne0 == 1 || ne0 == outputs->ne[0]) &&
+                "weighted MSE weights must be [1, nbatch] or [outputs->ne[0], nbatch]");
+            loss_weights = ggml_new_tensor_2d(ctx_results, GGML_TYPE_F32, ne0, nbatch);
             ggml_set_input(loss_weights);
             name(loss_weights, "loss_weights");
 
@@ -856,7 +888,8 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
 
         bool per_datapoint = false;
         opt_ctx->losses[i] = build_one_loss(
-            ctx_results, opt_ctx->outputs[i], opt_ctx->loss_type[i], opt_ctx->opt_period, suffix,
+            ctx_results, opt_ctx->outputs[i], opt_ctx->loss_type[i], opt_ctx->opt_period,
+            opt_ctx->loss_mask_ne0, suffix,
             &opt_ctx->labels[i], &opt_ctx->loss_weights[i], &per_datapoint);
         opt_ctx->loss_per_datapoint_head[i] = per_datapoint;
     }
@@ -1087,6 +1120,7 @@ ggml_opt_context_t ggml_opt_init(struct ggml_opt_params params) {
                                            : std::vector<struct ggml_tensor *>{};
     }
     result->opt_period       = params.opt_period;
+    result->loss_mask_ne0    = params.loss_mask_ne0;
     result->get_opt_pars     = params.get_opt_pars;
     result->get_opt_pars_ud  = params.get_opt_pars_ud;
     result->optimizer        = params.optimizer;

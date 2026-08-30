@@ -18,7 +18,8 @@ ggml_fit_opt(
   shuffle = TRUE,
   shuffle_all = shuffle,
   callbacks = list(),
-  silent = FALSE
+  silent = FALSE,
+  loss_mask_ne0 = NULL
 )
 }
 \arguments{
@@ -61,6 +62,10 @@ Built-in factories: `ggml_callback_early_stopping()`,
 `stop` (set TRUE to stop training), `lr_ud`, `nepoch`.}
 
 \item{silent}{Whether to suppress per-epoch progress output}
+
+\item{loss_mask_ne0}{Width of the weighted-MSE weight tensor: \code{NULL} or
+1 for per-datapoint weights, or the output width for a per-output mask.
+Ignored by every other loss type.}
 }
 \value{
 Data frame with columns epoch, train_loss, train_accuracy, val_loss, val_accuracy

@@ -2817,6 +2817,29 @@ ggml_silu_back <- function(ctx, a, b) {
   .Call("R_ggml_silu_back", ctx, a, b, PACKAGE = "ggmlR")
 }
 
+#' GELU Backward (Graph)
+#'
+#' Gradient of the GELU activation: \code{dx = dy * dgelu(x)}. Wired into the
+#' autodiff engine, so \code{ggml_compile(activation = "gelu")} trains -- this
+#' is a ggmlR extension, upstream ggml has no GELU backward and aborts instead.
+#'
+#' The derivative is that of the tanh approximation \code{\link{ggml_gelu}}
+#' computes,
+#' \code{g(x) = 0.5x(1 + tanh(u))} with \code{u = c*x*(1 + a*x^2)}. The quick
+#' and erf variants (\code{\link{ggml_gelu_quick}}, \code{\link{ggml_gelu_erf}})
+#' are different functions with different derivatives and remain without a
+#' backward rule.
+#'
+#' @param ctx GGML context
+#' @param a Gradient tensor from upstream (\code{dy})
+#' @param b Forward input tensor (\code{x})
+#' @return Gradient tensor for the input
+#' @seealso \code{\link{ggml_gelu}}, \code{\link{ggml_silu_back}}
+#' @export
+ggml_gelu_back <- function(ctx, a, b) {
+  .Call("R_ggml_gelu_back", ctx, a, b, PACKAGE = "ggmlR")
+}
+
 #' Get Rows Backward (Graph)
 #'
 #' Backward pass for ggml_get_rows operation.

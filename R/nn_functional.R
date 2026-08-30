@@ -690,10 +690,10 @@ ggml_layer_attention <- function(x, d_model, n_heads = 1L, causal = FALSE,
 #' @param ff_dim Integer, width of the feed-forward hidden layer. Defaults to
 #'   \code{4 * d_model}, the usual ratio.
 #' @param activation Feed-forward activation (default \code{"silu"}).
-#'   NB: \code{"gelu"}, \code{"hardsigmoid"} and \code{"hardswish"} have no
-#'   backward rule in ggml: the graph builds, then training aborts. Use
-#'   \code{"silu"} (the smooth one that does have a gradient), \code{"relu"},
-#'   \code{"tanh"} or \code{"sigmoid"}.
+#'   \code{"gelu"} is trainable too, so a model ported from a GELU-based
+#'   configuration keeps its activation. NB: \code{"hardsigmoid"} and
+#'   \code{"hardswish"} still have no backward rule in ggml -- the graph
+#'   builds, then training aborts.
 #' @param norm \code{"rms"} (default) or \code{"layer"}: which normalization to
 #'   put in front of each sublayer.
 #' @param causal Logical: causal self-attention (default \code{FALSE}).
@@ -1144,7 +1144,7 @@ nn_functional_weight_elements <- function(node, parent_shapes) {
       isz * 2 * units + units * 2 * units + 2 * units +
         isz * units + units * units + units + units
     },
-    0                                              # input, flatten, dropout, ...
+    0                                              # input, flatten, permute, reshape, dropout, ...
   )
 }
 
@@ -1173,6 +1173,12 @@ nn_functional_output_shape <- function(node, parent_shapes) {
     "flatten" = {
       psh <- parent_shapes[[1]]
       as.integer(prod(psh))
+    },
+    "permute" = {
+      nn_permute_output_shape(node$config$dims, parent_shapes[[1]])
+    },
+    "reshape" = {
+      nn_reshape_output_shape(node$config$shape, parent_shapes[[1]])
     },
     "batch_norm" = parent_shapes[[1]],
     "rms_norm"   = parent_shapes[[1]],
@@ -1305,10 +1311,18 @@ nn_functional_output_shape <- function(node, parent_shapes) {
     },
     "dropout" = parent_shapes[[1]],  # shape unchanged
     "embedding" = {
-      # input shape: c(seq_len) -> output: c(dim, seq_len)
+      # input shape: c(seq_len) -> output: c(seq_len, dim).
+      #
+      # The order follows the package's R-to-ggml rule: an R shape c(a, b) is
+      # the tensor [b, a, N]. The build emits [dim, seq_len, N] (see the
+      # "embedding" branch of nn_build_functional_node), so the R shape that
+      # describes it is c(seq_len, dim) -- the same layout every other sequence
+      # node uses. Reporting c(dim, seq_len) here used to invert the two, which
+      # made attention reject a correct graph and made GRU/LSTM size their
+      # weights off the embedding axis instead of the sequence axis.
       psh <- parent_shapes[[1]]
       seq_len <- if (length(psh) == 1L) psh else prod(psh)
-      as.integer(c(node$config$dim, seq_len))
+      as.integer(c(seq_len, node$config$dim))
     },
     stop("Unknown node_type in shape inference: ", node$node_type)
   )
@@ -1632,6 +1646,20 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
                        else list()))
     },
 
+    "permute" = {
+      parent_id <- node$parents[[1]]$id
+      out <- nn_build_permute_op(ctx_compute, built_tensors[[parent_id]],
+                                 node$config$dims, built_shapes[[parent_id]])
+      list(tensor = out, weights = list())
+    },
+
+    "reshape" = {
+      parent_id <- node$parents[[1]]$id
+      out <- nn_build_reshape_op(ctx_compute, built_tensors[[parent_id]],
+                                 node$config$shape, built_shapes[[parent_id]])
+      list(tensor = out, weights = list())
+    },
+
     "flatten" = {
       parent_id  <- node$parents[[1]]$id
       input_t    <- built_tensors[[parent_id]]
@@ -1944,8 +1972,7 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       }
 
       if (isTRUE(node$config$return_sequences)) {
-        out <- h_steps[[1]]
-        for (t in seq(2L, seq_len)) out <- ggml_concat(ctx_compute, out, h_steps[[t]], dim = 1L)
+        out <- nn_stack_time_steps(ctx_compute, h_steps, units, batch_size)
       } else {
         out <- h_t
       }
@@ -2005,8 +2032,7 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
       }
 
       if (isTRUE(node$config$return_sequences)) {
-        out <- h_steps[[1]]
-        for (t in seq(2L, seq_len)) out <- ggml_concat(ctx_compute, out, h_steps[[t]], dim = 1L)
+        out <- nn_stack_time_steps(ctx_compute, h_steps, units, batch_size)
       } else {
         out <- h_t
       }

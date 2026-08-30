@@ -317,6 +317,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_silu_back(ctx, compute_ctx, src0, src1, node);
 
         break;
+    case GGML_OP_GELU_BACK:
+        ggml_vk_gelu_back(ctx, compute_ctx, src0, src1, node);
+
+        break;
     case GGML_OP_NORM:
         ggml_vk_norm(ctx, compute_ctx, src0, node);
 
@@ -3045,6 +3049,8 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->src[2]->type == GGML_TYPE_I32 &&
                    op->type == GGML_TYPE_F32;
         case GGML_OP_SILU_BACK:
+        // DIVERGENCE from upstream: GELU backward, see ggml_gelu_back().
+        case GGML_OP_GELU_BACK:
         case GGML_OP_RMS_NORM_BACK:
         // DIVERGENCE from upstream: LayerNorm backward, see ggml_norm_back().
         case GGML_OP_NORM_BACK:

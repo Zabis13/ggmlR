@@ -1059,7 +1059,14 @@ nn_bn_calibrate <- function(model, x) {
 #'   \item{validation_split}{Fraction of data for validation (default: 0)}
 #'   \item{validation_data}{Optional list(x_val, y_val) for validation. Overrides validation_split.}
 #'   \item{class_weight}{Named vector of weights per class, e.g. c("0"=1, "1"=10). Cannot be used with sample_weight.}
-#'   \item{sample_weight}{Numeric vector of per-sample weights (length = nrow(x)). Cannot be used with class_weight.}
+#'   \item{sample_weight}{Per-sample weights: a numeric vector of length
+#'     \code{nrow(x)}, or -- for \code{mean_squared_error} only -- a
+#'     \code{nrow(x)} by \code{ncol(y)} matrix acting as a per-output loss mask.
+#'     A mask trains only the outputs whose weight is non-zero, which is what a
+#'     Q-model needs: 1 on the action that has a TD target, 0 elsewhere. The
+#'     denominator is unchanged (\code{sum(w*(pred-y)^2)/nelements}), so masking
+#'     does not renormalise over the active outputs. Cannot be used with
+#'     class_weight.}
 #'   \item{verbose}{0 = silent, 1 = progress (default: 1)}
 #'   \item{shuffle}{Shuffle the data (default: TRUE). Shuffled once before the
 #'     train/validation split, then the training portion each epoch; the
@@ -1174,16 +1181,41 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
   # When TRUE, sample weights are applied through the weighted-MSE loss node
   # (sum(w*(pred-y)^2)) instead of by scaling the labels, which would be wrong
   # for squared error. CE is unaffected: CE(p, w*y) == w*CE(p, y).
+  # A matrix sample_weight is a per-output mask rather than one weight per
+  # sample; loss_mask_ne0 carries its width down to the loss node. NULL keeps
+  # the [1, ndata] layout, so the vector case is untouched.
   use_weighted_mse <- FALSE
+  loss_mask_ne0 <- NULL
   if (!is.null(sample_weight)) {
-    if (length(sample_weight) != nrow(y)) {
-      stop("sample_weight length must match number of training samples.")
-    }
     is_mse <- model$compilation$loss %in% c("mse", "mean_squared_error")
-    if (is_mse) {
-      use_weighted_mse <- TRUE   # weights go into the loss node below, not y
+
+    if (is.matrix(sample_weight)) {
+      if (!is_mse) {
+        stop("A matrix 'sample_weight' is a per-output loss mask and only ",
+             "applies to mean_squared_error; got loss '",
+             model$compilation$loss, "'.", call. = FALSE)
+      }
+      if (nrow(sample_weight) != nrow(y)) {
+        stop("'sample_weight' must have one row per training sample (",
+             nrow(sample_weight), " rows for ", nrow(y), " samples).",
+             call. = FALSE)
+      }
+      if (ncol(sample_weight) != ncol(y)) {
+        stop("A matrix 'sample_weight' must have one column per output (",
+             ncol(sample_weight), " columns for ", ncol(y), " outputs).",
+             call. = FALSE)
+      }
+      use_weighted_mse <- TRUE
+      loss_mask_ne0    <- ncol(sample_weight)
     } else {
-      y <- y * sample_weight     # cross-entropy: scaling the label is correct
+      if (length(sample_weight) != nrow(y)) {
+        stop("sample_weight length must match number of training samples.")
+      }
+      if (is_mse) {
+        use_weighted_mse <- TRUE   # weights go into the loss node below, not y
+      } else {
+        y <- y * sample_weight     # cross-entropy: scaling the label is correct
+      }
     }
   }
 
@@ -1209,7 +1241,12 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
     # Validation rows carry no user weight; default to 1.0 so weighted MSE
     # reduces to plain MSE on the validation split.
     if (use_weighted_mse) {
-      sample_weight <- c(sample_weight, rep(1.0, n_val))
+      sample_weight <- if (is.matrix(sample_weight)) {
+        rbind(sample_weight,
+              matrix(1.0, nrow = n_val, ncol = ncol(sample_weight)))
+      } else {
+        c(sample_weight, rep(1.0, n_val))
+      }
     }
     validation_split <- n_val / (n_train + n_val)
     # The split is positional now: these rows ARE the user's validation set, so
@@ -1236,7 +1273,11 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
     x <- slice_first_dim(x, seq_len(usable_samples))
     y <- y[seq_len(usable_samples), , drop = FALSE]
     if (use_weighted_mse) {
-      sample_weight <- sample_weight[seq_len(usable_samples)]
+      sample_weight <- if (is.matrix(sample_weight)) {
+        sample_weight[seq_len(usable_samples), , drop = FALSE]
+      } else {
+        sample_weight[seq_len(usable_samples)]
+      }
     }
     n_samples <- usable_samples
   }
@@ -1274,10 +1315,19 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
   ggml_backend_tensor_set_data(data_tensor, x_ggml)
   ggml_backend_tensor_set_data(labels_tensor, y_ggml)
 
-  # Per-datapoint weights for weighted MSE (loss = sum(w*(pred-y)^2)/nelem)
+  # Loss weights for weighted MSE (loss = sum(w*(pred-y)^2)/nelem).
+  # A vector gives [1, ndata] (one weight per sample); a matrix gives
+  # [n_out, ndata] -- a per-output mask, transposed on the way in exactly like
+  # the labels above, since ggml wants the output axis on ne[0].
   if (use_weighted_mse) {
-    weights_tensor <- ggml_opt_dataset_weights(dataset)
-    ggml_backend_tensor_set_data(weights_tensor, as.numeric(sample_weight))
+    w_ne0 <- if (is.null(loss_mask_ne0)) 1L else as.integer(loss_mask_ne0)
+    weights_tensor <- ggml_opt_dataset_weights(dataset, w_ne0)
+    w_ggml <- if (is.matrix(sample_weight)) {
+      as.numeric(t(sample_weight))
+    } else {
+      as.numeric(sample_weight)
+    }
+    ggml_backend_tensor_set_data(weights_tensor, w_ggml)
   }
 
   # Build graph (creates contexts, weights, inputs, outputs).
@@ -1330,7 +1380,8 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
     shuffle = shuffle,
     shuffle_all = shuffle_all,
     callbacks = callbacks,
-    silent = (verbose == 0)
+    silent = (verbose == 0),
+    loss_mask_ne0 = loss_mask_ne0
   )
 
   # Store built layers (with trained weights)

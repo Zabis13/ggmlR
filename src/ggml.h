@@ -499,6 +499,7 @@ extern "C" {
         GGML_OP_REPEAT_BACK,
         GGML_OP_CONCAT,
         GGML_OP_SILU_BACK,
+        GGML_OP_GELU_BACK,
         GGML_OP_NORM, // normalize
         GGML_OP_RMS_NORM,
         GGML_OP_RMS_NORM_BACK,
@@ -1220,6 +1221,14 @@ extern "C" {
     // a - x
     // b - dy
     GGML_API struct ggml_tensor * ggml_silu_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    // gelu backward: dx = dy * gelu'(x), for the tanh approximation ggml_gelu() uses
+    // a - dy (the incoming gradient)
+    // b - x  (the original input)
+    GGML_API struct ggml_tensor * ggml_gelu_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);

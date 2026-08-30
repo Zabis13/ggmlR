@@ -1,5 +1,8 @@
 # ggmlR 0.8.5
 
+* **GELU trains** — new `GGML_OP_GELU_BACK` (CPU and Vulkan).
+* `ggml_fit(sample_weight = )` accepts a matrix: a per-output loss mask.
+* New layers `ggml_layer_permute()` and `ggml_layer_reshape()`.
 * **LayerNorm trains** — new `GGML_OP_NORM_BACK` (CPU and Vulkan), so `ggml_norm()` is no longer inference-only.
 * New `ggml_layer_transformer_block()`: a pre-LN encoder block in one call.
 * New layers `ggml_layer_rms_norm()`, `ggml_layer_layer_norm()`, `ggml_layer_positional_embedding()`, `ggml_layer_sequence_pooling()`.
