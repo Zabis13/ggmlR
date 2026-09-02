@@ -1283,6 +1283,24 @@ Vulkan shaders, so a state-space block trains entirely on the GPU (`d_state`
 RWKV and GLA backward kernels are CPU-only, as is `ggml_gated_linear_attn()` in
 the forward direction.
 
+The same holds for flash attention: upstream's `ggml_flash_attn_back()` is a
+stub that aborts, so `ggml_flash_attn_ext()` was inference-only. ggmlR
+implements it on CPU and Vulkan and wires it into the autodiff, so attention
+trains through the fused op. No ALiBi, logit softcap or attention sinks.
+
+Convolution backward (`GGML_OP_IM2COL_BACK`) also has a Vulkan shader here,
+which upstream lacks. Without it the scheduler moved the backward — and the
+nodes feeding it — to the CPU, and a convolution trained on the GPU came out
+*slower* than the same model trained on the CPU outright; with it the graph
+stays in one piece on the device. Training a convolution requires an F32
+kernel: an F16 one, the usual choice for inference, leaves the backward with no
+backend that can run it, and ggmlR says so when the gradient is requested
+rather than aborting later inside the scheduler.
+
+Embedding backward (`GGML_OP_GET_ROWS_BACK`) has a Vulkan shader here as well,
+so a trained embedding table stays on the device. On a 30000-word vocabulary
+that puts GPU training 1.5–2.5x ahead of the CPU, widening with depth.
+
 See `inst/examples/mamba_train_demo.R` for a block trained end to end on both
 backends, and `inst/examples/backward_gpu_demo.R` for which backward ops run
 where.

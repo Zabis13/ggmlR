@@ -1,0 +1,59 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_shader_atomic_float : require
+
+// ggmlR extension: GGML_OP_GET_ROWS_BACK on the GPU.
+//
+// Upstream has no Vulkan shader for it, so training an embedding table ran its
+// backward on the CPU. On a realistic vocabulary (30000 x 512, 256 tokens) that
+// measured 61.0 ms against 39.1 ms for plain CPU training -- 0.64x, with 7
+// scheduler splits and 4 nodes stranded off the device.
+//
+// Forward: out[i] = table[ids[i]], gathering one row per token.
+// Backward scatters those gradients back:
+//
+//     d_table[ids[i]] += d_out[i]
+//
+// ---- atomics, and why they are cheap here ----
+// This is a SCATTER: two tokens with the same id write to the same row, so the
+// accumulation needs atomicAdd. That is the pattern which cost flash_attn_back
+// 89% of its runtime, so it was measured before writing this: there, 256 query
+// rows collided on EVERY address, always. Here collisions are incidental --
+// repeated tokens within one batch. At 32768 tokens over a 30000-word
+// vocabulary the deepest collision is ~9 rows, and most rows are hit once or
+// not at all. Direct atomics are the right tool; a tiled accumulator would add
+// complexity for a contention that is not there.
+//
+// One invocation owns one (token, column) pair, so the grid is nr * nc.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint nc;         // columns per row (embedding dimension)
+    uint nr;         // number of tokens
+    uint dst_row;    // dst row stride, in elements
+    uint src_row;    // src0 row stride, in elements
+    uint ne_total;   // nr * nc
+} p;
+
+layout (binding = 0) readonly buffer G   { float grad[]; };   // d(gathered rows)
+layout (binding = 1) readonly buffer IDX { int   ids[]; };    // token ids
+layout (binding = 2) buffer D { float dst[]; };               // d(table)
+
+void main() {
+    const uint idx = gl_GlobalInvocationID.x;
+    if (idx >= p.ne_total) {
+        return;
+    }
+
+    const uint col = idx % p.nc;   // column within the embedding
+    const uint tok = idx / p.nc;   // which token this invocation carries
+
+    const int row = ids[tok];
+    if (row < 0) {
+        return;
+    }
+
+    atomicAdd(dst[uint(row) * p.dst_row + col], grad[tok * p.src_row + col]);
+}

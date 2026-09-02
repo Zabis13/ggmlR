@@ -246,6 +246,26 @@ SEXP R_ggml_backend_sched_get_tensor_backend(SEXP sched_ptr, SEXP tensor_ptr) {
         return R_NilValue;
     }
 
+    // The upstream lookup reads the backend index out of tensor->extra and
+    // indexes sched->backends with it, returning NULL only for a clean -1. A
+    // tensor the scheduler has not assigned -- asking after ggml_backend_sched_reserve()
+    // but before a compute, or about a tensor from another graph -- can carry a
+    // stale index instead, and the pointer that comes back is then garbage.
+    // Dereferencing it (ggml_backend_name(), say) segfaults the R session, which
+    // an exported, documented function must never do. Only hand back a pointer
+    // that is genuinely one of this scheduler's backends.
+    const int n_backends = ggml_backend_sched_get_n_backends(sched);
+    int known = 0;
+    for (int i = 0; i < n_backends; i++) {
+        if (ggml_backend_sched_get_backend(sched, i) == backend) {
+            known = 1;
+            break;
+        }
+    }
+    if (!known) {
+        return R_NilValue;
+    }
+
     SEXP ptr = PROTECT(R_MakeExternalPtr(backend, R_NilValue, R_NilValue));
     UNPROTECT(1);
     return ptr;

@@ -2921,22 +2921,19 @@ SEXP R_ggml_flash_attn_ext(SEXP ctx_ptr, SEXP q_ptr, SEXP k_ptr, SEXP v_ptr,
 // d: gradient from upstream (same shape as output)
 // masked: whether causal mask was used
 SEXP R_ggml_flash_attn_back(SEXP ctx_ptr, SEXP q_ptr, SEXP k_ptr, SEXP v_ptr,
-                            SEXP d_ptr, SEXP masked_sexp) {
+                            SEXP mask_ptr, SEXP d_ptr, SEXP scale_sexp) {
     struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
     struct ggml_tensor * q = (struct ggml_tensor *) r_ptr_required(q_ptr, "tensor");
     struct ggml_tensor * k = (struct ggml_tensor *) r_ptr_required(k_ptr, "tensor");
     struct ggml_tensor * v = (struct ggml_tensor *) r_ptr_required(v_ptr, "tensor");
+    struct ggml_tensor * mask = (struct ggml_tensor *) r_ptr_or_null(mask_ptr, "mask");
     struct ggml_tensor * d = (struct ggml_tensor *) r_ptr_required(d_ptr, "tensor");
-    bool masked = asLogical(masked_sexp);
+    float scale = (float) Rf_asReal(scale_sexp);
 
-    if (ctx == NULL || q == NULL || k == NULL || v == NULL || d == NULL) {
-        error("Invalid pointer");
-    }
-
-    struct ggml_tensor * result = ggml_flash_attn_back(ctx, q, k, v, d, masked);
+    struct ggml_tensor * result = ggml_flash_attn_back(ctx, q, k, v, mask, d, scale);
 
     if (result == NULL) {
-        error("Failed to create flash_attn_back operation");
+        Rf_error("Failed to create flash_attn_back operation");
     }
 
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);

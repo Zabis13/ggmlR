@@ -961,7 +961,7 @@ SEXP R_ggml_rope_multi_inplace(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr,
 SEXP R_ggml_flash_attn_ext(SEXP ctx_ptr, SEXP q_ptr, SEXP k_ptr, SEXP v_ptr,
                            SEXP mask_ptr, SEXP scale, SEXP max_bias, SEXP logit_softcap);
 SEXP R_ggml_flash_attn_back(SEXP ctx_ptr, SEXP q_ptr, SEXP k_ptr, SEXP v_ptr,
-                            SEXP d_ptr, SEXP masked);
+                            SEXP mask_ptr, SEXP d_ptr, SEXP scale_sexp);
 
 // Mixture of Experts
 SEXP R_ggml_mul_mat_id(SEXP ctx_ptr, SEXP as_ptr, SEXP b_ptr, SEXP ids_ptr);
@@ -1516,7 +1516,7 @@ static const R_CallMethodDef CallEntries[] = {
 
     // Flash Attention
     {"R_ggml_flash_attn_ext",  (DL_FUNC) &R_ggml_flash_attn_ext,  8},
-    {"R_ggml_flash_attn_back", (DL_FUNC) &R_ggml_flash_attn_back, 6},
+    {"R_ggml_flash_attn_back", (DL_FUNC) &R_ggml_flash_attn_back, 7},
 
     // Mixture of Experts
     {"R_ggml_mul_mat_id",     (DL_FUNC) &R_ggml_mul_mat_id,     4},

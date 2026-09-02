@@ -1,0 +1,105 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+// ggmlR extension: GGML_OP_IM2COL_BACK on the GPU.
+//
+// Upstream has no Vulkan shader for it, so training any convolution ran its
+// backward on the CPU. Measured on a 4-layer conv stack that made the GPU path
+// 0.64x -- SLOWER than plain CPU training -- with 8 scheduler splits and 7
+// nodes stranded off the device.
+//
+// Forward (im2col): [N, IC, IH, IW] -> [N, OH, OW, IC*KH*KW], each output
+// column gathering one KH x KW patch of the input. The backward scatters those
+// gradients back:
+//
+//     d_input[in, iic, iih, iiw] = sum over (ikh, ikw) of
+//         d_col[in, ioh, iow, iic*KH*KW + ikh*KW + ikw]
+//
+// where (ioh, iow) is the output position that read this input pixel through
+// kernel tap (ikh, ikw) -- if one exists, which is what the stride and bounds
+// tests below decide.
+//
+// ---- decomposition ----
+// One invocation owns one output element and loops over the kernel taps, so
+// the accumulation is entirely local: no atomics, no shared memory, no
+// reductions. (Contrast flash_attn_back, where dk/dv are shared between query
+// rows and the atomics cost 89% of the runtime.) The kernel is typically 3x3,
+// so the inner loop is short.
+//
+// ---- the stride test ----
+// With s0 > 1 the forward skipped input columns, and those pixels receive no
+// gradient at all. A tap contributes only when (iiw + p0 - ikw*d0) is divisible
+// by s0; the same holds for rows with s1. Getting this wrong yields gradients
+// that look plausible and train slightly wrong, so it mirrors the CPU kernel
+// exactly rather than being re-derived.
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint N;          // batch
+    uint IC;         // input channels
+    uint IH; uint IW;
+    uint OH; uint OW;
+    uint KH; uint KW;
+    int  s0; int  s1;
+    int  p0; int  p1;
+    int  d0; int  d1;
+    uint is_2D;
+    uint ne_total;   // N * IC * IH * IW, the number of output elements
+} p;
+
+layout (binding = 0) readonly  buffer G { float grad_col[]; };   // im2col gradients
+layout (binding = 1) writeonly buffer D { float dst[]; };        // gradient of the image
+
+void main() {
+    const uint idx = gl_GlobalInvocationID.x;
+    if (idx >= p.ne_total) {
+        return;
+    }
+
+    // Unpack the output element: dst is [IW, IH, IC, N] in ggml's ne order, so
+    // IW is the fastest-varying axis.
+    const uint iiw = idx % p.IW;
+    const uint iih = (idx / p.IW) % p.IH;
+    const uint iic = (idx / (p.IW * p.IH)) % p.IC;
+    const uint in_ = idx / (p.IW * p.IH * p.IC);
+
+    const uint KHKW = p.KH * p.KW;
+    const uint CHW  = p.IC * KHKW;
+
+    float grad = 0.0;
+
+    [[dont_unroll]]
+    for (uint ikh = 0; ikh < p.KH; ikh++) {
+        int ioh = 0;
+        if (p.is_2D != 0u) {
+            const int tmph = int(iih) + p.p1 - int(ikh) * p.d1;
+            // Input rows the forward stepped over receive nothing.
+            if (tmph % p.s1 != 0) {
+                continue;
+            }
+            ioh = tmph / p.s1;
+            if (ioh < 0 || ioh >= int(p.OH)) {
+                continue;
+            }
+        }
+
+        for (uint ikw = 0; ikw < p.KW; ikw++) {
+            const int tmpw = int(iiw) + p.p0 - int(ikw) * p.d0;
+            if (tmpw % p.s0 != 0) {
+                continue;
+            }
+            const int iow = tmpw / p.s0;
+            if (iow < 0 || iow >= int(p.OW)) {
+                continue;
+            }
+
+            // grad_col is [IC*KH*KW, OW, OH, N]: one column per output position.
+            const uint col = (in_ * p.OH * p.OW + uint(ioh) * p.OW + uint(iow)) * CHW;
+            grad += grad_col[col + iic * KHKW + ikh * p.KW + ikw];
+        }
+    }
+
+    dst[idx] = grad;
+}

@@ -3633,46 +3633,77 @@ void ggml_flash_attn_ext_add_sinks(
 
 // ggml_flash_attn_back
 
+// DIVERGENCE from upstream: upstream's ggml_flash_attn_back() is a stub -- its
+// first statement is GGML_ABORT("TODO: adapt to ggml_flash_attn_ext() changes"),
+// left behind when flash_attn was replaced by flash_attn_ext. The op, the enum
+// entry and a CPU kernel all existed, but the kernel spoke the OLD layout, so
+// flash attention had no usable backward at all and was never wired into
+// ggml-graph.c. Rewritten here against the flash_attn_ext contract:
+//
+//   q     [DK, N,  H,    B]
+//   k     [DK, M,  H_kv, B]
+//   v     [DV, M,  H_kv, B]      (NOT transposed, unlike the old flash_attn)
+//   mask  [M,  N,  H_m,  B_m]    F16, broadcast over heads/batch, or NULL
+//   d     [DV, H,  N,    B]      gradient of the forward result, same permuted
+//                                layout the forward writes: permute(0,2,1,3)
+//   scale                        taken from the forward node's op_params[0]
+//
+// The result packs grad_q | grad_k | grad_v as one contiguous 1D tensor, the
+// same trick ggml_ssm_conv_back() uses: one kernel pass yields every gradient,
+// and each src takes a view of its own slice in ggml-graph.c.
+//
+// Not supported (asserted, not silently ignored): max_bias/ALiBi slopes,
+// logit_softcap and attention sinks. Those forward features have no backward
+// here yet; a model training with them must lower attention to explicit ops.
 struct ggml_tensor * ggml_flash_attn_back(
         struct ggml_context * ctx,
         struct ggml_tensor  * q,
         struct ggml_tensor  * k,
         struct ggml_tensor  * v,
+        struct ggml_tensor  * mask,
         struct ggml_tensor  * d,
-        bool                  masked) {
-    GGML_ABORT("TODO: adapt to ggml_flash_attn_ext() changes");
-
+        float                 scale) {
     GGML_ASSERT(ggml_can_mul_mat(k, q));
-    // TODO: check if vT can be multiplied by (k*qT)
 
-    // d shape [D,N,ne2,ne3]
-    // q shape [D,N,ne2,ne3]
-    // k shape [D,M,kvne2,ne3]
-    // v shape [M,D,kvne2,ne3]
+    const int64_t DK = q->ne[0];
+    const int64_t DV = v->ne[0];
+    const int64_t N  = q->ne[1];
+    const int64_t M  = k->ne[1];
+    const int64_t H  = q->ne[2];
+    const int64_t B  = q->ne[3];
 
-    const int64_t     D = q->ne[0];
-    const int64_t     N = q->ne[1];
-    const int64_t     M = k->ne[1];
-    const int64_t   ne2 = q->ne[2];
-    const int64_t   ne3 = q->ne[3];
-    const int64_t kvne2 = k->ne[2];
+    GGML_ASSERT(k->ne[0] == DK);
+    GGML_ASSERT(v->ne[1] == M);
 
-    GGML_ASSERT(k->ne[0] == D);
-    GGML_ASSERT(v->ne[0] == M);
-    GGML_ASSERT(v->ne[1] == D);
-    GGML_ASSERT(d->ne[0] == D);
-    GGML_ASSERT(d->ne[1] == N);
-    GGML_ASSERT(k->ne[2] == kvne2);
-    GGML_ASSERT(k->ne[3] == ne3);
-    GGML_ASSERT(v->ne[2] == kvne2);
-    GGML_ASSERT(v->ne[3] == ne3);
-    GGML_ASSERT(d->ne[2] == ne2);
-    GGML_ASSERT(d->ne[3] == ne3);
+    // grouped-query attention: q heads are a whole multiple of the kv heads
+    GGML_ASSERT(k->ne[2] == v->ne[2]);
+    GGML_ASSERT(H % k->ne[2] == 0);
+    GGML_ASSERT(k->ne[3] == v->ne[3]);
+    GGML_ASSERT(B % k->ne[3] == 0);
 
-    GGML_ASSERT(ne2 % kvne2 == 0);
+    // d carries the forward result's permuted shape [DV, H, N, B]
+    GGML_ASSERT(d->ne[0] == DV);
+    GGML_ASSERT(d->ne[1] == H);
+    GGML_ASSERT(d->ne[2] == N);
+    GGML_ASSERT(d->ne[3] == B);
 
-    // store gradients of q, k and v as continuous tensors concatenated in result.
-    // note: v and gradv are actually transposed, i.e. v->ne[0] != D.
+    if (mask) {
+        GGML_ASSERT(mask->type == GGML_TYPE_F16);
+        GGML_ASSERT(ggml_is_contiguous(mask));
+        GGML_ASSERT(mask->ne[0] == M);
+        GGML_ASSERT(mask->ne[1] == N);
+        GGML_ASSERT(H % mask->ne[2] == 0);
+        GGML_ASSERT(B % mask->ne[3] == 0);
+    }
+
+    // The kernel reads q/k/v/d as f32 directly; quantised or f16 sources would
+    // need per-type vec_dot plumbing that the backward pass does not have.
+    GGML_ASSERT(q->type == GGML_TYPE_F32);
+    GGML_ASSERT(k->type == GGML_TYPE_F32);
+    GGML_ASSERT(v->type == GGML_TYPE_F32);
+    GGML_ASSERT(d->type == GGML_TYPE_F32);
+
+    // store gradients of q, k and v as continuous tensors concatenated in result
     const int64_t elem_q = ggml_nelements(q);
     const int64_t elem_k = ggml_nelements(k);
     const int64_t elem_v = ggml_nelements(v);
@@ -3690,14 +3721,14 @@ struct ggml_tensor * ggml_flash_attn_back(
 
     struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, nelements);
 
-    int32_t masked_i = masked ? 1 : 0;
-    ggml_set_op_params(result, &masked_i, sizeof(masked_i));
+    ggml_set_op_params_f32(result, 0, scale);
 
     result->op     = GGML_OP_FLASH_ATTN_BACK;
     result->src[0] = q;
     result->src[1] = k;
     result->src[2] = v;
-    result->src[3] = d;
+    result->src[3] = mask;
+    result->src[4] = d;
 
     return result;
 }

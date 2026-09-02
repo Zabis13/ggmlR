@@ -1,0 +1,234 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_shader_atomic_float : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// ggmlR extension: backward pass of GGML_OP_FLASH_ATTN_EXT on the GPU.
+//
+// Upstream ggml has no backward for flash attention at all -- its
+// ggml_flash_attn_back() is a GGML_ABORT stub speaking the pre-_ext layout --
+// so ggmlR implements both the op and this shader. Without it the backward
+// falls to the CPU and splits a training graph in two per attention block;
+// measured, that made GPU attention training no faster than plain CPU training.
+//
+// Forward, per query row (q head h, query n, batch b), with kv head hk = h/rk2:
+//     S[m]  = dot(q[:,n,h,b], k[:,m,hk,b]) * scale + mask[m,n]
+//     P     = softmax(S)
+//     out   = sum_m P[m] * v[:,m,hk,b]
+//
+// so with d = dL/dout for this row:
+//     dP[m] = dot(d, v[:,m,hk,b])
+//     dS    = P * (dP - dot(P, dP)) * scale      // softmax Jacobian
+//     dq   += sum_m dS[m] * k[:,m]
+//     dk[m]+= dS[m] * q
+//     dv[m]+= P[m] * d
+//
+// ---- decomposition ----
+// One workgroup owns one query row and walks the kv positions; the reductions
+// (row max, sum, dot(P,dP)) fold across the workgroup through shared memory.
+//
+// The forward softmax is RECOMPUTED rather than stored -- attention's P is the
+// largest intermediate in a transformer block, and one extra q@k pass beats
+// keeping [M,N,H,B] live. It is recomputed ONCE: P and dP are then cached in
+// shared memory (2 floats per kv position), because recomputing the logits per
+// gradient instead would cost four more passes over K.
+//
+// ---- atomics ----
+// dq rows are disjoint across (n,h,b), so they are written directly. dk and dv
+// are shared by every query row of a kv head -- and under GQA by all rk2 query
+// heads mapped onto it -- so they accumulate with atomicAdd. supports_op
+// refuses the op without shaderBufferFloat32AtomicAdd, and requires M to fit
+// the shared-memory cache.
+
+layout(constant_id = 0) const uint BLOCK_SIZE = 128;
+layout(constant_id = 1) const uint MAX_M = 1024;
+
+// Profiling aid: 0 runs everything, 1..4 stop after that phase. Each stage
+// writes a token value so the compiler cannot fold the earlier work away.
+// Set from the host only by inst/scripts/profile_flash_attn_back.R; the
+// pipeline the graph uses is always built with 0.
+layout(constant_id = 2) const uint PROFILE_STAGE = 0;
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint DK;         // key/query head size
+    uint DV;         // value head size
+    uint N;          // query positions
+    uint M;          // kv positions
+    uint H;          // query heads
+    uint B;          // batch
+    uint rk2;        // H / H_kv        (grouped-query factor)
+    uint rk3;        // B / B_kv
+    // element strides (divided by sizeof(float) on the host)
+    uint q_s1, q_s2, q_s3;
+    uint k_s1, k_s2, k_s3;
+    uint v_s1, v_s2, v_s3;
+    uint d_s1, d_s2, d_s3;
+    uint m_s1, m_s2, m_s3;
+    uint m_ne2, m_ne3;   // mask head/batch counts, for the broadcast modulo
+    // element offsets of the three gradients inside the packed output
+    uint dq_off, dk_off, dv_off;
+    float scale;
+    uint has_mask;
+} p;
+
+layout (binding = 0) readonly buffer Q   { float qd[]; };
+layout (binding = 1) readonly buffer K   { float kd[]; };
+layout (binding = 2) readonly buffer V   { float vd[]; };
+layout (binding = 3) readonly buffer MSK { float16_t maskd[]; };
+layout (binding = 4) readonly buffer D   { float dd[]; };
+layout (binding = 5) buffer DST { float dst[]; };
+
+shared float red[BLOCK_SIZE];
+shared float sh_p[MAX_M];    // softmax row
+shared float sh_dp[MAX_M];   // dot(d, v[:,m])
+
+float wg_reduce_sum(float v, uint tid) {
+    red[tid] = v;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            red[tid] += red[tid + s];
+        }
+        barrier();
+    }
+    const float r = red[0];
+    barrier();
+    return r;
+}
+
+float wg_reduce_max(float v, uint tid) {
+    red[tid] = v;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2u; s > 0u; s >>= 1u) {
+        if (tid < s) {
+            red[tid] = max(red[tid], red[tid + s]);
+        }
+        barrier();
+    }
+    const float r = red[0];
+    barrier();
+    return r;
+}
+
+void main() {
+    const uint tid = gl_LocalInvocationID.x;
+
+    // One workgroup per (query, head, batch).
+    const uint row = gl_WorkGroupID.x;
+    const uint iq1 = row % p.N;
+    const uint iq2 = (row / p.N) % p.H;
+    const uint iq3 = row / (p.N * p.H);
+
+    if (iq3 >= p.B) {
+        return;
+    }
+
+    // GQA: query heads group in BLOCKS onto kv heads (ik2 = iq2 / rk2), which is
+    // what the forward does. Inverting it as iq2 % nek2 instead agrees only for
+    // head 0 -- a mismatch no single-head test can see.
+    const uint ik2 = iq2 / p.rk2;
+    const uint ik3 = iq3 / p.rk3;
+
+    const uint q_base = iq1 * p.q_s1 + iq2 * p.q_s2 + iq3 * p.q_s3;
+    const uint k_base = ik2 * p.k_s2 + ik3 * p.k_s3;
+    const uint v_base = ik2 * p.v_s2 + ik3 * p.v_s3;
+    // d carries the forward result's permuted shape [DV, H, N, B].
+    const uint d_base = iq2 * p.d_s1 + iq1 * p.d_s2 + iq3 * p.d_s3;
+
+    const uint m_base = (p.has_mask != 0u)
+        ? iq1 * p.m_s1 + (iq2 % p.m_ne2) * p.m_s2 + (iq3 % p.m_ne3) * p.m_s3
+        : 0u;
+
+    // ---- pass 1: logits into sh_p, dP into sh_dp, and the row max ----
+    float lmax = -1.0 / 0.0;
+    for (uint m = tid; m < p.M; m += BLOCK_SIZE) {
+        float s = 0.0;
+        for (uint c = 0; c < p.DK; c++) {
+            s += qd[q_base + c] * kd[k_base + m * p.k_s1 + c];
+        }
+        s *= p.scale;
+        if (p.has_mask != 0u) {
+            s += float(maskd[m_base + m]);
+        }
+        sh_p[m] = s;
+
+        float dp = 0.0;
+        for (uint c = 0; c < p.DV; c++) {
+            dp += dd[d_base + c] * vd[v_base + m * p.v_s1 + c];
+        }
+        sh_dp[m] = dp;
+
+        lmax = max(lmax, s);
+    }
+    const float row_max = wg_reduce_max(lmax, tid);
+    if (PROFILE_STAGE == 1) { if (tid == 0) { dst[p.dq_off + q_base] = row_max; } return; }
+
+
+    // A fully masked row contributes no gradient anywhere.
+    if (isinf(row_max) && row_max < 0.0) {
+        return;
+    }
+
+    // ---- pass 2: exponentiate in place, sum ----
+    float lsum = 0.0;
+    for (uint m = tid; m < p.M; m += BLOCK_SIZE) {
+        const float e = exp(sh_p[m] - row_max);
+        sh_p[m] = e;
+        lsum += e;
+    }
+    const float row_sum = wg_reduce_sum(lsum, tid);
+    if (PROFILE_STAGE == 2) { if (tid == 0) { dst[p.dq_off + q_base] = row_sum; } return; }
+
+    const float inv_sum = 1.0 / row_sum;
+
+    // ---- pass 3: normalise, and fold dot(P, dP) ----
+    float ldot = 0.0;
+    for (uint m = tid; m < p.M; m += BLOCK_SIZE) {
+        const float pm = sh_p[m] * inv_sum;
+        sh_p[m] = pm;
+        ldot += pm * sh_dp[m];
+    }
+    const float dot_p_dp = wg_reduce_sum(ldot, tid);
+    if (PROFILE_STAGE == 3) { if (tid == 0) { dst[p.dq_off + q_base] = dot_p_dp; } return; }
+
+
+    // ---- pass 4: dS into sh_dp, then dk and dv ----
+    for (uint m = tid; m < p.M; m += BLOCK_SIZE) {
+        const float pm = sh_p[m];
+        const float ds = pm * (sh_dp[m] - dot_p_dp) * p.scale;
+        sh_dp[m] = ds;
+
+        if (ds != 0.0) {
+            for (uint c = 0; c < p.DK; c++) {
+                atomicAdd(dst[p.dk_off + k_base + m * p.k_s1 + c], ds * qd[q_base + c]);
+            }
+        }
+        if (pm != 0.0) {
+            for (uint c = 0; c < p.DV; c++) {
+                atomicAdd(dst[p.dv_off + v_base + m * p.v_s1 + c], pm * dd[d_base + c]);
+            }
+        }
+    }
+    barrier();
+
+    if (PROFILE_STAGE == 4) { return; }
+
+    // ---- dq = sum_m dS[m] * k[:,m] ----
+    // Partitioned by COMPONENT, not by kv position: each invocation owns a set
+    // of c and sums over every m itself, so this needs no reduction and no
+    // barriers at all. Folding per component instead (one wg_reduce_sum per c)
+    // costs DK reductions x log(BLOCK_SIZE) barriers per row, which measured as
+    // the dominant cost -- time grew linearly in DK while barely moving with M.
+    // This row owns its dq slice, so there are no atomics either.
+    for (uint c = tid; c < p.DK; c += BLOCK_SIZE) {
+        float acc = 0.0;
+        for (uint m = 0; m < p.M; m++) {
+            acc += sh_dp[m] * kd[k_base + m * p.k_s1 + c];
+        }
+        dst[p.dq_off + q_base + c] = acc;
+    }
+}

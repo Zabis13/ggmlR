@@ -50,6 +50,10 @@ put in front of each sublayer.}
 \item{dropout}{Dropout rate applied to each sublayer's output before it is
 added back to the residual (default 0, meaning no dropout).}
 
+\item{attn_dropout}{Dropout rate for the attention weights specifically;
+defaults to \code{dropout}, so setting only \code{dropout} applies the
+same rate everywhere.}
+
 \item{name}{Optional prefix for the layers inside the block.}
 }
 \value{

@@ -37,6 +37,8 @@ unseen sequence lengths. Needs an even \code{d_model / n_heads}.}
 
 \item{rope_base}{Rotation base for \code{rope} (default 10000).}
 
+\item{dropout}{Dropout rate applied to the attention weights during training (default 0, no dropout).}
+
 \item{name}{Optional character name.}
 
 \item{trainable}{Logical; whether weights are updated during training.}

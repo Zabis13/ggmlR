@@ -51,7 +51,9 @@ encodes RELATIVE position -- the score between two tokens depends on the
 distance between them -- so it carries over to sequence lengths the model
 was not trained on. Needs an even \code{d_model / n_heads}.}
 
-\item{rope_base}{Rotation base for \code{rope} (default 10000, the value
+\item{rope_base}{Rotation base for \code{rope} (default 10000, the value}
+
+\item{dropout}{Dropout rate applied to the attention weights during training (default 0, no dropout).
 used by LLaMA-family models). Larger values stretch the rotation over
 longer contexts.}
 

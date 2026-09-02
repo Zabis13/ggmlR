@@ -1,5 +1,8 @@
 # ggmlR 0.8.5
 
+* **Convolution backward on the GPU** — new Vulkan shader for `GGML_OP_IM2COL_BACK` (16x faster on a 4-layer conv stack).
+* **Embedding backward on the GPU** — new Vulkan shader for `GGML_OP_GET_ROWS_BACK`, so training an embedding table no longer leaves the device (1.5-2.5x over CPU training on a 30000-word vocabulary).
+* **Flash attention trains** — new `ggml_flash_attn_back()` (CPU and Vulkan), so `ggml_flash_attn_ext()` is no longer inference-only. Upstream ships it as a stub that aborts. No ALiBi, logit softcap or attention sinks.
 * **GELU trains** — new `GGML_OP_GELU_BACK` (CPU and Vulkan).
 * `ggml_fit(sample_weight = )` accepts a matrix: a per-output loss mask.
 * New layers `ggml_layer_permute()` and `ggml_layer_reshape()`.

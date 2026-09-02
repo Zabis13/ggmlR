@@ -78,3 +78,57 @@ test_that("conv2d matches between CPU and Vulkan", {
 
   expect_equal(gpu_res$conv, cpu_res$conv, tolerance = 1e-2)
 })
+
+# ---------------------------------------------------------------------------
+# Training a convolution needs an F32 kernel
+#
+# IM2COL_BACK is refused by the CPU backend unless both sources are F32, and
+# Vulkan has no shader for it, so an F16 kernel leaves the backward node with no
+# backend at all. Upstream's only symptom is GGML_ASSERT(*cur_backend_id != -1)
+# raised from inside the scheduler -- long after the graph was built, naming
+# neither the op nor the cause. ggmlR fails at the point the gradient is
+# requested instead, and says why.
+# ---------------------------------------------------------------------------
+
+test_that("an F16 convolution kernel is rejected when building the backward", {
+  ctx <- ggml_init(64 * 1024 * 1024)
+  on.exit(ggml_free(ctx), add = TRUE)
+
+  K <- 3L; Cin <- 4L; Cout <- 4L; W <- 16L; H <- 16L
+
+  ker <- ggml_new_tensor_4d(ctx, GGML_TYPE_F16, K, K, Cin, Cout)
+  img <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, W, H, Cin, 1L)
+  ggml_set_f32(img, runif(W * H * Cin))
+  ggml_set_param(img)
+
+  loss <- ggml_sum(ctx, ggml_conv_2d(ctx, ker, img, 1L, 1L, 1L, 1L, 1L, 1L))
+  ggml_set_loss(loss)
+  graph <- ggml_build_forward_expand_grads(ctx, loss)
+
+  expect_error(ggml_build_backward_expand(ctx, graph))
+})
+
+test_that("an F32 convolution kernel differentiates", {
+  ctx <- ggml_init(64 * 1024 * 1024)
+  on.exit(ggml_free(ctx), add = TRUE)
+
+  K <- 3L; Cin <- 4L; Cout <- 4L; W <- 16L; H <- 16L
+
+  ker <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, K, K, Cin, Cout)
+  img <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, W, H, Cin, 1L)
+  ggml_set_f32(ker, runif(K * K * Cin * Cout, -1, 1))
+  ggml_set_f32(img, runif(W * H * Cin, -1, 1))
+  ggml_set_param(img)
+
+  loss <- ggml_sum(ctx, ggml_conv_2d(ctx, ker, img, 1L, 1L, 1L, 1L, 1L, 1L))
+  ggml_set_loss(loss)
+  graph <- ggml_build_forward_expand_grads(ctx, loss)
+  ggml_build_backward_expand(ctx, graph)
+  ggml_graph_reset(graph)
+  ggml_graph_compute(ctx, graph)
+
+  g <- ggml_graph_get_grad(graph, img)
+  expect_false(is.null(g))
+  expect_true(all(is.finite(ggml_get_f32(g))))
+  expect_gt(max(abs(ggml_get_f32(g))), 0)
+})

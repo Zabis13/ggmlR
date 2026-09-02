@@ -1996,10 +1996,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_FLASH_ATTN_BACK:
             {
-                int32_t t = ggml_get_op_params_i32(tensor, 0);
-                GGML_ASSERT(t == 0 || t == 1);
-                bool masked = t != 0;
-                ggml_compute_forward_flash_attn_back(params, masked, tensor);
+                ggml_compute_forward_flash_attn_back(params, tensor);
             } break;
         case GGML_OP_SSM_CONV:
             {
@@ -2988,19 +2985,16 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_FLASH_ATTN_BACK:
                     {
-                        const int64_t    D = node->src[0]->ne[0];
-                        const int64_t ne11 = ggml_up(node->src[1]->ne[1], GGML_SOFT_MAX_UNROLL);
-                        const int64_t mxDn = MAX(D, ne11) * 2; // *2 because of S and SM in ggml_compute_forward_flash_attn_back
-                        if (node->src[1]->type == GGML_TYPE_F32) {
-                            cur  = sizeof(float)*mxDn*n_tasks; // TODO: this can become (n_tasks-1)
-                            cur += sizeof(float)*mxDn*n_tasks; // this is overestimated by x2
-                        } else if (node->src[1]->type == GGML_TYPE_F16) {
-                            cur  = sizeof(float)*mxDn*n_tasks; // TODO: this can become (n_tasks-1)
-                            cur += sizeof(float)*mxDn*n_tasks; // this is overestimated by x2
-                        } else if (node->src[1]->type == GGML_TYPE_BF16) {
-                            cur  = sizeof(float)*mxDn*n_tasks; // TODO: this can become (n_tasks-1)
-                            cur += sizeof(float)*mxDn*n_tasks; // this is overestimated by x2
-                        }
+                        // Two scratch rows per thread (S and SM), each padded
+                        // to a cache line because the kernel indexes them as
+                        // ith*2*(mxDM + CACHE_LINE_SIZE_F32). mxDM spans the
+                        // longest of DK, DV and the padded kv length.
+                        const int64_t DK   = node->src[0]->ne[0];
+                        const int64_t DV   = node->src[2]->ne[0];
+                        const int64_t Mup  = ggml_up(node->src[1]->ne[1], GGML_SOFT_MAX_UNROLL);
+                        const int64_t mxDM = MAX(MAX(DK, DV), Mup);
+
+                        cur = sizeof(float)*2*(mxDM + CACHE_LINE_SIZE_F32)*n_tasks;
                     } break;
 
                 case GGML_OP_CROSS_ENTROPY_LOSS:

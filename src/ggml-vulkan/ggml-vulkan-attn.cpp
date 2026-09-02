@@ -858,6 +858,21 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_out_prod_f32;
         }
         return nullptr;
+    case GGML_OP_GET_ROWS_BACK:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_get_rows_back_f32;
+        }
+        return nullptr;
+    case GGML_OP_IM2COL_BACK:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_im2col_back_f32;
+        }
+        return nullptr;
+    case GGML_OP_FLASH_ATTN_BACK:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_flash_attn_back_f32;
+        }
+        return nullptr;
     case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_cross_entropy_loss_back_f32;

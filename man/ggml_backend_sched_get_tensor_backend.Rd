@@ -12,8 +12,14 @@ ggml_backend_sched_get_tensor_backend(sched, tensor)
 \item{tensor}{Tensor pointer}
 }
 \value{
-Backend pointer or NULL if not assigned
+Backend pointer, or NULL if the tensor is not assigned to one
 }
 \description{
 Returns which backend a tensor is assigned to.
+}
+\details{
+Assignments are only meaningful once the scheduler has actually placed the
+graph --- that is, after \code{\link{ggml_backend_sched_graph_compute}}.
+After \code{\link{ggml_backend_sched_reserve}} alone, or for a tensor from a
+different graph, the assignment may not exist and this returns \code{NULL}.
 }

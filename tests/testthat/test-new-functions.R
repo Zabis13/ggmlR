@@ -268,8 +268,20 @@ test_that("ggml_rope_ext_back creates RoPE backward operation", {
   expect_false(is.null(result))
 })
 
-# NOTE: ggml_flash_attn_back is not implemented in current GGML version
-# The function exists in header but contains GGML_ABORT("TODO: adapt to ggml_flash_attn_ext() changes")
-# test_that("ggml_flash_attn_back creates flash attention backward operation", {
-#   skip("ggml_flash_attn_back not implemented in current GGML version")
+test_that("ggml_flash_attn_back creates flash attention backward operation", {
+  # Upstream leaves this as GGML_ABORT("TODO: adapt to ggml_flash_attn_ext()");
+  # ggmlR implements it, so the op builds instead of aborting the session.
+  ctx <- ggml_init(4 * 1024 * 1024)
+  on.exit(ggml_free(ctx))
+
+  DK <- 4L; DV <- 4L; N <- 2L; M <- 3L
+  q <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, DK, N, 1L, 1L)
+  k <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, DK, M, 1L, 1L)
+  v <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, DV, M, 1L, 1L)
+  d <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, DV, 1L, N, 1L)
+
+  result <- ggml_flash_attn_back(ctx, q, k, v, NULL, d, 1 / sqrt(DK))
+  expect_false(is.null(result))
+})
+NA
 # })

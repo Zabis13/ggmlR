@@ -2453,14 +2453,20 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
-    // TODO: needs to be adapted to ggml_flash_attn_ext
+    // ggmlR extension: backward pass for ggml_flash_attn_ext.
+    // Upstream ships this as a GGML_ABORT stub speaking the pre-_ext layout;
+    // here it is a working op. mask may be NULL; scale must match the forward
+    // node. max_bias/logit_softcap/sinks are not supported (asserted).
+    // Returns grad_q, grad_k and grad_v packed in one contiguous 1D tensor;
+    // ggml-graph.c takes a view of each slice (see GGML_OP_FLASH_ATTN_EXT).
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,
            struct ggml_tensor  * q,
            struct ggml_tensor  * k,
            struct ggml_tensor  * v,
+           struct ggml_tensor  * mask,
            struct ggml_tensor  * d,
-           bool                  masked);
+           float                 scale);
 
     GGML_API struct ggml_tensor * ggml_ssm_conv(
             struct ggml_context * ctx,

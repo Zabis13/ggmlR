@@ -942,6 +942,13 @@ struct vk_device_struct {
     vk_pipeline pipeline_ssm_scan_back_f32_d256;
     vk_pipeline pipeline_out_prod_f32;   // ggmlR: backward of mul_mat
     vk_pipeline pipeline_cross_entropy_loss_back_f32;   // ggmlR
+    vk_pipeline pipeline_flash_attn_back_f32;   // ggmlR: backward of flash attention
+    vk_pipeline pipeline_im2col_back_f32;   // ggmlR: backward of convolution
+    vk_pipeline pipeline_get_rows_back_f32;   // ggmlR: backward of embedding lookup
+    // ggmlR: stage-truncated copies of the same shader, for profiling only.
+    // [0] is unused; [1..4] stop after phase 1..4. Built alongside the real
+    // pipeline so a profiling run needs no rebuild, and never used by the graph.
+    vk_pipeline pipeline_flash_attn_back_f32_prof[5];
     vk_pipeline pipeline_opt_step_adamw_f32;
     vk_pipeline pipeline_opt_step_sgd_f32;
     std::map<vk_conv2d_pipeline_state, vk_pipeline> pipeline_conv2d_f32[CONV_SHAPE_COUNT];
@@ -1813,6 +1820,49 @@ struct vk_op_out_prod_push_constants {
     uint32_t nb10, nb11, nb12, nb13;
     uint32_t nb1, nb2, nb3;
     uint32_t dps2, dps3;
+};
+
+// ggmlR extension: GGML_OP_GET_ROWS_BACK on the GPU. Strides are element
+// counts, not bytes.
+struct vk_op_get_rows_back_push_constants {
+    uint32_t nc;
+    uint32_t nr;
+    uint32_t dst_row;
+    uint32_t src_row;
+    uint32_t ne_total;
+};
+
+// ggmlR extension: GGML_OP_IM2COL_BACK on the GPU. Mirrors the CPU kernel's
+// parameters; ne_total lets the shader bound-check without recomputing it.
+struct vk_op_im2col_back_push_constants {
+    uint32_t N;
+    uint32_t IC;
+    uint32_t IH; uint32_t IW;
+    uint32_t OH; uint32_t OW;
+    uint32_t KH; uint32_t KW;
+    int32_t  s0; int32_t  s1;
+    int32_t  p0; int32_t  p1;
+    int32_t  d0; int32_t  d1;
+    uint32_t is_2D;
+    uint32_t ne_total;
+};
+
+// ggmlR extension: GGML_OP_FLASH_ATTN_EXT backward on the GPU. Strides are
+// element counts, not bytes -- the host divides by sizeof(float) so the shader
+// can index directly. dq/dk/dv offsets locate each gradient inside the packed
+// output, and must match the arithmetic ggml-graph.c uses to view them.
+struct vk_op_flash_attn_back_push_constants {
+    uint32_t DK, DV, N, M, H, B;
+    uint32_t rk2, rk3;
+    uint32_t q_s1, q_s2, q_s3;
+    uint32_t k_s1, k_s2, k_s3;
+    uint32_t v_s1, v_s2, v_s3;
+    uint32_t d_s1, d_s2, d_s3;
+    uint32_t m_s1, m_s2, m_s3;
+    uint32_t m_ne2, m_ne3;
+    uint32_t dq_off, dk_off, dv_off;
+    float    scale;
+    uint32_t has_mask;
 };
 
 // ggmlR extension: GGML_OP_CROSS_ENTROPY_LOSS_BACK on the GPU (no upstream

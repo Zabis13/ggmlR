@@ -2906,19 +2906,35 @@ ggml_rope_ext_back <- function(ctx, a, b, c = NULL,
 
 #' Flash Attention Backward (Graph)
 #'
-#' Backward pass for Flash Attention.
-#' Used during training to compute gradients through attention.
+#' Backward pass for \code{\link{ggml_flash_attn_ext}}: given the gradient of
+#' the attention output, produces the gradients of Q, K and V in one pass.
+#'
+#' Upstream ggml ships this operation as a stub that aborts, left behind when
+#' \code{flash_attn} was replaced by \code{flash_attn_ext}; ggmlR implements it
+#' so attention can be trained through the fused op. It is also wired into the
+#' graph autodiff, so \code{\link{ggml_build_backward_expand}} reaches it on its
+#' own --- calling this directly is only needed when building a backward graph
+#' by hand.
+#'
+#' The three gradients come back packed head to tail in one contiguous 1D
+#' tensor: \code{grad_q}, then \code{grad_k}, then \code{grad_v}, each padded to
+#' \code{GGML_MEM_ALIGN}. Take a view of the slice you need.
+#'
+#' Not supported: \code{max_bias} (ALiBi), \code{logit_softcap} and attention
+#' sinks. Q, K, V and \code{d} must be F32.
 #'
 #' @param ctx GGML context
-#' @param q Query tensor (same as forward pass)
-#' @param k Key tensor (same as forward pass)
-#' @param v Value tensor (same as forward pass)
-#' @param d Gradient tensor from upstream (same shape as forward output)
-#' @param masked Logical: whether causal masking was used in forward pass
-#' @return Gradient tensor
+#' @param q Query tensor \code{[DK, N, H, B]}, as passed to the forward pass
+#' @param k Key tensor \code{[DK, M, H_kv, B]}, as passed to the forward pass
+#' @param v Value tensor \code{[DV, M, H_kv, B]}, as passed to the forward pass
+#' @param mask Attention mask \code{[M, N, H_m, B_m]} of type F16, or NULL
+#' @param d Gradient of the forward output, shape \code{[DV, H, N, B]}
+#' @param scale Softmax scale used in the forward pass (e.g. \code{1/sqrt(DK)})
+#' @return Tensor holding grad_q, grad_k and grad_v packed contiguously
+#' @seealso \code{\link{ggml_flash_attn_ext}} for the forward pass.
 #' @export
-ggml_flash_attn_back <- function(ctx, q, k, v, d, masked = TRUE) {
-  .Call("R_ggml_flash_attn_back", ctx, q, k, v, d, as.logical(masked),
+ggml_flash_attn_back <- function(ctx, q, k, v, mask, d, scale) {
+  .Call("R_ggml_flash_attn_back", ctx, q, k, v, mask, d, as.numeric(scale),
         PACKAGE = "ggmlR")
 }
 

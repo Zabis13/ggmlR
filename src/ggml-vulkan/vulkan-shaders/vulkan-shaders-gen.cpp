@@ -1129,6 +1129,15 @@ void process_shaders() {
     // ggmlR: OUT_PROD, the op both mul_mat gradients are built from.
     string_to_spv("out_prod_f32", "out_prod.comp", {{"A_TYPE", "float"}});
     string_to_spv("cross_entropy_loss_back_f32", "cross_entropy_loss_back.comp", {{"A_TYPE", "float"}});
+    // ggmlR: backward of flash attention. Upstream has no such shader (and no
+    // working op), so attention training fell back to the CPU once per block.
+    string_to_spv("flash_attn_back_f32", "flash_attn_back.comp", {{"A_TYPE", "float"}});
+    // ggmlR: backward of convolution. Without it a conv training graph ran its
+    // backward on the CPU, which measured SLOWER than training on the CPU outright.
+    string_to_spv("im2col_back_f32", "im2col_back.comp", {{"A_TYPE", "float"}});
+    // ggmlR: backward of embedding lookup. Scatter with atomics; contention was
+    // measured first and is incidental, unlike flash_attn_back's.
+    string_to_spv("get_rows_back_f32", "get_rows_back.comp", {{"A_TYPE", "float"}});
 
     string_to_spv("topk_moe_f32", "topk_moe.comp", {});
 

@@ -328,6 +328,7 @@ ggml_gru <- function(units, return_sequences = FALSE,
 #'   (default \code{FALSE}). Weightless and relative, so it generalises to
 #'   unseen sequence lengths. Needs an even \code{d_model / n_heads}.
 #' @param rope_base Rotation base for \code{rope} (default 10000).
+#' @param dropout Dropout rate applied to the attention weights during training (default 0, no dropout).
 #' @param name Optional character name.
 #' @param trainable Logical; whether weights are updated during training.
 #' @return A \code{ggml_layer} object.
@@ -607,6 +608,7 @@ ggml_model <- function(inputs, outputs) {
 #'   distance between them -- so it carries over to sequence lengths the model
 #'   was not trained on. Needs an even \code{d_model / n_heads}.
 #' @param rope_base Rotation base for \code{rope} (default 10000, the value
+#' @param dropout Dropout rate applied to the attention weights during training (default 0, no dropout).
 #'   used by LLaMA-family models). Larger values stretch the rotation over
 #'   longer contexts.
 #' @param bias Logical: add a bias to the output projection (default
@@ -703,6 +705,9 @@ ggml_layer_attention <- function(x, d_model, n_heads = 1L, causal = FALSE,
 #'   (default \code{FALSE}).
 #' @param dropout Dropout rate applied to each sublayer's output before it is
 #'   added back to the residual (default 0, meaning no dropout).
+#' @param attn_dropout Dropout rate for the attention weights specifically;
+#'   defaults to \code{dropout}, so setting only \code{dropout} applies the
+#'   same rate everywhere.
 #' @param name Optional prefix for the layers inside the block.
 #' @return A new \code{ggml_tensor_node} of shape \code{c(seq_len, d_model)},
 #'   so blocks stack directly.

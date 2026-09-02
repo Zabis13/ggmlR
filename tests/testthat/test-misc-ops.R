@@ -61,24 +61,25 @@ test_that("ggml_repeat_back works", {
 # ============================================================================
 
 test_that("ggml_flash_attn_back returns externalptr", {
+  # Was skipped for years as "not implemented (TODO in ggml.c)": upstream ships
+  # the constructor as a GGML_ABORT stub. ggmlR implements it, so it builds.
   ctx <- ggml_init(4 * 1024 * 1024)
   on.exit(ggml_free(ctx))
 
-  d <- 8L
-  n <- 4L
+  DK <- 8L; DV <- 8L; N <- 4L; M <- 4L
 
-  q <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d, n)
-  k <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d, n)
-  v <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, d, n)
+  q <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, DK, N, 1L, 1L)
+  k <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, DK, M, 1L, 1L)
+  v <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, DV, M, 1L, 1L)
+  d <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, DV, 1L, N, 1L)
 
-  ggml_set_f32(q, rnorm(d * n))
-  ggml_set_f32(k, rnorm(d * n))
-  ggml_set_f32(v, rnorm(d * n))
-  ggml_set_input(q)
-  ggml_set_input(k)
-  ggml_set_input(v)
+  ggml_set_f32(q, rnorm(DK * N))
+  ggml_set_f32(k, rnorm(DK * M))
+  ggml_set_f32(v, rnorm(DV * M))
+  ggml_set_f32(d, rnorm(DV * N))
 
-  skip("ggml_flash_attn_back not implemented (TODO in ggml.c)")
+  r <- ggml_flash_attn_back(ctx, q, k, v, NULL, d, 1 / sqrt(DK))
+  expect_true(inherits(r, "externalptr"))
 })
 
 # ============================================================================
