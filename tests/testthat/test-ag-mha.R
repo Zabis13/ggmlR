@@ -135,43 +135,138 @@ test_that("optimizer step reduces MHA loss over 10 iterations", {
   expect_lt(losses[10L], losses[1L])
 })
 
-test_that("ag_gradcheck passes for MHA (small model)", {
+# Finite differences against the REAL mha$forward().
+#
+# The previous version of this check rebuilt an equivalent graph by hand from
+# ag_matmul/ag_softmax and differentiated that. It therefore tested the base
+# ops -- already covered in test-autograd-ops.R -- and not the layer: the
+# hand-written replica hard-coded the scale, skipped b_o, skipped the causal
+# mask and used its own row slicing, so any of those could be wrong in the
+# layer and the check would still pass. ag_batch_norm shipped a wrong gradient
+# behind exactly that kind of gap. These call the layer itself.
+
+# Swap the layer's parameters for the tensors gradcheck perturbs, run the real
+# forward, then put the originals back.
+mha_loss_fn <- function(mha, q, k = NULL, v = NULL, causal = FALSE, w = NULL) {
+  function(ins) {
+    orig <- list(W_q = mha$W_q, W_k = mha$W_k, W_v = mha$W_v,
+                 W_o = mha$W_o, b_o = mha$b_o)
+    on.exit({
+      mha$W_q <- orig$W_q; mha$W_k <- orig$W_k; mha$W_v <- orig$W_v
+      mha$W_o <- orig$W_o; mha$b_o <- orig$b_o
+    }, add = TRUE)
+
+    for (nm in names(ins)) {
+      if (nm %in% c("W_q", "W_k", "W_v", "W_o", "b_o")) mha[[nm]] <- ins[[nm]]
+    }
+    qq <- if (!is.null(ins$q)) ins$q else q
+    out <- if (is.null(k)) mha$forward(qq, causal_mask = causal)
+           else            mha$forward(qq, k, v, causal_mask = causal)
+    # A non-constant weight matrix: a plain sum lets sign-symmetric errors
+    # cancel, which is how a wrong gradient survives a gradcheck.
+    ag_sum(ag_mul(out, ag_tensor(w)))
+  }
+}
+
+test_that("gradcheck passes for the real MHA forward (weights, self-attention)", {
   set.seed(6)
   mha <- ag_multihead_attention(4L, 2L, bias = FALSE)
+  x   <- ag_tensor(matrix(rnorm(4 * 3), 4, 3))
+  w   <- matrix(seq(0.2, by = 0.09, length.out = 12), 4, 3)
 
-  W_q <- mha$parameters()$W_q
-  W_k <- mha$parameters()$W_k
-  W_v <- mha$parameters()$W_v
-  W_o <- mha$parameters()$W_o
-
-  x_fix <- matrix(rnorm(4 * 3), 4, 3)
-
-  result <- ag_gradcheck(
-    fn = function(ins) {
-      # Temporarily assign weights for gradcheck perturbation
-      ins$W_q$data <- ins$W_q$data  # identity (gradcheck manages)
-      ag_mse_loss(
-        ag_matmul(ins$W_o,
-          ggmlR:::.ag_row_concat(lapply(seq_len(2L), function(h) {
-            rows <- ((h-1)*2+1):(h*2)
-            q_h  <- ag_matmul(ag_tensor(diag(1,4)[rows,]), ag_matmul(ins$W_q, ag_tensor(x_fix)))
-            k_h  <- ag_matmul(ag_tensor(diag(1,4)[rows,]), ag_matmul(ins$W_k, ag_tensor(x_fix)))
-            v_h  <- ag_matmul(ag_tensor(diag(1,4)[rows,]), ag_matmul(ins$W_v, ag_tensor(x_fix)))
-            sc   <- ag_scale(ag_matmul(ag_transpose(q_h), k_h), 1/sqrt(2))
-            at   <- ag_transpose(ag_softmax(ag_transpose(sc)))
-            ag_matmul(v_h, ag_transpose(at))
-          }))
-        ),
-        matrix(0, 4, 3)
-      )
-    },
-    inputs = list(W_q = W_q, W_k = W_k, W_v = W_v, W_o = W_o),
-    atol   = 1e-3,
-    quiet  = TRUE
+  p  <- mha$parameters()
+  ok <- ag_gradcheck(
+    fn     = mha_loss_fn(mha, x, w = w),
+    inputs = list(W_q = p$W_q, W_k = p$W_k, W_v = p$W_v, W_o = p$W_o),
+    atol   = 1e-3, quiet = TRUE
   )
-  expect_true(result)
+  expect_true(ok)
 })
 
+test_that("gradcheck passes for the MHA input, not just its weights", {
+  # The old check never perturbed x, so the gradient flowing back to the input
+  # -- through the slicing, the softmax and the concat -- was unverified.
+  set.seed(7)
+  mha <- ag_multihead_attention(4L, 2L, bias = FALSE)
+  x   <- ag_param(matrix(rnorm(4 * 3), 4, 3))
+  w   <- matrix(seq(0.15, by = 0.11, length.out = 12), 4, 3)
+
+  ok <- ag_gradcheck(
+    fn     = mha_loss_fn(mha, NULL, w = w),
+    inputs = list(q = x),
+    atol   = 1e-3, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+test_that("gradcheck covers the output bias b_o", {
+  # bias = TRUE is the constructor default, yet the old gradcheck used
+  # bias = FALSE and left the ag_add(out, b_o) branch unchecked.
+  set.seed(8)
+  mha <- ag_multihead_attention(4L, 2L, bias = TRUE)
+  x   <- ag_tensor(matrix(rnorm(4 * 3), 4, 3))
+  w   <- matrix(seq(0.25, by = 0.07, length.out = 12), 4, 3)
+
+  p  <- mha$parameters()
+  ok <- ag_gradcheck(
+    fn     = mha_loss_fn(mha, x, w = w),
+    inputs = list(W_o = p$W_o, b_o = p$b_o),
+    atol   = 1e-3, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+test_that("gradcheck passes with the causal mask on", {
+  # -Inf enters the softmax here; the gradient must still match finite
+  # differences, not merely be finite (that is test-ag-mha.R's other check).
+  set.seed(9)
+  mha <- ag_multihead_attention(4L, 2L, bias = FALSE)
+  x   <- ag_tensor(matrix(rnorm(4 * 4), 4, 4))
+  w   <- matrix(seq(0.3, by = 0.05, length.out = 16), 4, 4)
+
+  p  <- mha$parameters()
+  ok <- ag_gradcheck(
+    fn     = mha_loss_fn(mha, x, causal = TRUE, w = w),
+    inputs = list(W_q = p$W_q, W_v = p$W_v),
+    atol   = 1e-3, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+test_that("gradcheck passes for cross-attention (q, k, v distinct)", {
+  # k and v are separate tensors here, so W_k and W_v see a different input
+  # than W_q -- a case self-attention cannot distinguish.
+  set.seed(10)
+  mha <- ag_multihead_attention(4L, 2L, bias = FALSE)
+  q   <- ag_tensor(matrix(rnorm(4 * 3), 4, 3))
+  kv  <- ag_tensor(matrix(rnorm(4 * 5), 4, 5))
+  w   <- matrix(seq(0.18, by = 0.06, length.out = 12), 4, 3)
+
+  p  <- mha$parameters()
+  ok <- ag_gradcheck(
+    fn     = mha_loss_fn(mha, q, kv, kv, w = w),
+    inputs = list(W_q = p$W_q, W_k = p$W_k, W_v = p$W_v),
+    atol   = 1e-3, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+test_that("gradcheck passes for 4 heads (scale depends on d_k)", {
+  # env$scale = 1/sqrt(d_k). The old replica hard-coded 1/sqrt(2), which is
+  # only right for d_k = 2, so a wrong scale in the layer went unnoticed.
+  set.seed(11)
+  mha <- ag_multihead_attention(8L, 4L, bias = FALSE)
+  x   <- ag_tensor(matrix(rnorm(8 * 3), 8, 3))
+  w   <- matrix(seq(0.1, by = 0.03, length.out = 24), 8, 3)
+
+  p  <- mha$parameters()
+  ok <- ag_gradcheck(
+    fn     = mha_loss_fn(mha, x, w = w),
+    inputs = list(W_q = p$W_q, W_o = p$W_o),
+    atol   = 1e-3, quiet = TRUE
+  )
+  expect_true(ok)
+})
 # ============================================================================
 # train / eval mode
 # ============================================================================
@@ -215,4 +310,75 @@ test_that("ag_multihead_attention works inside ag_sequential", {
 
   p <- model$parameters()
   expect_true(length(p) >= 5L)
+})
+
+# ============================================================================
+# Causal mask: -Inf must not reach the gradients
+# ============================================================================
+
+test_that("causal mask: backward produces finite gradients (seq_q == seq_kv)", {
+  # The mask injects -Inf before the softmax. Partial masking is safe -- p is
+  # exactly 0 there, so the softmax backward contributes 0 * (...) -- but that
+  # holds only while no row is fully masked. This pins the safe case down.
+  set.seed(40)
+  mha <- ag_multihead_attention(8L, 2L, bias = FALSE)
+  x   <- ag_param(matrix(rnorm(8 * 5), 8, 5))
+
+  with_grad_tape({
+    out  <- mha$forward(x, causal_mask = TRUE)
+    loss <- ag_mse_loss(out, matrix(0.0, 8, 5))
+  })
+  expect_true(is.finite(as.numeric(ggmlR:::.ag_data(loss))))
+
+  grads <- backward(loss)
+
+  g_x <- get0(as.character(x$id), envir = grads)
+  expect_false(is.null(g_x))
+  expect_true(all(is.finite(g_x)))
+
+  for (nm in c("W_q", "W_k", "W_v", "W_o")) {
+    g <- get0(as.character(mha$parameters()[[nm]]$id), envir = grads)
+    expect_false(is.null(g), info = paste("gradient missing for", nm))
+    expect_true(all(is.finite(g)), info = paste("non-finite gradient for", nm))
+  }
+})
+
+test_that("causal mask: backward is finite for cross-attention shapes", {
+  # seq_kv > seq_q and seq_q > seq_kv both keep the diagonal open, so neither
+  # can produce a fully masked row. Checked here because the mask is built from
+  # two independent lengths and only the square case is exercised elsewhere.
+  for (dims in list(c(3L, 6L), c(6L, 3L), c(1L, 4L), c(4L, 1L))) {
+    seq_q <- dims[[1L]]; seq_kv <- dims[[2L]]
+    set.seed(41)
+    mha <- ag_multihead_attention(4L, 2L, bias = FALSE)
+    q   <- ag_param(matrix(rnorm(4 * seq_q),  4, seq_q))
+    kv  <- ag_tensor(matrix(rnorm(4 * seq_kv), 4, seq_kv))
+
+    with_grad_tape({
+      out  <- mha$forward(q, kv, kv, causal_mask = TRUE)
+      loss <- ag_mse_loss(out, matrix(0.0, 4, seq_q))
+    })
+    info <- sprintf("seq_q=%d seq_kv=%d", seq_q, seq_kv)
+    expect_true(is.finite(as.numeric(ggmlR:::.ag_data(loss))), info = info)
+
+    g_q <- get0(as.character(q$id), envir = backward(loss))
+    expect_false(is.null(g_q), info = info)
+    expect_true(all(is.finite(g_q)), info = info)
+  }
+})
+
+test_that("causal mask: masked positions get exactly zero attention weight", {
+  # Not just "finite" but "actually masking": the first query may attend only
+  # to the first key, so with one head its output must equal V's first column.
+  set.seed(42)
+  mha <- ag_multihead_attention(4L, 1L, bias = FALSE)
+  x   <- ag_tensor(matrix(rnorm(4 * 4), 4, 4))
+
+  out <- ggmlR:::.ag_data(mha$forward(x, causal_mask = TRUE))
+
+  W_v <- ggmlR:::.ag_data(mha$parameters()$W_v)
+  W_o <- ggmlR:::.ag_data(mha$parameters()$W_o)
+  v1  <- (W_v %*% ggmlR:::.ag_data(x))[, 1L, drop = FALSE]
+
+  expect_equal(out[, 1L], as.numeric(W_o %*% v1), tolerance = 1e-6)
 })

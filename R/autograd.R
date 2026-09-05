@@ -7,7 +7,10 @@
 #   - Inference:  static ggml graph (nn_build_graph / ggml_predict)
 #
 # Key design: ag_tensor uses environment (reference semantics) so optimizer
-# updates to $data are visible to all references, just like PyTorch tensors.
+# updates to a tensor's value are visible to all references, just like PyTorch
+# tensors. Access goes through .ag_data() / .ag_data_mut() / .ag_data_set() --
+# see inst/docs/ag_data_contract.md -- not through $data, which stops being
+# authoritative once a value can live on the device instead.
 #
 # GPU support (Phase 1):
 #   - Forward pass dispatches compute-heavy ops to ggml backend.
@@ -68,13 +71,35 @@ ag_tensor <- function(data, device = .ag_device_state$device,
   if (is.vector(data) && !is.list(data)) data <- matrix(data, ncol = 1L)
   e <- new.env(parent = emptyenv())
   e$id            <- ag_next_id()
-  e$data          <- data       # numeric matrix — always kept for backward
+  # Value. Read it with .ag_data(), never directly: once the tape is GPU-
+  # resident this may be NULL, with the value living in a backend buffer until
+  # something asks for it. Change it with .ag_data_set(), never by assignment,
+  # or the device copy goes stale without saying so. Read-modify-write cycles
+  # (gradcheck, optimizers, replica sync) use .ag_data_mut() + .ag_data_set().
+  # Full rules: inst/docs/ag_data_contract.md.
+  e$data          <- data
   e$grad          <- NULL       # filled by backward
   e$requires_grad <- FALSE
   e$grad_fn       <- NULL
   e$device        <- device
   e$dtype         <- dtype
+  # Residency handles, filled in only once a tensor is kept on the device:
+  #   $ptr     — backend tensor handle, valid while its context lives
+  #   $shape   — [nrow, ncol] recorded at upload time, needed to read $ptr back
+  #   $ctx_gen — generation the pointer was allocated under; .ag_data() refuses
+  #              to read a pointer from an older generation (see .ag_data).
+  e$ptr           <- NULL
+  e$shape         <- NULL
+  e$ctx_gen       <- NULL
+  #   $data_gen — generation $data was materialised from, when it is a cached
+  #               download rather than the authoritative value. NULL means
+  #               $data is authoritative (host-side tensor, or freshly set).
+  e$data_gen      <- NULL
   class(e) <- "ag_tensor"
+  # Opt-in diagnostics (GGMLR_AG_TRACE_DATA=1): replaces $data with a counting
+  # active binding. Checked once here, never on the read path, so it costs
+  # nothing when off. See R/ag_trace.R.
+  if (.ag_trace$enabled) .ag_trace_install(e, data)
   e
 }
 
@@ -116,7 +141,7 @@ print.ag_tensor <- function(x, ...) {
   print(d)
   if (!is.null(x$grad)) {
     cat("  grad:\n")
-    print(x$grad)
+    print(.ag_as_matrix(x$grad))
   }
   invisible(x)
 }
@@ -125,15 +150,22 @@ print.ag_tensor <- function(x, ...) {
 # Tape recording
 # ============================================================================
 
-ag_record <- function(output, grad_fn, inputs) {
+# `op` and `...` are the graph-backward record: the name of the rule to emit and
+# whatever that rule needs (the same snapshots the closure captured). They are
+# optional -- an op that does not pass them still records a perfectly good
+# closure node, and a tape containing one simply does not qualify for the graph
+# path (R/ag_backward_graph.R). grad_fn is always recorded either way, so the
+# closure path stays the fallback for everything.
+ag_record <- function(output, grad_fn, inputs, op = NULL, ...) {
   if (!.ag_tape$enabled) return(invisible(NULL))
   any_grad <- any(vapply(inputs, function(i) is_ag_tensor(i) && isTRUE(i$requires_grad), logical(1)))
   if (!any_grad) return(invisible(NULL))
-  .ag_tape$nodes <- c(.ag_tape$nodes, list(list(
+  .ag_tape$nodes <- c(.ag_tape$nodes, list(c(list(
     output_id = output$id,
     grad_fn   = grad_fn,
-    inputs    = inputs
-  )))
+    inputs    = inputs,
+    op        = op
+  ), list(...))))
   invisible(NULL)
 }
 
@@ -222,7 +254,10 @@ ag_matmul <- function(A, B) {
       )
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(A = A, B = B))
+    # a_snap/b_snap are recorded for the graph path too: it emits the same rule
+    # (dA = g %*% t(B), dB = t(A) %*% g) as mul_mat nodes instead of R matmuls.
+    ag_record(out, grad_fn, list(A = A, B = B),
+              op = "matmul", a_snap = a_snap, b_snap = b_snap)
   }
   out
 }
@@ -284,7 +319,11 @@ ag_add <- function(A, B) {
       list(A = ga, B = gb)
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(A = A, B = B))
+    # b_orig plus the output shape let the graph path recognise the broadcast
+    # cases; it declines those for now rather than emitting a wrong reduction.
+    ag_record(out, grad_fn, list(A = A, B = B),
+              op = "add", b_orig = b_orig,
+              out_nr = nrow(.ag_data(out)), out_nc = ncol(.ag_data(out)))
   }
   out
 }
@@ -414,7 +453,12 @@ ag_mul <- function(A, B) {
       )
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(A = A, B = B))
+    # Graph path: dA = g * b, dB = g * a -- one ggml_mul each, with the OTHER
+    # operand as the multiplier. Shapes are recorded so the emitter can refuse
+    # a broadcast rather than emit a wrong reduction.
+    ag_record(out, grad_fn, list(A = A, B = B), op = "mul",
+              a_snap = a_snap, b_snap = b_snap,
+              a_orig = a_orig, b_orig = b_orig)
   }
   out
 }
@@ -438,7 +482,7 @@ ag_scale <- function(x, scalar) {
     x_ref <- x
     grad_fn <- function(grad_out) list(x = grad_out * scalar)
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "scale", scalar = scalar)
   }
   out
 }
@@ -465,7 +509,9 @@ ag_relu <- function(x) {
     x_ref <- x
     grad_fn <- function(grad_out) list(x = grad_out * mask)
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    # Same multiplier the closure uses, recorded so the graph path can emit
+    # dx = g * mask as a single ggml_mul node.
+    ag_record(out, grad_fn, list(x = x), op = "elemwise_mul", mult = mask)
   }
   out
 }
@@ -492,7 +538,8 @@ ag_sigmoid <- function(x) {
     s_snap <- s
     grad_fn <- function(grad_out) list(x = grad_out * s_snap * (1.0 - s_snap))
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "elemwise_mul",
+              mult = s_snap * (1.0 - s_snap))
   }
   out
 }
@@ -517,7 +564,8 @@ ag_tanh <- function(x) {
     t_snap <- t_val
     grad_fn <- function(grad_out) list(x = grad_out * (1.0 - t_snap^2))
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "elemwise_mul",
+              mult = 1.0 - t_snap^2)
   }
   out
 }
@@ -555,7 +603,7 @@ ag_softmax <- function(x) {
       list(x = p_snap * (grad_out - dot_m))
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "softmax", p_snap = p_snap)
   }
   out
 }
@@ -587,7 +635,9 @@ ag_mse_loss <- function(pred, target) {
       list(pred = (2.0 / n) * diff_snap * as.numeric(grad_out))
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(pred = pred))
+    # Graph path: gradient is a ready matrix times a scalar (see loss_const).
+    ag_record(out, grad_fn, list(pred = pred),
+              op = "loss_const", gmat = diff_snap, gscale = 2.0 / n)
   }
   out
 }
@@ -621,7 +671,8 @@ ag_cross_entropy_loss <- function(pred, target) {
       list(pred = (-t_snap / p_snap) / n * as.numeric(grad_out))
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(pred = pred))
+    ag_record(out, grad_fn, list(pred = pred),
+              op = "loss_const", gmat = -t_snap / p_snap, gscale = 1.0 / n)
   }
   out
 }
@@ -674,7 +725,8 @@ ag_softmax_cross_entropy_loss <- function(logits, target) {
       list(logits = (p_snap - t_snap) / n * as.numeric(grad_out))
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(logits = logits))
+    ag_record(out, grad_fn, list(logits = logits),
+              op = "loss_const", gmat = p_snap - t_snap, gscale = 1.0 / n)
   }
   out
 }
@@ -705,6 +757,47 @@ ag_softmax_cross_entropy_loss <- function(logits, target) {
 backward <- function(loss) {
   if (!is_ag_tensor(loss)) stop("backward() requires an ag_tensor")
 
+  # Graph path: the whole backward pass as one ggml graph, when enabled and when
+  # every node on the tape is an op it can emit. Measured at 2-3.6x the closure
+  # path; see R/ag_backward_graph.R for why it must stay all-or-nothing.
+  #
+  # It returns NULL for any tape it will not take, and any error in it is a
+  # fallback rather than a failure: the closure path below computes the same
+  # gradients and is always available.
+  if (.ag_bwd_is_enabled()) {
+    prof_t0 <- if (isTRUE(.ag_bwd$prof)) Sys.time() else NULL
+    graph_grads <- tryCatch(
+      .ag_bwd_run_graph(loss, .ag_tape$nodes),
+      error = function(e) {
+        .ag_bwd$last_path <- paste0("closures (error: ", conditionMessage(e), ")")
+        NULL
+      })
+    if (!is.null(graph_grads)) {
+      if (!is.null(prof_t0)) { tw <- Sys.time() }
+      .ag_bwd_write_leaf_grads(graph_grads)
+      if (!is.null(prof_t0)) {
+        # Two stages the in-graph clock cannot see: installing $grad on the leaf
+        # tensors, and whatever backward() itself spends around the call
+        # (tryCatch, the tape scan and .ag_ctx_ensure that run before the
+        # in-graph clock starts). The first real-model profile accounted for
+        # only ~80%% of backward() on the large models, and this is the rest.
+        #
+        # The first stage is named for what it COSTS, not for the function it
+        # calls. .ag_bwd_write_leaf_grads is 0.05-0.11 ms of R arithmetic on the
+        # CPU path but 4-5 ms here, because the values it installs still have to
+        # be materialised off the device. Calling the stage "write_leaf" invited
+        # exactly one wrong conclusion -- that a third of the backward was R-side
+        # bookkeeping to be optimised away, when it is transfer that residency
+        # would remove. Keep the name pointing at the cost.
+        .ag_bwd_prof_extra("leaf_fetch", tw)
+        .ag_bwd_prof_extra("bwd_other",  prof_t0, subtract = TRUE)
+      }
+      return(invisible(graph_grads))
+    }
+  } else {
+    .ag_bwd$last_path <- "closures"
+  }
+
   grads <- new.env(hash = TRUE, parent = emptyenv())
   assign(as.character(loss$id), matrix(1.0), envir = grads)
 
@@ -732,68 +825,183 @@ backward <- function(loss) {
     }
   }
 
-  # Write gradients back to leaf tensor $grad fields
+  .ag_bwd_write_leaf_grads(grads)
+
+  invisible(grads)
+}
+
+# Write accumulated gradients back to the leaf tensors' $grad fields.
+#
+# Shared by both backward paths so they cannot drift: whatever the graph path
+# computes lands in $grad exactly the way the closure path's results do.
+.ag_bwd_write_leaf_grads <- function(grads) {
+  # Each tensor is written ONCE, however many tape nodes consume it.
+  #
+  # `grads` already holds the total: the backward walk above accumulates every
+  # path into grads[[id]] before this runs. Adding it per referencing node --
+  # which is what this loop did until it was caught by a slice/concat test --
+  # multiplies the gradient by the number of consumers: a tensor sliced into 4
+  # attention heads came out 4x too large. The forward pass is unaffected, and
+  # a doubled gradient still trains (just with an inflated learning rate), so
+  # nothing about it is visible without differentiating against a reference.
+  seen <- new.env(hash = TRUE, parent = emptyenv())
   for (node in .ag_tape$nodes) {
     for (inp in node$inputs) {
       if (!is_ag_tensor(inp) || !isTRUE(inp$requires_grad)) next
       key <- as.character(inp$id)
-      g   <- get0(key, envir = grads)
+      if (!is.null(get0(key, envir = seen))) next
+      assign(key, TRUE, envir = seen)
+      g <- get0(key, envir = grads)
       if (!is.null(g)) {
-        inp$grad <- if (is.null(inp$grad)) g else inp$grad + g
+        # An EXISTING gradient is materialised before it is added to.
+        #
+        # Not merely because `+` cannot take a handle: a gradient that survives
+        # into a second backward() has outlived its buffer. with_grad_tape()
+        # calls .ag_reset_ggml_ctx(), which frees the contexts and bumps
+        # ctx_gen, so a handle installed on the previous pass points at
+        # released memory by the time the next pass writes to it. Caught by the
+        # accumulation test: "buffer freed by a tape reset (generation 12 < 13)".
+        #
+        # So residency for $grad lasts exactly as long as the tape that
+        # produced it. That is enough for the case it was built for -- the
+        # optimizer reads $grad within the same step -- and anything that holds
+        # a gradient across a tape boundary gets a plain matrix, which is what
+        # it needs anyway.
+        if (is.null(inp$grad)) {
+          inp$grad <- g
+          # A handle here lives in a buffer the next with_grad_tape() frees.
+          # Register the tensor so the reset materialises it first -- a
+          # gradient is the one piece of state with no host fallback, so
+          # letting the pointer die would lose it outright.
+          if (.ag_is_handle(g)) .ag_register_pending_grad(inp)
+        } else {
+          prev <- .ag_as_matrix(inp$grad)
+          inp$grad <- prev + .ag_as_matrix(g)
+        }
       }
     }
   }
-
-  invisible(grads)
+  invisible(NULL)
 }
 
 # ============================================================================
 # Optimizers
 # ============================================================================
 
+# Where does an optimizer step get its gradients?
+#
+# Two places hold a gradient and they do not hold the same thing:
+#
+#   p$grad                  accumulates across backward() calls
+#   backward()'s return env holds only the last call's gradients
+#
+# step(grads) reads the env, which is right for the ordinary one-batch loop and
+# wrong the moment micro-batches are accumulated -- it would apply the last one
+# and drop the rest. step() with no argument reads $grad instead, so it sees
+# the accumulated sum. Both spellings stay supported: dp_train() and the mlr3
+# learners pass an env of their own (averaged across replicas, in dp_train's
+# case) and must keep working unchanged.
+#
+# `n` divides the result when the optimizer is averaging accumulated steps.
+.ag_opt_grad_for <- function(p, grads, n = 1L) {
+  g <- if (is.null(grads)) p$grad else get0(as.character(p$id), envir = grads)
+  if (is.null(g)) return(NULL)
+  # With resident gradients (component 3) this is a device handle, and this is
+  # the point where the optimizer needs actual numbers -- so it is also the
+  # one download a whole backward pass pays, instead of one per leaf.
+  g <- .ag_as_matrix(g)
+  if (n > 1L) g / n else g
+}
+
+# Accumulation bookkeeping shared by both optimizers: count a completed
+# backward() and say whether this call should actually update the weights.
+# Returns the divisor to apply, or NULL when the step is still being filled.
+.ag_opt_accum_tick <- function(env) {
+  if (env$accumulate_steps <= 1L) return(1L)
+  env$accum_count <- env$accum_count + 1L
+  if (env$accum_count < env$accumulate_steps) return(NULL)
+  env$accum_count <- 0L
+  if (isTRUE(env$average)) env$accumulate_steps else 1L
+}
+
 #' Create an SGD optimizer
 #'
 #' @param params Named list of ag_param tensors
 #' @param lr Learning rate (default 0.01)
 #' @param momentum Momentum factor (default 0)
+#' @param accumulate_steps Number of \code{backward()} passes to accumulate
+#'   before a call to \code{$step()} updates the weights (default 1, no
+#'   accumulation).  With \code{k > 1} the first \code{k - 1} calls to
+#'   \code{$step()} only count, and the \code{k}-th applies the update and
+#'   resets the counter, so a micro-batch loop needs no bookkeeping of its own.
+#' @param average When accumulating, divide the accumulated gradient by
+#'   \code{accumulate_steps} (default \code{TRUE}).  That is what makes
+#'   \code{k} micro-batches equivalent to one batch of \code{k} times the size
+#'   for an averaging loss such as \code{\link{ag_mse_loss}}; set it to
+#'   \code{FALSE} for a summing loss, where the plain sum is already right.
 #' @return An optimizer environment
 #' @export
 #' @examples
 #' \donttest{
 #' w <- ag_param(matrix(runif(4), 2, 2))
 #' opt <- optimizer_sgd(list(w = w), lr = 0.01)
+#'
+#' # accumulate 4 micro-batches per update
+#' opt4 <- optimizer_sgd(list(w = w), lr = 0.01, accumulate_steps = 4L)
 #' }
-optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0) {
+optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
+                          accumulate_steps = 1L, average = TRUE) {
   stopifnot(is.list(params))
+  accumulate_steps <- as.integer(accumulate_steps)
+  if (is.na(accumulate_steps) || accumulate_steps < 1L) {
+    stop("accumulate_steps must be a positive integer")
+  }
   env <- new.env(parent = emptyenv())
   env$params   <- params
   env$lr       <- lr
   env$momentum <- momentum
+  env$accumulate_steps <- accumulate_steps
+  env$average          <- isTRUE(average)
+  env$accum_count      <- 0L
   env$velocity <- lapply(params, function(p) {
     d <- .ag_data(p)
     matrix(0.0, nrow(d), ncol(d))
   })
 
-  # step: update param $data in-place (reference semantics via environment)
-  env$step <- function(grads) {
+  # step: update each parameter's value in place (reference semantics via
+  # environment). Read-modify-write, so it goes through the mutable path:
+  # assigning $data directly would leave a resident parameter's device buffer
+  # holding the pre-update weights while the host copy moved on
+  # (inst/docs/ag_data_contract.md).
+  #
+  # `grads` is optional: omit it to read the accumulated $grad (see
+  # .ag_opt_grad_for), pass an env to use those gradients instead.
+  env$step <- function(grads = NULL) {
+    n <- .ag_opt_accum_tick(env)
+    if (is.null(n)) return(invisible(FALSE))   # still filling the accumulation
     for (nm in names(env$params)) {
-      p   <- env$params[[nm]]
-      key <- as.character(p$id)
-      g   <- get0(key, envir = grads)
+      p <- env$params[[nm]]
+      g <- .ag_opt_grad_for(p, grads, n)
       if (is.null(g)) next
+      w <- .ag_data_mut(p)
       if (env$momentum > 0) {
         env$velocity[[nm]] <- env$momentum * env$velocity[[nm]] + g
-        p$data <- p$data - env$lr * env$velocity[[nm]]
+        .ag_data_set(p, w - env$lr * env$velocity[[nm]])
       } else {
-        p$data <- p$data - env$lr * g
+        .ag_data_set(p, w - env$lr * g)
       }
     }
+    invisible(TRUE)
   }
 
   env$zero_grad <- function() {
     for (nm in names(env$params)) {
       env$params[[nm]]$grad <- NULL
     }
+    # Resident gradients just went away, so the register that would rescue
+    # them at the next tape reset has nothing left worth saving. Clearing it
+    # avoids downloading gradients the optimizer has already consumed.
+    .ag_forget_pending_grads()
     .ag_tape$nodes <- list()
   }
 
@@ -808,6 +1016,14 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0) {
 #' @param beta1 First moment decay (default 0.9)
 #' @param beta2 Second moment decay (default 0.999)
 #' @param eps Stability constant (default 1e-8)
+#' @param accumulate_steps Number of \code{backward()} passes to accumulate
+#'   before a call to \code{$step()} updates the weights (default 1, no
+#'   accumulation).  The bias-correction counter advances only on a real
+#'   update, so accumulating \code{k} micro-batches behaves like one step on
+#'   the larger batch rather than like \code{k} steps.
+#' @param average When accumulating, divide the accumulated gradient by
+#'   \code{accumulate_steps} (default \code{TRUE}).  See
+#'   \code{\link{optimizer_sgd}}.
 #' @return An optimizer environment
 #' @export
 #' @examples
@@ -815,8 +1031,13 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0) {
 #' w <- ag_param(matrix(runif(4), 2, 2))
 #' opt <- optimizer_adam(list(w = w), lr = 1e-3)
 #' }
-optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999, eps = 1e-8) {
+optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
+                           eps = 1e-8, accumulate_steps = 1L, average = TRUE) {
   stopifnot(is.list(params))
+  accumulate_steps <- as.integer(accumulate_steps)
+  if (is.na(accumulate_steps) || accumulate_steps < 1L) {
+    stop("accumulate_steps must be a positive integer")
+  }
   env <- new.env(parent = emptyenv())
   env$params <- params
   env$lr     <- lr
@@ -824,15 +1045,23 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999, eps = 
   env$beta2  <- beta2
   env$eps    <- eps
   env$t      <- 0L
+  env$accumulate_steps <- accumulate_steps
+  env$average          <- isTRUE(average)
+  env$accum_count      <- 0L
   env$m      <- lapply(params, function(p) { d <- .ag_data(p); matrix(0.0, nrow(d), ncol(d)) })
   env$v      <- lapply(params, function(p) { d <- .ag_data(p); matrix(0.0, nrow(d), ncol(d)) })
 
-  env$step <- function(grads) {
+  # `grads` is optional -- see the SGD step and .ag_opt_grad_for.
+  env$step <- function(grads = NULL) {
+    n <- .ag_opt_accum_tick(env)
+    if (is.null(n)) return(invisible(FALSE))   # still filling the accumulation
+
+    # Only a real update advances t. Counting the skipped calls would make the
+    # bias correction think k times as many steps had happened.
     env$t <- env$t + 1L
     for (nm in names(env$params)) {
-      p   <- env$params[[nm]]
-      key <- as.character(p$id)
-      g   <- get0(key, envir = grads)
+      p <- env$params[[nm]]
+      g <- .ag_opt_grad_for(p, grads, n)
       if (is.null(g)) next
 
       env$m[[nm]] <- env$beta1 * env$m[[nm]] + (1 - env$beta1) * g
@@ -841,14 +1070,22 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999, eps = 
       m_hat <- env$m[[nm]] / (1 - env$beta1^env$t)
       v_hat <- env$v[[nm]] / (1 - env$beta2^env$t)
 
-      p$data <- p$data - env$lr * m_hat / (sqrt(v_hat) + env$eps)
+      # Read-modify-write on the parameter: see the SGD step above and
+      # inst/docs/ag_data_contract.md.
+      w <- .ag_data_mut(p)
+      .ag_data_set(p, w - env$lr * m_hat / (sqrt(v_hat) + env$eps))
     }
+    invisible(TRUE)
   }
 
   env$zero_grad <- function() {
     for (nm in names(env$params)) {
       env$params[[nm]]$grad <- NULL
     }
+    # Resident gradients just went away, so the register that would rescue
+    # them at the next tape reset has nothing left worth saving. Clearing it
+    # avoids downloading gradients the optimizer has already consumed.
+    .ag_forget_pending_grads()
     .ag_tape$nodes <- list()
   }
 
@@ -1127,7 +1364,7 @@ ag_transpose <- function(x) {
   if (out$requires_grad) {
     grad_fn <- function(grad_out) list(x = t(grad_out))
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "transpose")
   }
   out
 }
@@ -1264,27 +1501,36 @@ ag_gradcheck <- function(fn, inputs, eps = 1e-5, atol = 1e-4, verbose = FALSE,
     }
 
     # ---- numerical gradients (central differences) ----
-    x_flat     <- as.numeric(inp$data)
+    #
+    # Read-modify-write on the input: each step perturbs one element and the
+    # forward pass that follows must SEE that perturbation. Writing $data
+    # directly would leave a resident tensor's device buffer holding the
+    # unperturbed value, and fn() -- which reads via .ag_data() -- would then
+    # difference two identical forwards, giving a numerical gradient of zero
+    # that matches nothing. Silent, and it would look like a passing check.
+    # Hence the explicit mutable path (inst/docs/ag_data_contract.md).
+    base_val   <- .ag_data_mut(inp)
+    x_flat     <- as.numeric(base_val)
     num_g      <- numeric(length(x_flat))
-    inp_shape  <- dim(inp$data)
+    inp_shape  <- dim(base_val)
 
     for (k in seq_along(x_flat)) {
       # +eps
       x_flat[k] <- x_flat[k] + eps
-      inp$data   <- matrix(x_flat, inp_shape[1L], inp_shape[2L])
+      .ag_data_set(inp, matrix(x_flat, inp_shape[1L], inp_shape[2L]))
       with_grad_tape({ lp <- fn(inputs) })
       f_plus <- as.numeric(.ag_data(lp))
 
       # -eps
       x_flat[k] <- x_flat[k] - 2 * eps
-      inp$data   <- matrix(x_flat, inp_shape[1L], inp_shape[2L])
+      .ag_data_set(inp, matrix(x_flat, inp_shape[1L], inp_shape[2L]))
       with_grad_tape({ lm <- fn(inputs) })
       f_minus <- as.numeric(.ag_data(lm))
 
       num_g[k]   <- (f_plus - f_minus) / (2 * eps)
       x_flat[k]  <- x_flat[k] + eps  # restore
     }
-    inp$data <- matrix(x_flat, inp_shape[1L], inp_shape[2L])
+    .ag_data_set(inp, matrix(x_flat, inp_shape[1L], inp_shape[2L]))
 
     num_g_mat  <- matrix(num_g, nrow(anal_g), ncol(anal_g))
     max_err    <- max(abs(anal_g - num_g_mat))

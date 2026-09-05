@@ -298,6 +298,10 @@ clip_grad_norm <- function(params, grads, max_norm) {
     key <- as.character(p$id)
     g   <- get0(key, envir = grads)
     if (!is.null(g)) {
+      # Resident gradients (component 3) arrive as device handles; the norm is
+      # host arithmetic, so materialise once here and reuse below rather than
+      # letting `g^2` meet a handle.
+      g              <- .ag_as_matrix(g)
       total_sq       <- total_sq + sum(g^2)
       grad_list[[key]] <- g
     }
@@ -428,7 +432,10 @@ dp_train <- function(make_model,
     p0 <- replicas[[1L]]$parameters()
     for (i in seq(2L, n_gpu)) {
       pi <- replicas[[i]]$parameters()
-      for (nm in param_names) pi[[nm]]$data <- p0[[nm]]$data
+      # Copy through the contract: a replica's parameter may be resident, and a
+      # direct $data assignment would leave its device buffer on the old
+      # weights (inst/docs/ag_data_contract.md).
+      for (nm in param_names) .ag_data_set(pi[[nm]], .ag_data(p0[[nm]]))
     }
   }
 
@@ -440,7 +447,7 @@ dp_train <- function(make_model,
     p0 <- replicas[[1L]]$parameters()
     pi <- replicas[[i]]$parameters()
     for (nm in param_names) {
-      pi[[nm]]$data <- p0[[nm]]$data
+      .ag_data_set(pi[[nm]], .ag_data(p0[[nm]]))
     }
   }
 
@@ -485,13 +492,17 @@ dp_train <- function(make_model,
       if (is.null(g0)) next
 
       # sum contributions from replicas 2..N
-      g_sum <- g0
+      #
+      # Resident gradients (component 3) are device handles, and the allreduce
+      # is host arithmetic across replicas that may sit on different devices --
+      # so materialise as they are summed.
+      g_sum <- .ag_as_matrix(g0)
       for (j in seq(2L, length(grad_list))) {
         pj  <- replicas[[j]]$parameters()
         # replica j has its own param id for the same "slot"
         key_j <- as.character(pj[[nm]]$id)
         gj    <- get0(key_j, envir = grad_list[[j]])
-        if (!is.null(gj)) g_sum <- g_sum + gj
+        if (!is.null(gj)) g_sum <- g_sum + .ag_as_matrix(gj)
       }
       assign(key, g_sum / length(grad_list), envir = grad_list[[1L]])
     }
@@ -592,7 +603,7 @@ clip_grad_value <- function(params, grads, clip_value) {
   for (nm in names(params)) {
     p   <- params[[nm]]
     key <- as.character(p$id)
-    g   <- get0(key, envir = grads)
+    g   <- .ag_as_matrix(get0(key, envir = grads))
     if (is.null(g)) next
 
     finite_g <- g[is.finite(g)]
@@ -652,7 +663,7 @@ check_grad_anomaly <- function(params, grads, action = c("warn", "stop", "silent
   for (nm in names(params)) {
     p   <- params[[nm]]
     key <- as.character(p$id)
-    g   <- get0(key, envir = grads)
+    g   <- .ag_as_matrix(get0(key, envir = grads))
 
     if (is.null(g)) {
       rows[[length(rows) + 1L]] <- data.frame(

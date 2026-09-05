@@ -1,5 +1,17 @@
 # ggmlR 0.8.5
 
+* **Device-resident gradients** — `GGMLR_AG_RESIDENT_GRADS=1` keeps backward gradients in their backend buffer instead of downloading every leaf each pass (1.1-1.3x on dense stacks). Off by default.
+* New `ag_tape_memory()`: what the gradient tape holds, split into operands and freeable activations.
+* New `ag_estimate_training_memory()`: training budget from parameter shapes, at the 8 bytes per scalar the autograd path actually uses.
+* New `ag_forward_profile()`: per-stage forward timings, matching the backward profiler.
+* Fixed `ggml_estimate_memory()` returning 4 bytes per element for every type; F16 was reported at twice its size, quantised types at up to seven times.
+* Fixed gradient accumulation: `step(grads)` read the last backward pass rather than the accumulated total, so micro-batch loops trained on the last micro-batch only.
+* Fixed `ag_batch_norm()` backward ignoring the batch statistics in training mode.
+* **Fused multi-head attention for the autograd engine** — new `ag_flash_attention(q, k, v, n_heads)` computes all heads in one `ggml_flash_attn_ext()` call, with its gradient in one `ggml_flash_attn_back()`. The tape records a single node where the per-head loop recorded dozens (52 -> 1 on a 4-head block). Supports cross-attention and masking: `causal = TRUE` for decoder-style attention, or an explicit `[seq_kv, seq_q]` mask, applied to the gradient as well. Projections stay outside the call.
+* Fixed `ag_device("cpu")` leaving the Vulkan backend in place, so anything reading it — `gpu_linalg`, `sc_umap`, `ag_flash_attention` — kept computing on the GPU after the caller asked for the CPU.
+* Fixed `backward()` scaling a gradient by the number of operations consuming a tensor: a tensor sliced into 4 attention heads received 4x its gradient. Forward results were unaffected, and training still converged at a distorted learning rate, so the error was silent. `ag_multihead_attention()` was affected.
+* **Gradient checkpointing** — new `ag_checkpoint(fn, ...)` runs part of the forward pass without recording it, then re-runs that segment during `backward()` to rebuild what the gradient rules need. Trades compute for memory: on a 12-layer stack, checkpointing every second block cuts the tape by about half, and every block by 98%. Segments containing dropout replay with the same mask.
+* **Experimental graph backward for the autograd engine** — `backward()` can build the whole backward pass as a single ggml graph instead of one R closure per tape node. Off by default; enable with `GGMLR_AG_BACKWARD_GRAPH=1`. Covers matmul, add, the three losses, `relu`/`sigmoid`/`tanh`, transpose, softmax, scale and elementwise multiply — enough for dense stacks, classifiers, multi-head attention and dropout. A tape containing anything else falls back to the closure path, so gradients are unchanged either way. Per-stage timings via `GGMLR_AG_BWD_PROF=1`.
 * **Convolution backward on the GPU** — new Vulkan shader for `GGML_OP_IM2COL_BACK` (16x faster on a 4-layer conv stack).
 * **Embedding backward on the GPU** — new Vulkan shader for `GGML_OP_GET_ROWS_BACK`, so training an embedding table no longer leaves the device (1.5-2.5x over CPU training on a 30000-word vocabulary).
 * **Flash attention trains** — new `ggml_flash_attn_back()` (CPU and Vulkan), so `ggml_flash_attn_ext()` is no longer inference-only. Upstream ships it as a stub that aborts. No ALiBi, logit softcap or attention sinks.

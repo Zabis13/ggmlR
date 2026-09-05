@@ -188,3 +188,48 @@ test_that("full training loop reduces loss", {
   # Loss should decrease over training (average last 10 vs first 10)
   expect_lt(mean(losses[41:50]), mean(losses[1:10]))
 })
+
+test_that("a tensor feeding several ops is not counted twice", {
+  # Regression: .ag_bwd_write_leaf_grads() used to add grads[[id]] to $grad
+  # once per tape node referencing that tensor, so a tensor consumed by N ops
+  # ended up with N times its gradient. `grads` already holds the total, so the
+  # write must happen once.
+  #
+  # Nothing about this is visible from the forward pass, and a scaled gradient
+  # still trains -- just at the wrong learning rate -- which is why it survived
+  # until a slice/concat round trip was differentiated against a reference.
+  x <- ag_param(matrix(c(1, 2, 3, 4), 2, 2))
+  g <- matrix(c(1, 1, 1, 1), 2, 2)
+
+  # x used twice: out = x + x, so dL/dx = 2 * g, not 4 * g.
+  with_grad_tape({
+    out  <- ag_add(x, x)
+    loss <- ag_sum(ag_mul(out, ag_tensor(g)))
+  })
+  backward(loss)
+
+  expect_equal(x$grad, 2 * g, tolerance = 1e-10)
+})
+
+test_that("slicing one tensor into heads and concatenating is the identity", {
+  # The shape ag_multihead_attention builds: one tensor sliced per head, the
+  # pieces concatenated back. Forward is exactly the identity, so the gradient
+  # of sum(g * y) must be exactly g -- it came out doubled for 2 heads (and
+  # would be 4x for 4) before the fix above.
+  d <- 6L; s <- 3L; n_heads <- 2L; d_head <- d %/% n_heads
+  set.seed(5L)
+  X <- matrix(runif(d * s, -1, 1), d, s)
+  G <- matrix(runif(d * s, -1, 1), d, s)
+
+  x <- ag_param(X)
+  with_grad_tape({
+    parts <- lapply(seq_len(n_heads), function(i)
+      ggmlR:::.ag_row_slice(x, (i - 1L) * d_head + 1L, i * d_head))
+    y    <- ggmlR:::.ag_row_concat(parts)
+    loss <- ag_sum(ag_mul(y, ag_tensor(G)))
+  })
+  backward(loss)
+
+  expect_equal(ggmlR:::.ag_data(y), X, tolerance = 1e-12)
+  expect_equal(x$grad, G, tolerance = 1e-10)
+})

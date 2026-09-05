@@ -2187,11 +2187,36 @@ static void r_ggml_backend_buffer_finalizer(SEXP ptr) {
 
 // Allocate all tensors in a context using a backend
 SEXP R_ggml_backend_alloc_ctx_tensors(SEXP ctx_ptr, SEXP backend_ptr) {
-    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
-    ggml_backend_t backend = (ggml_backend_t) R_ExternalPtrAddr(backend_ptr);
+    // r_ptr_required() rather than R_ExternalPtrAddr(): callers reach here with
+    // a plain R NULL when no backend was ever created -- ag_device("cpu")
+    // leaves .ag_device_state$backend unset, for one. R_ExternalPtrAddr() on a
+    // NILSXP does not return NULL; it reads a field off an object that is not
+    // an external pointer at all, producing a garbage address that passes a
+    // != NULL check and then segfaults inside ggml-alloc.
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    ggml_backend_t backend = (ggml_backend_t) r_ptr_required(backend_ptr, "backend");
 
-    if (ctx == NULL || backend == NULL) {
-        error("Invalid context or backend pointer");
+    // ggml-alloc returns NULL for two different outcomes: a real allocation
+    // failure, and "every tensor already has memory" (ggml-alloc.c:1214-1220,
+    // which also covers an empty context). Only the first is an error, so
+    // decide which one this is BEFORE calling.
+    //
+    // The test must match the upstream criterion for "needs allocating"
+    // exactly (ggml-alloc.c:1185): a tensor is skipped when it is a view
+    // (view_src != NULL, it borrows its parent's memory) OR when data is
+    // already set for any other reason (e.g. created in a no_alloc = false
+    // context). Anything else contributes to the buffer size.
+    bool needs_alloc = false;
+    for (struct ggml_tensor * t = ggml_get_first_tensor(ctx);
+         t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->data == NULL && t->view_src == NULL) {
+            needs_alloc = true;
+            break;
+        }
+    }
+
+    if (!needs_alloc) {
+        return R_NilValue;
     }
 
     ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);

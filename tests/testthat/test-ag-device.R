@@ -434,3 +434,41 @@ test_that("ag_add GPU with [1,n] broadcast equals CPU", {
   expect_equal(result, expected, tolerance = 1e-5)
   reset_to_cpu()
 })
+
+test_that("switching to the CPU releases the GPU backend", {
+  skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() > 0L,
+              "no Vulkan device")
+
+  st <- ggmlR:::.ag_device_state
+  prev <- ag_default_device()
+  on.exit(ag_device(prev), add = TRUE)
+
+  ag_device("gpu")
+  expect_false(is.null(st$backend))
+
+  # Regression: ag_device("cpu") used to set $device and stop there, leaving a
+  # Vulkan backend behind. Everything that reads $backend directly --
+  # gpu_linalg, sc_umap, ag_flash_attention -- then kept computing on the GPU
+  # after the caller asked for the CPU. Under test_dir() any file running after
+  # a GPU test inherited that, and the only symptom was f16-level disagreement
+  # with a double-precision reference: no error, just numbers from the wrong
+  # device.
+  ag_device("cpu")
+  expect_null(st$backend)
+
+  # Residency has to go with it: contexts and buffers allocated from that
+  # backend would otherwise outlive it, which is a use-after-free rather than a
+  # leak.
+  expect_length(st$contexts, 0L)
+  expect_length(st$buffers, 0L)
+
+  # And the round trip still works -- the backend is re-created on demand.
+  ag_device("gpu")
+  expect_false(is.null(st$backend))
+  a <- ag_tensor(matrix(runif(16), 4, 4))
+  b <- ag_tensor(matrix(runif(16), 4, 4))
+  r <- ag_matmul(a, b)
+  expect_equal(ggmlR:::.ag_data(r),
+               ggmlR:::.ag_data(a) %*% ggmlR:::.ag_data(b),
+               tolerance = 1e-2)
+})

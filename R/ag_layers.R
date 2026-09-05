@@ -181,7 +181,7 @@ ag_dropout <- function(rate) {
 
   env$forward <- function(x) {
     if (!env$training || env$rate == 0) return(x)
-    x_data <- if (is_ag_tensor(x)) x$data else x
+    x_data <- .ag_data(x)
     mask_vals <- matrix(
       (stats::runif(length(x_data)) > env$rate) / (1 - env$rate),
       nrow(x_data), ncol(x_data)
@@ -208,8 +208,8 @@ ag_eval.ag_dropout  <- function(model) { model$training <- FALSE; invisible(mode
 .ag_mul_broadcast_col <- function(scalar_col, mat) {
   # scalar_col: ag_param [F, 1]; mat: ag_tensor [F, N]
   # Expands scalar_col to [F, N] then calls ag_mul
-  s_data <- if (is_ag_tensor(scalar_col)) scalar_col$data else scalar_col
-  m_data <- if (is_ag_tensor(mat))        mat$data        else mat
+  s_data <- .ag_data(scalar_col)
+  m_data <- .ag_data(mat)
   n      <- ncol(m_data)
   # broadcast: replicate column n times
   s_exp  <- matrix(as.numeric(s_data), nrow(s_data), n)
@@ -229,8 +229,8 @@ ag_eval.ag_dropout  <- function(model) { model$training <- FALSE; invisible(mode
 
 # Same for bias (beta): add [F,1] broadcast to [F,N]
 .ag_add_broadcast_col <- function(scalar_col, mat) {
-  s_data <- if (is_ag_tensor(scalar_col)) scalar_col$data else scalar_col
-  m_data <- if (is_ag_tensor(mat))        mat$data        else mat
+  s_data <- .ag_data(scalar_col)
+  m_data <- .ag_data(mat)
   n      <- ncol(m_data)
   s_exp  <- matrix(as.numeric(s_data), nrow(s_data), n)
   s_t    <- ag_tensor(s_exp)
@@ -285,7 +285,7 @@ ag_batch_norm <- function(num_features, eps = 1e-5, momentum = 0.1) {
   env$name         <- paste0("batch_norm(", num_features, ")")
 
   env$forward <- function(x) {
-    x_data <- if (is_ag_tensor(x)) x$data else x
+    x_data <- .ag_data(x)
     n      <- ncol(x_data)
 
     if (env$training) {
@@ -308,13 +308,31 @@ ag_batch_norm <- function(num_features, eps = 1e-5, momentum = 0.1) {
     std_m <- matrix(std, num_features, n)
 
     # x_hat as ag_tensor that propagates gradient from x
-    x_hat <- ag_tensor((x_data - mu_m) / std_m)
+    xh_data <- (x_data - mu_m) / std_m
+    x_hat <- ag_tensor(xh_data)
     x_hat$requires_grad <- is_ag_tensor(x) && x$requires_grad
 
     if (x_hat$requires_grad) {
       std_snap <- std_m
+      xh_snap  <- xh_data
       x_ref    <- x
-      grad_fn  <- function(grad_out) list(x = grad_out / std_snap)
+
+      if (env$training) {
+        # Training: mu and var are computed from this very batch, so their
+        # dependence on x contributes to the gradient.  Reduction runs along
+        # the batch axis (rows), mirroring ag_layer_norm which reduces along
+        # the feature axis (columns):
+        #   dx = (g - mean_N(g) - x_hat * mean_N(g * x_hat)) / std
+        grad_fn <- function(grad_out) {
+          list(x = (grad_out - rowMeans(grad_out) -
+                      xh_snap * rowMeans(grad_out * xh_snap)) / std_snap)
+        }
+      } else {
+        # Eval: mu and var come from the running statistics and really are
+        # constants w.r.t. x, so the plain scaling is exact here.
+        grad_fn <- function(grad_out) list(x = grad_out / std_snap)
+      }
+
       x_hat$grad_fn <- grad_fn
       ag_record(x_hat, grad_fn, list(x = x))
     }
@@ -400,7 +418,7 @@ ag_layer_norm <- function(normalized_shape, eps = 1e-5,
   }
 
   env$forward <- function(x) {
-    x_data <- if (is_ag_tensor(x)) x$data else x
+    x_data <- .ag_data(x)
     if (!is.matrix(x_data)) x_data <- matrix(x_data, ncol = 1L)
     d <- nrow(x_data)
     n <- ncol(x_data)
@@ -415,8 +433,8 @@ ag_layer_norm <- function(normalized_shape, eps = 1e-5,
     sd    <- sqrt(var + env$eps)
     x_hat <- (x_data - rep(mu, each = d)) / rep(sd, each = d)
 
-    g_data <- if (env$elementwise_affine) as.numeric(env$gamma$data) else rep(1.0, d)
-    b_data <- if (env$elementwise_affine) as.numeric(env$beta$data)  else rep(0.0, d)
+    g_data <- if (env$elementwise_affine) as.numeric(.ag_data(env$gamma)) else rep(1.0, d)
+    b_data <- if (env$elementwise_affine) as.numeric(.ag_data(env$beta))  else rep(0.0, d)
     y_data <- g_data * x_hat + b_data
 
     out <- ag_tensor(y_data)
@@ -517,11 +535,13 @@ ag_embedding <- function(vocab_size, dim) {
   env$name       <- paste0("embedding(", vocab_size, ", ", dim, ")")
 
   env$forward <- function(idx) {
-    idx_int <- as.integer(if (is_ag_tensor(idx)) idx$data else idx)
+    idx_int <- as.integer(.ag_data(idx))
     n       <- length(idx_int)
 
-    # read current weight data (via $data, works even when gradcheck replaces it)
-    W_data  <- env$weight$data           # [dim, vocab_size]
+    # Read the current weight table through .ag_data(), which sees a value
+    # written by gradcheck's .ag_data_set() as well as one living on the device
+    # (inst/docs/ag_data_contract.md).
+    W_data  <- .ag_data(env$weight)      # [dim, vocab_size]
     out_data <- W_data[, idx_int + 1L, drop = FALSE]   # [dim, n]
 
     out <- ag_tensor(out_data)
@@ -594,6 +614,46 @@ ag_eval.ag_embedding  <- function(model) { model$training <- FALSE; invisible(mo
 #'   out    = W_o \%*\% concat + b_o      [d_model, seq_len]
 #' }
 #'
+#' @section Choosing between this and \code{ag_flash_attention()}:
+#' This layer loops over heads in R. Since \code{ag_*} has no slice operation,
+#' extracting one head is a matmul against a selector matrix, so a 4-head block
+#' records around 52 tape nodes for the attention core -- against one for
+#' \code{\link{ag_flash_attention}}, which fuses all heads into a single
+#' \code{ggml_flash_attn_ext()} call and its gradient into one
+#' \code{ggml_flash_attn_back()}. Measured on the attention core alone, the
+#' fused op is 15-37x faster depending on shape
+#' (\code{inst/scripts/measure_ag_flash_attn.R}).
+#'
+#' Prefer \code{ag_flash_attention()} for plain and causal multi-head
+#' attention. This layer remains the fallback for what the fused op cannot do:
+#'
+#' \itemize{
+#'   \item attention dropout (\code{dropout > 0});
+#'   \item packaged projections -- it owns \code{W_q}, \code{W_k}, \code{W_v},
+#'     \code{W_o} and \code{b_o}, whereas \code{ag_flash_attention()} takes
+#'     already-projected Q/K/V and leaves the output projection to the caller;
+#'   \item shapes or options \code{ggml_flash_attn_back()} rejects -- ALiBi,
+#'     logit softcap and attention sinks all assert.
+#' }
+#'
+#' @section Which API this belongs to:
+#' This is an \code{ag_*} layer: it runs on the dynamic autograd path, where a
+#' tape records each operation as it executes and \code{\link{backward}}
+#' differentiates through R closures. It is not a layer for
+#' \code{\link{ggml_model_sequential}} or \code{\link{ggml_model}} and cannot be
+#' passed to them; the two APIs do not share layer objects. For attention inside
+#' a compiled model, build the block from \code{nn_*} layers instead (see the
+#' transformer encoder section of the README).
+#'
+#' The practical consequences of being on this path: gradients and optimizer
+#' state are R doubles regardless of \code{\link{ag_dtype}}, so budget 8 bytes
+#' per scalar (\code{\link{ag_estimate_training_memory}}); the tape holds every
+#' activation until \code{zero_grad()} (\code{\link{ag_tape_memory}}); and
+#' \code{ag_device("gpu")} is usually slower than the CPU for individual ops,
+#' because each one pays a separate upload and download.
+#'
+#' @seealso \code{\link{ag_flash_attention}} for the fused implementation.
+#'
 #' @param d_model Model (embedding) dimension
 #' @param n_heads Number of attention heads. \code{d_model} must be divisible
 #'   by \code{n_heads}.
@@ -654,8 +714,8 @@ ag_multihead_attention <- function(d_model, n_heads, dropout = 0.0, bias = TRUE)
     K <- ag_matmul(env$W_k, k)
     V <- ag_matmul(env$W_v, v)
 
-    seq_q  <- ncol(if (is_ag_tensor(Q)) Q$data else Q)
-    seq_kv <- ncol(if (is_ag_tensor(K)) K$data else K)
+    seq_q  <- ncol(.ag_data(Q))
+    seq_kv <- ncol(.ag_data(K))
 
     # Collect head outputs: list of [d_v, seq_q]
     heads <- vector("list", env$n_heads)
@@ -689,7 +749,7 @@ ag_multihead_attention <- function(d_model, n_heads, dropout = 0.0, bias = TRUE)
 
       # Optional attention dropout
       if (env$training && env$dropout > 0) {
-        attn_data <- if (is_ag_tensor(attn)) attn$data else attn
+        attn_data <- .ag_data(attn)
         mask_vals <- matrix(
           (stats::runif(length(attn_data)) > env$dropout) / (1 - env$dropout),
           nrow(attn_data), ncol(attn_data)
@@ -739,7 +799,7 @@ ag_eval.ag_multihead_attention <- function(model) {
 # Implemented via linear projection with a fixed identity-slice matrix.
 # The slice matrix is not tracked for gradients (it's a constant).
 .ag_row_slice <- function(x, from, to) {
-  x_data <- if (is_ag_tensor(x)) x$data else x
+  x_data <- .ag_data(x)
   d      <- nrow(x_data)
   n_rows <- to - from + 1L
   # Selector matrix S: [n_rows, d] — row i selects row (from+i-1) of x
@@ -759,7 +819,7 @@ ag_eval.ag_multihead_attention <- function(model) {
   if (length(tensors) == 1L) return(tensors[[1L]])
 
   # Get data from all tensors for shape checks
-  data_list <- lapply(tensors, function(t) if (is_ag_tensor(t)) t$data else t)
+  data_list <- lapply(tensors, function(t) .ag_data(t))
   total_rows <- sum(vapply(data_list, nrow, integer(1L)))
   n_cols     <- ncol(data_list[[1L]])
 
@@ -787,8 +847,18 @@ ag_eval.ag_multihead_attention <- function(model) {
 
 # Apply causal mask: set scores[i,j] = -Inf for j > i (future positions)
 # scores: ag_tensor [seq_q, seq_kv]
+#
+# INVARIANT: row i keeps j <= i open, so every row has at least j = 1 open and
+# no row is fully -Inf -- for any seq_q/seq_kv, cross-attention included. That
+# matters downstream: ag_softmax subtracts the column max, and a fully masked
+# row would make it compute exp(-Inf - -Inf) = NaN, which the backward pass
+# would then spread over the whole graph. Partial masking is safe (p is exactly
+# 0 there, so the softmax backward contributes 0 * (...) = 0), and the tests in
+# test-ag-mha.R pin this down. A future change to the mask shape must not drop
+# the open diagonal. Note that a user-supplied mask in ag_flash_attention() has
+# no such guarantee -- that is a different path and a different kernel.
 .ag_causal_mask <- function(scores, seq_q, seq_kv) {
-  scores_data <- if (is_ag_tensor(scores)) scores$data else scores
+  scores_data <- .ag_data(scores)
   mask <- matrix(0.0, seq_q, seq_kv)
   for (i in seq_len(seq_q)) {
     for (j in seq_len(seq_kv)) {

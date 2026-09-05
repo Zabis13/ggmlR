@@ -63,6 +63,18 @@ utils::globalVariables(c("object", "new_data", "self", "super", "private"))
   ggml_log_set_r()
   ggml_set_abort_callback_r()
 
+  # Opt-in tracing of ag_tensor$data reads (diagnostics only, see R/ag_trace.R).
+  if (identical(Sys.getenv("GGMLR_AG_TRACE_DATA"), "1")) ag_trace_data(TRUE)
+
+  # Opt-in graph backward: computes backward() as a single ggml graph instead of
+  # one R closure per tape node. Off by default -- measured slower than the
+  # closures on real models (R/ag_backward_graph.R has the numbers); a tape with
+  # any uncovered op falls back wholesale, so gradients are unchanged either way.
+  if (identical(Sys.getenv("GGMLR_AG_BACKWARD_GRAPH"), "1")) ag_backward_graph(TRUE)
+
+  # Per-stage timings for the graph backward (diagnostics only).
+  if (identical(Sys.getenv("GGMLR_AG_BWD_PROF"), "1")) ag_backward_profile(TRUE)
+
   # Track whether backend message has been shown
   .ggmlr_state$backend_msg_shown <- FALSE
 

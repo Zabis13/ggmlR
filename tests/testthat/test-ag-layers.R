@@ -189,6 +189,108 @@ test_that("ag_batch_norm: gradcheck passes (gamma/beta)", {
   expect_true(ok_gamma)
 })
 
+test_that("ag_batch_norm: gradcheck passes for x in train mode", {
+  # The train-mode gradient must account for mu and var depending on x.
+  # Treating them as constants (grad_out / std) passes the gamma/beta check
+  # above but is wrong here -- this is the regression guard.
+  set.seed(24)
+  bn <- ag_batch_norm(3L)
+  ag_train(bn)
+  x  <- ag_param(matrix(rnorm(3 * 6), 3, 6))
+
+  ok <- ag_gradcheck(
+    fn = function(ins) ag_sum(ag_mul(bn$forward(ins$x), ag_tensor(
+      matrix(seq(0.3, by = 0.17, length.out = 18), 3, 6)))),
+    inputs = list(x = x), atol = 1e-3, quiet = TRUE
+  )
+  expect_true(ok)
+})
+
+test_that("ag_batch_norm: eval mode keeps the running-stats gradient", {
+  # In eval mode mu/sigma come from the running statistics and are genuine
+  # constants w.r.t. x, so dx = grad_out * gamma / std exactly.  The train-mode
+  # correction must NOT be applied here.
+  set.seed(25)
+  bn <- ag_batch_norm(3L)
+  bn$running_mean <- matrix(c(0.5, -0.2, 1.3), 3, 1)
+  bn$running_var  <- matrix(c(2.0,  0.5, 4.0), 3, 1)
+  ag_eval(bn)
+  x <- ag_param(matrix(rnorm(3 * 4), 3, 4))
+
+  ok <- ag_gradcheck(
+    fn = function(ins) ag_sum(ag_mul(bn$forward(ins$x), ag_tensor(
+      matrix(seq(0.4, by = 0.11, length.out = 12), 3, 4)))),
+    inputs = list(x = x), atol = 1e-3, quiet = TRUE
+  )
+  expect_true(ok)
+
+  # and the analytical value is the closed form grad_out * gamma / std
+  w <- matrix(seq(0.4, by = 0.11, length.out = 12), 3, 4)
+  with_grad_tape({
+    loss <- ag_sum(ag_mul(bn$forward(x), ag_tensor(w)))
+  })
+  g   <- backward(loss)
+  std <- sqrt(as.numeric(bn$running_var) + bn$eps)
+  expect_equal(get0(as.character(x$id), envir = g), w / std,
+               tolerance = 1e-6)
+})
+
+test_that("ag_batch_norm: train gradient is not the naive grad_out/std", {
+  # Mirror of the ag_layer_norm guard: with a constant grad_out and gamma=1 the
+  # exact batch gradient cancels to (almost) zero, while the 'treat mu/sigma as
+  # constants' shortcut would leave 1/std behind.
+  set.seed(26)
+  bn <- ag_batch_norm(4L)
+  ag_train(bn)
+  x  <- ag_param(matrix(rnorm(4 * 5), 4, 5))
+
+  with_grad_tape({ loss <- ag_sum(bn$forward(x)) })
+  g_x <- get0(as.character(x$id), envir = backward(loss))
+
+  expect_true(max(abs(g_x)) < 1e-8)
+})
+
+test_that("ag_batch_norm: gradcheck passes for beta", {
+  # .ag_add_broadcast_col was only ever exercised indirectly; beta itself had
+  # no finite-difference coverage.
+  set.seed(27)
+  bn  <- ag_batch_norm(3L)
+  ag_train(bn)
+  x_d <- matrix(rnorm(3 * 6), 3, 6)
+  w   <- matrix(seq(0.2, by = 0.13, length.out = 18), 3, 6)
+
+  ok_beta <- ag_gradcheck(
+    fn = function(ins) {
+      orig_b  <- bn$beta
+      bn$beta <- ins$beta
+      out     <- bn$forward(ag_tensor(x_d))
+      bn$beta <- orig_b
+      ag_sum(ag_mul(out, ag_tensor(w)))
+    },
+    inputs = list(beta = bn$beta), atol = 1e-3, quiet = TRUE
+  )
+  expect_true(ok_beta)
+})
+
+test_that("ag_batch_norm: gradient is finite for N=1 and for near-zero variance", {
+  # N=1 -> var is exactly 0, everything rides on eps.
+  bn <- ag_batch_norm(3L)
+  ag_train(bn)
+  x1 <- ag_param(matrix(c(1.0, -2.0, 0.5), 3, 1))
+  with_grad_tape({ loss1 <- ag_sum(bn$forward(x1)) })
+  g1 <- backward(loss1)
+  expect_true(all(is.finite(get0(as.character(x1$id), envir = g1))))
+
+  # N=2 with nearly equal values -> var ~ eps, the numerically nastiest zone.
+  bn2 <- ag_batch_norm(2L)
+  ag_train(bn2)
+  x2 <- ag_param(matrix(c(1.0, 1.0 + 1e-6, -3.0, -3.0 - 1e-6), 2, 2,
+                        byrow = TRUE))
+  with_grad_tape({ loss2 <- ag_sum(bn2$forward(x2)) })
+  g2 <- backward(loss2)
+  expect_true(all(is.finite(get0(as.character(x2$id), envir = g2))))
+})
+
 # ============================================================================
 # ag_embedding
 # ============================================================================

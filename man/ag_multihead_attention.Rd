@@ -53,6 +53,48 @@ Forward pass:
   out    = W_o \%*\% concat + b_o      [d_model, seq_len]
 }
 }
+\section{Choosing between this and \code{ag_flash_attention()}}{
+
+This layer loops over heads in R. Since \code{ag_*} has no slice operation,
+extracting one head is a matmul against a selector matrix, so a 4-head block
+records around 52 tape nodes for the attention core -- against one for
+\code{\link{ag_flash_attention}}, which fuses all heads into a single
+\code{ggml_flash_attn_ext()} call and its gradient into one
+\code{ggml_flash_attn_back()}. Measured on the attention core alone, the
+fused op is 15-37x faster depending on shape
+(\code{inst/scripts/measure_ag_flash_attn.R}).
+
+Prefer \code{ag_flash_attention()} for plain and causal multi-head
+attention. This layer remains the fallback for what the fused op cannot do:
+
+\itemize{
+  \item attention dropout (\code{dropout > 0});
+  \item packaged projections -- it owns \code{W_q}, \code{W_k}, \code{W_v},
+    \code{W_o} and \code{b_o}, whereas \code{ag_flash_attention()} takes
+    already-projected Q/K/V and leaves the output projection to the caller;
+  \item shapes or options \code{ggml_flash_attn_back()} rejects -- ALiBi,
+    logit softcap and attention sinks all assert.
+}
+}
+
+\section{Which API this belongs to}{
+
+This is an \code{ag_*} layer: it runs on the dynamic autograd path, where a
+tape records each operation as it executes and \code{\link{backward}}
+differentiates through R closures. It is not a layer for
+\code{\link{ggml_model_sequential}} or \code{\link{ggml_model}} and cannot be
+passed to them; the two APIs do not share layer objects. For attention inside
+a compiled model, build the block from \code{nn_*} layers instead (see the
+transformer encoder section of the README).
+
+The practical consequences of being on this path: gradients and optimizer
+state are R doubles regardless of \code{\link{ag_dtype}}, so budget 8 bytes
+per scalar (\code{\link{ag_estimate_training_memory}}); the tape holds every
+activation until \code{zero_grad()} (\code{\link{ag_tape_memory}}); and
+\code{ag_device("gpu")} is usually slower than the CPU for individual ops,
+because each one pays a separate upload and download.
+}
+
 \examples{
 \donttest{
 # Self-attention
@@ -68,4 +110,7 @@ out <- mha$forward(q, kv, kv)
 # Causal (GPT-style)
 out <- mha$forward(x, causal_mask = TRUE)
 }
+}
+\seealso{
+\code{\link{ag_flash_attention}} for the fused implementation.
 }

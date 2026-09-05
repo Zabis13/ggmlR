@@ -4,7 +4,13 @@
 \alias{optimizer_sgd}
 \title{Create an SGD optimizer}
 \usage{
-optimizer_sgd(params, lr = 0.01, momentum = 0)
+optimizer_sgd(
+  params,
+  lr = 0.01,
+  momentum = 0,
+  accumulate_steps = 1L,
+  average = TRUE
+)
 }
 \arguments{
 \item{params}{Named list of ag_param tensors}
@@ -12,6 +18,18 @@ optimizer_sgd(params, lr = 0.01, momentum = 0)
 \item{lr}{Learning rate (default 0.01)}
 
 \item{momentum}{Momentum factor (default 0)}
+
+\item{accumulate_steps}{Number of \code{backward()} passes to accumulate
+before a call to \code{$step()} updates the weights (default 1, no
+accumulation).  With \code{k > 1} the first \code{k - 1} calls to
+\code{$step()} only count, and the \code{k}-th applies the update and
+resets the counter, so a micro-batch loop needs no bookkeeping of its own.}
+
+\item{average}{When accumulating, divide the accumulated gradient by
+\code{accumulate_steps} (default \code{TRUE}).  That is what makes
+\code{k} micro-batches equivalent to one batch of \code{k} times the size
+for an averaging loss such as \code{\link{ag_mse_loss}}; set it to
+\code{FALSE} for a summing loss, where the plain sum is already right.}
 }
 \value{
 An optimizer environment
@@ -23,5 +41,8 @@ Create an SGD optimizer
 \donttest{
 w <- ag_param(matrix(runif(4), 2, 2))
 opt <- optimizer_sgd(list(w = w), lr = 0.01)
+
+# accumulate 4 micro-batches per update
+opt4 <- optimizer_sgd(list(w = w), lr = 0.01, accumulate_steps = 4L)
 }
 }

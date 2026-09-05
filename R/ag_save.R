@@ -228,7 +228,11 @@ ag_load_model <- function(path, model_fn = NULL, device = NULL, dtype = NULL) {
            paste(dim(.ag_data(p)), collapse = "x"), " vs file ",
            paste(dim(new_data), collapse = "x"), ".")
     }
-    p$data <- new_data
+    # .ag_data_set() installs the value and drops any device residency, so the
+    # next forward re-uploads instead of computing on the pre-load weights
+    # (inst/docs/ag_data_contract.md). It subsumes the explicit $ptr/$ctx_gen
+    # clearing that used to follow this line.
+    .ag_data_set(p, new_data)
     # dtype resolution: an explicit `dtype` argument wins; otherwise restore
     # what the file recorded, so a module trained under ag_dtype("f16") keeps
     # computing in f16 no matter what the loading session's default is. Files
@@ -237,8 +241,6 @@ ag_load_model <- function(path, model_fn = NULL, device = NULL, dtype = NULL) {
     if (length(saved_dtype) != 1L || is.na(saved_dtype)) saved_dtype <- NULL
     resolved <- dtype %||% saved_dtype
     if (!is.null(resolved)) p$dtype <- resolved
-    # Drop any stale GPU pointer so the next forward re-uploads $data.
-    if (!is.null(p$ptr)) p$ptr <- NULL
   }
 
   # Restore buffers (BN running stats).

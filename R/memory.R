@@ -137,15 +137,22 @@ ggml_print_objects <- function(ctx) {
 #' ggml_estimate_memory(GGML_TYPE_F32, 1000, 1000)
 #' }
 ggml_estimate_memory <- function(type = GGML_TYPE_F32, ne0, ne1 = 1, ne2 = 1, ne3 = 1) {
-  # Calculate manually
   n_elements <- ne0 * ne1 * ne2 * ne3
-  
-  # F32 = 4 bytes
-  type_size <- switch(as.character(type),
-                     "0" = 4,  # GGML_TYPE_F32
-                     4)
-  
-  data_size <- n_elements * type_size
+
+  # Ask ggml for the type's size rather than assuming one. This used to be a
+  # switch that returned 4 for every type including its default branch, so an
+  # F16 tensor was reported at twice its size and a Q4_0 one at roughly eight
+  # times -- silently, since the number looked plausible.
+  #
+  # Quantised types store a block of values per struct, so bytes are
+  # type_size * n_elements / block_size, not type_size * n_elements. For F32
+  # and F16 the block size is 1 and the two agree.
+  type      <- as.integer(type)
+  type_size <- as.double(ggml_type_size(type))
+  blck      <- as.double(ggml_blck_size(type))
+  if (!is.finite(blck) || blck <= 0) blck <- 1
+
+  data_size <- n_elements * type_size / blck
   overhead <- ggml_tensor_overhead()
   alignment <- 256
   
