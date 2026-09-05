@@ -915,17 +915,17 @@ passed in, so earlier layers train as usual. A tape containing a checkpoint
 always uses the closure backward — the segment is R code, not something the
 graph path below can turn into nodes.
 
-### Experimental: backward as a single graph
+### Backward as a single graph
 
-By default `backward()` walks the tape and calls one R closure per node, each
-computing its gradient with `%*%` and `t()` on the host. An alternative path
-builds the **entire backward pass as one ggml graph** and computes it in a
-single call, so the intermediate gradients never leave the device.
+`backward()` builds the **entire backward pass as one ggml graph** and computes
+it in a single call, so intermediate gradients never leave the device. The
+alternative — one R closure per tape node, each computing its gradient with
+`%*%` and `t()` on the host — is still there as a fallback.
 
-It is off by default. Enable it per session or per run:
+The graph path is the default. Turn it off per session or per run:
 
 ```r
-ggmlR:::ag_backward_graph(TRUE)     # or: GGMLR_AG_BACKWARD_GRAPH=1 Rscript ...
+ggmlR:::ag_backward_graph(FALSE)    # or: GGMLR_AG_BACKWARD_GRAPH=0 Rscript ...
 ggmlR:::ag_backward_path()          # "graph", "closures", or "closures (<why>)"
 ```
 
@@ -940,17 +940,14 @@ closure path in full rather than splitting the pass between the two.
 are identical either way; the test suite checks the graph path against the
 closures on every covered shape.
 
-**It is currently a slowdown, not a speedup, and is kept for the case where
-that changes.** On a synthetic chain of eight 512×512 matmuls the graph is
-about twice as fast as the closures, which is what motivated it — but on real
-models it loses on eight of nine measured configurations, from small MLPs to a
-109-node attention block. Stage profiling shows why: the actual GPU compute is
-only 12–25% of `backward()`, and the rest is spread across uploading forward
-snapshots, downloading gradients, building the nodes in R and writing `$grad`
-back — with no single dominant cost to remove. Reusing a prebuilt graph
-between steps does not rescue it either: `ggml_graph_plan` is CPU-only and the
-Vulkan backend implements none of the `graph_plan_*` hooks, and even a free
-cache would remove under a fifth of the time.
+**It became the faster path once weights stopped moving.** Measured across five
+shapes it runs 1.2–2.7× the closures, with only the smallest (64×64, depth 2)
+at parity. It was a measured *slowdown* before resident weights: stage profiling
+put the actual GPU compute at 12–25% of `backward()`, with the rest spread over
+uploading forward snapshots, downloading gradients, building nodes in R and
+writing `$grad` back. Two of those four are now gone — a snapshot that is a
+weight is already on the device, and gradients stay there — which is what turned
+the ratio around.
 
 Measure before trusting either path on your own shapes:
 
@@ -966,6 +963,14 @@ read them with `ggmlR:::ag_backward_profile_report()`.
 
 Short answer: for the `ag_*` ops on their own, on the hardware measured so far,
 it is not — and the reason is worth knowing before reaching for `ag_device("gpu")`.
+
+⚠️ **The table below predates device residency and has not been re-measured.**
+It was taken when every `ag_*` operation uploaded its operands and downloaded
+its result, which is no longer what happens on the ops listed in "Keeping
+tensors on the device" — a step now costs 8 crossings rather than 10, and the
+forward's share of them no longer grows with depth. Treat these numbers as the
+shape of the old problem, and re-run
+`inst/scripts/measure_ag_gpu_threshold.R` before deciding anything from them.
 
 Every `ag_*` operation is executed on its own: `.ag_run_op` creates tensors for
 the inputs, uploads their data, builds a one-node graph, computes it and reads
@@ -1019,46 +1024,53 @@ This is about `ag_*` specifically. The `nn_*` path compiles a model into a singl
 ggml graph, so it is not subject to the per-op upload described here, and the
 Vulkan backend behaves quite differently there.
 
-### Keeping gradients on the device
+### Keeping tensors on the device
 
-The per-op round trip above has an obvious remedy — leave values on the device
-between operations — and the backward pass is where it was applied first,
-because that is where the measurement said the transfer was:
+The per-op round trip above has an obvious remedy — leave values on the device —
+and it now applies to the whole training step. Four kinds of tensor stay in
+backend buffers:
+
+* **weights** — `ag_param()` uploads once into a residency pool that survives
+  the tape reset `with_grad_tape()` performs at every step;
+* **optimizer moments** — Adam's `m` and `v` live beside the weights, and the
+  step updates all three on the device;
+* **gradients** — the graph backward puts a device handle in each leaf's
+  `$grad`, and the optimizer consumes it there;
+* **forward activations** — the ops take handles instead of materialising their
+  operands.
+
+**Measured on one training step:** 4 host/device crossings and 0.047 MB, against
+10 and 0.188 before, split as forward 3 / backward 1 / step 0. What remains is
+the batch going up, the loss scalar coming back, and one backward snapshot — the
+optimizer step touches the host not at all. Forward traffic no longer scales
+with depth either: a four-layer network with four different activations pays the
+same three crossings as a single layer, because nothing between the input and
+the loss goes through R.
+
+Both defaults can be turned off:
 
 ```r
-ggmlR:::ag_backward_graph(TRUE)      # the graph backward, which this builds on
-ggmlR:::ag_backward_resident(TRUE)   # or GGMLR_AG_RESIDENT_GRADS=1
+ggmlR:::ag_backward_graph(FALSE)     # GGMLR_AG_BACKWARD_GRAPH=0
+ggmlR:::ag_backward_resident(FALSE)  # GGMLR_AG_RESIDENT_GRADS=0
 ```
 
-With it on, the graph backward puts a device handle in each leaf's `$grad`
-instead of an R matrix, and the numbers come back when something reads them —
-the optimizer, `clip_grad_norm()`, `print()`. One download per step rather than
-one per leaf per pass. Gradients are identical either way; the test suite checks
-them against the closure path and against finite differences.
+Numerically nothing changes: this is transport, not arithmetic, and the test
+suite checks gradients against the closure path and against finite differences.
 
-**What it buys, measured:** 1.1–1.3x on dense stacks. The gradient download
-stage falls from 35 ms to 0.3 on a 4-layer 1024-wide model.
+**One thing to know if you write code against `$grad`.** With resident gradients
+it holds a device handle, not a matrix. Read it through the supported accessors
+and nothing changes; do arithmetic on it directly and you get a handle, which
+has no arithmetic methods and so fails loudly rather than computing something
+wrong. The same applies to holding a gradient across a tape boundary — its
+buffer belongs to the step that produced it. `dp_train()` and `ag_checkpoint()`
+both do this and both materialise first.
 
-**What it does not do:** make the `ag_*` path faster than the CPU on this
-hardware. The forward pass is still per-op, and it is roughly half of a training
-step — 39–58% on the models measured.
-
-Doing the same to the forward was costed and declined, and the numbers are worth
-repeating because they are the trap this kind of work sets. The forward is even
-more transfer-bound than the backward (46–85%, with upload alone reaching 72%),
-so making it resident would speed the forward up by **1.9–8.2x**. On the
-training step that is worth **1.2–1.4x**, because the forward is only half the
-step and only its transfer goes away.
-
-Measure what a change does to the step, not to the subsystem it touches. The two
-differ by a factor of six here, and the subsystem figure is also the noisier of
-the two — across runs the forward ceiling moved between 6.6x and 8.2x on the
-same model while the step ceiling stayed put.
-
-Off by default, because it changes what `$grad` contains. Code reading it
-through the supported accessors is unaffected; code doing arithmetic on `$grad`
-directly gets a handle, which has no arithmetic methods and therefore fails
-loudly rather than computing something wrong.
+**A note on how this was measured, because the subsystem figure misleads.** The
+forward is more transfer-bound than the backward (46–85%, upload alone up to
+72%), so making it resident speeds *the forward* up by 1.9–8.2x — but the
+forward is only 39–58% of a step, so the step gains 1.2–1.4x. Measure what a
+change does to the step, not to the part it touches: the two differ by a factor
+of six here, and the subsystem number is the noisier of the two.
 
 Two reports come with it:
 

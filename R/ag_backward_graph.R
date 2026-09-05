@@ -1,13 +1,16 @@
 # Backward as ONE ggml graph, instead of one R closure per tape node.
 #
-# STATUS: OFF BY DEFAULT -- this path is currently SLOWER than the closures it
-# replaces. It is kept, behind GGMLR_AG_BACKWARD_GRAPH=1, because the rules and
-# tests are done and the balance could shift (a resident forward would delete
-# the upload stage and part of the download). Do not switch it on by default
-# without re-running inst/scripts/measure_ag_backward_real.R.
+# STATUS: ON BY DEFAULT. Set GGMLR_AG_BACKWARD_GRAPH=0 for the closure path.
 #
-# WHY IT LOOKED LIKE A WIN, AND WHY IT IS NOT
-# -------------------------------------------
+# The balance shifted exactly where the earlier note predicted it might -- "a
+# resident forward would delete the upload stage and part of the download" --
+# and that is what resident weights did. Re-measured on five shapes:
+# 0.97x / 2.67x / 1.17x / 1.90x / 2.03x, four of five ahead and the fifth at
+# noise. The section below is kept because its reasoning still holds for the
+# code it described, and because one of its conclusions must not be relitigated.
+#
+# WHY IT LOOKED LIKE A WIN, WHY IT THEN WAS NOT, AND WHAT CHANGED
+# ---------------------------------------------------------------
 # The tape's grad_fn closures capture host matrices (a_snap/b_snap) and compute
 # with %*% and t() -- the largest single cost in path B. On a synthetic chain of
 # 8 matmuls at 512x512 (inst/scripts/measure_ag_backward.R):
@@ -32,6 +35,15 @@
 # help either: ggml_graph_plan is CPU-only and the Vulkan backend leaves every
 # graph_plan_* hook NULL, and even a free cache removes under a fifth of the
 # time.
+#
+# WHAT CHANGED. Two of the four costs named above are gone. ag_param() now keeps
+# weights in the persistent pool, so a snapshot that is a weight is already on
+# the device; and const() below returns a handle's pointer instead of building a
+# tensor and queueing an upload for it. Uploading snapshots and writing $grad
+# back were two of the four items the spread was divided between -- removing
+# them is what moved the ratio, and it is why the "closed" verdict does not
+# reproduce on the current code. The remaining two (building nodes in R,
+# downloading gradients) are what a unified forward+backward graph would take.
 #
 # One conclusion DOES carry over and must not be relitigated: a per-op GPU
 # grad_fn (dispatching each closure through .ag_run_op) is a measured 1.8x
@@ -124,7 +136,28 @@ ag_backward_graph <- function(on = TRUE) {
 #' @keywords internal
 ag_backward_path <- function() .ag_bwd$last_path
 
-.ag_bwd_is_enabled <- function() isTRUE(.ag_bwd$enabled)
+# ON by default since the residency work; NULL means "nobody has set it".
+#
+# The measurement that switched this: closures vs graph on five shapes, after
+# resident weights (stage 3.1) and after const() stopped re-uploading snapshots
+# that are already device handles (stage 1) --
+#   d=64  b=32  depth=2   0.97x
+#   d=128 b=64  depth=3   2.67x
+#   d=256 b=128 depth=2   1.17x
+#   d=512 b=128 depth=2   1.90x
+#   d=256 b=64  depth=6   2.03x
+# Four of five ahead, the fifth at noise on the smallest shape. The earlier
+# verdict (eight of nine BELOW 1x) was true of the code it was taken on: two of
+# the four costs it named -- uploading snapshots and writing $grad back -- are
+# what residency removed. It does not reproduce here.
+#
+# A tape holding an op the graph cannot emit still falls back to closures
+# wholesale, so switching the default changes which path runs, not whether a
+# tape can run.
+.ag_bwd_is_enabled <- function() {
+  if (is.null(.ag_bwd$enabled)) return(TRUE)
+  isTRUE(.ag_bwd$enabled)
+}
 
 #' Keep backward gradients on the device
 #'
@@ -135,8 +168,9 @@ ag_backward_path <- function() .ag_bwd$last_path
 #' download and the leaf install, together 43-64% of it on the measured models
 #' (\code{inst/scripts/measure_ag_residency_on_backward.R}).
 #'
-#' Opt-in, because it changes what \code{$grad} contains. Code that reads it
-#' through \code{.ag_data}/\code{.ag_as_matrix} is unaffected; code doing
+#' On by default; \code{GGMLR_AG_RESIDENT_GRADS=0} or \code{FALSE} here restores
+#' host-side gradients. It changes what \code{$grad} contains: code reading it
+#' through \code{.ag_data}/\code{.ag_as_matrix} is unaffected, while code doing
 #' arithmetic on \code{$grad} directly gets an \code{ag_handle}, which has no
 #' arithmetic methods and so fails loudly rather than computing something wrong.
 #'
@@ -153,9 +187,40 @@ ag_backward_resident <- function(on = TRUE) {
   invisible(old)
 }
 
+# ON by default. GGMLR_AG_RESIDENT_GRADS=0 restores host-side gradients.
+#
+# What it buys: on a 2-layer MLP a step goes from 9 crossings to 5, removing the
+# gradient download and its re-upload into the optimizer -- the same numbers
+# crossing the bus twice. Training is bit-identical either way, which is the
+# point of a transport change.
+#
+# ⚠️ The constraint is LIFETIME. A resident $grad lives in the pass pool, so it
+# dies at the next with_grad_tape(). That suits the ordinary loop, where the
+# optimizer consumes it within the same step, and it is a trap for anything
+# holding gradients ACROSS a tape boundary. Two such places existed and both are
+# now fixed:
+#
+#   dp_train()  ran a tape per replica and averaged afterwards, so replica 1's
+#               handles were freed by replica 2's tape ("buffer freed by a tape
+#               reset, generation 428 < 429"). It now materialises each
+#               replica's gradients before returning them, and clears $grad
+#               before each replica's pass -- backward() accumulates into an
+#               existing $grad, which across iterations meant adding to a
+#               pointer whose buffer was already gone.
+#
+#   ag_checkpoint()  accumulated with `inp$grad + g`, which a handle refuses.
+#
+# Readers inside one tape were converted earlier: the optimizers pass the handle
+# straight into the device Adam step, and print, clipping and the anomaly check
+# go through the accessor.
+#
+# A new caller that holds a gradient past a tape reset will hit a loud error,
+# not a wrong number -- the handle checks its generation and has no arithmetic.
+# That is the intended failure mode; the fix belongs at the call site, in the
+# shape of the two above.
 .ag_bwd_resident_grads <- function() {
   if (!is.null(.ag_bwd$resident)) return(isTRUE(.ag_bwd$resident))
-  isTRUE(Sys.getenv("GGMLR_AG_RESIDENT_GRADS") == "1")
+  !identical(Sys.getenv("GGMLR_AG_RESIDENT_GRADS"), "0")
 }
 
 # Ops this file can emit. A tape is eligible only if EVERY node is in here:
@@ -337,6 +402,17 @@ ag_backward_profile_report <- function() {
 
   # Materialise an R matrix as a graph input tensor.
   const <- function(m) {
+    # A snapshot that is already on the device needs no tensor and no upload:
+    # its pointer IS the constant. This is the other half of stage 1 -- the
+    # forward stopped downloading resident operands, so the snapshots it records
+    # arrive here as handles, and re-uploading them would put back the round
+    # trip from the other end.
+    if (.ag_is_handle(m)) {
+      if (!.ag_handle_live(m))
+        stop("ggmlR: a backward snapshot refers to a buffer freed since the ",
+             "forward pass ran.", call. = FALSE)
+      return(m$ptr)
+    }
     if (is.null(dim(m))) m <- matrix(m, ncol = 1L)
     tt <- ggml_new_tensor_2d(ctx, ggml_type, nrow(m), ncol(m))
     uploads[[length(uploads) + 1L]] <<- list(ptr = tt, val = as.numeric(m))
@@ -394,17 +470,20 @@ ag_backward_profile_report <- function() {
         # uploads as ne0=r, ne1=c, so sum_rows collapses R's ROWS, giving
         # colSums. That is exactly the row-broadcast case; the column one needs
         # the other axis and goes through a transpose.
-        bo <- nd$b_orig
+        # Shapes via the accessors: b_orig is a device handle whenever the
+        # forward kept it resident, and dim() on one is NULL.
+        bo   <- nd$b_orig
+        bdim <- .ag_dim(bo)
         gb <-
-          if (!is.null(dim(bo)) && ncol(bo) == 1L && nd$out_nc > 1L) {
+          if (!is.null(bdim) && bdim[2L] == 1L && nd$out_nc > 1L) {
             # b was [m,1] broadcast across columns -> db = rowSums(g), [m,1].
             # Reducing ne[1] is not something sum_rows does, so transpose to
             # [n,m] and reduce ne[0] instead, then reshape [1,m] back to [m,1].
             # ggml_cont before the reduction: sum_rows over a transposed VIEW is
             # a different (and here wrong) memory walk.
             gt <- ggml_cont(ctx, ggml_transpose(ctx, g))
-            ggml_reshape_2d(ctx, ggml_sum_rows(ctx, gt), nrow(bo), 1L)
-          } else if (!is.null(dim(bo)) && nrow(bo) == 1L && nd$out_nr > 1L) {
+            ggml_reshape_2d(ctx, ggml_sum_rows(ctx, gt), bdim[1L], 1L)
+          } else if (!is.null(bdim) && bdim[1L] == 1L && nd$out_nr > 1L) {
             # b was [1,n] broadcast down rows -> db = colSums(g), [1,n], which
             # is sum_rows' native shape.
             ggml_sum_rows(ctx, g)
@@ -452,7 +531,7 @@ ag_backward_profile_report <- function() {
       # attention mask and batch_norm's gamma all pass matching shapes), so the
       # case is declined until something needs it.
       A <- inp$A; B <- inp$B
-      bc <- !identical(dim(nd$a_orig), dim(nd$b_orig))
+      bc <- !identical(.ag_dim(nd$a_orig), .ag_dim(nd$b_orig))
       if (bc) {
         .ag_bwd$last_path <- "closures (mul: broadcast)"
         return(NULL)
@@ -519,7 +598,7 @@ ag_backward_profile_report <- function() {
   # One buffer for every tensor built above, then the uploads.
   .ag_ctx_flush(ctx)
   if (prof) { acc <- .ag_bwd_prof_add(acc, "flush", tk); tk <- Sys.time() }
-  for (u in uploads) ggml_backend_tensor_set_data(u$ptr, u$val)
+  for (u in uploads) .ag_xfer_up(u$ptr, u$val, "bwd_graph operands")
   if (prof) { acc <- .ag_bwd_prof_add(acc, "upload", tk); tk <- Sys.time() }
 
   # The graph gets a throwaway context of its own: it holds pointers to tensors
@@ -594,7 +673,7 @@ ag_backward_profile_report <- function() {
     # is R's row count because that is how the matrices were uploaded.
     ne <- ggml_tensor_shape(nd)
     val <- if (resident) .ag_handle(nd, c(ne[1L], ne[2L]))
-           else matrix(ggml_backend_tensor_get_data(nd), ne[1L], ne[2L])
+           else matrix(.ag_xfer_down(nd, "bwd_graph leaf grads"), ne[1L], ne[2L])
     assign(k, val, envir = grads)
   }
 

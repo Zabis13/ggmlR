@@ -114,14 +114,22 @@ test_that("ag_tensor(x, device='gpu') has device='gpu'", {
   reset_to_cpu()
 })
 
-test_that("ag_param(x, device='gpu') keeps $data as source-of-truth", {
+test_that("ag_param(x, device='gpu') keeps its value, on the device", {
   skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
   ag_device("gpu")
   d <- matrix(1:4, 2, 2)
   p <- ag_param(d, device = "gpu")
   expect_equal(p$device, "gpu")
-  expect_equal(p$data, d)
   expect_true(p$requires_grad)
+
+  # A parameter is uploaded once into the persistent pool and read back through
+  # .ag_data(); $data is NULL because the device holds the value, which the
+  # contract defines as "not materialised", never as "empty" (rule 4). The
+  # test above covers the other half of this: a plain ag_tensor is NOT made
+  # resident, so it does keep $data.
+  expect_null(p$data)
+  expect_false(is.null(p$ptr))
+  expect_equal(.ag_data(p), d, tolerance = 1e-6)
   reset_to_cpu()
 })
 
@@ -187,7 +195,8 @@ test_that("backward on GPU tensors matches CPU backward (tol=1e-4)", {
   grads_gpu <- backward(loss_gpu)
   g_gpu     <- get0(as.character(W_gpu$id), envir = grads_gpu)
 
-  expect_equal(g_gpu, g_cpu, tolerance = 1e-4)
+  # Resident gradients arrive as device handles -- materialise before comparing.
+  expect_equal(ggmlR:::.ag_as_matrix(g_gpu), g_cpu, tolerance = 1e-4)
   reset_to_cpu()
 })
 

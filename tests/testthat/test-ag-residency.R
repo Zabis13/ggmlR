@@ -239,8 +239,12 @@ test_that("tape memory ledger reports context and buffer usage", {
   .ag_ctx_ensure()
 
   m0 <- .ag_tape_mem()
+  # The unprefixed fields describe the pass pool, as they always have; the p_*
+  # fields and the total are what the persistent pool added.
   expect_named(m0, c("ctx_bytes", "ctx_used", "buffer_bytes", "n_contexts",
-                     "n_buffers"),
+                     "n_buffers",
+                     "p_ctx_bytes", "p_ctx_used", "p_buffer_bytes",
+                     "p_n_contexts", "p_n_buffers", "total_buffer_bytes"),
                ignore.order = TRUE)
   expect_identical(m0$buffer_bytes, 0)
 

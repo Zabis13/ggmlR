@@ -22,8 +22,9 @@ download and the leaf install, together 43-64% of it on the measured models
 (\code{inst/scripts/measure_ag_residency_on_backward.R}).
 }
 \details{
-Opt-in, because it changes what \code{$grad} contains. Code that reads it
-through \code{.ag_data}/\code{.ag_as_matrix} is unaffected; code doing
+On by default; \code{GGMLR_AG_RESIDENT_GRADS=0} or \code{FALSE} here restores
+host-side gradients. It changes what \code{$grad} contains: code reading it
+through \code{.ag_data}/\code{.ag_as_matrix} is unaffected, while code doing
 arithmetic on \code{$grad} directly gets an \code{ag_handle}, which has no
 arithmetic methods and so fails loudly rather than computing something wrong.
 }

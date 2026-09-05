@@ -103,7 +103,7 @@ test_that("a stale handle is refused rather than read", {
   expect_error(
     run_op(function(ctx, p) ggml_scale(ctx, p[[1L]], 2),
            inputs = list(h), out_shape = c(8L, 8L)),
-    "device handle from generation")
+    "device handle from the pass pool")
 })
 
 test_that("a handle is not usable as an arithmetic operand", {

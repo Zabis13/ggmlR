@@ -66,11 +66,17 @@ utils::globalVariables(c("object", "new_data", "self", "super", "private"))
   # Opt-in tracing of ag_tensor$data reads (diagnostics only, see R/ag_trace.R).
   if (identical(Sys.getenv("GGMLR_AG_TRACE_DATA"), "1")) ag_trace_data(TRUE)
 
-  # Opt-in graph backward: computes backward() as a single ggml graph instead of
-  # one R closure per tape node. Off by default -- measured slower than the
-  # closures on real models (R/ag_backward_graph.R has the numbers); a tape with
-  # any uncovered op falls back wholesale, so gradients are unchanged either way.
-  if (identical(Sys.getenv("GGMLR_AG_BACKWARD_GRAPH"), "1")) ag_backward_graph(TRUE)
+  # Graph backward: computes backward() as a single ggml graph instead of one R
+  # closure per tape node. ON by default since resident weights made it the
+  # faster path (1.17-2.67x on four of five shapes; R/ag_backward_graph.R has
+  # the numbers and the history). A tape with any uncovered op falls back
+  # wholesale, so gradients are unchanged either way.
+  #
+  # The variable now switches it OFF -- "0" for the closure path -- and still
+  # accepts "1" so anything that used it to opt in keeps working.
+  bwd_env <- Sys.getenv("GGMLR_AG_BACKWARD_GRAPH")
+  if (identical(bwd_env, "1")) ag_backward_graph(TRUE)
+  if (identical(bwd_env, "0")) ag_backward_graph(FALSE)
 
   # Per-stage timings for the graph backward (diagnostics only).
   if (identical(Sys.getenv("GGMLR_AG_BWD_PROF"), "1")) ag_backward_profile(TRUE)

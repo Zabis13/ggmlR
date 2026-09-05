@@ -283,10 +283,13 @@ test_that("the register does not grow across passes", {
   expect_lte(length(st$pending_grads), n1)
 })
 
-test_that("the flag defaults to off", {
-  # Opt-in: an existing session must behave exactly as before until it asks.
+test_that("the flag defaults to on", {
+  # Resident gradients are the default now that the two cross-tape holders are
+  # fixed (dp_train's replica loop and ag_checkpoint's accumulation); the tests
+  # above pin the behaviour that made that safe. GGMLR_AG_RESIDENT_GRADS=0 is
+  # the way back to host-side gradients.
   skip_if_no_gpu()
   ag_device("gpu"); on.exit(ag_device("cpu"), add = TRUE)
   old <- bwd_res(NA)
-  expect_false(isTRUE(old))
+  expect_true(isTRUE(old))
 })

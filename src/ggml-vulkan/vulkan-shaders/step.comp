@@ -18,5 +18,9 @@ void main() {
     }
 
     const float x = float(data_a[i]);
-    data_d[i] = D_TYPE(x >= 0.0f ? 1.0f : 0.0f);
+    // Strictly greater, matching op_step in ggml-cpu/unary-ops.cpp:15-17.
+    // The shader used >=, which disagreed with the CPU backend at exactly
+    // x == 0 -- invisible on random data, and wrong for a relu mask, where
+    // x == 0 must contribute no gradient.
+    data_d[i] = D_TYPE(x > 0.0f ? 1.0f : 0.0f);
 }

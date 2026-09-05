@@ -1,6 +1,8 @@
 # ggmlR 0.8.5
 
-* **Device-resident gradients** — `GGMLR_AG_RESIDENT_GRADS=1` keeps backward gradients in their backend buffer instead of downloading every leaf each pass (1.1-1.3x on dense stacks). Off by default.
+* **GPU-resident training** — weights, Adam moments, gradients and forward activations stay in device buffers across steps instead of crossing the bus each operation. A step costs 4 host/device crossings and 0.047 MB where it cost 10 and 0.188; the optimizer step now touches the host not at all, and forward traffic no longer grows with depth. Numerically unchanged.
+* **Graph backward and resident gradients are now the default** — `GGMLR_AG_BACKWARD_GRAPH=0` and `GGMLR_AG_RESIDENT_GRADS=0` restore the previous behaviour.
+* New `ag_xfer_count()` / `ag_xfer_report()`: host/device crossings counted by call site.
 * New `ag_tape_memory()`: what the gradient tape holds, split into operands and freeable activations.
 * New `ag_estimate_training_memory()`: training budget from parameter shapes, at the 8 bytes per scalar the autograd path actually uses.
 * New `ag_forward_profile()`: per-stage forward timings, matching the backward profiler.

@@ -219,18 +219,25 @@ ag_checkpoint <- function(fn, ...) {
   # result, so the generation is checked rather than trusted: this is the one
   # thing a later refactor could break silently by reaching for the convenient
   # with_grad_tape() wrapper.
-  gen_before <- .ag_device_state$ctx_gen
+  # Both pools are watched. Gradients live in the pass pool, so that counter is
+  # the one that matters for them -- but ag_device() frees the persistent pool
+  # too, and a segment that dropped resident weights while leaving the pass pool
+  # untouched would slip through a pass-only check.
+  gen_before   <- .ag_device_state$ctx_gen
+  p_gen_before <- .ag_device_state$p_ctx_gen
 
   .ag_tape$nodes   <- list()
   .ag_tape$enabled <- TRUE
   redone <- do.call(fn, inputs)
   seg_nodes <- .ag_tape$nodes
 
-  if (!identical(gen_before, .ag_device_state$ctx_gen))
-    stop("ggmlR: ag_checkpoint() replay reset the ggml context (generation ",
-         gen_before, " -> ", .ag_device_state$ctx_gen, "). Gradients already ",
-         "accumulated now point at freed device memory. The segment must not ",
-         "call with_grad_tape() or ag_device().", call. = FALSE)
+  if (!identical(gen_before, .ag_device_state$ctx_gen) ||
+      !identical(p_gen_before, .ag_device_state$p_ctx_gen))
+    stop("ggmlR: ag_checkpoint() replay reset the ggml context (pass ",
+         gen_before, " -> ", .ag_device_state$ctx_gen, ", persistent ",
+         p_gen_before, " -> ", .ag_device_state$p_ctx_gen, "). Gradients ",
+         "already accumulated now point at freed device memory. The segment ",
+         "must not call with_grad_tape() or ag_device().", call. = FALSE)
 
   # Walk the segment's tape exactly as backward() walks the main one, seeded
   # with the gradient arriving from downstream.
@@ -270,7 +277,13 @@ ag_checkpoint <- function(fn, ...) {
       # anyone outside can use.
       if (any(vapply(seg_nodes, function(o) identical(as.character(o$output_id), key),
                      logical(1)))) next
-      inp$grad <- if (is.null(inp$grad)) g else inp$grad + g
+      # Through the accessor: with resident gradients $grad is a device handle,
+      # which deliberately has no arithmetic (rule 3 of the data contract), so
+      # `inp$grad + g` would error rather than silently compute. Accumulating a
+      # gradient needs the numbers, so this is one of the places that pays a
+      # materialisation -- once per leaf, not per pass.
+      inp$grad <- if (is.null(inp$grad)) g
+                  else .ag_as_matrix(inp$grad) + .ag_as_matrix(g)
     }
   }
 

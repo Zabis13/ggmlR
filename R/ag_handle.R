@@ -33,18 +33,29 @@
 # Build a handle for a tensor pointer that lives in the current residency
 # context. `shape` is c(nrow, ncol) as R sees it -- ggml keeps ne0 as the row
 # count because that is how matrices are uploaded.
-.ag_handle <- function(ptr, shape) {
+#
+# `scope` names the pool the pointer was allocated from, because the two pools
+# have independent lifetimes and independent generation counters. A handle
+# checked against the wrong counter would either look stale while its memory is
+# fine (a persistent weight after a pass reset) or, worse, look live after its
+# buffer was freed. Carrying the pool with the pointer is what keeps the check
+# meaningful; the default is "pass", so existing callers are unaffected.
+.ag_handle <- function(ptr, shape, scope = "pass") {
   structure(list(ptr   = ptr,
                  shape = as.integer(shape),
-                 gen   = .ag_device_state$ctx_gen),
+                 scope = scope,
+                 gen   = .ag_scope_gen(scope)),
             class = "ag_handle")
 }
 
 .ag_is_handle <- function(x) inherits(x, "ag_handle")
 
-# TRUE while the handle's pointer still belongs to the live context.
+# Pool a handle belongs to. Handles made before scopes existed are pass-pool.
+.ag_handle_scope <- function(h) h$scope %||% "pass"
+
+# TRUE while the handle's pointer still belongs to the live context of ITS pool.
 .ag_handle_live <- function(h) {
-  .ag_is_handle(h) && identical(h$gen, .ag_device_state$ctx_gen)
+  .ag_is_handle(h) && identical(h$gen, .ag_scope_gen(.ag_handle_scope(h)))
 }
 
 # Materialise a handle into an R matrix. This is the download; call it only
@@ -53,9 +64,10 @@
   if (!.ag_is_handle(h)) stop("ggmlR: not an ag_handle.", call. = FALSE)
   if (!.ag_handle_live(h))
     stop("ggmlR: this device handle refers to a buffer freed by a tape reset ",
-         "(generation ", h$gen %||% NA, " < ", .ag_device_state$ctx_gen, ").",
+         "(", .ag_handle_scope(h), " pool, generation ", h$gen %||% NA, " < ",
+         .ag_scope_gen(.ag_handle_scope(h)), ").",
          call. = FALSE)
-  matrix(ggml_backend_tensor_get_data(h$ptr),
+  matrix(.ag_xfer_down(h$ptr, "handle_to_r"),
          nrow = h$shape[1L], ncol = h$shape[2L])
 }
 
@@ -70,8 +82,8 @@
 
 #' @export
 print.ag_handle <- function(x, ...) {
-  cat(sprintf("<ag_handle %dx%d, generation %s%s>\n",
-              x$shape[1L], x$shape[2L], format(x$gen),
+  cat(sprintf("<ag_handle %dx%d, %s pool, generation %s%s>\n",
+              x$shape[1L], x$shape[2L], .ag_handle_scope(x), format(x$gen),
               if (.ag_handle_live(x)) "" else ", STALE"))
   invisible(x)
 }

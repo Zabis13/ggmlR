@@ -49,6 +49,14 @@ both_paths <- function(build) {
        got = got_grads, got_params = got$params, got_path = got_path)
 }
 
+# Gradients come back as device handles when residency is on, so they are read
+# through the accessor rather than as fields. A handle has no arithmetic on
+# purpose (rule 3 of the data contract), which is why `a - b` on one fails
+# loudly instead of quietly computing the wrong thing -- helpful in the engine,
+# but here it just means the test has to materialise first.
+.bwd_as_matrix <- get(".ag_as_matrix", envir = asNamespace("ggmlR"))
+.bwd_dim       <- get(".ag_dim",       envir = asNamespace("ggmlR"))
+
 # Max absolute difference between the gradients of matching parameters.
 grad_maxdiff <- function(r) {
   stopifnot(length(r$ref_params) == length(r$got_params))
@@ -57,7 +65,7 @@ grad_maxdiff <- function(r) {
     b <- r$got_params[[i]]$grad
     if (is.null(a) && is.null(b)) return(0)
     if (is.null(a) || is.null(b)) return(Inf)   # one path produced no gradient
-    max(abs(a - b))
+    max(abs(.bwd_as_matrix(a) - .bwd_as_matrix(b)))
   }, numeric(1)))
 }
 
@@ -141,7 +149,7 @@ test_that("graph backward handles a column-broadcast bias", {
   expect_identical(r$got_path, "graph")
   # The reduction must also produce the right SHAPE: a [1,m] gradient for a
   # [m,1] parameter would broadcast silently in the optimizer.
-  expect_identical(dim(r$got_params[[2]]$grad), c(5L, 1L))
+  expect_identical(.bwd_dim(r$got_params[[2]]$grad), c(5L, 1L))
   expect_lt(grad_maxdiff(r), 1e-3)
 })
 
@@ -166,7 +174,7 @@ test_that("graph backward handles a row-broadcast bias", {
   r <- both_paths(build)
 
   expect_identical(r$got_path, "graph")
-  expect_identical(dim(r$got_params[[2]]$grad), c(1L, 3L))
+  expect_identical(.bwd_dim(r$got_params[[2]]$grad), c(1L, 3L))
   expect_lt(grad_maxdiff(r), 1e-3)
 })
 
@@ -195,8 +203,8 @@ test_that("graph backward matches closures on a real ag_linear stack", {
 
   expect_identical(r$got_path, "graph")
   expect_lt(grad_maxdiff(r), 1e-3)
-  expect_identical(dim(r$got_params[[2]]$grad), c(4L, 1L))
-  expect_identical(dim(r$got_params[[4]]$grad), c(2L, 1L))
+  expect_identical(.bwd_dim(r$got_params[[2]]$grad), c(4L, 1L))
+  expect_identical(.bwd_dim(r$got_params[[4]]$grad), c(2L, 1L))
 })
 
 

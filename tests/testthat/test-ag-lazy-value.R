@@ -173,7 +173,9 @@ test_that("gradients through a resident tensor match finite differences", {
 
   r <- loss_of(w_val)
   backward(r$l)
-  analytic <- r$W$grad
+  # A resident gradient is a handle; the comparison below is against finite
+  # differences computed in R, so it is materialised here.
+  analytic <- get(".ag_as_matrix", envir = ns)(r$W$grad)
 
   eps <- 1e-3
   fd   <- matrix(0, d, d)

@@ -435,7 +435,7 @@ dp_train <- function(make_model,
       # Copy through the contract: a replica's parameter may be resident, and a
       # direct $data assignment would leave its device buffer on the old
       # weights (inst/docs/ag_data_contract.md).
-      for (nm in param_names) .ag_data_set(pi[[nm]], .ag_data(p0[[nm]]))
+      for (nm in param_names) .ag_opt_store_weight(pi[[nm]], .ag_data(p0[[nm]]))
     }
   }
 
@@ -447,7 +447,7 @@ dp_train <- function(make_model,
     p0 <- replicas[[1L]]$parameters()
     pi <- replicas[[i]]$parameters()
     for (nm in param_names) {
-      .ag_data_set(pi[[nm]], .ag_data(p0[[nm]]))
+      .ag_opt_store_weight(pi[[nm]], .ag_data(p0[[nm]]))
     }
   }
 
@@ -459,6 +459,16 @@ dp_train <- function(make_model,
   # ---- helper: run one forward+backward on replica i, sample s ----
   .replica_step <- function(i, s) {
     model <- replicas[[i]]
+
+    # Clear this replica's gradients before its pass.
+    #
+    # backward() ADDS to $grad when one is already there, which is right inside
+    # one step and wrong across iterations: a replica's gradient from the
+    # previous iteration is a handle whose pass-pool buffer another replica's
+    # tape has already freed, and the accumulation would try to read it. The
+    # averaging below takes each replica's gradients fresh every iteration, so
+    # there is nothing here worth carrying over.
+    for (p_ in model$parameters()) p_$grad <- NULL
 
     with_grad_tape({
       logits <- if (is.null(forward_fn)) {
@@ -476,6 +486,20 @@ dp_train <- function(make_model,
     })
 
     grads <- backward(loss)
+
+    # Materialise before returning, while this replica's tape is still alive.
+    #
+    # With resident gradients backward() hands back device handles into the pass
+    # pool, and the caller runs every replica before averaging any of them --
+    # so replica 1's handles are freed by replica 2's with_grad_tape() long
+    # before .average_grads() reads them ("buffer freed by a tape reset,
+    # generation 428 < 429"). The allreduce is host arithmetic across replicas
+    # that may sit on different devices, so these values have to come back
+    # regardless; the only question is whether they come back in time.
+    if (.ag_bwd_resident_grads()) {
+      for (k in ls(grads, all.names = TRUE))
+        assign(k, .ag_as_matrix(get(k, envir = grads)), envir = grads)
+    }
     list(loss = as.numeric(.ag_data(loss)), grads = grads)
   }
 

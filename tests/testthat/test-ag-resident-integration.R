@@ -91,7 +91,12 @@ test_that("Adam agrees with itself across residency", {
       with_grad_tape({ l <- ag_mse_loss(ag_matmul(W, X), matrix(0, d, d)) })
       backward(l); opt$step(); opt$zero_grad()
     }
-    list(w = ag_data(W), m = opt$m$w, v = opt$v$w, t = opt$t, path = bwd_path())
+    # The moments are device handles once the optimizer runs on the GPU, so they
+    # are materialised here: the comparison below is about their VALUES, and
+    # comparing handles would compare pointers, which differ by construction.
+    list(w = ag_data(W),
+         m = as_mat(opt$m$w), v = as_mat(opt$v$w),
+         t = opt$t, path = bwd_path())
   }
 
   r <- both(train)
