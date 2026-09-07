@@ -227,7 +227,7 @@ ag_backward_resident <- function(on = TRUE) {
 # splitting one backward between a graph and closures would mean moving
 # gradients across the bus mid-pass, which is the per-op round trip again.
 .AG_BWD_GRAPH_OPS <- c("matmul", "add", "loss_const", "elemwise_mul",
-                       "transpose", "softmax", "scale", "mul")
+                       "transpose", "softmax", "scale", "mul", "flash_attn")
 
 # Can this tape run as one graph?
 #
@@ -564,6 +564,36 @@ ag_backward_profile_report <- function() {
         accumulate(as.character(x$id),
                    ggml_mul(ctx, p, ggml_sub(ctx, g, dot)))
       }
+    } else if (identical(nd$op, "flash_attn")) {
+      # Attention is one opaque node here, and deliberately so.
+      #
+      # Every other rule in this file spells its gradient out in ggml
+      # primitives. This one delegates to R/ag_flash_attn.R and takes three
+      # gradients back, already in [d_model, seq] form. The reason is the
+      # boundary the industry draws in the same place: a fused attention kernel
+      # is integrated as a single node with a known forward/backward contract,
+      # not decomposed into head permutations the surrounding graph can see
+      # through. ggml supplies both halves of that kernel already
+      # (ggml_flash_attn_ext / ggml_flash_attn_back).
+      #
+      # Concretely, this branch knows the op's name and nothing else -- not
+      # d_head, not the head order, not the 16-byte alignment of the packed
+      # gradient buffer. All of that is one file away, where the file header
+      # records that the layout was verified against an independent
+      # implementation rather than read off ggml.h. Knowledge with that history
+      # should break in one place when ggml changes, not two.
+      #
+      # Nothing crosses the bus: `g` is a node, the operands are the nodes the
+      # forward built, and the three results are nodes. So a tape with
+      # attention now qualifies for the fused forward+backward graph like any
+      # other -- which is the whole reason the missing `op` mattered.
+      gr <- .ag_flash_build_bwd(ctx, g, nd)
+      for (nm in c("q", "k", "v")) {
+        tt <- inp[[nm]]
+        if (is_ag_tensor(tt) && isTRUE(tt$requires_grad))
+          accumulate(as.character(tt$id), gr[[nm]])
+      }
+
     } else if (identical(nd$op, "loss_const")) {
       # All three losses share one shape of gradient: a matrix the forward pass
       # already built, times a scalar. Only the matrix and the scalar differ, so
@@ -595,6 +625,35 @@ ag_backward_profile_report <- function() {
 
   if (prof) { acc <- .ag_bwd_prof_add(acc, "emit", tk); tk <- Sys.time() }
 
+  # FUSED PATH: hand the gradient roots to the forward's queue instead of
+  # computing them here, so one graph covers the forward and the backward.
+  #
+  # This is possible only because nothing above reads a forward VALUE. Every
+  # snapshot reaches const() as a handle and contributes its pointer, and the
+  # shape decisions (.ag_dim on b_orig, the broadcast branches) read recorded
+  # shapes, not contents. So the backward can be expressed entirely as nodes
+  # over tensors the forward has not computed yet.
+  #
+  # What made it impossible until now was the loss, not the backward: MSE
+  # computed its scalar with resident = FALSE and divided on the host, so the
+  # forward had to run before ag_mse_loss() returned. With the division folded
+  # into the graph (.ag_gpu_mse_parts) nothing pulls the forward early, and the
+  # single compute happens when the optimizer reads a gradient.
+  #
+  # Requires resident gradients: the leaf loop below has to hand back handles,
+  # since a download here would be exactly the early compute this avoids. When
+  # gradients are materialised, the graph must run now.
+  fuse <- .ag_defer_enabled() && .ag_defer_len() > 0L &&
+          .ag_bwd_resident_grads()
+
+  if (fuse) {
+    # Queued, not computed. The uploads travel with them: the barrier flushes
+    # the context and fills every operand before it builds the graph, which is
+    # the same order this function used, just deferred as a unit.
+    .ag_defer_push_many(outs, uploads)
+    if (prof) { acc <- .ag_bwd_prof_add(acc, "queue", tk); tk <- Sys.time() }
+  } else {
+
   # One buffer for every tensor built above, then the uploads.
   .ag_ctx_flush(ctx)
   if (prof) { acc <- .ag_bwd_prof_add(acc, "flush", tk); tk <- Sys.time() }
@@ -619,6 +678,8 @@ ag_backward_profile_report <- function() {
 
   ggml_backend_graph_compute(backend, graph)
   if (prof) { acc <- .ag_bwd_prof_add(acc, "compute", tk); tk <- Sys.time() }
+
+  }
 
   # Download -- but only the gradients anyone will actually read.
   #
@@ -672,7 +733,10 @@ ag_backward_profile_report <- function() {
     # ne is (ne0, ne1, ne2, ne3); a 2D gradient lives in the first two, and ne0
     # is R's row count because that is how the matrices were uploaded.
     ne <- ggml_tensor_shape(nd)
-    val <- if (resident) .ag_handle(nd, c(ne[1L], ne[2L]))
+    # On the fused path the node has not been computed yet, so its handle is
+    # pending: reading it drains the queue, which is what makes the single
+    # compute happen at the optimizer rather than here.
+    val <- if (resident) .ag_handle(nd, c(ne[1L], ne[2L]), pending = fuse)
            else matrix(.ag_xfer_down(nd, "bwd_graph leaf grads"), ne[1L], ne[2L])
     assign(k, val, envir = grads)
   }

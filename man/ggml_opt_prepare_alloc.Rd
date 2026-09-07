@@ -27,6 +27,7 @@ Sets up the optimizer context with the computation graph and input/output tensor
 \seealso{
 Other optimization: 
 \code{\link{ggml_fit_opt}()},
+\code{\link{ggml_fit_opt_gen}()},
 \code{\link{ggml_fit_opt_multi}()},
 \code{\link{ggml_opt_alloc}()},
 \code{\link{ggml_opt_context_optimizer_type}()},
@@ -81,6 +82,7 @@ Other optimization:
 \code{\link{ggml_opt_result_pred}()},
 \code{\link{ggml_opt_result_reset}()},
 \code{\link{ggml_opt_set_lr}()},
-\code{\link{ggml_opt_static_graphs}()}
+\code{\link{ggml_opt_static_graphs}()},
+\code{\link{ggml_trainer}()}
 }
 \concept{optimization}

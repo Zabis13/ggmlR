@@ -318,7 +318,97 @@ See also `vignette("gpu-vulkan", package = "ggmlR")` for device management.
 
 ---
 
-## 11. Data-parallel training
+## 11. GPU residency
+
+Tensors stay in device buffers across a whole training step instead of moving
+to the host after every operation. This is not a setting — it is how `ag_*`
+already works — but it changes what two things *are*, so it is worth knowing.
+
+**Why it exists.** A naive GPU autograd re-uploads the weights on every single
+operation, then downloads each result. The arithmetic was never the bottleneck:
+uploading *weights* accounted for 74–98% of the forward pass. Four things now
+stay resident:
+
+| what | lifetime |
+|---|---|
+| weights | across steps |
+| Adam moments (`m`, `v`) | across steps |
+| gradients | within a step |
+| forward activations | within a step |
+
+A training step went from **10 host/device crossings and 0.188 MB to 4 and
+0.047 MB** — forward 3, backward 1, optimizer step 0. The Adam step no longer
+touches the host at all. Training is numerically unchanged; this is a transport
+change, not a different computation.
+
+`ag_tape_memory()` shows the memory side of it:
+
+```{r}
+# Section 10 left the dtype at f16 on a GPU machine; the tape report is about
+# bytes held, so pin f32 to keep the figures comparable across machines.
+ag_dtype("f32")
+
+x_r <- ag_tensor(matrix(rnorm(16 * 32), nrow = 16L))
+W_r <- ag_param(matrix(rnorm(8 * 16) * 0.1, nrow = 8L))
+y_r <- ag_tensor(matrix(0, 8L, 32L))
+
+with_grad_tape({
+  out_r  <- ag_relu(ag_matmul(W_r, x_r))
+  loss_r <- ag_mse_loss(out_r, y_r)
+})
+backward(loss_r)
+
+ag_tape_memory(top = 5)
+```
+
+### Two rules this imposes
+
+**`$grad` may be a device handle, not a matrix.** Reading it through the normal
+accessors is unaffected, but arithmetic directly on the slot fails — an
+`ag_handle` has no arithmetic methods. That is deliberate: failing loudly beats
+computing something plausible from a pointer.
+
+**A resident gradient dies at the next tape.** It lives in the pass pool, which
+is cleared when the next `with_grad_tape()` opens. The ordinary loop is fine —
+the optimizer consumes gradients in the step that produced them — but holding
+one *across* a tape boundary does not work:
+
+```{r eval=FALSE}
+# WRONG: g1's buffer is gone by the time it is used
+with_grad_tape({ l1 <- f(x1) }); backward(l1); g1 <- W$grad
+with_grad_tape({ l2 <- f(x2) }); backward(l2); g2 <- W$grad
+total <- g1 + g2
+```
+
+Materialise inside the pass that produced it, before the next tape opens.
+
+### Switching it off
+
+Both parts are on by default and restore the previous behaviour exactly:
+
+```{r eval=FALSE}
+ggmlR:::ag_backward_graph(FALSE)     # backward as closures, not one graph
+ggmlR:::ag_backward_resident(FALSE)  # download gradients into R matrices
+```
+
+Both also respond to an environment variable, which is the right way to switch
+them off for a whole session without touching code:
+
+```sh
+GGMLR_AG_BACKWARD_GRAPH=0 GGMLR_AG_RESIDENT_GRADS=0 Rscript your-script.R
+```
+
+A third part, a **deferred forward** that computes the whole forward as one
+graph, is off by default and enabled with `GGMLR_AG_DEFER=1`. It is gated
+because its benefit is uneven — substantial on small and mid-sized models,
+close to nothing where the weight upload dominates.
+
+Residency lowers the size at which the GPU beats the CPU; it does not remove
+it. Below roughly `d = 128` the dispatch cost still outweighs the arithmetic.
+
+---
+
+## 12. Data-parallel training
 
 For multi-GPU or faster single-GPU training see `dp_train()`:
 

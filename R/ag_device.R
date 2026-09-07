@@ -327,6 +327,33 @@ ag_to_device <- function(tensor, device) {
   # This runs for a pass reset too. Gradients are pass-pool tensors -- they are
   # produced by the backward graph, not carried between steps -- so freeing the
   # pass pool is exactly the event they need rescuing from.
+  # ⚠️ ORDER. The deferred queue is settled BEFORE the two rescues below, not
+  # after, and not by discarding it.
+  #
+  # Both rescues read values off the device (.ag_gpu_to_r), and a value being
+  # rescued may be exactly a node this queue has not computed yet -- a resident
+  # weight written by a deferred op, or a gradient whose snapshot is one. Freeing
+  # the queue first would rescue whatever the buffer happened to hold: not an
+  # error, not a stale-pointer trap, just wrong numbers written into $data as
+  # though they were authoritative. That is the failure this contract exists to
+  # prevent, so the queue is DRAINED here rather than dropped.
+  #
+  # Draining is also why .ag_gpu_to_r's own drain is not enough on its own: it
+  # would fire mid-rescue, after the loop below had already freed a pool.
+  #
+  # It costs one compute of a graph whose results may go unread. That is the
+  # price of the rescue being correct.
+  #
+  # With fusion the queue reaching here is no longer unusual: backward() does
+  # NOT drain on the graph path, so a step whose gradients were never read
+  # arrives at the next tape with the whole forward and backward still queued.
+  # Draining is then exactly right -- .ag_materialise_pending_grads() below is
+  # about to read those gradients, and they do not exist until this runs.
+  if ("pass" %in% pools && .ag_defer_len()) {
+    tryCatch(.ag_defer_drain(), error = function(e) NULL)
+  }
+  .ag_defer_discard()
+
   .ag_materialise_pending_grads()
 
   for (sc in pools) {
@@ -598,6 +625,52 @@ ag_to_device <- function(tensor, device) {
   # Optional post-build node tweak (e.g. forcing f32 accumulation precision on a
   # mul_mat node). Runs before allocation/compute so it affects the kernel pick.
   if (!is.null(node_hook)) node_hook(node)
+
+  # Deferred: the node is built, so this op's work as far as R is concerned is
+  # done. Queue it and hand back a pending handle; the flush, the uploads, the
+  # graph and the compute all happen once, at the barrier (R/ag_defer.R).
+  #
+  # Returning here skips the four stages below, which is the entire point: on a
+  # depth-16 chain they run 32 times instead of once. What it does NOT skip is
+  # the upload -- those operands still have to reach the device, they just do it
+  # in one pass instead of thirty-two. That is why the measured gain is modest
+  # on real shapes and why this is groundwork, not an optimisation.
+  #
+  # ⚠️ resident = FALSE IS HONOURED, and deferral gives way to it.
+  #
+  # The first version deferred regardless and returned a handle either way, on
+  # the assumption that callers read results through .ag_as_matrix, which drains
+  # first. That assumption is false: .ag_gpu_mse_parts asks for the loss with
+  # resident = FALSE and does `as.numeric(s) / n` on the result directly, so it
+  # got a list where it wanted a number ("'list' object cannot be coerced to
+  # type 'double'"). Four tests caught it, which is the good case -- the same
+  # mistake against a caller doing arithmetic on a partly-numeric structure
+  # would have computed something instead of erroring.
+  #
+  # So the rule is the one the data contract already states: what a function
+  # returns is decided by what the caller asked for, not by an optimisation
+  # underneath it. A caller wanting a value gets a value; the queue is drained
+  # below to produce it, which costs a compute exactly where the old path had
+  # one anyway.
+  if (isTRUE(resident) && .ag_defer_ok(scope, out)) {
+    ups <- list()
+    for (i in seq_along(inputs)) {
+      if (.ag_is_handle(inputs[[i]])) next
+      ups[[length(ups) + 1L]] <- list(ptr = ptrs[[i]],
+                                      val = as.numeric(inputs[[i]]))
+    }
+    .ag_defer_push(node, ups)
+    if (fprof) .ag_fwd_prof_record(facc)
+    return(.ag_handle(node, out_shape, scope = scope, pending = TRUE))
+  }
+
+  # Not deferring -- because the caller wants a value (resident = FALSE), or
+  # because this op is one deferral refuses (out=, the persistent pool). Either
+  # way the queue has to go first: this op's operands may be pending handles,
+  # and the compute below would read buffers that ggml_backend_alloc_ctx_tensors
+  # has given memory to but nothing has filled. Not a crash -- plausible
+  # garbage, which is worse.
+  if (.ag_defer_len()) .ag_defer_drain()
 
   # In-place: land the result in a tensor the caller already owns.
   #
@@ -977,6 +1050,15 @@ GGML_PREC_F32 <- 10L
 # into ggml_scale, rather than uploaded as tensors: a scalar in a push constant
 # costs nothing, a 1x1 tensor costs an allocation and a crossing.
 .ag_adam_step_device <- function(env, nm, p, g) {
+  # ⚠️ Never deferred. Every graph below is ordered by hand relative to the
+  # copies at the end -- read m, v and w first, write them afterwards -- and a
+  # queue that postpones the reads until the first write folds the two into one
+  # graph. Symptom when this wrapper was missing: the loss sat at 0.212 for four
+  # steps and the weight never moved at all. See .ag_defer_suspend.
+  .ag_defer_suspend(.ag_adam_step_device_impl(env, nm, p, g))
+}
+
+.ag_adam_step_device_impl <- function(env, nm, p, g) {
   m  <- env$m[[nm]]
   v  <- env$v[[nm]]
   wh <- .ag_handle_of(p)
@@ -1200,13 +1282,29 @@ GGML_PREC_F32 <- 10L
     out_shape = .ag_dim(p_data),
     resident  = TRUE)
 
-  # sum(diff^2) as one graph, off the resident diff: no second upload.
+  # sum(diff^2)/n as one graph, off the resident diff: no second upload.
+  #
+  # The division by n is a graph node rather than R arithmetic on the result,
+  # and that is the whole point: it is what lets the loss come back as a HANDLE.
+  # While the scalar was computed as `as.numeric(s) / n`, reading it was a
+  # download -- one of the four crossings left in a step, and the one that
+  # forced the forward to be computed before backward() could start, since the
+  # value had to exist for the division. A resident loss removes the crossing
+  # and, with it, the ordering constraint that made a fused forward+backward
+  # graph impossible.
+  #
+  # Callers that want the number still get it: ag_data() on the loss tensor
+  # materialises through the ordinary accessor, draining any deferred queue on
+  # the way. What changed is that nothing forces that read to happen early.
   s <- .ag_run_op(
-    op_fn     = function(ctx, ptrs) ggml_sum(ctx, ggml_sqr(ctx, ptrs[[1L]])),
+    op_fn     = function(ctx, ptrs)
+                  ggml_scale(ctx, ggml_sum(ctx, ggml_sqr(ctx, ptrs[[1L]])),
+                             1 / n),
     inputs    = list(d),
-    out_shape = c(1L, 1L))
+    out_shape = c(1L, 1L),
+    resident  = TRUE)
 
-  list(loss = matrix(as.numeric(s) / n, 1L, 1L), diff = d)
+  list(loss = s, diff = d)
 }
 
 # The relu mask, (x > 0) * 1, computed on the device.
@@ -1338,7 +1436,18 @@ GGML_PREC_F32 <- 10L
 }
 
 # Download data from a ggml tensor pointer to an R matrix.
+#
+# A drain point, and the one that is easy to miss. .ag_data_set_handle installs
+# a handle's POINTER on an ag_tensor and drops the handle object, so a tensor
+# produced by a deferred op carries no pending flag -- the flag lives on the
+# handle, and by here it is gone. Rather than thread it through the tensor, the
+# queue is drained on any read from a device pointer: this is the only function
+# that turns one into numbers, so covering it covers every ag_tensor read
+# (.ag_data, the resident-value rescue, ag_save).
+#
+# Cheap when nothing is queued, which is always on the non-deferred path.
 .ag_gpu_to_r <- function(tensor) {
+  .ag_defer_drain()
   ptr   <- tensor$ptr
   shape <- tensor$shape   # [nr, nc] stored at creation time
   raw   <- .ag_xfer_down(ptr, "gpu_to_r")

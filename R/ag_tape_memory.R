@@ -131,6 +131,7 @@
 #' @return Invisibly, a list with \code{nodes}, \code{bytes_total},
 #'   \code{bytes_snapshots}, \code{bytes_fields}, \code{bytes_inputs} and a
 #'   data frame \code{by_op}. Printed as a report as a side effect.
+#' @importFrom utils object.size
 #' @export
 #' @examples
 #' \donttest{

@@ -725,7 +725,13 @@ ag_mse_loss <- function(pred, target) {
     n      <- .ag_nrow(p_data) * .ag_ncol(p_data)
     parts  <- .ag_gpu_mse_parts(p_data, t_data, n)
     diff   <- parts$diff
-    out    <- ag_tensor(parts$loss, device = device)
+    # The loss is a device handle now, not a 1x1 matrix. Wrapping it keeps the
+    # scalar on the GPU: reading it is a download the caller asks for, rather
+    # than one every step pays whether or not anyone looks.
+    out    <- if (.ag_is_handle(parts$loss))
+                .ag_tensor_from_handle(parts$loss, dtype = .ag_device_state$dtype)
+              else
+                ag_tensor(parts$loss, device = device)
   } else {
     p_data <- .ag_data(pred)
     t_data <- .ag_data(target)
@@ -867,6 +873,22 @@ ag_softmax_cross_entropy_loss <- function(logits, target) {
 backward <- function(loss) {
   if (!is_ag_tensor(loss)) stop("backward() requires an ag_tensor")
 
+  # ⚠️ NOT an unconditional barrier -- that is what makes fusion possible.
+  #
+  # This used to drain here, on the reasoning that both backward paths need the
+  # forward's values to exist. That is true of the CLOSURE path, which reads
+  # snapshots as R matrices, and false of the graph path, which only ever takes
+  # their pointers (const() in R/ag_backward_graph.R). Draining for both cost
+  # the graph path the one thing it needed to fuse: an uncomputed forward it
+  # could append to.
+  #
+  # So the drain moves to where the values are actually required. The graph
+  # path, when it fuses, queues its gradient roots and lets the barrier fire at
+  # the optimizer; when it does not fuse, it computes as before. The closure
+  # path drains below, right before it starts reading matrices.
+  #
+  # Costs nothing when the queue is empty, which is every non-deferred run.
+
   # Graph path: the whole backward pass as one ggml graph, when enabled and when
   # every node on the tape is an op it can emit. Measured at 2-3.6x the closure
   # path; see R/ag_backward_graph.R for why it must stay all-or-nothing.
@@ -907,6 +929,14 @@ backward <- function(loss) {
   } else {
     .ag_bwd$last_path <- "closures"
   }
+
+  # The closure path's barrier. Everything below computes in R from snapshots
+  # (.ag_as_matrix inside each grad_fn), so the forward's values have to exist
+  # by here -- unlike the graph path above, which needs only their pointers.
+  #
+  # Reached either because the graph path is off, or because it refused this
+  # tape. Both are exactly the cases where a queued forward must be settled.
+  .ag_defer_drain()
 
   grads <- new.env(hash = TRUE, parent = emptyenv())
   assign(as.character(loss$id), matrix(1.0), envir = grads)

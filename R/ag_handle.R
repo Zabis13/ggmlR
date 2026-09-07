@@ -40,15 +40,27 @@
 # fine (a persistent weight after a pass reset) or, worse, look live after its
 # buffer was freed. Carrying the pool with the pointer is what keeps the check
 # meaningful; the default is "pass", so existing callers are unaffected.
-.ag_handle <- function(ptr, shape, scope = "pass") {
-  structure(list(ptr   = ptr,
-                 shape = as.integer(shape),
-                 scope = scope,
-                 gen   = .ag_scope_gen(scope)),
+#
+# `pending` marks a handle whose tensor has been BUILT but not yet computed --
+# the deferred forward (R/ag_defer.R) queues nodes and runs them as one graph.
+# Such a pointer is allocated and safe to use as an operand of another node, but
+# reading its numbers before the barrier would return whatever the buffer held.
+# Every read path goes through .ag_handle_to_r, which drains the queue first, so
+# the flag exists to make a bypass loud rather than to be checked by callers.
+.ag_handle <- function(ptr, shape, scope = "pass", pending = FALSE) {
+  structure(list(ptr     = ptr,
+                 shape   = as.integer(shape),
+                 scope   = scope,
+                 pending = isTRUE(pending),
+                 gen     = .ag_scope_gen(scope)),
             class = "ag_handle")
 }
 
 .ag_is_handle <- function(x) inherits(x, "ag_handle")
+
+# TRUE while this handle names a node that has been queued but not computed.
+# Handles made before deferral existed have no field and are never pending.
+.ag_handle_pending <- function(h) isTRUE(h$pending)
 
 # Pool a handle belongs to. Handles made before scopes existed are pass-pool.
 .ag_handle_scope <- function(h) h$scope %||% "pass"
@@ -62,6 +74,15 @@
 # when the numbers are actually needed.
 .ag_handle_to_r <- function(h) {
   if (!.ag_is_handle(h)) stop("ggmlR: not an ag_handle.", call. = FALSE)
+  # The deferred forward's barrier, and the reason deferral is safe: asking for
+  # the numbers is exactly the event that makes them have to exist. Everything
+  # queued so far is computed as one graph here, before the download below.
+  #
+  # Placed at the READ rather than at the end of the tape so a chain of ag_*
+  # calls stays lazy: on the training path the first read is the loss scalar,
+  # by which point the whole forward is one graph. Draining costs nothing when
+  # the queue is empty, which is every call on the non-deferred path.
+  if (.ag_handle_pending(h)) .ag_defer_drain()
   if (!.ag_handle_live(h))
     stop("ggmlR: this device handle refers to a buffer freed by a tape reset ",
          "(", .ag_handle_scope(h), " pool, generation ", h$gen %||% NA, " < ",
@@ -82,8 +103,9 @@
 
 #' @export
 print.ag_handle <- function(x, ...) {
-  cat(sprintf("<ag_handle %dx%d, %s pool, generation %s%s>\n",
+  cat(sprintf("<ag_handle %dx%d, %s pool, generation %s%s%s>\n",
               x$shape[1L], x$shape[2L], .ag_handle_scope(x), format(x$gen),
+              if (.ag_handle_pending(x)) ", PENDING" else "",
               if (.ag_handle_live(x)) "" else ", STALE"))
   invisible(x)
 }

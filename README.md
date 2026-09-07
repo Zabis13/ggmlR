@@ -347,6 +347,90 @@ model <- ggml_model_sequential() |>
   ggml_layer_dense(10L, activation = "softmax")
 ```
 
+### Training from a generator
+
+`x` and `y` have to fit in memory twice — once as an R matrix, once as the ggml
+copy. Pass a `generator` instead and only the current batch is ever resident.
+It is a function of no arguments returning `list(x, y)`, or `NULL` when the data
+runs out:
+
+```r
+# Read batches off disk instead of loading the whole set
+gen <- function() {
+  f <- next_shard()                 # your own bookkeeping
+  if (is.null(f)) {
+    rewind_shards()                 # reset, so the next epoch starts over
+    return(NULL)                    # NULL ends the epoch
+  }
+  d <- readRDS(f)
+  list(d$x, d$y)                    # exactly batch_size rows
+}
+
+model <- ggml_fit(model, generator = gen, epochs = 10L, batch_size = 32L)
+```
+
+Note the reset: training runs several epochs over the same source, and a bare
+closure gives the loop no handle to rewind it, so a finite generator has to
+rewind itself before returning `NULL`. Forget it and the second epoch gets
+nothing — which stops training with a warning rather than looping over an empty
+source.
+
+A generator that never returns `NULL` is fine too — augmentation, simulators, RL
+rollouts — but then `steps_per_epoch` says where an epoch ends:
+
+```r
+augmenting <- function() {
+  i <- sample(nrow(x_train), 32L)
+  list(random_flip(x_train[i, , drop = FALSE]), y_train[i, , drop = FALSE])
+}
+
+model <- ggml_fit(model, generator = augmenting,
+                  steps_per_epoch = 500L, epochs = 10L, batch_size = 32L,
+                  validation_generator = val_gen, validation_steps = 20L)
+```
+
+Batches are in ordinary R layout, same as `x`/`y`, and must contain exactly
+`batch_size` samples — a short batch is an error rather than being padded.
+`initial_epoch` shifts the epoch numbering seen by callbacks and LR schedules
+(as in Keras); it does not restore optimizer state, so Adam starts with zeroed
+moments. The arguments that need a whole dataset to be meaningful —
+`validation_split`, `validation_data`, `class_weight`, `sample_weight` — are
+rejected with a generator rather than silently ignored.
+
+For a training loop you drive yourself (RL, or anything where "epoch" is not a
+pass over a dataset), `ggml_fit_opt_gen()` is the same loop one level down.
+
+### Your own training loop
+
+When progress is not measured in passes over data — reinforcement learning,
+curricula, anything where the next batch depends on what the model just did —
+`ggml_trainer()` hands back a context that lives until you free it, and you step
+it yourself:
+
+```r
+tr <- ggml_trainer(model, batch_size = 32L)
+on.exit(tr$free())
+
+target <- tr$model()                    # target network for bootstrapping
+for (i in seq_len(10000L)) {
+  rollout(env, target)                  # your agent fills a replay buffer
+  b <- sample_batch(replay, 32L)
+  loss <- tr$step(b$x, b$y)             # one forward + backward, returns the loss
+
+  if (i %% 500L == 0L) target <- tr$model()   # refresh every 500 steps
+}
+
+model <- tr$model()                     # weights back into a model object
+tr$free()
+```
+
+Weights, Adam moments and the compute graph stay alive between steps, so a step
+costs one forward and backward pass and nothing else. `$eval(x, y)` measures
+without training, `$set_lr()` changes the rate mid-run, and gradient
+accumulation follows `nbatch_logical` — the optimizer updates only on the period
+boundary, and the trainer tracks that internally. The context holds GPU buffers,
+so free it when done.
+
 ## Functional API
 
 Wire layers into arbitrary graphs — residual connections, multi-input/output, shared weights.

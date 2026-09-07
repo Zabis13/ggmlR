@@ -141,7 +141,22 @@
     }
   }
   backend   <- .ag_device_state$backend
-  ggml_type <- .ag_dtype_to_ggml(.ag_compute_dtype())
+
+  # ⚠️ THE BACKWARD IS F32-ONLY, AND THAT DECIDES THE DTYPE FOR THE WHOLE CALL.
+  #
+  # ggml_flash_attn_back asserts q, k, v and d are all GGML_TYPE_F32
+  # (ggml-ops-builders.c:3701, "the kernel reads q/k/v/d as f32 directly").
+  # ggml_flash_attn_ext has no such restriction, so under ag_dtype("f16") this
+  # function used to build a perfectly good FORWARD and then abort R the moment
+  # a gradient was asked for -- GGML_ABORT, not an R error, so nothing could
+  # catch it and no fallback could run. The whole session died.
+  #
+  # Forcing F32 whenever a gradient is wanted costs precision nothing that
+  # matters here (the backward accumulates in f32 anyway) and turns a crash into
+  # ordinary arithmetic. The forward-only case keeps the requested dtype, which
+  # is where f16 actually buys something.
+  ggml_type <- if (is.null(grad_out)) .ag_dtype_to_ggml(.ag_compute_dtype())
+               else                   GGML_TYPE_F32
 
   dk <- dim(q)[1L]; n_q <- dim(q)[2L]; n_head <- dim(q)[3L]
   dv <- dim(v)[1L]; n_kv <- dim(k)[2L]
@@ -261,26 +276,51 @@
 #' }
 ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
                                mask = NULL, causal = FALSE) {
-  q_data <- .ag_data(q); k_data <- .ag_data(k); v_data <- .ag_data(v)
   n_heads <- as.integer(n_heads)
+  resident <- .ag_flash_resident_ok()
 
-  d_model <- nrow(q_data)
+  # Shapes without materialising: on the resident path q/k/v may be handles, and
+  # calling .ag_data() on one would download the very values this path exists to
+  # keep on the device. .ag_operand() returns a handle when the value is already
+  # there and a matrix otherwise, and .ag_nrow/.ag_ncol read either.
+  if (resident) {
+    qo <- .ag_operand(q); ko <- .ag_operand(k); vo <- .ag_operand(v)
+  } else {
+    qo <- .ag_data(q); ko <- .ag_data(k); vo <- .ag_data(v)
+  }
+
+  d_model <- .ag_nrow(qo)
   if (d_model %% n_heads != 0L)
     stop("ggmlR: ag_flash_attention() needs n_heads to divide d_model (",
          d_model, " %% ", n_heads, " != 0).", call. = FALSE)
-  if (nrow(k_data) != d_model || nrow(v_data) != d_model)
+  if (.ag_nrow(ko) != d_model || .ag_nrow(vo) != d_model)
     stop("ggmlR: ag_flash_attention() needs q, k and v to share d_model (got ",
-         d_model, ", ", nrow(k_data), ", ", nrow(v_data), ").", call. = FALSE)
-  if (ncol(k_data) != ncol(v_data))
+         d_model, ", ", .ag_nrow(ko), ", ", .ag_nrow(vo), ").", call. = FALSE)
+  if (.ag_ncol(ko) != .ag_ncol(vo))
     stop("ggmlR: ag_flash_attention() needs k and v to share a sequence length ",
-         "(got ", ncol(k_data), " and ", ncol(v_data), ").", call. = FALSE)
+         "(got ", .ag_ncol(ko), " and ", .ag_ncol(vo), ").", call. = FALSE)
 
   d_head <- d_model %/% n_heads
   if (is.null(scale)) scale <- 1 / sqrt(d_head)
 
-  seq_q  <- ncol(q_data)
-  seq_kv <- ncol(k_data)
+  seq_q  <- .ag_ncol(qo)
+  seq_kv <- .ag_ncol(ko)
   mask_m <- .ag_flash_mask(mask, causal, seq_q, seq_kv)
+
+  needs_grad <- (is_ag_tensor(q) && q$requires_grad) ||
+                (is_ag_tensor(k) && k$requires_grad) ||
+                (is_ag_tensor(v) && v$requires_grad)
+
+  if (resident)
+    return(.ag_flash_attention_resident(q, k, v, qo, ko, vo, n_heads, scale,
+                                        mask_m, d_model, seq_q, seq_kv,
+                                        needs_grad))
+
+  # ------------------------------------------------------------------ CPU path
+  # Unchanged: its own context, its own compute, values through R. The graph
+  # backward refuses a non-gpu tape anyway (.ag_bwd_reject_reason), so there is
+  # nothing here for an `op` to buy.
+  q_data <- qo; k_data <- ko; v_data <- vo
 
   qh <- .ag_flash_split_heads(q_data, n_heads)
   kh <- .ag_flash_split_heads(k_data, n_heads)
@@ -294,16 +334,15 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
 
   out <- ag_tensor(out_mat, device = .ag_device_state$device,
                    dtype = .ag_device_state$dtype)
-  out$requires_grad <- (is_ag_tensor(q) && q$requires_grad) ||
-                       (is_ag_tensor(k) && k$requires_grad) ||
-                       (is_ag_tensor(v) && v$requires_grad)
+  out$requires_grad <- needs_grad
 
   if (out$requires_grad) {
     q_ref <- q; k_ref <- k; v_ref <- v
     grad_fn <- function(grad_out) {
       # grad_out is [d_model, seq_q] in R terms; flash wants the result's own
       # permuted layout [d_head, n_head, seq_q].
-      gh <- aperm(.ag_flash_split_heads(grad_out, n_heads), c(1L, 3L, 2L))
+      gh <- aperm(.ag_flash_split_heads(.ag_as_matrix(grad_out), n_heads),
+                  c(1L, 3L, 2L))
       # Same mask as the forward pass: a gradient computed against a different
       # mask than the values it belongs to is wrong in a way nothing reports.
       g  <- .ag_flash_run(qh, kh, vh, scale, grad_out = gh, mask = mask_m)$grads
@@ -316,9 +355,302 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
               .ag_flash_join_heads(g$v) else NULL)
     }
     out$grad_fn <- grad_fn
-    # No `op`: the graph backward path cannot emit this, and a tape holding it
-    # falls back to closures -- which is where the gradient is computed anyway.
+    # No `op` on this path: the tape is not on a device, so the graph backward
+    # would refuse it regardless of what is recorded here.
     ag_record(out, grad_fn, list(q = q, k = k, v = v))
+  }
+  out
+}
+
+
+# ===========================================================================
+# Resident path: attention as one opaque node on the device.
+#
+# WHY A SEPARATE PATH, AND WHY IT STOPS AT THIS FILE'S EDGE
+# --------------------------------------------------------
+# The tape's graph backward (R/ag_backward_graph.R) emits every op as nodes in
+# the shared pass context, and refuses a tape containing anything it cannot
+# emit -- all-or-nothing, because splitting one backward between a graph and
+# closures would put the per-op round trip back. Attention recorded without an
+# `op` was therefore rejecting ENTIRE tapes: a model with one attention block
+# lost the graph backward and the fused forward+backward for its matmuls too.
+#
+# So attention needs an `op`. What it does NOT need is for the rest of the
+# engine to understand its insides. The industry shape is a fused kernel that
+# the surrounding graph sees as a single node with a known forward/backward
+# contract -- PyTorch dispatches scaled_dot_product_attention to one backend
+# and the autograd graph records one call, not a head permutation followed by
+# a matmul. ggml already supplies both halves of that kernel
+# (ggml_flash_attn_ext / ggml_flash_attn_back), so the fused op exists; what
+# was missing was a device-resident boundary around it.
+#
+# Hence the split of responsibility:
+#
+#   here            everything about layout -- the head split, the permutation
+#                   of the result, the packed gradient buffer and its 16-byte
+#                   alignment. All of it expressed as ggml nodes so nothing
+#                   travels through R, but all of it CONTAINED.
+#
+#   backward graph  one delegating branch that hands a gradient node in and
+#                   takes three out. It knows the op's name and nothing about
+#                   d_head, head order or slice offsets.
+#
+# That boundary is the point. The header of this file records that the layout
+# is "the whole difficulty" and that it was verified against an independent
+# implementation rather than read off ggml.h; knowledge with that history
+# belongs in one file, not spread across two. If ggml changes the result's
+# permutation, this file breaks and the backward graph does not.
+#
+# WHY THE NODES OUTLIVE THE CALL. .ag_flash_run() owns its context and frees it
+# on exit, so its tensors are gone by the time backward() runs -- which is why
+# it has to download. The functions below allocate from the shared pass pool
+# instead: .ag_residency_reset(scope = "pass") runs at the START of
+# with_grad_tape(), so a forward's tensors are still live while the backward
+# for that same tape is built.
+# ===========================================================================
+
+# Is the resident path available? The closure path stays for the CPU backend
+# and for a tape that is not running on a device at all.
+#
+# ⚠️ F32 ONLY, and this is a hard gate rather than a preference.
+# ggml_flash_attn_back asserts q, k, v and d are all GGML_TYPE_F32
+# (src/ggml-ops-builders.c: "the kernel reads q/k/v/d as f32 directly").
+# ggml_flash_attn_ext has no such restriction, so an f16 tape would build a
+# perfectly good resident FORWARD and then abort R inside a GGML_ASSERT the
+# moment its backward was emitted -- an abort, not an R error, so there would be
+# nothing to catch and fall back from. Refusing here sends f16/bf16 down the
+# closure path, which computes the same gradients.
+.ag_flash_resident_ok <- function() {
+  identical(.ag_device_state$device, "gpu") &&
+    !is.null(.ag_device_state$backend) &&
+    identical(.ag_compute_dtype(), "f32")
+}
+
+# [d_model, seq] tensor -> flash layout [d_head, seq, n_head].
+#
+# The reshape is free: a [d_model, seq] column-major matrix already stores head
+# h in rows (h-1)*d_head+1 ... h*d_head, so reading the same bytes as
+# [d_head, n_head, seq] groups them without moving anything -- the R path says
+# the same thing with array(m, dim = c(d_head, n_heads, seq)).
+#
+# Only the permute costs, and it costs a copy: ggml_permute relabels ne/nb and
+# yields a view, which flash_attn_ext will not take. Per the permute contract in
+# CLAUDE.md the arguments are DESTINATION positions, so sending source axis 1
+# (n_head) to position 2 and source axis 2 (seq) to position 1 is (0, 2, 1, 3).
+.ag_flash_to_heads <- function(ctx, t2d, d_head, n_heads, seq_len_) {
+  t3 <- ggml_reshape_3d(ctx, t2d, d_head, n_heads, seq_len_)
+  ggml_cont(ctx, ggml_permute(ctx, t3, 0L, 2L, 1L, 3L))
+}
+
+# Flash layout [d_head, seq, n_head] -> [d_model, seq] tensor. Inverse of the
+# above: send source axis 1 (seq) to position 2 and axis 2 (n_head) to
+# position 1, then read the [d_head, n_head, seq] result as [d_model, seq].
+.ag_flash_from_heads <- function(ctx, t3d, d_head, n_heads, seq_len_) {
+  c3 <- ggml_cont(ctx, ggml_permute(ctx, t3d, 0L, 2L, 1L, 3L))
+  ggml_reshape_2d(ctx, c3, d_head * n_heads, seq_len_)
+}
+
+# The forward result arrives as [d_v, n_head, n_q] -- head and sequence are
+# SWAPPED relative to q/k/v, which the file header flags as real and verified.
+# Send axis 1 (n_head) to position 2 and axis 2 (n_q) to position 1 to reach
+# [d_v, n_q, n_head], the layout .ag_flash_from_heads expects.
+.ag_flash_unswap <- function(ctx, t3d) {
+  ggml_cont(ctx, ggml_permute(ctx, t3d, 0L, 2L, 1L, 3L))
+}
+
+# Build the forward attention nodes in the shared pass context.
+#
+# Takes q/k/v as either device handles or R matrices in [d_model, seq] form,
+# and returns the pieces the tape node needs: the result node, the flash-layout
+# operand nodes the backward will attach to, and the uploads that have to run
+# after the context flush.
+#
+# Nothing is computed here and nothing is flushed. The caller decides whether
+# to queue this into the deferred forward or to compute it immediately, which
+# is the same choice .ag_run_op makes -- and keeping it there rather than here
+# is what lets attention join a fused forward+backward graph instead of forcing
+# a compute in the middle of one.
+.ag_flash_build_fwd <- function(ctx, ggml_type, q, k, v, n_heads, scale, mask_m,
+                                d_model, seq_q, seq_kv) {
+  d_head <- d_model %/% n_heads
+  uploads <- list()
+
+  # A handle contributes its pointer; a matrix needs a tensor and an upload.
+  # Same rule as .ag_run_op, and the same payoff: a projection that is already
+  # resident is not sent again.
+  operand <- function(x, nc) {
+    if (.ag_is_handle(x)) return(x$ptr)
+    tt <- ggml_new_tensor_2d(ctx, ggml_type, d_model, nc)
+    uploads[[length(uploads) + 1L]] <<- list(ptr = tt, val = as.numeric(x))
+    tt
+  }
+
+  tq2 <- operand(q, seq_q)
+  tk2 <- operand(k, seq_kv)
+  tv2 <- operand(v, seq_kv)
+
+  fq <- .ag_flash_to_heads(ctx, tq2, d_head, n_heads, seq_q)
+  fk <- .ag_flash_to_heads(ctx, tk2, d_head, n_heads, seq_kv)
+  fv <- .ag_flash_to_heads(ctx, tv2, d_head, n_heads, seq_kv)
+
+  # The mask is a constant of the graph, not a tracked value: it is built from
+  # `causal` or supplied by the caller and never receives a gradient. ggml wants
+  # it F16 and contiguous, and 0/-Inf survive that conversion exactly.
+  tm <- NULL
+  if (!is.null(mask_m)) {
+    tm <- ggml_new_tensor_2d(ctx, GGML_TYPE_F16, nrow(mask_m), ncol(mask_m))
+    uploads[[length(uploads) + 1L]] <- list(ptr = tm, val = as.numeric(mask_m))
+  }
+
+  res <- ggml_flash_attn_ext(ctx, fq, fk, fv, tm, scale, 0, 0)
+
+  # [d_v, n_head, n_q] -> [d_v, n_q, n_head] -> [d_model, seq_q].
+  out <- .ag_flash_from_heads(ctx, .ag_flash_unswap(ctx, res),
+                              d_head, n_heads, seq_q)
+
+  list(out = out, fq = fq, fk = fk, fv = fv, tm = tm, uploads = uploads)
+}
+
+# Build the backward attention nodes, given the gradient of the output as a
+# graph node.
+#
+# `g` is [d_model, seq_q]; ggml_flash_attn_back wants it in the result's own
+# permuted layout [d_v, n_head, n_q], so it goes through the head split and
+# then the swap that .ag_flash_unswap undoes on the way out.
+#
+# The three gradients come back PACKED into one contiguous buffer with each
+# slice aligned to 16 bytes. They are cut out with views rather than downloaded
+# and re-uploaded: a view costs no memory and no transfer, and the offsets are
+# computed from the same .ag_flash_pad() the closure path uses, so the two
+# cannot drift apart. Offsets for ggml_view_1d are BYTES, which is why the
+# element counts are multiplied by the type size.
+#
+# Returns the three gradients already back in [d_model, seq] form, so the
+# caller accumulates them without knowing anything about heads.
+.ag_flash_build_bwd <- function(ctx, g, nd) {
+  d_model <- nd$d_model; n_heads <- nd$n_heads
+  d_head  <- d_model %/% n_heads
+  seq_q   <- nd$seq_q;  seq_kv  <- nd$seq_kv
+
+  # g [d_model, seq_q] -> [d_head, seq_q, n_head] -> [d_head, n_head, seq_q].
+  gh <- .ag_flash_to_heads(ctx, g, d_head, n_heads, seq_q)
+  td <- .ag_flash_unswap(ctx, gh)
+
+  packed <- ggml_flash_attn_back(ctx, nd$fq, nd$fk, nd$fv, nd$tm, td, nd$scale)
+
+  nq <- d_head * seq_q  * n_heads
+  nk <- d_head * seq_kv * n_heads
+  # dv == d_head here because ag_flash_attention() requires q, k and v to share
+  # d_model and splits all three by the same n_heads. ggml itself allows
+  # dv != dk; if this wrapper ever does, this line is the one that has to grow a
+  # separate d_v -- getting it wrong shifts nothing in dq or dk and silently
+  # truncates dv.
+  nv <- d_head * seq_kv * n_heads
+  off_k <- .ag_flash_pad(nq)
+  off_v <- off_k + .ag_flash_pad(nk)
+
+  # The packed buffer is F32 regardless of the compute dtype: ggml_flash_attn_back
+  # allocates it as F32, and .ag_flash_pad() is written in units of 4-byte floats
+  # (ceiling(n * 4 / 16) * 4), matching. Sizing the stride from the compute type
+  # instead would shift dk and dv silently under f16.
+  esz <- ggml_type_size(GGML_TYPE_F32)
+
+  slice <- function(n, off_elems, seq_len_) {
+    vw <- ggml_view_1d(ctx, packed, n, off_elems * esz)
+    t3 <- ggml_reshape_3d(ctx, vw, d_head, seq_len_, n_heads)
+    .ag_flash_from_heads(ctx, t3, d_head, n_heads, seq_len_)
+  }
+
+  list(q = slice(nq, 0,     seq_q),
+       k = slice(nk, off_k, seq_kv),
+       v = slice(nv, off_v, seq_kv))
+}
+
+# The resident forward: build, record, hand back a handle.
+#
+# Mirrors .ag_run_op's structure deliberately -- same context, same deferral
+# decision, same choice between queueing and computing -- because attention has
+# to be indistinguishable from any other resident op to the machinery around it.
+# It cannot literally BE .ag_run_op: that helper builds 2D operand tensors and
+# takes one output shape, and attention needs three operands reshaped into 3D
+# plus a mask in a different dtype. The 3D special case stays here.
+.ag_flash_attention_resident <- function(q, k, v, qo, ko, vo, n_heads, scale,
+                                         mask_m, d_model, seq_q, seq_kv,
+                                         needs_grad) {
+  ggml_type <- .ag_dtype_to_ggml(.ag_compute_dtype())
+
+  # Descriptor budget: three operands, three head conversions (reshape+permute
+  # +cont each), the mask, the attention node and the output conversion. Slack
+  # on top, since overflowing a context aborts R inside ggml_new_tensor_impl
+  # rather than returning something to fall back from.
+  ctx <- .ag_ctx_ensure(32L, scope = "pass")
+
+  b <- .ag_flash_build_fwd(ctx, ggml_type, qo, ko, vo, n_heads, scale, mask_m,
+                           d_model, seq_q, seq_kv)
+
+
+  # Deferral, on the same terms as every other op: if the queue is open, this
+  # attention joins it and computes with everything else at the barrier. This
+  # is the half of the fix that the missing `op` blocked from the other end --
+  # a tape whose attention forced a compute could not be one fused graph even
+  # if its backward were emittable.
+  if (.ag_defer_ok("pass", NULL)) {
+    .ag_defer_push(b$out, b$uploads)
+    h <- .ag_handle(b$out, c(d_model, seq_q), scope = "pass", pending = TRUE)
+  } else {
+    if (.ag_defer_len()) .ag_defer_drain()
+    .ag_ctx_flush(ctx, scope = "pass")
+    for (u in b$uploads) .ag_xfer_up(u$ptr, u$val, "flash_attn operands")
+
+    ctx_graph <- ggml_init(.ag_graph_ctx_bytes(), no_alloc = TRUE)
+    if (is.null(ctx_graph))
+      stop("ggmlR: failed to create a graph context for flash attention.",
+           call. = FALSE)
+    on.exit(ggml_free(ctx_graph), add = TRUE)
+    graph <- ggml_build_forward_expand(ctx_graph, b$out)
+    ggml_backend_graph_compute(.ag_device_state$backend, graph)
+    h <- .ag_handle(b$out, c(d_model, seq_q), scope = "pass")
+  }
+  out <- .ag_tensor_from_handle(h, dtype = .ag_device_state$dtype)
+  out$requires_grad <- needs_grad
+
+  if (needs_grad) {
+    # The closure stays as the fallback: a tape can still reach the closure path
+    # (graph backward off, or another node on the tape unsupported), and then
+    # this is what computes the gradient. It reads through .ag_as_matrix so a
+    # resident gradient arriving as a handle materialises rather than erroring.
+    q_ref <- q; k_ref <- k; v_ref <- v
+    fq <- b$fq; fk <- b$fk; fv <- b$fv; tm <- b$tm
+    grad_fn <- function(grad_out) {
+      qh <- .ag_flash_split_heads(.ag_as_matrix(.ag_data(q_ref)), n_heads)
+      kh <- .ag_flash_split_heads(.ag_as_matrix(.ag_data(k_ref)), n_heads)
+      vh <- .ag_flash_split_heads(.ag_as_matrix(.ag_data(v_ref)), n_heads)
+      gh <- aperm(.ag_flash_split_heads(.ag_as_matrix(grad_out), n_heads),
+                  c(1L, 3L, 2L))
+      g  <- .ag_flash_run(qh, kh, vh, scale, grad_out = gh, mask = mask_m)$grads
+      list(
+        q = if (is_ag_tensor(q_ref) && q_ref$requires_grad)
+              .ag_flash_join_heads(g$q) else NULL,
+        k = if (is_ag_tensor(k_ref) && k_ref$requires_grad)
+              .ag_flash_join_heads(g$k) else NULL,
+        v = if (is_ag_tensor(v_ref) && v_ref$requires_grad)
+              .ag_flash_join_heads(g$v) else NULL)
+    }
+    out$grad_fn <- grad_fn
+
+    # ⚠️ THE POINT OF THE WHOLE CHANGE. With `op` set, a tape carrying attention
+    # is no longer rejected wholesale by .ag_bwd_reject_reason -- its matmuls
+    # keep the graph backward and the stage-2 fusion they had before attention
+    # was added to the model.
+    #
+    # The recorded fields are the flash-layout NODES, not values: the backward
+    # attaches ggml_flash_attn_back to the very tensors the forward built, so
+    # nothing crosses the bus in between. They stay valid because the pass pool
+    # is reset at the start of the next tape, not at the end of this one.
+    ag_record(out, grad_fn, list(q = q, k = k, v = v), op = "flash_attn",
+              fq = fq, fk = fk, fv = fv, tm = tm, scale = scale,
+              n_heads = n_heads, d_model = d_model,
+              seq_q = seq_q, seq_kv = seq_kv)
   }
   out
 }

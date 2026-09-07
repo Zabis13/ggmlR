@@ -1,7 +1,7 @@
 # Tests for ag_* GPU device support (Phase 1)
 #
 # All tests that require a real GPU backend are wrapped in:
-#   skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+#   skip_if_no_gpu()
 #
 # CPU path tests run unconditionally and verify that the new device parameter
 # does not break existing behaviour.
@@ -100,13 +100,13 @@ test_that("ag_to_device returns same tensor if already on target device", {
 # ============================================================================
 
 test_that("ag_device('gpu') does not error when backend available", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   expect_silent(ag_device("gpu"))
   reset_to_cpu()
 })
 
 test_that("ag_tensor(x, device='gpu') has device='gpu'", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   ag_device("gpu")
   x <- ag_tensor(matrix(1:4, 2, 2), device = "gpu")
   expect_equal(x$device, "gpu")
@@ -115,7 +115,7 @@ test_that("ag_tensor(x, device='gpu') has device='gpu'", {
 })
 
 test_that("ag_param(x, device='gpu') keeps its value, on the device", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   ag_device("gpu")
   d <- matrix(1:4, 2, 2)
   p <- ag_param(d, device = "gpu")
@@ -129,12 +129,12 @@ test_that("ag_param(x, device='gpu') keeps its value, on the device", {
   # resident, so it does keep $data.
   expect_null(p$data)
   expect_false(is.null(p$ptr))
-  expect_equal(.ag_data(p), d, tolerance = 1e-6)
+  expect_equal(ggmlR:::.ag_data(p), d, tolerance = 1e-6)
   reset_to_cpu()
 })
 
 test_that("ag_matmul GPU forward equals CPU forward (tol=1e-4)", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(7)
   a_mat <- matrix(runif(6), 2, 3)
   b_mat <- matrix(runif(6), 3, 2)
@@ -153,7 +153,7 @@ test_that("ag_matmul GPU forward equals CPU forward (tol=1e-4)", {
 })
 
 test_that("ag_relu GPU forward equals CPU forward", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(11)
   x_mat    <- matrix(runif(12, -1, 1), 3, 4)
   expected <- pmax(x_mat, 0)
@@ -170,7 +170,7 @@ test_that("ag_relu GPU forward equals CPU forward", {
 })
 
 test_that("backward on GPU tensors matches CPU backward (tol=1e-4)", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(99)
   w_mat <- matrix(runif(6, -1, 1), 2, 3)
   x_mat <- matrix(runif(3), 3, 1)
@@ -201,7 +201,7 @@ test_that("backward on GPU tensors matches CPU backward (tol=1e-4)", {
 })
 
 test_that("ag_gradcheck passes for GPU tensors (matmul + relu)", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(55)
   ag_device("gpu")
 
@@ -222,7 +222,7 @@ test_that("ag_gradcheck passes for GPU tensors (matmul + relu)", {
 })
 
 test_that("training loop on GPU reduces loss over 10 epochs", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(77)
   ag_device("gpu")
 
@@ -253,7 +253,7 @@ test_that("training loop on GPU reduces loss over 10 epochs", {
 })
 
 test_that("ag_to_device(tensor, 'cpu') correctly copies GPU data", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(13)
   d <- matrix(runif(6), 2, 3)
 
@@ -267,7 +267,7 @@ test_that("ag_to_device(tensor, 'cpu') correctly copies GPU data", {
 })
 
 test_that("ag_softmax GPU forward equals CPU forward", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(21)
   x_mat <- matrix(runif(12, -2, 2), 3, 4)
   # CPU reference: column-wise softmax
@@ -286,7 +286,7 @@ test_that("ag_softmax GPU forward equals CPU forward", {
 })
 
 test_that("ag_add GPU with [m,1] broadcast equals CPU", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(22)
   a_mat <- matrix(runif(12), 3, 4)
   b_mat <- matrix(runif(3),  3, 1)
@@ -303,7 +303,7 @@ test_that("ag_add GPU with [m,1] broadcast equals CPU", {
 })
 
 test_that("ag_dtype('bf16') + ag_matmul GPU result close to f32", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(51)
   a_mat <- matrix(runif(6), 2, 3)
   b_mat <- matrix(runif(6), 3, 2)
@@ -323,7 +323,7 @@ test_that("ag_dtype('bf16') + ag_matmul GPU result close to f32", {
 })
 
 test_that("ag_dtype('f16') + ag_relu GPU result close to f32", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(52)
   x_mat <- matrix(runif(8, -1, 1), 2, 4)
   expected <- pmax(x_mat, 0)
@@ -351,7 +351,7 @@ test_that("ag_dtype switches and returns previous", {
 })
 
 test_that("ag_sum GPU dim=1 (rowSums) equals CPU", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(31)
   x_mat <- matrix(runif(12), 3, 4)
   ag_device("gpu")
@@ -362,7 +362,7 @@ test_that("ag_sum GPU dim=1 (rowSums) equals CPU", {
 })
 
 test_that("ag_sum GPU dim=2 (colSums) equals CPU", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(32)
   x_mat <- matrix(runif(12), 3, 4)
   ag_device("gpu")
@@ -373,7 +373,7 @@ test_that("ag_sum GPU dim=2 (colSums) equals CPU", {
 })
 
 test_that("ag_mean GPU dim=1 (rowMeans) equals CPU", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(33)
   x_mat <- matrix(runif(12), 3, 4)
   ag_device("gpu")
@@ -384,7 +384,7 @@ test_that("ag_mean GPU dim=1 (rowMeans) equals CPU", {
 })
 
 test_that("ag_mean GPU dim=2 (colMeans) equals CPU", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(34)
   x_mat <- matrix(runif(12), 3, 4)
   ag_device("gpu")
@@ -395,7 +395,7 @@ test_that("ag_mean GPU dim=2 (colMeans) equals CPU", {
 })
 
 test_that("ag_pow GPU p=2 (sqr) equals CPU", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(41)
   x_mat <- matrix(runif(6, 0.1, 2), 2, 3)
   ag_device("gpu")
@@ -406,7 +406,7 @@ test_that("ag_pow GPU p=2 (sqr) equals CPU", {
 })
 
 test_that("ag_pow GPU p=0.5 (sqrt) equals CPU", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(42)
   x_mat <- matrix(runif(6, 0.1, 2), 2, 3)
   ag_device("gpu")
@@ -417,7 +417,7 @@ test_that("ag_pow GPU p=0.5 (sqrt) equals CPU", {
 })
 
 test_that("ag_pow GPU p=3 (general) equals CPU", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(43)
   x_mat <- matrix(runif(6, 0.1, 2), 2, 3)
   ag_device("gpu")
@@ -428,7 +428,7 @@ test_that("ag_pow GPU p=3 (general) equals CPU", {
 })
 
 test_that("ag_add GPU with [1,n] broadcast equals CPU", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   set.seed(23)
   a_mat <- matrix(runif(12), 3, 4)
   b_mat <- matrix(runif(4),  1, 4)

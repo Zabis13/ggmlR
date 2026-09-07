@@ -1,31 +1,9 @@
 # ggmlR 0.8.5
 
-* **GPU-resident training** — weights, Adam moments, gradients and forward activations stay in device buffers across steps instead of crossing the bus each operation. A step costs 4 host/device crossings and 0.047 MB where it cost 10 and 0.188; the optimizer step now touches the host not at all, and forward traffic no longer grows with depth. Numerically unchanged.
-* **Graph backward and resident gradients are now the default** — `GGMLR_AG_BACKWARD_GRAPH=0` and `GGMLR_AG_RESIDENT_GRADS=0` restore the previous behaviour.
-* New `ag_xfer_count()` / `ag_xfer_report()`: host/device crossings counted by call site.
-* New `ag_tape_memory()`: what the gradient tape holds, split into operands and freeable activations.
-* New `ag_estimate_training_memory()`: training budget from parameter shapes, at the 8 bytes per scalar the autograd path actually uses.
-* New `ag_forward_profile()`: per-stage forward timings, matching the backward profiler.
-* Fixed `ggml_estimate_memory()` returning 4 bytes per element for every type; F16 was reported at twice its size, quantised types at up to seven times.
-* Fixed gradient accumulation: `step(grads)` read the last backward pass rather than the accumulated total, so micro-batch loops trained on the last micro-batch only.
-* Fixed `ag_batch_norm()` backward ignoring the batch statistics in training mode.
-* **Fused multi-head attention for the autograd engine** — new `ag_flash_attention(q, k, v, n_heads)` computes all heads in one `ggml_flash_attn_ext()` call, with its gradient in one `ggml_flash_attn_back()`. The tape records a single node where the per-head loop recorded dozens (52 -> 1 on a 4-head block). Supports cross-attention and masking: `causal = TRUE` for decoder-style attention, or an explicit `[seq_kv, seq_q]` mask, applied to the gradient as well. Projections stay outside the call.
-* Fixed `ag_device("cpu")` leaving the Vulkan backend in place, so anything reading it — `gpu_linalg`, `sc_umap`, `ag_flash_attention` — kept computing on the GPU after the caller asked for the CPU.
-* Fixed `backward()` scaling a gradient by the number of operations consuming a tensor: a tensor sliced into 4 attention heads received 4x its gradient. Forward results were unaffected, and training still converged at a distorted learning rate, so the error was silent. `ag_multihead_attention()` was affected.
-* **Gradient checkpointing** — new `ag_checkpoint(fn, ...)` runs part of the forward pass without recording it, then re-runs that segment during `backward()` to rebuild what the gradient rules need. Trades compute for memory: on a 12-layer stack, checkpointing every second block cuts the tape by about half, and every block by 98%. Segments containing dropout replay with the same mask.
-* **Experimental graph backward for the autograd engine** — `backward()` can build the whole backward pass as a single ggml graph instead of one R closure per tape node. Off by default; enable with `GGMLR_AG_BACKWARD_GRAPH=1`. Covers matmul, add, the three losses, `relu`/`sigmoid`/`tanh`, transpose, softmax, scale and elementwise multiply — enough for dense stacks, classifiers, multi-head attention and dropout. A tape containing anything else falls back to the closure path, so gradients are unchanged either way. Per-stage timings via `GGMLR_AG_BWD_PROF=1`.
-* **Convolution backward on the GPU** — new Vulkan shader for `GGML_OP_IM2COL_BACK` (16x faster on a 4-layer conv stack).
-* **Embedding backward on the GPU** — new Vulkan shader for `GGML_OP_GET_ROWS_BACK`, so training an embedding table no longer leaves the device (1.5-2.5x over CPU training on a 30000-word vocabulary).
-* **Flash attention trains** — new `ggml_flash_attn_back()` (CPU and Vulkan), so `ggml_flash_attn_ext()` is no longer inference-only. Upstream ships it as a stub that aborts. No ALiBi, logit softcap or attention sinks.
-* **GELU trains** — new `GGML_OP_GELU_BACK` (CPU and Vulkan).
-* `ggml_fit(sample_weight = )` accepts a matrix: a per-output loss mask.
-* New layers `ggml_layer_permute()` and `ggml_layer_reshape()`.
-* **LayerNorm trains** — new `GGML_OP_NORM_BACK` (CPU and Vulkan), so `ggml_norm()` is no longer inference-only.
-* New `ggml_layer_transformer_block()`: a pre-LN encoder block in one call.
-* New layers `ggml_layer_rms_norm()`, `ggml_layer_layer_norm()`, `ggml_layer_positional_embedding()`, `ggml_layer_sequence_pooling()`.
-* `ggml_layer_attention()` gains `mask` (padding masks, unequal lengths), `rope`, `dropout` and `context`.
-* Fixed `ggml_layer_batch_norm()` aborting on sequence input.
-* Fixed multi-input functional models producing `NaN` on sequence input, and `ggml_predict()` failing on them.
+* **GPU-resident training** — weights, Adam moments, gradients and forward activations stay in device buffers across steps, cutting a training step from 10 host/device crossings to 4 (0.188 MB to 0.047); graph backward and resident gradients are now the default, and training is numerically unchanged.
+* **Transformers train on the GPU** — new `ag_flash_attention(q, k, v, n_heads)` computes every head in one fused call with its gradient in one more, backed by new `ggml_flash_attn_back()`, `GGML_OP_NORM_BACK` and `GGML_OP_GELU_BACK` kernels (CPU and Vulkan) that upstream ships as inference-only stubs.
+* **Training from a generator** — `ggml_fit(model, generator = )` pulls batches from a function instead of slicing a matrix held in memory, so only the current batch is resident. Endless generators (augmentation, simulators, RL rollouts) are supported via `steps_per_epoch`, with `initial_epoch`, `validation_generator` and `validation_steps` alongside. `ggml_fit_opt_gen()` exposes the same loop for training loops you drive yourself.
+* **New `ggml_trainer()`** — a training context that outlives a single call, for loops where "epoch" is not the unit of progress (reinforcement learning, curricula). `tr$step(x, y)` runs one forward/backward and returns that step's loss, keeping weights, Adam moments and the graph alive across steps; `$eval()`, `$model()`, `$set_lr()` and `$free()` complete it.
 
 # ggmlR 0.8.4
 

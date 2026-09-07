@@ -48,7 +48,7 @@ test_that("$grad stays double when ag_dtype() asks for f16", {
 })
 
 test_that("f16 on the GPU does not flush small gradients to zero", {
-  skip_if(ggml_backend_dev_count() < 1, "No ggml backend device available")
+  skip_if_no_gpu()
   local_cpu_device()
   ag_device("gpu")
   prev <- ag_dtype("f16")

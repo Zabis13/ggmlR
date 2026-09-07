@@ -1073,6 +1073,16 @@ nn_bn_calibrate <- function(model, x) {
 #'     validation portion stays fixed. FALSE for time series or exactly
 #'     reproducible runs.}
 #'   \item{callbacks}{List of callback objects (early stopping, LR schedules)}
+#'   \item{generator}{Function of no arguments yielding \code{list(x, y)} for
+#'     one batch, or \code{NULL} when exhausted -- an alternative to \code{x}
+#'     and \code{y} that keeps only the current batch in memory. See
+#'     \code{\link{ggml_fit_generator}}, to which the call is forwarded along
+#'     with \code{steps_per_epoch}, \code{initial_epoch},
+#'     \code{validation_generator} and \code{validation_steps}. The arguments
+#'     that are defined in terms of a whole dataset --
+#'     \code{validation_split}, \code{validation_data}, \code{class_weight}
+#'     and \code{sample_weight} -- are rejected rather than ignored, and
+#'     \code{shuffle} is inert because the generator owns its own order.}
 #' }
 #'
 #' \strong{Low-level (optimizer loop):}
@@ -1159,7 +1169,34 @@ ggml_fit_sequential <- function(model, x, y, epochs = 1, batch_size = 32,
                                 validation_split = 0.0, validation_data = NULL,
                                 class_weight = NULL, sample_weight = NULL,
                                 verbose = 1, shuffle = TRUE,
-                                callbacks = list()) {
+                                callbacks = list(), generator = NULL, ...) {
+  # Streaming path: no dataset is materialised, so the arguments that are
+  # defined in terms of one are rejected rather than quietly ignored. `shuffle`
+  # is simply inert here -- the generator owns the order it yields batches in.
+  if (!is.null(generator)) {
+    if (!missing(x) && !is.null(x)) {
+      stop("Give either 'x'/'y' or 'generator', not both.", call. = FALSE)
+    }
+    if (!identical(validation_split, 0.0) && validation_split > 0) {
+      stop("'validation_split' needs the total number of samples in order to ",
+           "cut a tail off it, which a generator does not have. Use ",
+           "'validation_generator' with 'validation_steps' instead.",
+           call. = FALSE)
+    }
+    if (!is.null(validation_data)) {
+      stop("'validation_data' is not used with a generator; pass ",
+           "'validation_generator' with 'validation_steps' instead.",
+           call. = FALSE)
+    }
+    if (!is.null(class_weight) || !is.null(sample_weight)) {
+      stop("'class_weight'/'sample_weight' are applied to a whole dataset ",
+           "before training and are not supported with a generator; scale the ",
+           "labels inside the generator instead.", call. = FALSE)
+    }
+    return(ggml_fit_generator(model, generator = generator, epochs = epochs,
+                              batch_size = batch_size, verbose = verbose,
+                              callbacks = callbacks, ...))
+  }
   if (!model$compiled) {
     stop("Model must be compiled before training. Call ggml_compile() first.")
   }

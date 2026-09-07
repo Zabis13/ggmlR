@@ -105,6 +105,16 @@ delegates to the low-level optimizer loop (\code{ggml_fit_opt}).
     validation portion stays fixed. FALSE for time series or exactly
     reproducible runs.}
   \item{callbacks}{List of callback objects (early stopping, LR schedules)}
+  \item{generator}{Function of no arguments yielding \code{list(x, y)} for
+    one batch, or \code{NULL} when exhausted -- an alternative to \code{x}
+    and \code{y} that keeps only the current batch in memory. See
+    \code{\link{ggml_fit_generator}}, to which the call is forwarded along
+    with \code{steps_per_epoch}, \code{initial_epoch},
+    \code{validation_generator} and \code{validation_steps}. The arguments
+    that are defined in terms of a whole dataset --
+    \code{validation_split}, \code{validation_data}, \code{class_weight}
+    and \code{sample_weight} -- are rejected rather than ignored, and
+    \code{shuffle} is inert because the generator owns its own order.}
 }
 
 \strong{Low-level (optimizer loop):}
