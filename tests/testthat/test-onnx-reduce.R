@@ -24,6 +24,48 @@ test_that("ONNX ReduceSum reduces to scalar", {
   expect_equal(as.numeric(result), 10.0, tolerance = 1e-4)
 })
 
+# ── ReduceMax / ReduceMin ────────────────────────────────────────
+
+test_that("ONNX ReduceMax reduces to the largest element", {
+  path <- .onnx_make_unary("ReduceMax", c(5L))
+  x <- c(3, 9, 1, 7, 4)
+  result <- run_onnx(path, list(X = x))
+  expect_equal(as.numeric(result)[1], 9.0, tolerance = 1e-4)
+})
+
+test_that("ONNX ReduceMin reduces to the smallest element", {
+  path <- .onnx_make_unary("ReduceMin", c(5L))
+  x <- c(3, 9, 1, 7, 4)
+  result <- run_onnx(path, list(X = x))
+  expect_equal(as.numeric(result)[1], 1.0, tolerance = 1e-4)
+})
+
+test_that("ONNX ReduceMax and ReduceMin handle negative values", {
+  # All-negative input catches a max implemented as an unsigned or
+  # zero-initialised accumulator.
+  x <- c(-3, -9, -1, -7)
+  mx <- run_onnx(.onnx_make_unary("ReduceMax", c(4L)), list(X = x))
+  mn <- run_onnx(.onnx_make_unary("ReduceMin", c(4L)), list(X = x))
+  expect_equal(as.numeric(mx)[1], -1.0, tolerance = 1e-4)
+  expect_equal(as.numeric(mn)[1], -9.0, tolerance = 1e-4)
+})
+
+test_that("ONNX ReduceMax over one axis keeps the other rows", {
+  # X[2,3] reduced along axis 1 gives the row maxima.
+  inp   <- .onnx_value_info("X", 1L, c(2L, 3L))
+  outp  <- .onnx_value_info("Y", 1L, c(2L, 1L))
+  node  <- .onnx_node("ReduceMax", "X", "Y",
+                      attrs = list(.onnx_attr_ints("axes", 1L),
+                                   .onnx_attr_int("keepdims", 1L)))
+  graph <- .onnx_graph("test", list(node), list(inp), list(outp))
+  path  <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+
+  # Row-major ONNX [2,3]: rows are (1,5,2) and (9,3,4).
+  result <- as.numeric(run_onnx(path, list(X = c(1, 5, 2, 9, 3, 4))))
+  expect_equal(sort(result[1:2]), c(5, 9), tolerance = 1e-4)
+})
+
 # ── MaxPool 2D ───────────────────────────────────────────────────
 
 test_that("ONNX MaxPool 2D works", {
@@ -111,4 +153,48 @@ test_that("ONNX Pad 2D zero-padding works", {
   # ggml_pad adds at the end, so our Pad implementation may differ
   # Just check total element count and that non-zero values sum correctly
   expect_equal(sum(result), 10, tolerance = 1e-3)
+})
+
+# ── TopK ─────────────────────────────────────────────────────────
+# ggml sorts along ne[0] (the last ONNX axis), so that is the case the
+# implementation covers; other axes are rejected rather than answered
+# with a wrong ordering.
+
+.topk_graph <- function(n_in, k, axis = -1L) {
+  inp    <- .onnx_value_info("X", 1L, c(n_in))
+  k_raw  <- .int64_bytes(k)
+  k_t    <- .onnx_tensor("K", c(1L), 7L, k_raw)
+  k_vi   <- .onnx_value_info("K", 7L, c(1L))
+  out_v  <- .onnx_value_info("Values",  1L, c(k))
+  out_i  <- .onnx_value_info("Indices", 7L, c(k))
+  node   <- .onnx_node("TopK", c("X", "K"), c("Values", "Indices"),
+                       attrs = list(.onnx_attr_int("axis", axis)))
+  graph  <- .onnx_graph("test", list(node), list(inp, k_vi),
+                        list(out_v, out_i), list(k_t))
+  path <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+  path
+}
+
+test_that("ONNX TopK returns the k largest values in order", {
+  path <- .topk_graph(5L, 3L)
+  m   <- onnx_load(path, device = "cpu")
+  res <- onnx_run(m, list(X = c(3, 9, 1, 7, 4)))
+  expect_equal(as.numeric(res[[1]]), c(9, 7, 4), tolerance = 1e-4)
+})
+
+test_that("ONNX TopK reports the matching indices", {
+  path <- .topk_graph(5L, 3L)
+  m   <- onnx_load(path, device = "cpu")
+  res <- onnx_run(m, list(X = c(3, 9, 1, 7, 4)))
+  expect_equal(length(res), 2L)
+  # 0-based positions of 9, 7 and 4.
+  expect_equal(as.numeric(res[[2]]), c(1, 3, 4), tolerance = 1e-4)
+})
+
+test_that("ONNX TopK with k equal to the row length sorts it", {
+  path <- .topk_graph(4L, 4L)
+  m   <- onnx_load(path, device = "cpu")
+  res <- onnx_run(m, list(X = c(2, 8, 5, 1)))
+  expect_equal(as.numeric(res[[1]]), c(8, 5, 2, 1), tolerance = 1e-4)
 })

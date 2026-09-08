@@ -1,0 +1,31 @@
+in	mnist-8	mnist-8.onnx	Input3	1,1,28,28	0
+out	mnist-8	mnist-8.onnx	10
+in	squeezenet1.0-8	squeezenet1.0-8.onnx	data_0	1,3,224,224	0
+out	squeezenet1.0-8	squeezenet1.0-8.onnx	1000
+in	adv_inception_v3_Opset17	adv_inception_v3_Opset17.onnx	x	1,3,299,299	0
+out	adv_inception_v3_Opset17	adv_inception_v3_Opset17.onnx	1000
+in	adv_inception_v3_Opset18	adv_inception_v3_Opset18.onnx	x	1,3,299,299	0
+out	adv_inception_v3_Opset18	adv_inception_v3_Opset18.onnx	1000
+in	super-resolution-10	super-resolution-10.onnx	input	1,1,224,224	0
+out	super-resolution-10	super-resolution-10.onnx	451584
+in	emotion-ferplus-8	emotion-ferplus-8.onnx	Input3	1,1,64,64	0
+out	emotion-ferplus-8	emotion-ferplus-8.onnx	8
+in	bert_Opset17	bert_Opset17.onnx	input_ids	1,128	1
+in	bert_Opset17	bert_Opset17.onnx	attention_mask	1,128	1
+out	bert_Opset17	bert_Opset17.onnx	98304
+in	sageconv_Opset16	sageconv_Opset16.onnx	x	2708,1433	0
+in	sageconv_Opset16	sageconv_Opset16.onnx	edge_index	2,2708	1
+out	sageconv_Opset16	sageconv_Opset16.onnx	18956
+in	roberta-sequence-classification-9	roberta-sequence-classification-9.onnx	input	1,128	1
+out	roberta-sequence-classification-9	roberta-sequence-classification-9.onnx	2
+in	bat_resnext26ts_Opset18	bat_resnext26ts_Opset18.onnx	x	1,3,256,256	0
+out	bat_resnext26ts_Opset18	bat_resnext26ts_Opset18.onnx	1000
+in	botnet26t_256_Opset16	botnet26t_256_Opset16.onnx	x	1,3,256,256	0
+out	botnet26t_256_Opset16	botnet26t_256_Opset16.onnx	1000
+in	cait_xs24_384_Opset16	cait_xs24_384_Opset16.onnx	x	1,3,384,384	0
+out	cait_xs24_384_Opset16	cait_xs24_384_Opset16.onnx	1000
+in	gptneox_Opset18	gptneox_Opset18.onnx	input_ids	1,128	1
+in	gptneox_Opset18	gptneox_Opset18.onnx	attention_mask	1,128	1
+out	gptneox_Opset18	gptneox_Opset18.onnx	4096
+in	xcit_tiny_12_p8_224_Opset17	xcit_tiny_12_p8_224_Opset17.onnx	x	1,3,224,224	0
+out	xcit_tiny_12_p8_224_Opset17	xcit_tiny_12_p8_224_Opset17.onnx	1000

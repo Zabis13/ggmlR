@@ -4814,8 +4814,17 @@ SEXP R_ggml_log_is_r_enabled(void) {
 // Static flag for R abort handler
 static int r_abort_enabled = 0;
 
+/* Declared here rather than taken from r_ggml_compat.h: this file compiles
+ * with -DR_GGML_IO_IMPL, which switches that header off entirely. */
+extern void (*r_ggml_abort_hook)(void);
+
 // R-compatible abort callback
 static void r_ggml_abort_callback(const char * error_message) {
+    /* Let anything that has been accumulating diagnostics print it first.
+     * Rf_error longjmps, so this is the last point at which any code runs;
+     * ggml reaches here through its own abort callback and never touches
+     * abort(), which is why the hook has to be called from both places. */
+    if (r_ggml_abort_hook) r_ggml_abort_hook();
     if (error_message != NULL) {
         Rf_error("GGML abort: %s", error_message);
     } else {

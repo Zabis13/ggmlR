@@ -1,0 +1,2 @@
+in	bn_probe	bn_probe.onnx	X	1,4,3,5	0
+out	bn_probe	bn_probe.onnx	60

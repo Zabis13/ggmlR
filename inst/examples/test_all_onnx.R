@@ -30,9 +30,11 @@ models <- list(
                      attention_mask = c(1L, 128L)),
        int_inputs = c("input_ids", "attention_mask")),
 
+  # edge_index is [2, 2708], the shape this export declares -- not Cora's
+  # 10556 edges, which was used here until ONNX Runtime rejected it.
   list(file = "sageconv_Opset16.onnx",
        inputs = list(x = c(2708L, 1433L),
-                     edge_index = c(2L, 10556L)),
+                     edge_index = c(2L, 2708L)),
        int_inputs = c("edge_index")),
 
   list(file = "roberta-sequence-classification-9.onnx",

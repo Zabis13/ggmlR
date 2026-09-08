@@ -511,20 +511,35 @@ void ggml_compute_forward_rel_pos_bias(const struct ggml_compute_params * params
         for (int hq = 0; hq < H; hq++) {
             for (int wq = 0; wq < W; wq++) {
                 const int q_idx = hq * W + wq;
+
+                /* Both halves read the query's own feature vector.
+                 *
+                 * The reference graph does transpose the queries between its
+                 * two matmuls, and its second one is indexed by the
+                 * transposed position -- but the two transposes cancel, so
+                 * what the H half needs is row q after all.  Solved against
+                 * ONNX Runtime's own intermediates rather than argued from
+                 * the graph: the fit picks x[wq*H+hq] for that matmul at
+                 * 6.5e-07 while x[q] misses by 1.9, and composing that with
+                 * the transposed row index lands back on q.
+                 *
+                 * Which weight goes with which axis is the part that is NOT
+                 * symmetric, and was wrong here: W_h (first in the packed
+                 * buffer) belongs to the W offset, W_w (at rel_h) to the H
+                 * offset.  Same for the sign -- k minus q, not q minus k. */
                 const float * x_hw = xb + (size_t)q_idx * C;
-                const float * x_wh = xb + (size_t)(wq * H + hq) * C;
 
                 for (int hk = 0; hk < H; hk++) {
-                    const int r_h = hq - hk + H - 1;
+                    const int r_h = hk - hq + H - 1;
                     float dot_h = 0.0f;
                     for (int ci = 0; ci < C; ci++)
-                        dot_h += x_hw[ci] * Wdata[r_h + ci * Wstride];
+                        dot_h += x_hw[ci] * Wdata[rel_h + r_h + ci * Wstride];
 
                     for (int wk = 0; wk < W; wk++) {
-                        const int r_w = wq - wk + W - 1;
+                        const int r_w = wk - wq + W - 1;
                         float dot_w = 0.0f;
                         for (int ci = 0; ci < C; ci++)
-                            dot_w += x_wh[ci] * Wdata[rel_h + r_w + ci * Wstride];
+                            dot_w += x_hw[ci] * Wdata[r_w + ci * Wstride];
 
                         const int k_idx = hk * W + wk;
                         out[k_idx + (size_t)q_idx * HW + (size_t)b * HW * HW] = dot_h + dot_w;

@@ -179,10 +179,24 @@ int map_node_quant(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                     out = ggml_concat(c->ctx, out, group_outs[g], 2);
             }
         }
-        /* Add bias (float, not quantized) */
+        /* Add bias.
+         *
+         * QLinearConv stores the bias quantised as INT32 (the spec fixes it to
+         * that type: it is added in the accumulator's domain, at scale
+         * x_scale*w_scale, before the output is requantised).  `out` here is
+         * already dequantised to F32, so the bias has to be converted rather
+         * than added as-is -- ggml has no add of an I32 onto an F32 and aborts
+         * on the type triple.
+         *
+         * This was reached only once segmented execution let MaskRCNN get as
+         * far as actually executing its convolutions; before that the model
+         * died while the graph was still being built. */
         if (bias) {
             int64_t c_out = ggml_nelements(bias);
-            struct ggml_tensor *bias_4d = ggml_reshape_4d(c->ctx, bias, 1, 1, c_out, 1);
+            struct ggml_tensor *b_typed = bias;
+            if (b_typed->type != out->type)
+                b_typed = ggml_cast_numeric(c->ctx, b_typed, out->type);
+            struct ggml_tensor *bias_4d = ggml_reshape_4d(c->ctx, b_typed, 1, 1, c_out, 1);
             out = ggml_add(c->ctx, out, bias_4d);
         }
 

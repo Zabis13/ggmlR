@@ -415,6 +415,99 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         }
     }
 
+    /* ── ReduceMax / ReduceMin ─────────────────────────────────── */
+    /* ggml has sum_rows but no max/min row reduction, so the extremum is
+     * taken with a pooling window that spans the whole axis -- the same
+     * trick GlobalAveragePool uses above.  Pooling works on ne[0]/ne[1],
+     * so the reduced axis is permuted into ne[0] first.  ReduceMin is
+     * ReduceMax on the negated input, negated back. */
+    else if (strcmp(op, "ReduceMax") == 0 || strcmp(op, "ReduceMin") == 0) {
+        if (!a) return -1;
+        int is_min = (strcmp(op, "ReduceMin") == 0);
+
+        /* The reduction below is built from ggml_neg and ggml_pool_2d, both of
+         * which are float-only.  ONNX allows integer inputs here -- MaskRCNN
+         * reduces a Cast-to-int64 tensor of detection counts -- so convert
+         * first and let the ONNX rank bookkeeping treat it as before.  The
+         * values involved are counts and indices, well inside what F32
+         * represents exactly. */
+        if (a->type != GGML_TYPE_F32 && a->type != GGML_TYPE_F16 &&
+            a->type != GGML_TYPE_BF16)
+            a = ggml_cast_numeric(c->ctx, a, GGML_TYPE_F32);
+
+        int64_t axes[ONNX_MAX_DIMS];
+        int n_axes = 0;
+        const onnx_attr_t *axes_attr = onnx_node_find_attr(n, "axes");
+        if (axes_attr && axes_attr->n_ints > 0) {
+            n_axes = axes_attr->n_ints;
+            if (n_axes > ONNX_MAX_DIMS) n_axes = ONNX_MAX_DIMS;
+            for (int d = 0; d < n_axes; d++) axes[d] = axes_attr->ints[d];
+        }
+        if (n_axes == 0 && n->n_inputs > 1)
+            n_axes = cval_get(c, n->inputs[1], axes, ONNX_MAX_DIMS);
+
+        int a_nd = tmap_get_ndims(c, n->inputs[0]);
+        if (a_nd <= 0) a_nd = (int)ggml_n_dims(a);
+        for (int d = 0; d < n_axes; d++)
+            if (axes[d] < 0) axes[d] += a_nd;
+
+        /* Reduce over ne[0] of `src`, keeping the other axes. */
+        struct ggml_tensor *src = a;
+        int ggml_dim = 0;
+        int perm[4] = {0, 1, 2, 3};
+        int permuted = 0;
+
+        if (n_axes == 1) {
+            ggml_dim = a_nd - 1 - (int)axes[0];
+            if (ggml_dim < 0) ggml_dim = 0;
+            if (ggml_dim > 3) ggml_dim = 3;
+            if (ggml_dim != 0) {
+                perm[0] = ggml_dim; perm[ggml_dim] = 0;
+                src = ggml_cont(c->ctx,
+                    ggml_permute(c->ctx, a, perm[0], perm[1], perm[2], perm[3]));
+                permuted = 1;
+            }
+        } else if (n_axes > 1) {
+            /* Several axes at once: flatten everything into one row, which is
+             * also what a missing `axes` means (reduce the whole tensor). */
+            src = ggml_reshape_2d(c->ctx, ggml_cont(c->ctx, a),
+                                  ggml_nelements(a), 1);
+        } else {
+            src = ggml_reshape_2d(c->ctx, ggml_cont(c->ctx, a),
+                                  ggml_nelements(a), 1);
+        }
+
+        if (is_min) src = ggml_neg(c->ctx, src);
+
+        /* One output per row: the window spans ne[0] and is one element tall.
+         * pool_2d rather than pool_1d because the Vulkan backend implements
+         * POOL_2D only -- pool_1d would force the op onto the CPU. */
+        struct ggml_tensor *pooled =
+            ggml_pool_2d(c->ctx, src, GGML_OP_POOL_MAX,
+                         (int)src->ne[0], 1,
+                         (int)src->ne[0], 1, 0, 0);
+
+        if (is_min) pooled = ggml_neg(c->ctx, pooled);
+
+        if (permuted)
+            pooled = ggml_cont(c->ctx,
+                ggml_permute(c->ctx, pooled, perm[0], perm[1], perm[2], perm[3]));
+        out = pooled;
+
+        /* Compile-time folding, so shape arithmetic keeps working. */
+        {
+            int64_t cv[ONNX_MAX_DIMS];
+            int ncv = cval_get(c, n->inputs[0], cv, ONNX_MAX_DIMS);
+            if (ncv > 0) {
+                int64_t best = cv[0];
+                for (int j = 1; j < ncv; j++) {
+                    if (is_min ? (cv[j] < best) : (cv[j] > best)) best = cv[j];
+                }
+                cval_put(c, n->outputs[0], &best, 1);
+            }
+        }
+    }
+
     /* ── Identity / Dropout (inference mode) ────────────────────── */
     else if (strcmp(op, "Identity") == 0 || strcmp(op, "Dropout") == 0) {
         if (!a) return -1;
@@ -460,12 +553,30 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             }
             if (out) {
                 ggml_set_input(out);
-                /* Data will be loaded into weight_buf during build */
                 ggml_set_name(out, n->outputs[0]);
                 tmap_put_nd(c, n->outputs[0], out, t_init->n_dims > 0 ? t_init->n_dims : 1);
-                /* Stash init pointer for load_weights to find later */
+                /* Queue the payload for the deferred fill.
+                 *
+                 * Naming the attribute tensor after this node used to be the
+                 * whole mechanism, on the assumption that load_weights would
+                 * then find it -- but load_weights iterates
+                 * onnx->initializers[], which the loader builds solely from
+                 * graph.initializer, and a Constant node's tensor is never
+                 * put there.  The name was set and nothing ever read it, so
+                 * the tensor kept whatever its freshly allocated buffer held.
+                 * The name is still assigned: find_constant_tensor() and the
+                 * diagnostics identify these tensors by it. */
                 strncpy(t_init->name, n->outputs[0], ONNX_MAX_NAME - 1);
                 t_init->name[ONNX_MAX_NAME - 1] = '\0';
+                if (c->n_cinit_fills < ONNX_MAX_CONSTANTS) {
+                    c->cinit_fill_ptrs[c->n_cinit_fills] = out;
+                    c->cinit_fill_srcs[c->n_cinit_fills] = t_init;
+                    c->n_cinit_fills++;
+                } else {
+                    fprintf(stderr, "ONNX WARNING: too many Constant nodes "
+                            "(> %d), '%s' will read uninitialised memory\n",
+                            ONNX_MAX_CONSTANTS, n->outputs[0]);
+                }
                 /* Register compile-time values for int64 constants (shape tensors) */
                 if (t_init->data_type == ONNX_DTYPE_INT64) {
                     int64_t vals[ONNX_MAX_DIMS];
@@ -541,6 +652,11 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             nd = 4;
             while (nd > 1 && a->ne[nd-1] == 1) nd--;
         }
+        /* The dims are stashed below into a [ONNX_MAX_DIMS + 1] row as
+         * [count, dims...], so a rank beyond that would write past the row and
+         * into the next one -- silent corruption of the context struct that
+         * only shows up much later, elsewhere. */
+        if (nd > ONNX_MAX_DIMS) nd = ONNX_MAX_DIMS;
         {
             struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
             out = ggml_new_tensor_1d(wctx, GGML_TYPE_I32, nd);
@@ -570,27 +686,115 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
     /* ── Pow ────────────────────────────────────────────────────── */
     else if (strcmp(op, "Pow") == 0) {
         if (!a || !b) return -1;
-        /* Common case: b is a scalar constant (e.g. x^2, x^0.5) */
-        /* For now, use log-exp: a^b = exp(b * log(a))
-         * Works for positive a; good enough for normalization patterns. */
-        struct ggml_tensor *log_a = ggml_log(c->ctx, a);
-        struct ggml_tensor *prod;
-        if (ggml_nelements(b) < ggml_nelements(a))
-            prod = ggml_mul(c->ctx, log_a, b);
-        else
-            prod = ggml_mul(c->ctx, b, log_a);
-        out = ggml_exp(c->ctx, prod);
+
+        /* exp(b*log(a)) is the general form, but log(a) is NaN for every
+         * negative a -- and the most common Pow in a transformer is the
+         * Pow(x - mean, 2) inside LayerNorm, whose input is centred and so
+         * half negative by construction.  That produced a NaN in half the
+         * elements of the very first LayerNorm and carried it to the model's
+         * output.
+         *
+         * A small integer exponent needs no logarithm at all: repeated
+         * multiplication is exact, defined for negative bases, and cheaper.
+         * Anything else keeps the old path, which remains correct wherever a
+         * is positive. */
+        int64_t exp_i = 0;
+        int is_int_exp = 0;
+        if (ggml_nelements(b) == 1) {
+            const onnx_initializer_t *bi = onnx_find_initializer(c->onnx, n->inputs[1]);
+            if (!bi) bi = find_constant_tensor(c->onnx, n->inputs[1]);
+            if (bi) {
+                const void *src = bi->raw_data ? (const void *)bi->raw_data
+                                               : (const void *)bi->decoded_data;
+                double bv = 0.0;
+                int got = 0;
+                if (src) {
+                    if (bi->data_type == ONNX_DTYPE_FLOAT) {
+                        float f; memcpy(&f, src, sizeof(f)); bv = f; got = 1;
+                    } else if (bi->data_type == ONNX_DTYPE_DOUBLE) {
+                        double d; memcpy(&d, src, sizeof(d)); bv = d; got = 1;
+                    } else if (bi->data_type == ONNX_DTYPE_INT64) {
+                        int64_t v; memcpy(&v, src, sizeof(v)); bv = (double)v; got = 1;
+                    } else if (bi->data_type == ONNX_DTYPE_INT32) {
+                        int32_t v; memcpy(&v, src, sizeof(v)); bv = (double)v; got = 1;
+                    }
+                }
+                /* Only exponents small enough to be worth unrolling, and only
+                 * exact integers: 2.5 is not 2. */
+                if (got && bv == (double)(int64_t)bv && bv >= 1 && bv <= 8) {
+                    exp_i = (int64_t)bv;
+                    is_int_exp = 1;
+                }
+            }
+        }
+
+        if (is_int_exp) {
+            /* x^1 still has to be a node of its own: handing back `a` itself
+             * would register this op's output name onto the input tensor. */
+            out = (exp_i == 1) ? ggml_dup(c->ctx, a) : a;
+            for (int64_t k = 1; k < exp_i; k++)
+                out = ggml_mul(c->ctx, out, a);
+            if (onnx_trace_nodes())
+                fprintf(stderr, "[Pow] %s: integer exponent %lld, using repeated mul\n",
+                        n->outputs[0], (long long)exp_i);
+        } else {
+            struct ggml_tensor *log_a = ggml_log(c->ctx, a);
+            struct ggml_tensor *prod;
+            if (ggml_nelements(b) < ggml_nelements(a))
+                prod = ggml_mul(c->ctx, log_a, b);
+            else
+                prod = ggml_mul(c->ctx, b, log_a);
+            out = ggml_exp(c->ctx, prod);
+        }
     }
 
     /* ── Erf (error function) ──────────────────────────────────── */
     else if (strcmp(op, "Erf") == 0) {
         if (!a) return -1;
-        /* Approximate erf using: erf(x) ≈ tanh(sqrt(2/pi) * (x + 0.044715 * x^3))
-         * This is the standard fast approximation. */
-        struct ggml_tensor *x3 = ggml_mul(c->ctx, a, ggml_mul(c->ctx, a, a));
-        struct ggml_tensor *inner = ggml_add(c->ctx, a,
-            ggml_scale(c->ctx, x3, 0.044715f));
-        out = ggml_tanh(c->ctx, ggml_scale(c->ctx, inner, 0.7978845608f)); /* sqrt(2/pi) */
+        /* Abramowitz & Stegun 7.1.26:
+         *
+         *   erf(|x|) = 1 - (a1 t + a2 t^2 + ... + a5 t^5) * exp(-x^2),
+         *   t = 1 / (1 + p|x|),
+         *
+         * odd-extended by the sign of x.  Accurate to 1.4e-7 over [-6,6].
+         *
+         * The previous form, tanh(sqrt(2/pi)*(u + 0.044715 u^3)), came from
+         * the tanh formulation of GELU, where the tanh stands in for
+         * erf(u/sqrt(2)) -- the sqrt(2) included.  Used as erf it was wrong by
+         * 0.166; corrected by feeding it x*sqrt(2) it was still only good to
+         * 3.6e-4, and that residue was what kept bert, roberta and cait about
+         * 1e-2 away from ONNX Runtime after every other defect was fixed. */
+        static const float p_as  = 0.3275911f;
+        static const float a1_as = 0.254829592f, a2_as = -0.284496736f,
+                           a3_as = 1.421413741f, a4_as = -1.453152027f,
+                           a5_as = 1.061405429f;
+
+        struct ggml_tensor *ax = ggml_abs(c->ctx, a);
+        struct ggml_tensor *den = ggml_scale_bias(c->ctx, ax, p_as, 1.0f);
+        /* t = 1/den.  The numerator is built from the input itself -- x*0 + 1 --
+         * rather than from a scalar: ggml_div needs both operands the same
+         * shape, and onnx_broadcast_prepare cannot supply it here because it
+         * SWAPS its arguments so the larger one comes first.  For a scalar over
+         * a tensor that turns 1/den into den/1, which is what wrecked every
+         * model using Erf when this was first written that way. */
+        struct ggml_tensor *ones = ggml_scale_bias(c->ctx, a, 0.0f, 1.0f);
+        struct ggml_tensor *t = ggml_div(c->ctx, ones, den);
+
+        /* Horner: (((a5 t + a4) t + a3) t + a2) t + a1, then one more t. */
+        struct ggml_tensor *poly = ggml_scale_bias(c->ctx, t, a5_as, a4_as);
+        poly = ggml_scale_bias(c->ctx, ggml_mul(c->ctx, poly, t), 1.0f, a3_as);
+        poly = ggml_scale_bias(c->ctx, ggml_mul(c->ctx, poly, t), 1.0f, a2_as);
+        poly = ggml_scale_bias(c->ctx, ggml_mul(c->ctx, poly, t), 1.0f, a1_as);
+        poly = ggml_mul(c->ctx, poly, t);
+
+        struct ggml_tensor *gauss = ggml_exp(c->ctx,
+            ggml_neg(c->ctx, ggml_sqr(c->ctx, a)));
+        /* 1 - poly*exp(-x^2), via -(poly*gauss) + 1 so no constant tensor is
+         * needed for the subtraction. */
+        struct ggml_tensor *mag = ggml_scale_bias(c->ctx,
+            ggml_mul(c->ctx, poly, gauss), -1.0f, 1.0f);
+
+        out = ggml_mul(c->ctx, ggml_sgn(c->ctx, a), mag);
     }
 
     /* ── Sin / Cos ──────────────────────────────────────────────── */
@@ -705,6 +909,102 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         }
     }
 
+    /* ── Less / LessOrEqual / Greater / GreaterOrEqual ─────────── */
+    /* Comparisons produce a 0/1 float mask, the same representation Equal and
+     * Where already use.  ggml_step(x) is 1 for x > 0 and 0 otherwise, so a
+     * strict comparison is a step of the difference; the "or equal" forms add
+     * half a unit of slack so that an exact tie lands on the 1 side.  That
+     * slack assumes the compared values are not closer together than 0.5,
+     * which holds for the shape arithmetic and index masks these ops are used
+     * for -- the same assumption Equal makes with its 0.5 window. */
+    else if (strcmp(op, "Less") == 0 || strcmp(op, "LessOrEqual") == 0 ||
+             strcmp(op, "Greater") == 0 || strcmp(op, "GreaterOrEqual") == 0) {
+        if (!a || !b) return -1;
+        int is_less  = (op[0] == 'L');
+        int or_equal = (strstr(op, "OrEqual") != NULL);
+
+        struct ggml_tensor *ta = a, *tb = b;
+        onnx_broadcast_prepare(c->ctx, &ta, &tb);
+        /* Less: b - a > 0 ;  Greater: a - b > 0 */
+        struct ggml_tensor *diff = is_less ? ggml_sub(c->ctx, tb, ta)
+                                           : ggml_sub(c->ctx, ta, tb);
+        if (or_equal)
+            diff = ggml_add(c->ctx, diff, make_scalar(c, 0.5f));
+        out = ggml_step(c->ctx, diff);
+
+        /* Compile-time values, so shape arithmetic keeps folding. */
+        {
+            int64_t cv_a[ONNX_MAX_DIMS], cv_b[ONNX_MAX_DIMS];
+            int na2 = cval_get(c, n->inputs[0], cv_a, ONNX_MAX_DIMS);
+            int nb2 = cval_get(c, n->inputs[1], cv_b, ONNX_MAX_DIMS);
+            if (na2 > 0 && nb2 == na2) {
+                int64_t result[ONNX_MAX_DIMS];
+                for (int j = 0; j < na2; j++) {
+                    int r = is_less ? (or_equal ? cv_a[j] <= cv_b[j] : cv_a[j] < cv_b[j])
+                                    : (or_equal ? cv_a[j] >= cv_b[j] : cv_a[j] > cv_b[j]);
+                    result[j] = r ? 1 : 0;
+                }
+                cval_put(c, n->outputs[0], result, na2);
+            }
+        }
+    }
+
+    /* ── Not ───────────────────────────────────────────────────── */
+    else if (strcmp(op, "Not") == 0) {
+        if (!a) return -1;
+        /* 1 - x, written as -(x - 1) so the full-size tensor stays the first
+         * operand -- ggml broadcasts the second into the first, not the other
+         * way round. */
+        out = ggml_neg(c->ctx, ggml_sub(c->ctx, a, make_scalar(c, 1.0f)));
+        {
+            int64_t cv[ONNX_MAX_DIMS];
+            int ncv = cval_get(c, n->inputs[0], cv, ONNX_MAX_DIMS);
+            if (ncv > 0) {
+                int64_t result[ONNX_MAX_DIMS];
+                for (int j = 0; j < ncv; j++) result[j] = cv[j] ? 0 : 1;
+                cval_put(c, n->outputs[0], result, ncv);
+            }
+        }
+    }
+
+    /* ── And / Or / Xor ────────────────────────────────────────── */
+    /* On 0/1 masks: And is the product, Or is 1 - (1-a)(1-b), and Xor is
+     * |a - b|. */
+    else if (strcmp(op, "And") == 0 || strcmp(op, "Or") == 0 ||
+             strcmp(op, "Xor") == 0) {
+        if (!a || !b) return -1;
+        struct ggml_tensor *ta = a, *tb = b;
+        onnx_broadcast_prepare(c->ctx, &ta, &tb);
+        if (strcmp(op, "And") == 0) {
+            out = ggml_mul(c->ctx, ta, tb);
+        } else if (strcmp(op, "Or") == 0) {
+            /* 1 - (1-a)(1-b), with the full-size tensor kept as the first
+             * operand of every sub so ggml broadcasts the scalar into it. */
+            struct ggml_tensor *one = make_scalar(c, 1.0f);
+            struct ggml_tensor *na_ = ggml_neg(c->ctx, ggml_sub(c->ctx, ta, one));
+            struct ggml_tensor *nb_ = ggml_neg(c->ctx, ggml_sub(c->ctx, tb, one));
+            struct ggml_tensor *prod = ggml_mul(c->ctx, na_, nb_);
+            out = ggml_neg(c->ctx, ggml_sub(c->ctx, prod, one));
+        } else {
+            out = ggml_abs(c->ctx, ggml_sub(c->ctx, ta, tb));
+        }
+        {
+            int64_t cv_a[ONNX_MAX_DIMS], cv_b[ONNX_MAX_DIMS];
+            int na2 = cval_get(c, n->inputs[0], cv_a, ONNX_MAX_DIMS);
+            int nb2 = cval_get(c, n->inputs[1], cv_b, ONNX_MAX_DIMS);
+            if (na2 > 0 && nb2 == na2) {
+                int64_t result[ONNX_MAX_DIMS];
+                for (int j = 0; j < na2; j++) {
+                    int x = cv_a[j] != 0, y = cv_b[j] != 0;
+                    result[j] = (strcmp(op, "And") == 0) ? (x && y)
+                              : (strcmp(op, "Or") == 0)  ? (x || y)
+                                                         : (x != y);
+                }
+                cval_put(c, n->outputs[0], result, na2);
+            }
+        }
+    }
+
     /* ── EyeLike ──────────────────────────────────────────────── */
     else if (strcmp(op, "EyeLike") == 0) {
         if (!a) return -1;
@@ -771,6 +1071,25 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             } else if (va->tensor->raw_size >= 4) {
                 memcpy(&fill_val, va->tensor->raw_data, sizeof(float));
             }
+        }
+
+        if (onnx_trace_nodes()) {
+            /* Where the value actually lives decides whether it is read at all:
+             * the branch above requires raw_data, while a TensorProto may carry
+             * the value in int64_data/float_data instead, which the loader
+             * decodes into decoded_data.  Printing both sizes says which of the
+             * two this model uses, and so whether the value was read or the
+             * initialiser 0.0f survived. */
+            const onnx_initializer_t *vt = va ? va->tensor : NULL;
+            fprintf(stderr, "[ConstantOfShape] %s: shape_src='%s' fill_val=%g has_value_attr=%d "
+                    "dtype=%d raw=%zu decoded=%zu resolved=[",
+                    n->outputs[0], n->inputs[0], (double)fill_val, va ? 1 : 0,
+                    vt ? vt->data_type : -1,
+                    vt ? vt->raw_size : (size_t)0,
+                    vt ? vt->decoded_size : (size_t)0);
+            for (int d = 0; d < ndims; d++)
+                fprintf(stderr, "%lld%s", (long long)shape[d], d < ndims - 1 ? "," : "");
+            fprintf(stderr, "]\n");
         }
 
         /* Reverse ONNX shape → ggml ne */

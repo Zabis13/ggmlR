@@ -9,19 +9,22 @@
 .pb_varint <- function(value) {
   value <- as.numeric(value)
   if (value < 0) {
-    # Protobuf encodes negative sint as 10-byte two's complement uint64.
-    # Represent value mod 2^64 as two 32-bit halves to avoid int32 truncation.
-    lo <- value %% 2^32          # unsigned low 32 bits (as double)
-    hi <- (2^32 - 1)             # sign-extended: all 1s in bits 32-63
+    # Two's complement in 64 bits, emitted as 10 groups of 7 bits.  The
+    # groups are produced from the magnitude with a borrow rather than from
+    # value + 2^64, because 2^64 exceeds the exact range of a double and the
+    # low bits of the sum are lost -- which silently corrupts the result.
+    mag <- -value                 # positive magnitude, exact for our range
+    borrow <- 1                   # two's complement = ~mag + 1
     bytes <- raw(10)
     for (i in 1:10) {
-      if (i <= 5) {
-        b <- as.integer(lo %% 128)
-        lo <- floor(lo / 128)
-      } else {
-        b <- as.integer(hi %% 128)
-        hi <- floor(hi / 128)
-      }
+      chunk <- as.integer(mag %% 128)
+      mag <- floor(mag / 128)
+      inv <- bitwAnd(bitwNot(chunk), 0x7FL) + borrow
+      borrow <- if (inv > 0x7F) 1 else 0
+      b <- bitwAnd(inv, 0x7FL)
+      # The tenth group carries only bit 63, so it is 1 for any negative
+      # value; the seven-bit chunking above would otherwise emit 0x7F there.
+      if (i == 10) b <- 1L
       bytes[i] <- as.raw(if (i < 10) bitwOr(b, 0x80L) else b)
     }
     return(bytes)

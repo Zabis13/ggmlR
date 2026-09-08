@@ -1755,6 +1755,15 @@ struct ggml_tensor * ggml_reshape_1d(
         struct ggml_tensor  * a,
         int64_t               ne0) {
     GGML_ASSERT(ggml_is_contiguous(a));
+    if (ggml_nelements(a) != ne0) {
+        /* Name the tensor: "some reshape had the wrong count" is not enough
+         * to locate the node in a graph of thousands. */
+        GGML_LOG_ERROR("%s: '%s' has %lld elements, cannot reshape to [%lld]; "
+                       "ne=[%lld,%lld,%lld,%lld]\n", __func__,
+                       a->name, (long long) ggml_nelements(a), (long long) ne0,
+                       (long long) a->ne[0], (long long) a->ne[1],
+                       (long long) a->ne[2], (long long) a->ne[3]);
+    }
     GGML_ASSERT(ggml_nelements(a) == ne0);
 
     const int64_t ne[1] = { ne0 };

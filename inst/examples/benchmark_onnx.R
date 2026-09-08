@@ -79,6 +79,50 @@ models <- list(
     input_shape = c(1L, 128L),
     extra_inputs = list(attention_mask = c(1L, 128L)),
     description = "GPT-NeoX, seq_len=128, causal LM"
+  ),
+  list(
+    name        = "RoBERTa SeqClass",
+    file        = "roberta-sequence-classification-9.onnx",
+    input_name  = "input",
+    input_shape = c(1L, 128L),
+    int_input   = TRUE,
+    description = "RoBERTa base, seq_len=128, 2-class sentiment"
+  ),
+  list(
+    name        = "CaiT XS24",
+    file        = "cait_xs24_384_Opset16.onnx",
+    input_name  = "x",
+    input_shape = c(1L, 3L, 384L, 384L),
+    description = "Class-Attention ViT, 384x384 RGB, 1000 classes"
+  ),
+  list(
+    name        = "XCiT Tiny12 P8",
+    file        = "xcit_tiny_12_p8_224_Opset17.onnx",
+    input_name  = "x",
+    input_shape = c(1L, 3L, 224L, 224L),
+    description = "Cross-Covariance ViT, 224x224 RGB, 1000 classes"
+  ),
+  list(
+    name        = "BoTNet26t",
+    file        = "botnet26t_256_Opset16.onnx",
+    input_name  = "x",
+    input_shape = c(1L, 3L, 256L, 256L),
+    description = "Bottleneck Transformer, 256x256 RGB, 1000 classes"
+  ),
+  list(
+    name        = "SAGEConv",
+    file        = "sageconv_Opset16.onnx",
+    input_name  = "x",
+    input_shape = c(2708L, 1433L),
+    extra_inputs = list(edge_index = c(2L, 10556L)),
+    description = "GraphSAGE on Cora, 2708 nodes, 7 classes"
+  ),
+  list(
+    name        = "MaskRCNN int8",
+    file        = "MaskRCNN-12-int8.onnx",
+    input_shape = c(3L, 224L, 224L),
+    input_name  = "image",
+    description = "Mask R-CNN R50-FPN int8 (partial: TopK/ReduceMin missing)"
   )
 )
 
@@ -139,7 +183,11 @@ bench_one <- function(onnx_path, input_name, input_shape, device,
 
   # Top-5
   probs <- out[[1]]
-  top5_idx <- order(probs, decreasing = TRUE)[1:5]
+  # A partially-supported model can return an empty output (MaskRCNN stops at
+  # its unsupported ops), so guard the ranking rather than indexing past the end.
+  top5_idx <- if (length(probs) > 0)
+                order(probs, decreasing = TRUE)[seq_len(min(5L, length(probs)))]
+              else integer(0)
 
   # Free model to release VRAM before next benchmark
   rm(model, out); gc(verbose = FALSE)
@@ -176,8 +224,9 @@ for (m in models) {
 
   # Генерируем входные данные
   set.seed(42)
-  if (grepl("input_ids", m$input_name, fixed = TRUE)) {
-    # Token IDs: integer values in reasonable vocab range
+  # Token ids and other integer inputs need whole numbers in a valid range,
+  # not runif() -- flagged either by the conventional name or by `int_input`.
+  if (grepl("input_ids", m$input_name, fixed = TRUE) || isTRUE(m$int_input)) {
     input_data <- as.numeric(sample.int(1000L, prod(m$input_shape), replace = TRUE))
   } else {
     input_data <- runif(prod(m$input_shape))

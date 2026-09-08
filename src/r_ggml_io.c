@@ -99,11 +99,20 @@ int r_ggml_fputs(const char *s, FILE *stream) {
     return 0;
 }
 
+/* Called just before the abort path longjmps back to R, if anything has
+ * registered.  Diagnostics that accumulate state during a run -- the ONNX node
+ * ring, say -- have no other chance to print: Rf_error does not return, so
+ * there is no code after the failure to print from, and R itself does not
+ * exit, so atexit never fires.  A plain hook pointer keeps this file free of
+ * any dependency on whatever registered it. */
+void (*r_ggml_abort_hook)(void) = NULL;
+
 /*
  * abort replacement
  * Uses R's error() which performs a longjmp back to R
  */
 void r_ggml_abort(const char *file, int line, const char *msg) {
+    if (r_ggml_abort_hook) r_ggml_abort_hook();
     Rf_error("ggml fatal error at %s:%d: %s", file, line, msg);
     /* Rf_error never returns, but compiler needs this for noreturn attribute */
     while(1) {}

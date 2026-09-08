@@ -157,6 +157,11 @@ SEXP R_onnx_run(SEXP ctx_ptr_, SEXP input_names_, SEXP input_data_) {
     const char **names = (const char **)R_alloc(n_inputs, sizeof(char *));
     const float **data  = (const float **)R_alloc(n_inputs, sizeof(float *));
 
+    /* Length of each converted array, passed down so the run cannot read past
+     * the end of one: a segmented model writes its inputs once per segment and
+     * a tensor may be rebuilt at a different size in between. */
+    int64_t *lens = (int64_t *)R_alloc(n_inputs, sizeof(int64_t));
+
     for (int i = 0; i < n_inputs; i++) {
         names[i] = CHAR(STRING_ELT(input_names_, i));
         SEXP vec = VECTOR_ELT(input_data_, i);
@@ -167,9 +172,10 @@ SEXP R_onnx_run(SEXP ctx_ptr_, SEXP input_names_, SEXP input_data_) {
         for (int64_t j = 0; j < nel; j++)
             fdata[j] = (float)rdata[j];
         data[i] = fdata;
+        lens[i] = nel;
     }
 
-    int status = onnx_ggml_run(ctx, names, data, n_inputs);
+    int status = onnx_ggml_run(ctx, names, data, lens, n_inputs);
     if (status != 0) {
         Rf_error("onnx_run: inference failed");
     }

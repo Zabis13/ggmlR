@@ -716,6 +716,17 @@ static void ggml_compute_forward_get_rows_f32(
         const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
         const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
 
+        if (i01 < 0 || i01 >= ne01) {
+            /* Name the tensors before aborting: the bare assert says only
+             * that some index was out of range, which in a graph of a
+             * thousand get_rows nodes is not enough to find the culprit. */
+            GGML_LOG_ERROR("%s: index %lld out of range [0,%lld) "
+                           "at i10=%lld i11=%lld i12=%lld; "
+                           "dst='%s' src0='%s' src1='%s'\n",
+                           __func__, (long long) i01, (long long) ne01,
+                           (long long) i10, (long long) i11, (long long) i12,
+                           dst->name, src0->name, src1->name);
+        }
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
         ggml_vec_cpy_f32(nc,

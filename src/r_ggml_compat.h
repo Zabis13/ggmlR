@@ -91,6 +91,10 @@ int r_ggml_fflush(FILE *stream);
 int r_ggml_fputs(const char *s, FILE *stream);
 R_GGML_NORETURN
 void r_ggml_abort(const char *file, int line, const char *msg);
+/* Optional last-gasp callback, run inside r_ggml_abort before it longjmps.
+ * Lets a diagnostic that has been accumulating state print it; NULL by
+ * default, so nothing pays for it. */
+extern void (*r_ggml_abort_hook)(void);
 R_GGML_NORETURN
 void r_ggml_exit(int status);
 R_GGML_FORMAT_PRINTF(1, 2) R_GGML_NORETURN

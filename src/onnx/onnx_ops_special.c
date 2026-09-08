@@ -29,9 +29,23 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
 
         int64_t total_elems = (int64_t)ggml_nelements(a);
 
-        /* Assume all elements are non-zero (common case: ConstantOfShape with value=1).
-         * For truly sparse inputs this would need runtime sizing. */
-        int64_t nnz = total_elems;
+        /* How many elements are actually non-zero cannot be known while the
+         * graph is being built -- it depends on the input's VALUES.  Two cases:
+         *
+         *  - Segmented execution has already run the segment that computes
+         *    this input, measured the count and recorded it; use that.
+         *  - Otherwise (first mapping, or no segmentation) fall back to
+         *    assuming every element is non-zero.  That is right for the common
+         *    ConstantOfShape(value=1) case and wrong for a genuine mask, which
+         *    is precisely why the segmented path exists. */
+        int64_t nnz = onnx_resolved_size(c, n->outputs[0]);
+        if (nnz < 0) {
+            nnz = total_elems;
+        } else if (onnx_trace_nodes()) {
+            fprintf(stderr, "[NonZero] %s: using measured nnz=%lld (guess was %lld)\n",
+                    n->outputs[0], (long long)nnz, (long long)total_elems);
+        }
+        if (nnz < 1) nnz = 1;   /* ggml has no zero-length dimension */
 
         /* Output: ONNX [input_ndims, nnz] → ggml [nnz, input_ndims] */
         {

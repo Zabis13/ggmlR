@@ -70,10 +70,38 @@ const onnx_initializer_t *find_constant_tensor(const onnx_model_t *m,
                                                 const char *name);
 
 enum ggml_type onnx_dtype_to_ggml(int32_t dt);
+
+/* Upload an initializer's payload into a tensor, converting ONNX dtypes ggml
+ * does not have (INT64 indices, doubles) on the way.  Shared by load_weights()
+ * and by the deferred fill for Constant nodes, whose data sits in a node
+ * attribute and so never reaches onnx->initializers[]. */
+int onnx_upload_initializer(struct ggml_tensor *t,
+                            const onnx_initializer_t *init);
 size_t         onnx_dtype_size(int32_t dt);
 
 /* g_current_node — set in map_node() before each call, used for diagnostics */
 extern const onnx_node_t *g_current_node;
+
+/* onnx_trace_nodes() — nonzero when ONNX_TRACE_NODES=1; gates graph tracing */
+int onnx_trace_nodes(void);
+
+/* onnx_trace_ring() — nonzero when ONNX_TRACE_RING=1; keeps the last few graph
+ * nodes with their edge values so they can be printed when a run dies. */
+int onnx_trace_ring(void);
+
+/* Print that ring.  Registered as r_ggml_abort_hook, since a ggml assertion
+ * reaches R through Rf_error and never returns here. */
+void onnx_ring_dump(void);
+int onnx_use_segments(void);
+
+/* Measured output size of a data-dependent op, or -1 when it has not been
+ * measured yet (the first time the op is mapped, or outside segmented
+ * execution).  Ops fall back to their build-time guess when it is -1. */
+int64_t onnx_resolved_size(onnx_ggml_ctx_t *c, const char *name);
+
+/* Report an unsupported op once per model load (reset by the build entry). */
+void onnx_warn_unsupported_op(const char *op);
+void onnx_reset_unsupported_warnings(void);
 
 /* ── Op group dispatcher functions ──────────────────────────────── */
 /* Each returns: 1 = handled, 0 = not this group's op, -1 = error */

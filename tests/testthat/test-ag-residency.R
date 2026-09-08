@@ -13,6 +13,29 @@
 #                         Reading it afterwards is a use-after-free that returns
 #                         plausible garbage rather than failing loudly.
 
+# Everything under test is internal, so it is reached through the namespace
+# rather than by bare name: that way the file runs the same under test_dir() as
+# under test_check(), which is the only reason the bare-name style worked here
+# before.  Same approach as test-ag-residency-scopes.R.
+ns                  <- asNamespace("ggmlR")
+.ag_device_state    <- get(".ag_device_state",    envir = ns)
+.ag_residency_reset <- get(".ag_residency_reset", envir = ns)
+.ag_ctx_ensure      <- get(".ag_ctx_ensure",      envir = ns)
+.ag_ctx_capacity    <- get(".ag_ctx_capacity",    envir = ns)
+.ag_r_to_gpu        <- get(".ag_r_to_gpu",        envir = ns)
+.ag_r_to_gpu_batch  <- get(".ag_r_to_gpu_batch",  envir = ns)
+.ag_data            <- get(".ag_data",            envir = ns)
+.ag_data_set        <- get(".ag_data_set",        envir = ns)
+.ag_data_mut        <- get(".ag_data_mut",        envir = ns)
+.ag_ptr_is_live     <- get(".ag_ptr_is_live",     envir = ns)
+.ag_tape_mem        <- get(".ag_tape_mem",        envir = ns)
+.ag_tape_mem_limit  <- get(".ag_tape_mem_limit",  envir = ns)
+.ag_min_ctx_mb      <- get(".ag_min_ctx_mb",      envir = ns)
+.ag_run_op          <- get(".ag_run_op",          envir = ns)
+.ag_gpu_add         <- get(".ag_gpu_add",         envir = ns)
+.ag_gpu_mul         <- get(".ag_gpu_mul",         envir = ns)
+.ag_gpu_matmul      <- get(".ag_gpu_matmul",      envir = ns)
+
 # Residency lives on the device-state backend. These tests exercise the memory
 # bookkeeping only, so any backend will do — the CPU one keeps them runnable
 # without a GPU.

@@ -141,8 +141,12 @@ static void binary_op(const ggml_compute_params * params, ggml_tensor * dst) {
     } else if (src0->type == GGML_TYPE_F16  && src1->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) {
         apply_binary_op<op, ggml_fp16_t, float, float>(params, dst);
     } else {
-        GGML_ABORT("%s: unsupported types: dst: %s, src0: %s, src1: %s\n", __func__,
-            ggml_type_name(dst->type), ggml_type_name(src0->type), ggml_type_name(src1->type));
+        /* Name the tensors, not just their types: in a graph of thousands of
+         * nodes the type triple alone does not say which node is wrong. */
+        GGML_ABORT("%s: unsupported types: dst: %s(%s), src0: %s(%s), src1: %s(%s)\n", __func__,
+            dst->name,  ggml_type_name(dst->type),
+            src0->name, ggml_type_name(src0->type),
+            src1->name, ggml_type_name(src1->type));
     }
 }
 
