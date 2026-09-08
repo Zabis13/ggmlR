@@ -6,10 +6,10 @@
 # test; a difference past the tolerance is a disagreement about the arithmetic
 # rather than rounding.
 #
-# Usage: Rscript inst/reference/compare.R [datadir] [tolerance]
+# Usage: Rscript inst/scripts/ref_compare.R [datadir] [tolerance]
 
 args <- commandArgs(trailingOnly = TRUE)
-DIR  <- if (length(args) >= 1 && nzchar(args[1])) args[1] else "inst/reference/data"
+DIR  <- if (length(args) >= 1 && nzchar(args[1])) args[1] else "inst/scripts/ref_data"
 TOL  <- if (length(args) >= 2) as.numeric(args[2]) else 1e-3
 
 read_f32 <- function(path) {

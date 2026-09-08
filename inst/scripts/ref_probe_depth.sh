@@ -8,21 +8,21 @@
 # it in a handful of runs.
 #
 # Usage:
-#   inst/reference/probe_depth.sh <model.onnx> <shape-expr> <tensor> [tensor...]
+#   inst/scripts/ref_probe_depth.sh <model.onnx> <shape-expr> <tensor> [tensor...]
 # e.g.
-#   inst/reference/probe_depth.sh ".../botnet26t_256_Opset16.onnx" \
+#   inst/scripts/ref_probe_depth.sh ".../botnet26t_256_Opset16.onnx" \
 #       "list(x=c(1L,3L,256L,256L))" /stages/... /stages/...
 
 set -u
 MODEL="$1"; SHAPE="$2"; shift 2
 ORT_DIR="${ORT_DIR:-/mnt/Data2/DS_projects/onnxruntime-linux-x64-1.29.0}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-work="${DEPTH_DIR:-inst/reference/depth}"
+work="${DEPTH_DIR:-inst/scripts/ref_depth}"
 mkdir -p "$work"
 
 runner="$work/ort_reference"
-if [ ! -x "$runner" ] || [ "$here/ort_reference.cpp" -nt "$runner" ]; then
-    g++ -O2 -std=c++17 "$here/ort_reference.cpp" -o "$runner" \
+if [ ! -x "$runner" ] || [ "$here/ref_ort_reference.cpp" -nt "$runner" ]; then
+    g++ -O2 -std=c++17 "$here/ref_ort_reference.cpp" -o "$runner" \
         -I"$ORT_DIR/include" -L"$ORT_DIR/lib" -lonnxruntime \
         -Wl,-rpath,"$ORT_DIR/lib" || exit 1
 fi
@@ -33,7 +33,7 @@ for cut in "$@"; do
     i=$((i+1))
     tag="cut$i"
     printf '%-3s %s\n' "$i" "$cut"
-    Rscript "$here/truncate_onnx.R" "$MODEL" "$work/$tag.onnx" "$cut" >/dev/null || continue
+    Rscript "$here/ref_truncate_onnx.R" "$MODEL" "$work/$tag.onnx" "$cut" >/dev/null || continue
     Rscript -e "
       suppressMessages(library(ggmlR))
       sh <- $SHAPE

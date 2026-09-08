@@ -12,7 +12,7 @@
 suppressMessages(library(ggmlR))
 source("tests/testthat/helper-onnx.R")
 
-OUT <- "inst/reference/data"
+OUT <- "inst/scripts/ref_data"
 dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
 
 # [N,C,H,W] with C the channel axis BN normalises over.

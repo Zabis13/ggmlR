@@ -8,8 +8,8 @@ length, reported it as OK.
 
 ## Running
 
-    inst/reference/check_vs_onnxruntime.sh            # all 15 models
-    inst/reference/check_vs_onnxruntime.sh roberta    # one, by substring
+    inst/scripts/ref_check_vs_onnxruntime.sh            # all 15 models
+    inst/scripts/ref_check_vs_onnxruntime.sh roberta    # one, by substring
 
 Paths are overridable: `ORT_DIR` (an unpacked onnxruntime-linux-x64 release,
 from the project's GitHub releases — the C++ artifact, not the Python package),

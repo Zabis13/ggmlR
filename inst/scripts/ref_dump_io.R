@@ -10,13 +10,13 @@
 # Format: little-endian float32, no header, in the element order onnx_run uses.
 # manifest.tsv carries everything the runner needs to rebuild the tensors.
 #
-# Usage: Rscript inst/reference/dump_io.R [outdir] [model-substring]
+# Usage: Rscript inst/scripts/ref_dump_io.R [outdir] [model-substring]
 
 library(ggmlR)
 
 ONNX_DIR <- "/mnt/Data2/DS_projects/ONNX models-main"
 args     <- commandArgs(trailingOnly = TRUE)
-OUT_DIR  <- if (length(args) >= 1 && nzchar(args[1])) args[1] else "inst/reference/data"
+OUT_DIR  <- if (length(args) >= 1 && nzchar(args[1])) args[1] else "inst/scripts/ref_data"
 # The wrapper always passes a second argument, empty when no filter was given,
 # so emptiness has to mean "all models" rather than being matched against.
 ONLY     <- if (length(args) >= 2 && nzchar(args[2])) args[2] else NULL

@@ -28,3 +28,9 @@ rm -f src/Makevars.win
 # Remove Vulkan generated files
 rm -rf src/ggml-vulkan/generated
 rm -f src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen
+
+# Remove ONNX Runtime comparison dumps (inst/scripts/ref_*).
+# These are inputs and outputs captured from a run, tens of megabytes of them,
+# and every one is reproduced by re-running ref_check_vs_onnxruntime.sh.
+rm -rf inst/scripts/ref_data
+rm -rf inst/scripts/ref_depth

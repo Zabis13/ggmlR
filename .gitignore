@@ -40,3 +40,8 @@ structure.md
 
 # Vulkan validation layer settings (debug-only, never ship)
 vk_layer_settings.txt
+
+# ONNX Runtime comparison dumps — captured from a run, reproduced by
+# inst/scripts/ref_check_vs_onnxruntime.sh, tens of megabytes
+inst/scripts/ref_data/
+inst/scripts/ref_depth/

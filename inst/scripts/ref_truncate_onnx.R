@@ -15,7 +15,7 @@
 # element type given, so no shape has to be predicted here; ONNX Runtime infers
 # what it needs, and ggmlR reads the shape off its own graph.
 #
-# Usage: Rscript inst/reference/truncate_onnx.R <in.onnx> <out.onnx> <tensor-name>
+# Usage: Rscript inst/scripts/ref_truncate_onnx.R <in.onnx> <out.onnx> <tensor-name>
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 3) stop("usage: truncate_onnx.R <in.onnx> <out.onnx> <tensor>")

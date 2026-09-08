@@ -56,4 +56,5 @@
 ^src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen$
 ^src/Makevars$
 ^src/Makevars\.win$
-
+^inst/scripts/ref_data$
+^inst/scripts/ref_depth$
