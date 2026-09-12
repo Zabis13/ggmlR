@@ -368,6 +368,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_UNARY_OP_SOFTPLUS:
         case GGML_UNARY_OP_STEP:
         case GGML_UNARY_OP_ROUND:
+        case GGML_UNARY_OP_ROUND_EVEN:
         case GGML_UNARY_OP_CEIL:
         case GGML_UNARY_OP_FLOOR:
         case GGML_UNARY_OP_TRUNC:
@@ -2733,6 +2734,7 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                 case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_STEP:
                 case GGML_UNARY_OP_ROUND:
+                case GGML_UNARY_OP_ROUND_EVEN:
                 case GGML_UNARY_OP_CEIL:
                 case GGML_UNARY_OP_FLOOR:
                 case GGML_UNARY_OP_TRUNC:

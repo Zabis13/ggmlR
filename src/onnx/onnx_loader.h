@@ -54,7 +54,17 @@ extern "C" {
 /* ── Limits ─────────────────────────────────────────────────────── */
 #define ONNX_MAX_DIMS        8
 #define ONNX_MAX_NAME      256
-#define ONNX_MAX_INPUTS     16
+/* Enough for the widest node seen in the ONNX Zoo: MaskRCNN concatenates 80
+ * tensors at its mask head, and its QLinearConcat takes 17 (two output params
+ * plus five (tensor, scale, zero_point) triples).  Anything past this is
+ * dropped, and parse_node says so by name.
+ *
+ * A heap array was tried instead, to remove the ceiling altogether, and was
+ * reverted: it corrupted the heap in ways two readings could not explain,
+ * while saving nothing that matters.  At 96 the node struct grows from 17 KB
+ * to 37 KB, which for MaskRCNN's 3001 nodes is 49 MB -> 108 MB, held only
+ * while the model is parsed -- against a whole class of allocation bugs. */
+#define ONNX_MAX_INPUTS     96
 #define ONNX_MAX_OUTPUTS     8
 #define ONNX_MAX_ATTRS      32
 
@@ -85,9 +95,12 @@ typedef struct {
     char     name[ONNX_MAX_NAME];
     char     op_type[128];
     char     domain[128];
-    /* Input/output tensor names */
+    /* Input tensor names.  See ONNX_MAX_INPUTS above for why this stays a
+     * fixed array; anything over the ceiling is dropped, and parse_node
+     * reports it by node name rather than losing it in silence. */
     char     inputs[ONNX_MAX_INPUTS][ONNX_MAX_NAME];
     int      n_inputs;
+    int      n_dropped_inputs;   /* how many did not fit; 0 for almost every node */
     char     outputs[ONNX_MAX_OUTPUTS][ONNX_MAX_NAME];
     int      n_outputs;
     /* Attributes */
@@ -129,6 +142,16 @@ typedef struct {
     onnx_value_info_t *outputs;
     int                n_outputs;
 
+    /* Declared shapes of intermediate tensors (GraphProto.value_info).
+     * Exporters fill this in far more often than the code here assumed: the
+     * MaskRCNN export declares 6670 of them, essentially the whole graph.
+     * Only the RANK is trustworthy for our purposes -- the dimensions may be
+     * symbolic ("batch", "?") and are resolved by the actual tensors -- but
+     * the rank is a structural fact, and inferring it from each op's inputs
+     * accumulates error along a chain. */
+    onnx_value_info_t *value_info;
+    int                n_value_info;
+
     /* Nodes (ops) */
     onnx_node_t       *nodes;
     int                n_nodes;
@@ -156,6 +179,18 @@ void onnx_free(onnx_model_t *model);
 /* Find an initializer by name. Returns NULL if not found. */
 const onnx_initializer_t *onnx_find_initializer(const onnx_model_t *model,
                                                   const char *name);
+
+/* Declared rank of a tensor, from GraphProto.value_info; 0 when not declared.
+   Only the rank is returned: the dimensions there may be symbolic. */
+int onnx_declared_rank(const onnx_model_t *model, const char *name);
+
+/* Payload of an initializer, wherever the exporter stored it: raw_data (field 9)
+   or the typed arrays (float_data, int64_data, ...) decoded on load.  Readers
+   that look only at raw_data silently see nothing for a tensor written the
+   other way -- MaskRCNN's Clip bounds live in float_data, and reading past
+   them left the clamp at +-FLT_MAX, so exp() downstream overflowed to inf.
+   Returns NULL and leaves *size untouched when there is no payload. */
+const void *onnx_init_payload(const onnx_initializer_t *t, size_t *size);
 
 /* Find an attribute by name in a node. Returns NULL if not found. */
 const onnx_attr_t *onnx_node_find_attr(const onnx_node_t *node,

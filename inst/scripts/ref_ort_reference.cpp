@@ -169,12 +169,52 @@ int main(int argc, char **argv) {
             }
             if (missing) continue;
 
-            auto out_held = session.GetOutputNameAllocated(0, alloc);
-            const char *out_names[] = { out_held.get() };
+            // Every output the model declares, not just the first.  A detector
+            // splits its answer across them -- MaskRCNN returns boxes, labels,
+            // scores and masks separately -- and a disagreement in the box list
+            // alone cannot say whether the two runs found different objects or
+            // ordered the same ones differently.  The extras go to their own
+            // files; the first stays where compare.R expects it.
+            size_t n_out = session.GetOutputCount();
+            std::vector<Ort::AllocatedStringPtr> out_holders;
+            std::vector<const char *> out_names;
+            for (size_t k = 0; k < n_out; k++) {
+                out_holders.push_back(session.GetOutputNameAllocated(k, alloc));
+                out_names.push_back(out_holders.back().get());
+            }
 
             auto outputs = session.Run(Ort::RunOptions{nullptr},
                                        in_names.data(), in_values.data(),
-                                       in_values.size(), out_names, 1);
+                                       in_values.size(),
+                                       out_names.data(), out_names.size());
+
+            for (size_t k = 1; k < n_out; k++) {
+                auto ei = outputs[k].GetTensorTypeAndShapeInfo();
+                size_t en = ei.GetElementCount();
+                std::vector<float> ev(en);
+                auto et = ei.GetElementType();
+                if (et == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+                    const float *p = outputs[k].GetTensorData<float>();
+                    ev.assign(p, p + en);
+                } else if (et == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
+                    const int64_t *p = outputs[k].GetTensorData<int64_t>();
+                    for (size_t i = 0; i < en; i++) ev[i] = static_cast<float>(p[i]);
+                } else if (et == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
+                    const int32_t *p = outputs[k].GetTensorData<int32_t>();
+                    for (size_t i = 0; i < en; i++) ev[i] = static_cast<float>(p[i]);
+                } else {
+                    std::printf("  [out%zu] unsupported type %d\n", k, (int)et);
+                    continue;
+                }
+                write_f32(dir + "/" + spec.tag + ".out" + std::to_string(k) + ".ort.bin", ev);
+                auto sh = ei.GetShape();
+                std::printf("  [out%zu] '%s' n=%zu shape=[", k, out_names[k], en);
+                for (size_t i = 0; i < sh.size(); i++)
+                    std::printf("%lld%s", (long long)sh[i], i + 1 < sh.size() ? "," : "");
+                std::printf("] head=");
+                for (size_t i = 0; i < en && i < 4; i++) std::printf(" %.6g", ev[i]);
+                std::printf("\n");
+            }
 
             auto info = outputs[0].GetTensorTypeAndShapeInfo();
             size_t n = info.GetElementCount();

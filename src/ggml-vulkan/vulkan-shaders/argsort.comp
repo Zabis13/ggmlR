@@ -50,8 +50,22 @@ void argsort(bool needs_bounds_check, const uint row) {
             bool idx_0_oob = needs_bounds_check ? sh_idx_0.x >= p.ncols : false;
             bool idx_1_oob = needs_bounds_check ? sh_idx_1.x >= p.ncols : false;
 
-            if ((idx_0_oob ||
-                (!idx_1_oob && intBitsToFloat(sh_idx_0.y) > intBitsToFloat(sh_idx_1.y))) && (ixj > col)) {
+            // Equal values are ordered by index, so a tie comes out the same
+            // here as on the CPU (see cmp_argsort in ops-rope-attn.cpp) rather
+            // than depending on how the bitonic network happened to move them.
+            //
+            // The network always sorts ascending; DESC is served by reading
+            // the result backwards, which reverses ties along with everything
+            // else.  So the tie direction has to follow p.order: ASC wants
+            // equal indices ascending in the array, DESC wants them descending
+            // there so the backwards read presents them ascending.  Both then
+            // agree with the CPU, whose comparator puts the lower index first.
+            const float val_0 = intBitsToFloat(sh_idx_0.y);
+            const float val_1 = intBitsToFloat(sh_idx_1.y);
+            const bool tie_swap = (p.order == ASC) ? (sh_idx_0.x > sh_idx_1.x)
+                                                   : (sh_idx_0.x < sh_idx_1.x);
+            const bool gt = (val_0 != val_1) ? (val_0 > val_1) : tie_swap;
+            if ((idx_0_oob || (!idx_1_oob && gt)) && (ixj > col)) {
                 dst_row[idx_0] = sh_idx_1;
                 dst_row[idx_1] = sh_idx_0;
             }

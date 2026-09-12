@@ -74,3 +74,34 @@ test_that("ONNX ConvTranspose 1D works", {
   expect_equal(length(result), 6)
   expect_equal(as.numeric(result), c(1, 1, 2, 2, 3, 3), tolerance = 1e-5)
 })
+
+test_that("ONNX Resize reads scales from a Constant node, not just an initializer", {
+  # Exporters put the scales either in graph.initializer or in a Constant node,
+  # and the two are equally common -- yolov8n's upsamples use the latter.
+  # Reading only initializers made Resize silently return its input unchanged,
+  # which surfaced much later as a Concat between a resized and an unresized
+  # tensor.  Checking the output SIZE is the whole point here: a no-op Resize
+  # produces perfectly plausible values, just too few of them.
+  inp  <- .onnx_value_info("X", 1L, c(1L, 1L, 2L, 2L))
+  outp <- .onnx_value_info("Y", 1L, c(1L, 1L, 4L, 4L))
+
+  roi_t  <- .onnx_tensor("roi", c(0L), 1L, raw(0))
+  roi_vi <- .onnx_value_info("roi", 1L, c(0L))
+
+  scales_raw <- unlist(lapply(c(1, 1, 2, 2), .float_bytes))
+  const_node <- .onnx_node("Constant", character(0), "scales",
+                           attrs = list(.onnx_attr_tensor("value", c(4L), 1L,
+                                                          scales_raw)))
+  resize_node <- .onnx_node("Resize", c("X", "roi", "scales"), "Y")
+
+  graph <- .onnx_graph("test", list(const_node, resize_node),
+                        list(inp, roi_vi), list(outp), list(roi_t))
+  path <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+
+  x <- c(1, 2, 3, 4)
+  result <- as.numeric(run_onnx(path, list(X = x)))
+  expect_equal(length(result), 16)      # 2x2 -> 4x4, not 4
+  expect_equal(result[1], 1, tolerance = 1e-5)
+  expect_equal(result[16], 4, tolerance = 1e-5)
+})

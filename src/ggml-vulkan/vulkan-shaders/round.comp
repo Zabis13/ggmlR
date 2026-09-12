@@ -20,6 +20,9 @@ void main() {
     const float x = float(data_a[i]);
     float result;
     // Round halfway cases away from zero as roundf does.
+    // Not roundEven: ggml_round is exported from this package and a test
+    // pins 2.5 -> 3, so both backends keep roundf's rule.  ONNX's
+    // half-to-even requirement belongs in the ONNX layer instead.
     if (x >= 0.0) {
         result = floor(x + 0.5);
     } else {

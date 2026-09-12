@@ -243,6 +243,39 @@ test_that("Softmax axis=-1 equals axis=1 for [2,4]", {
   expect_equal(as.numeric(r_neg), as.numeric(r_pos), tolerance = 1e-5)
 })
 
+test_that("Softmax over an intermediate axis normalises that axis alone", {
+  # ONNX [1,3,2,2] with axis=1: each (h,w) position gets its own softmax over
+  # the 3 channels.  This is the only shape that reaches the permute branch --
+  # a last-axis softmax takes the ne[0] fast path, and every model in the
+  # reference set carries axis=-1, so nothing else exercises this code.
+  inp  <- .onnx_value_info("X", 1L, c(1L, 3L, 2L, 2L))
+  outp <- .onnx_value_info("Y", 1L, c(1L, 3L, 2L, 2L))
+  node <- .onnx_node("Softmax", "X", "Y",
+                      attrs = list(.onnx_attr_int("axis", 1L)))
+  graph <- .onnx_graph("test", list(node), list(inp), list(outp))
+  path <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+
+  set.seed(11)
+  x <- round(runif(12, -2, 2), 3)
+  r <- as.numeric(run_onnx(path, list(X = x)))
+
+  # Reference: softmax down the channel axis, per (h,w).  ONNX is row-major,
+  # so the flat input is [c,h,w] with w fastest.
+  a <- array(x, dim = c(2L, 2L, 3L))   # [w,h,c] in column-major = ONNX [c,h,w]
+  ref <- a
+  for (i in 1:2) for (j in 1:2) {
+    e <- exp(a[i, j, ] - max(a[i, j, ]))
+    ref[i, j, ] <- e / sum(e)
+  }
+  expect_equal(r, as.numeric(ref), tolerance = 1e-5)
+
+  # Each (h,w) column must sum to 1 on its own -- the defect this replaced
+  # normalised the whole tensor at once, so every group summed to about 0.25.
+  sums <- apply(array(r, dim = c(2L, 2L, 3L)), c(1, 2), sum)
+  expect_equal(as.numeric(sums), rep(1, 4), tolerance = 1e-5)
+})
+
 test_that("Flatten axis=-1 flattens all but last dim of [2,3,4]", {
   inp  <- .onnx_value_info("X", 1L, c(2L, 3L, 4L))
   outp <- .onnx_value_info("Y", 1L, c(6L, 4L))

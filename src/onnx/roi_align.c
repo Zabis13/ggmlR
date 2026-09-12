@@ -3,6 +3,7 @@
 #include "roi_align.h"
 #include <math.h>
 #include <float.h>
+#include <stdio.h>
 
 /* Bilinear interpolation on feature map X[W, H, C, N] (ggml layout).
  * x, y are in spatial coordinates (float). c_idx = channel, n_idx = batch. */
@@ -51,6 +52,31 @@ void roi_align_cpu(struct ggml_tensor *dst,
     (void)a; /* dummy — shape only */
 
     const roi_align_params_t *p = (const roi_align_params_t *)userdata;
+
+    /* Refuse a missing operand instead of dereferencing it.
+     *
+     * A kernel runs long after the graph was built, and an input that failed
+     * to map leaves its tensor unregistered rather than announcing itself
+     * here: p->X arrived NULL because a Cast upstream declined, and reading
+     * X->ne[0] faulted at address 0x10 -- the offset of ne[] within
+     * ggml_tensor, which is what a null dereference looks like from the
+     * outside.  The build-time failure is reported by name elsewhere; this
+     * only has to avoid turning it into a crash. */
+    if (!p || !p->X || !b || !c_tensor || !dst) {
+        fprintf(stderr, "[roi_align] missing tensor (params=%p X=%p rois=%p "
+                        "batch=%p dst=%p) -- output left untouched\n",
+                (const void *)p, (const void *)(p ? p->X : NULL),
+                (const void *)b, (const void *)c_tensor, (const void *)dst);
+        return;
+    }
+    if (!p->X->data || !b->data || !c_tensor->data || !dst->data) {
+        fprintf(stderr, "[roi_align] tensor without data (X=%p rois=%p "
+                        "batch=%p dst=%p) -- output left untouched\n",
+                (const void *)p->X->data, (const void *)b->data,
+                (const void *)c_tensor->data, (const void *)dst->data);
+        return;
+    }
+
     const struct ggml_tensor *X = p->X;
 
     /* X: ggml [W, H, C, N] */

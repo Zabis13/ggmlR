@@ -16,7 +16,7 @@ library(ggmlR)
 
 ONNX_DIR <- "/mnt/Data2/DS_projects/ONNX models-main"
 args     <- commandArgs(trailingOnly = TRUE)
-OUT_DIR  <- if (length(args) >= 1 && nzchar(args[1])) args[1] else "inst/scripts/ref_data"
+OUT_DIR  <- if (length(args) >= 1 && nzchar(args[1])) args[1] else "/tmp/ggmlR-ref/data"
 # The wrapper always passes a second argument, empty when no filter was given,
 # so emptiness has to mean "all models" rather than being matched against.
 ONLY     <- if (length(args) >= 2 && nzchar(args[2])) args[2] else NULL
@@ -88,13 +88,24 @@ for (m in models) {
                         as.integer(!is.null(m$int_inputs) &&
                                    nm %in% m$int_inputs)))
     }
-    # Only the first output is compared: it is what test_all_onnx.R reports on,
-    # and a model whose first output agrees has agreed about everything feeding
-    # it, which is most of the graph.
+    # The first output is what gets compared: it is what test_all_onnx.R reports
+    # on, and a model whose first output agrees has agreed about everything
+    # feeding it, which is most of the graph.
     v <- out[[1]]
     writeBin(as.numeric(v), file.path(OUT_DIR, sprintf("%s.ggmlr.bin", tag)),
              size = 4, endian = "little")
     r <- c(r, sprintf("out\t%s\t%s\t%d", tag, m$file, length(v)))
+    # The rest go beside it, matching what the reference runner writes.  A
+    # detector splits its answer over several outputs -- boxes, labels, scores,
+    # masks -- and a disagreement in the box list alone cannot say whether the
+    # two runs found different objects or ordered the same ones differently.
+    if (length(out) > 1) {
+      for (k in seq.int(2, length(out))) {
+        writeBin(as.numeric(out[[k]]),
+                 file.path(OUT_DIR, sprintf("%s.out%d.ggmlr.bin", tag, k - 1L)),
+                 size = 4, endian = "little")
+      }
+    }
 
     cat(sprintf("OK  out=%d  head=%s\n", length(v),
                 paste(format(head(v, 3), digits = 6), collapse = " ")))

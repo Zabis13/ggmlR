@@ -430,3 +430,16 @@
   writeBin(model, path)
   path
 }
+
+# A TensorProto whose payload lives in float_data (field 4) rather than
+# raw_data (field 9).  Both are legal and exporters use both -- MaskRCNN
+# stores its Clip bounds this way -- so readers that look only at raw_data
+# silently see nothing.
+.onnx_tensor_floatdata <- function(name, dims, values) {
+  out <- raw(0)
+  for (d in dims) out <- c(out, .pb_varint_field(1L, d))
+  out <- c(out, .pb_varint_field(2L, 1L))          # data_type = FLOAT
+  for (v in values) out <- c(out, .pb_fixed32(4L, v))   # float_data, repeated
+  out <- c(out, .pb_string(8L, name))
+  out
+}

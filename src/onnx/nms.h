@@ -26,6 +26,19 @@ typedef struct {
     const struct ggml_tensor *scores; /* scores tensor (set at graph build time) */
 } nms_params_t;
 
+/* Where nms_cpu reports how many boxes it kept.
+ *
+ * NOT op_params[0].  ggml_map_custom3 stores its own
+ * struct ggml_map_custom3_op_params -- {fun, n_tasks, userdata}, 24 bytes --
+ * at the start of the very same op_params array, so op_params[0..1] IS the
+ * function pointer.  Writing the count there truncated nms_cpu's own address
+ * to its high half plus the count: the first NMS node ran, corrupted the
+ * pointer, and the second jumped to 0x....00000001 and died inside
+ * ggml_compute_forward_map_custom3 with no name in the backtrace.
+ *
+ * Index 6 is the first int32 past that struct, and op_params holds 16. */
+#define NMS_COUNT_SLOT 6
+
 /* CPU callback for ggml_map_custom3.
  * dst: output [3, max_possible_selected] preallocated, filled with -1
  * a:   boxes [4, num_boxes, N] (ggml order)
@@ -33,7 +46,7 @@ typedef struct {
  * c:   params tensor [3]: {max_output_boxes_per_class, iou_threshold_bits, score_threshold_bits}
  *      (thresholds stored as float bits in int via memcpy)
  *
- * Actual number of selected boxes stored in dst->op_params[0] after execution.
+ * Actual number of selected boxes stored in dst->op_params[NMS_COUNT_SLOT].
  */
 void nms_cpu(struct ggml_tensor *dst,
              const struct ggml_tensor *a,

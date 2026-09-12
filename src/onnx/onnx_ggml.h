@@ -10,6 +10,7 @@
 #include "rel_pos_bias.h"
 #include "roi_align.h"
 #include "nms.h"
+#include "qconv_i32.h"
 #include "../ggml.h"
 #include "../ggml-backend.h"
 
@@ -125,6 +126,13 @@ typedef struct {
     char              (*tensor_map_keys)[ONNX_MAX_NAME];
     int                *tensor_map_ndims;  /* original ONNX ndims (for >4D axis mapping) */
     int64_t           (*tensor_map_onnx_ne)[ONNX_MAX_DIMS]; /* full ONNX shape (up to 8D) */
+    /* Logically empty: the ONNX semantics say this tensor has zero rows, but
+     * ggml cannot represent ne=0, so it is carried as a one-element tensor.
+     * Set by NonZero when the measured count is zero; without it the unused
+     * element reads back as index 0, which is a perfectly valid row number and
+     * therefore becomes a detection nothing selected.  A separate flag rather
+     * than a sentinel index: -1 already means "last element" to ONNX Gather. */
+    unsigned char      *tensor_map_empty;
     int                 tensor_map_size;
     int                 tensor_map_cap;
 
@@ -294,19 +302,42 @@ typedef struct {
     rel_pos_bias_params_t *pos_embed_params;    /* malloc'd array, freed in onnx_ggml_free */
 
     /* RoiAlign custom op params (must outlive graph compute) */
-    roi_align_params_t *roi_align_params;       /* malloc'd array */
+    roi_align_params_t **roi_align_params;      /* malloc'd array of malloc'd entries */
     int                 n_roi_aligns;
+    int                 roi_align_params_cap;
 
-    /* NMS custom op params (must outlive graph compute) */
-    nms_params_t       *nms_params;             /* malloc'd array */
+    /* NMS custom op params (must outlive graph compute).
+     *
+     * An array of pointers, not of structs: each entry's address is handed to
+     * ggml_map_custom3 as the kernel's userdata and has to stay valid for the
+     * life of the graph.  Growing an array of structs with realloc moves it,
+     * which leaves every userdata pointer already given out dangling -- see
+     * the note in onnx_ops_special.c. */
+    nms_params_t      **nms_params;             /* malloc'd array of malloc'd entries */
     int                 n_nms_ops;
+    int                 nms_params_cap;
+
+    /* Userdata for the exact-integer QLinearConv path, same ownership rule as
+     * nms_params above: individually malloc'd, pointers kept so the context
+     * can free them, never realloc'd as a block (that would dangle every
+     * pointer already handed to an op). */
+    void              **qconv_params;
+    int                 n_qconv_ops;
+    int                 qconv_params_cap;
 
     /* Deferred NMS output sizing (filled after sched alloc) */
     struct ggml_tensor *nms_param_tensors[ONNX_MAX_DEFERRED]; /* param tensors to fill */
     int                 nms_max_boxes[ONNX_MAX_DEFERRED];
     float               nms_iou_thresh[ONNX_MAX_DEFERRED];
     float               nms_score_thresh[ONNX_MAX_DEFERRED];
+    int                 nms_have_score_thresh[ONNX_MAX_DEFERRED]; /* input present? */
     int                 n_nms_deferred;
+
+    /* First node map_node declined, and its op.  A declined node leaves its
+     * output unregistered, so everything downstream of it goes unbuilt too --
+     * the later failures are consequences and the first one is the cause. */
+    char                first_failed_node[ONNX_MAX_NAME];
+    char                first_failed_op[64];
 
     /* Orphan-input CPU buffers allocated in sched_alloc_and_fill (one per
      * unbuffered real input). Freed and reset on each re-alloc and at ctx free. */

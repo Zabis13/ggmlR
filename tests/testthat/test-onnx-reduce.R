@@ -198,3 +198,59 @@ test_that("ONNX TopK with k equal to the row length sorts it", {
   res <- onnx_run(m, list(X = c(2, 8, 5, 1)))
   expect_equal(as.numeric(res[[1]]), c(8, 5, 2, 1), tolerance = 1e-4)
 })
+
+test_that("ONNX TopK works on an axis that is not the last one", {
+  # ggml sorts along ne[0], so any other axis has to be rotated there and
+  # back.  MaskRCNN's final TopK picks over axis 0 of a rank-3 tensor;
+  # refusing it left the detection branch unbuilt and the graph empty, so
+  # every output came back at its uninitialised value.
+  #
+  # ONNX [5,1,3] with axis=0: each of the 3 columns is ranked independently
+  # over its 5 entries.
+  inp   <- .onnx_value_info("X", 1L, c(5L, 1L, 3L))
+  k_t   <- .onnx_tensor("K", c(1L), 7L, .int64_bytes(2))
+  k_vi  <- .onnx_value_info("K", 7L, c(1L))
+  out_v <- .onnx_value_info("Values",  1L, c(2L, 1L, 3L))
+  out_i <- .onnx_value_info("Indices", 7L, c(2L, 1L, 3L))
+  node  <- .onnx_node("TopK", c("X", "K"), c("Values", "Indices"),
+                      attrs = list(.onnx_attr_int("axis", 0L)))
+  graph <- .onnx_graph("test", list(node), list(inp, k_vi),
+                        list(out_v, out_i), list(k_t))
+  path <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+
+  # ONNX [5,1,3] row-major is column-major [3,1,5]: the axis being ranked is
+  # the slowest one here, and each of the 3 leading entries is its own column.
+  set.seed(7)
+  x <- round(runif(15) * 10, 1)
+  res <- onnx_run(onnx_load(path, device = "cpu"), list(X = x))
+
+  arr <- array(x, dim = c(3, 1, 5))
+  # TopK keeps the ONNX layout and only replaces the ranked axis by K, so for
+  # input [5,1,3] with axis=0 and K=2 the output is ONNX [2,1,3] -- which under
+  # the ndims-1-i dimension reversal is ggml ne=[3,1,2].  K therefore lands on
+  # the SLOWEST ggml axis, not the fastest: linearly, all three rank-0 values
+  # come first, then all three rank-1 values.  Building the expectation with K
+  # innermost instead treats K as the fast axis and reads as a transposition
+  # failure when the data is in fact correct, so the rank loop goes outside.
+  want_idx <- unlist(lapply(1:2, function(j)
+    vapply(1:3, function(i) order(arr[i, 1, ], decreasing = TRUE)[j] - 1, numeric(1))))
+  want_val <- unlist(lapply(1:2, function(j)
+    vapply(1:3, function(i) sort(arr[i, 1, ], decreasing = TRUE)[j], numeric(1))))
+
+  expect_equal(length(as.numeric(res[[1]])), 6L)
+  expect_equal(as.numeric(res[[2]]), want_idx, tolerance = 1e-4)
+  expect_equal(as.numeric(res[[1]]), want_val, tolerance = 1e-4)
+})
+
+test_that("ONNX TopK indices are values, not reinterpreted bits", {
+  # The index tensor is I32 and the ONNX output is read as a number, so the
+  # conversion has to be numeric: reinterpreting the bits of 3 as a float
+  # gives 4.2e-45, which is not obviously wrong to the eye but is not 3.
+  path <- .topk_graph(5L, 3L)
+  res  <- onnx_run(onnx_load(path, device = "cpu"), list(X = c(3, 9, 1, 7, 4)))
+  idx  <- as.numeric(res[[2]])
+  expect_true(all(idx >= 0 & idx < 5))
+  expect_true(all(abs(idx - round(idx)) < 1e-6))
+  expect_equal(idx, c(1, 3, 4), tolerance = 1e-4)
+})

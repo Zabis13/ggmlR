@@ -1877,6 +1877,10 @@ void ggml_compute_forward_unary(
             {
                 ggml_compute_forward_round(params, dst);
             } break;
+        case GGML_UNARY_OP_ROUND_EVEN:
+            {
+                ggml_compute_forward_round_even(params, dst);
+            } break;
         case GGML_UNARY_OP_TRUNC:
             {
                 ggml_compute_forward_trunc(params, dst);

@@ -19,7 +19,7 @@ set -u
 
 ORT_DIR="${ORT_DIR:-/mnt/Data2/DS_projects/onnxruntime-linux-x64-1.29.0}"
 ONNX_DIR="${ONNX_DIR:-/mnt/Data2/DS_projects/ONNX models-main}"
-DATA_DIR="${DATA_DIR:-inst/scripts/ref_data}"
+DATA_DIR="${DATA_DIR:-/tmp/ggmlR-ref/data}"
 FILTER="${1:-}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

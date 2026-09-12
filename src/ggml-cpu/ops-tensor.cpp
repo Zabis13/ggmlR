@@ -716,10 +716,17 @@ static void ggml_compute_forward_get_rows_f32(
         const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
         const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
 
-        if (i01 < 0 || i01 >= ne01) {
-            /* Name the tensors before aborting: the bare assert says only
-             * that some index was out of range, which in a graph of a
-             * thousand get_rows nodes is not enough to find the culprit. */
+        /* Name the tensors before aborting: the bare assert says only that
+         * some index was out of range, which in a graph of a thousand
+         * get_rows nodes is not enough to find the culprit.
+         *
+         * Thread 0 only.  GGML_LOG_ERROR reaches REprintf through
+         * r_ggml_compat.h, and R's I/O is not callable from an OpenMP worker:
+         * several threads landing here at once interleaved their output mid
+         * format string and corrupted R's heap, which surfaced far away as
+         * garbage in strings R handed to sh.  A worker that finds a bad index
+         * still aborts on the assert below -- it just does not print. */
+        if ((i01 < 0 || i01 >= ne01) && ith == 0) {
             GGML_LOG_ERROR("%s: index %lld out of range [0,%lld) "
                            "at i10=%lld i11=%lld i12=%lld; "
                            "dst='%s' src0='%s' src1='%s'\n",

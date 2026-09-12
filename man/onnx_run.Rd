@@ -14,8 +14,16 @@ Names must match the model's input tensor names.
 Use \code{onnx_inputs()} to see expected names and shapes.}
 }
 \value{
-A named list of output tensors (numeric vectors with dim
-  attributes for multi-dimensional outputs).
+A named list of output tensors: numeric vectors carrying a
+  \code{dim} attribute when the output has more than one dimension.
+
+  The buffers are row-major, as ONNX stores them, so \code{dim} is given in
+  storage order -- fastest-varying axis first -- which is the reverse of the
+  shape the ONNX file declares. An output declared \code{[nbox, 4]} arrives
+  as \code{dim = c(4, nbox)}, one detection per column. This keeps \code{dim}
+  an honest description of the memory, so ordinary R indexing is correct;
+  use \code{\link{predict.onnx_model}} to get arrays in the declared ONNX
+  order instead.
 }
 \description{
 Run ONNX model inference

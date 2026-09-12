@@ -23,16 +23,38 @@ run_cpu_gpu <- function(path, inputs) {
   list(cpu = cpu, gpu = gpu)
 }
 
-# Compare CPU vs GPU with cosine + max abs tolerance
-expect_cpu_gpu_close <- function(path, inputs, tol = 1e-3) {
+# Compare CPU vs GPU, scaled to the magnitude of the values being compared.
+#
+# The tolerance is RELATIVE because an absolute one is not reachable.  The
+# K=33 case below produces values up to ~11370, where a single f32 ULP is
+# already 1.35e-3: the old absolute 1e-3 asked for better than the format can
+# represent, and the observed CPU/GPU spread of 1.95e-3 is 1.4 ULP -- two
+# correct results summed in a different order, not a defect.  Checked against
+# R's own BLAS: CPU is 1.70e-6 off it and GPU 1.21e-6, so both are right and
+# the GPU is marginally closer.
+#
+# That the old bound went unnoticed has a cause worth recording: onnx_load
+# did not recognise device = "gpu" and silently fell back to the CPU, so this
+# helper compared CPU against CPU and could not fail whatever the tolerance.
+# The fall-through is fixed (onnx_ggml.c now treats "gpu" as "vulkan" and
+# rejects an unknown name), which is what first made this assertion run.
+#
+# Backends are compared against each other here ON PURPOSE: the subject is
+# tile-boundary handling, and "both backends agree" is the property under
+# test.  It is NOT a correctness check -- a mistake present in both is
+# invisible to it, which is how the deliberate top_k swap survived in the
+# kernel and all three shaders until an outside reference was brought in.
+expect_cpu_gpu_close <- function(path, inputs, rel_tol = 1e-5) {
   r <- run_cpu_gpu(path, inputs)
   skip_if(is.null(r$gpu), "No Vulkan device")
   cpu <- as.numeric(r$cpu)
   gpu <- as.numeric(r$gpu)
   expect_equal(length(cpu), length(gpu))
+  scale <- max(abs(cpu), abs(gpu), 1)
   max_abs <- max(abs(cpu - gpu))
-  expect_true(max_abs < tol,
-    label = sprintf("CPU/GPU max abs diff = %.2e (tol %.2e)", max_abs, tol))
+  expect_true(max_abs <= rel_tol * scale,
+    label = sprintf("CPU/GPU max abs diff = %.2e (rel %.2e, tol %.2e of scale %.3g)",
+                    max_abs, max_abs / scale, rel_tol, scale))
 }
 
 # ── matmul helper with explicit K ────────────────────────────────────────────
@@ -314,7 +336,9 @@ test_that("dispatch: Conv 3x3 vs Conv 1x1 differ on same input [1,2,5,5]", {
 
 test_that("dispatch: Conv 1x1 CPU vs GPU [1,8,6,6]", {
   cv <- make_conv2d(1L, 8L, 6L, 6L, 16L, 1L, 1L)
-  expect_cpu_gpu_close(cv$path, list(X = cv$x), tol = 1e-2)
+  # Looser than the default: the 1x1 path dispatches to MUL_MAT, whose
+  # accumulation order differs more from the CPU's than the direct conv does.
+  expect_cpu_gpu_close(cv$path, list(X = cv$x), rel_tol = 1e-3)
 })
 
 # ── 5. GRAPH CHAINS: accumulated error across 3-5 nodes ──────────────────────

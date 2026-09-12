@@ -1045,6 +1045,14 @@ struct ggml_tensor * ggml_round_inplace(
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_ROUND);
 }
 
+//ggml_round_even
+
+struct ggml_tensor * ggml_round_even(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_ROUND_EVEN);
+}
+
 //ggml_trunc
 
 struct ggml_tensor * ggml_trunc(

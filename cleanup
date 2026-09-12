@@ -29,8 +29,12 @@ rm -f src/Makevars.win
 rm -rf src/ggml-vulkan/generated
 rm -f src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen
 
-# Remove ONNX Runtime comparison dumps (inst/scripts/ref_*).
-# These are inputs and outputs captured from a run, tens of megabytes of them,
-# and every one is reproduced by re-running ref_check_vs_onnxruntime.sh.
+# Remove ONNX Runtime comparison dumps left by older checkouts.
+#
+# These now default to /tmp/ggmlR-ref/data and are NOT removed from there:
+# a reference captured from ONNX Runtime costs a full run to reproduce, and
+# deleting it as part of a build meant losing it exactly when a rebuild was
+# about to be compared against it.  The paths below stay only to clean up
+# trees that still have the old in-package directory.
 rm -rf inst/scripts/ref_data
 rm -rf inst/scripts/ref_depth

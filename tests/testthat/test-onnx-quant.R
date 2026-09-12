@@ -14,6 +14,15 @@ run_onnx <- function(path, inputs, device = "cpu") {
        vi     = .onnx_value_info(name, 1L, c(1L)))
 }
 
+# A zero_point stored with its real ONNX dtype (2 = UINT8).  The spec ties the
+# quantised type to this input's dtype, and that is what decides the saturation
+# range, so a zero_point written as FLOAT32 only reaches the right range by
+# falling through quant_bounds()' default -- it tests the fallback, not the op.
+.make_zp_uint8 <- function(name, value = 0L) {
+  list(tensor = .onnx_tensor(name, c(1L), 2L, as.raw(as.integer(value))),
+       vi     = .onnx_value_info(name, 2L, c(1L)))
+}
+
 # ── DequantizeLinear ───────────────────────────────────────────
 
 test_that("ONNX DequantizeLinear per-tensor works", {
@@ -79,16 +88,22 @@ test_that("ONNX QuantizeLinear per-tensor works", {
 # ── QLinearSigmoid ─────────────────────────────────────────────
 
 test_that("ONNX QLinearSigmoid works", {
-  # Dequant → Sigmoid → Requant
-  # x=[0], x_scale=1, x_zp=0 → dequant=0 → sigmoid=0.5 → requant: 0.5/y_scale + y_zp
-  # y_scale=1, y_zp=0 → output = 0.5
+  # Dequant → Sigmoid → Requant.  The output of a QLinear* op lives in the
+  # quantised domain, so the expectation is the uint8 code, not the float
+  # sigmoid: y = clamp(round(sigmoid(dequant(x)) / y_scale) + y_zp, 0, 255).
+  #
+  # y_scale=1 would collapse the whole (0,1) range of sigmoid onto {0,1} and
+  # the test would read as if the op had "returned sigmoid in F32" whenever
+  # rounding happened to land right.  1/255 is what a real model uses and it
+  # keeps every sample distinguishable across the low, middle and saturated
+  # parts of the curve.
   inp <- .onnx_value_info("X", 1L, c(4L))
   outp <- .onnx_value_info("Y", 1L, c(4L))
 
   xs <- .make_scalar_f32("x_scale", 1.0)
   xz <- .make_scalar_f32("x_zp", 0.0)
-  ys <- .make_scalar_f32("y_scale", 1.0)
-  yz <- .make_scalar_f32("y_zp", 0.0)
+  ys <- .make_scalar_f32("y_scale", 1.0 / 255.0)
+  yz <- .make_zp_uint8("y_zp", 0L)
 
   node <- .onnx_node("QLinearSigmoid",
                       c("X", "x_scale", "x_zp", "y_scale", "y_zp"), "Y")
@@ -98,13 +113,18 @@ test_that("ONNX QLinearSigmoid works", {
   path <- tempfile(fileext = ".onnx")
   writeBin(.onnx_model(graph), path)
 
-  # sigmoid(0)=0.5, sigmoid(large)≈1, sigmoid(-large)≈0
-  result <- run_onnx(path, list(X = c(0, 10, -10, 1)))
+  x <- c(0, 10, -10, 1)
+  result <- run_onnx(path, list(X = x))
   r <- as.numeric(result)
-  expect_equal(r[1], 0.5, tolerance = 0.01)
-  expect_true(r[2] > 0.99)
-  expect_true(r[3] < 0.01)
-  expect_true(r[4] > 0.7 && r[4] < 0.8)  # sigmoid(1) ≈ 0.731
+  # sigmoid: 0.5, 0.99995, 4.54e-5, 0.7311 → ×255 → 127.5, 254.99, 0.0116, 186.4
+  expect_equal(r, round(1 / (1 + exp(-x)) * 255), tolerance = 0.51)
+  # The discretisation itself: distinct inputs stay distinct codes, and the
+  # saturated ends land on the range boundaries.
+  expect_equal(r[2], 255)
+  expect_equal(r[3], 0)
+  expect_true(r[1] > r[3] && r[4] > r[1] && r[2] > r[4])
+  # Dequantising the code recovers sigmoid to within one quantisation step.
+  expect_equal(r * (1 / 255), 1 / (1 + exp(-x)), tolerance = 1 / 255)
 })
 
 # ── QLinearAdd ─────────────────────────────────────────────────

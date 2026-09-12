@@ -18,6 +18,16 @@ make_scalar <- function(name, val) {
   list(t = t, vi = vi)
 }
 
+# A zero_point carrying its real ONNX dtype (2 = UINT8).  The spec reads the
+# quantised type off this input, and that type sets the saturation range, so a
+# zero_point written as FLOAT32 lands in [0,255] only via quant_bounds()'
+# fallback -- which tests the fallback rather than the op.
+make_zp_uint8 <- function(name, val = 0L) {
+  t  <- .onnx_tensor(name, c(1L), 2L, as.raw(as.integer(val)))
+  vi <- .onnx_value_info(name, 2L, c(1L))
+  list(t = t, vi = vi)
+}
+
 # ── Minimal (2 ops): DequantizeLinear → Relu ────────────────
 
 test_that("chain quant: DequantizeLinear→Relu (minimal)", {
@@ -162,8 +172,11 @@ test_that("chain quant: QLinearSigmoid (quantized sigmoid)", {
 
   x_sc <- make_scalar("x_sc", 0.1)
   x_zp <- make_scalar("x_zp", 128.0)
-  y_sc <- make_scalar("y_sc", 1.0)
-  y_zp <- make_scalar("y_zp", 0.0)
+  # y_scale=1/255 with a uint8 zero_point: the output of QLinearSigmoid is a
+  # quantised code, and 1/255 is the scale that spreads sigmoid's (0,1) range
+  # over the whole uint8 domain.  y_scale=1 would map everything onto {0,1}.
+  y_sc <- make_scalar("y_sc", 1.0 / 255.0)
+  y_zp <- make_zp_uint8("y_zp", 0L)
 
   qs_node <- .onnx_node("QLinearSigmoid",
     c("X", "x_sc", "x_zp", "y_sc", "y_zp"), "Y")
@@ -180,10 +193,11 @@ test_that("chain quant: QLinearSigmoid (quantized sigmoid)", {
   result <- run_onnx(path, list(X = x))
   r <- as.numeric(result)
   # dequant: (x-128)*0.1 = 0, 1, -1, 5
-  # sigmoid: 0.5, 0.731, 0.269, 0.993
-  # requant: /1+0 = same
-  expected <- 1 / (1 + exp(-c(0, 1, -1, 5)))
-  expect_equal(r, expected, tolerance = 0.01)
+  # sigmoid: 0.5, 0.7311, 0.2689, 0.9933
+  # requant: round(sigmoid*255) = 128, 186, 69, 253
+  expect_equal(r, c(128, 186, 69, 253), tolerance = 0.51)
+  # And the code dequantises back to sigmoid within one step of the scale.
+  expect_equal(r / 255, 1 / (1 + exp(-c(0, 1, -1, 5))), tolerance = 1 / 255)
 })
 
 # ── QLinearConcat: quantized concat ─────────────────────────
@@ -273,15 +287,14 @@ test_that("chain quant: Dequant→Conv→Sigmoid→Quant (INT8 pipeline)", {
 
 # ── Boundary: zero-point = 0, scale = 1 (passthrough) ──────
 
-test_that("chain quant: scale=1 zp=0 passthrough (boundary)", {
-  inp <- .onnx_value_info("X", 1L, c(4L))
-  outp <- .onnx_value_info("Y", 1L, c(4L))
+.quant_roundtrip_graph <- function(n) {
+  inp  <- .onnx_value_info("X", 1L, c(as.integer(n)))
+  outp <- .onnx_value_info("Y", 1L, c(as.integer(n)))
 
   sc <- make_scalar("sc", 1.0)
-  zp <- make_scalar("zp", 0.0)
+  zp <- make_zp_uint8("zp", 0L)
 
-  # QuantizeLinear then DequantizeLinear with scale=1, zp=0 → identity
-  q_node <- .onnx_node("QuantizeLinear", c("X", "sc", "zp"), "q")
+  q_node  <- .onnx_node("QuantizeLinear",   c("X", "sc", "zp"), "q")
   dq_node <- .onnx_node("DequantizeLinear", c("q", "sc", "zp"), "Y")
 
   graph <- .onnx_graph("test", list(q_node, dq_node),
@@ -289,9 +302,26 @@ test_that("chain quant: scale=1 zp=0 passthrough (boundary)", {
                         list(sc$t, zp$t))
   path <- tempfile(fileext = ".onnx")
   writeBin(.onnx_model(graph), path)
+  path
+}
 
-  x <- c(-3.14, 0, 2.71, 100)
-  result <- run_onnx(path, list(X = x))
-  r <- as.numeric(result)
+test_that("chain quant: scale=1 zp=0 passthrough (boundary)", {
+  # QuantizeLinear→DequantizeLinear is the identity only where the input is
+  # already a representable uint8 code: scale=1 and zp=0 make the mapping
+  # x → round(x) → x, and round is a no-op on integers inside [0,255].
+  # Values outside that set are covered by the rounds-and-saturates test below;
+  # keeping them here made one test assert two contradictory invariants.
+  x <- c(0, 1, 3, 100)
+  r <- as.numeric(run_onnx(.quant_roundtrip_graph(length(x)), list(X = x)))
   expect_equal(r, x, tolerance = 1e-3)
+})
+
+test_that("chain quant: QuantizeLinear rounds and saturates uint8", {
+  # The other half of the invariant: a uint8 zero_point means the quantised
+  # domain is [0,255] integers, so a fractional value rounds and anything
+  # outside the range clips.  For uint8 with zp=0 the lower clip is also where
+  # the quantised network gets its ReLU.
+  x <- c(-3.14, 2.71, 300)
+  r <- as.numeric(run_onnx(.quant_roundtrip_graph(length(x)), list(X = x)))
+  expect_equal(r, c(0, 3, 255), tolerance = 1e-3)
 })

@@ -622,6 +622,14 @@ extern "C" {
         GGML_UNARY_OP_CEIL,
         GGML_UNARY_OP_ROUND,
         GGML_UNARY_OP_TRUNC,
+        // Round half to even ("banker's rounding"), as distinct from ROUND,
+        // which sends halfway cases away from zero the way roundf does.
+        // ONNX QuantizeLinear requires this rule specifically; ROUND cannot
+        // be reused for it, because ggml_round() is exported from this
+        // package with a test pinning 2.5 -> 3.
+        // Appended at the end on purpose: inserting it earlier would
+        // renumber every later op.
+        GGML_UNARY_OP_ROUND_EVEN,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -1272,6 +1280,21 @@ extern "C" {
             struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_round_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    /**
+     * Rounds each element to the nearest integer, with halfway cases going to
+     * the nearest EVEN integer: 0.5 -> 0, 1.5 -> 2, 2.5 -> 2, -0.5 -> -0.
+     * Away from a halfway case this agrees with ggml_round; the two differ
+     * only on exact ties.
+     *
+     * This is what ONNX QuantizeLinear specifies ("it rounds to the nearest
+     * even"), which is why it exists separately: ggml_round follows roundf
+     * and sends ties away from zero, and that behaviour is part of this
+     * package's exported API.
+     */
+    GGML_API struct ggml_tensor * ggml_round_even(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 

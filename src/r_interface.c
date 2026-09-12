@@ -193,6 +193,7 @@ extern SEXP R_onnx_override_input_shapes(SEXP, SEXP, SEXP);
 extern SEXP R_onnx_build(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_onnx_run(SEXP, SEXP, SEXP);
 extern SEXP R_onnx_inputs(SEXP);
+extern SEXP R_onnx_graph_info(SEXP);
 extern SEXP R_onnx_device_info(SEXP);
 // Async operations
 extern SEXP R_ggml_backend_tensor_set_async(SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -2028,6 +2029,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_onnx_build",                            (DL_FUNC) &R_onnx_build,                             4},
     {"R_onnx_run",                              (DL_FUNC) &R_onnx_run,                               3},
     {"R_onnx_inputs",                           (DL_FUNC) &R_onnx_inputs,                            1},
+    {"R_onnx_graph_info",                       (DL_FUNC) &R_onnx_graph_info,                        1},
     {"R_onnx_device_info",                      (DL_FUNC) &R_onnx_device_info,                       1},
 
     {"R_ggml_set_omp_threads",                  (DL_FUNC) &R_ggml_set_omp_threads,                   1},

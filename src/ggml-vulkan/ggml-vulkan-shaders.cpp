@@ -1301,6 +1301,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     CREATE_UNARY(softplus)
     CREATE_UNARY(step)
     CREATE_UNARY(round)
+    CREATE_UNARY(round_even)
     CREATE_UNARY(ceil)
     CREATE_UNARY(floor)
     CREATE_UNARY(trunc)

@@ -589,6 +589,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 return ctx->device->pipeline_step[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_ROUND:
                 return ctx->device->pipeline_round[dst->type == GGML_TYPE_F16];
+            case GGML_UNARY_OP_ROUND_EVEN:
+                return ctx->device->pipeline_round_even[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_CEIL:
                 return ctx->device->pipeline_ceil[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_FLOOR:

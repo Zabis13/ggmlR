@@ -2375,11 +2375,22 @@ template<enum ggml_sort_order order>
 struct cmp_argsort {
     const float * data;
     bool operator()(int32_t a, int32_t b) const {
-        if constexpr (order == GGML_SORT_ORDER_ASC) {
-            return data[a] < data[b];
-        } else {
-            return data[a] > data[b];
+        // Equal values order by index, because std::sort is not stable and
+        // the caller cannot see which of two equal elements it got.  Without
+        // this the result depends on the library's introsort pivots: a run
+        // is reproducible on one machine and different on the next, and ONNX
+        // TopK, whose sorted=1 promises a definite order, inherits that.
+        // MaskRCNN quantises its RPN scores to uint8, so 594 proposals share
+        // 118 distinct values -- one tie group holds 69 -- and which of them
+        // survive decides the whole detection set.
+        if (data[a] != data[b]) {
+            if constexpr (order == GGML_SORT_ORDER_ASC) {
+                return data[a] < data[b];
+            } else {
+                return data[a] > data[b];
+            }
         }
+        return a < b;
     }
 };
 
@@ -2447,7 +2458,11 @@ void ggml_compute_forward_argsort(
 struct cmp_top_k {
     const float * data;
     bool operator()(int32_t a, int32_t b) const {
-        return data[a] > data[b];
+        // Ties order by index -- see cmp_argsort above for why.
+        if (data[a] != data[b]) {
+            return data[a] > data[b];
+        }
+        return a < b;
     }
 };
 
@@ -2483,10 +2498,13 @@ static void ggml_compute_forward_top_k_f32(
 
         std::copy(tmp, tmp + top_k, dst_data);
 
-        // emphasize that the order is not important
-        if (top_k > 1) {
-            std::swap(dst_data[0], dst_data[1]);
-        }
+        // Upstream swaps the first two entries here "to emphasize that the
+        // order is not important".  It is important to one caller: ONNX TopK
+        // promises a sorted result when sorted=1, and this kernel is what
+        // serves it.  Sampling, the swap's intended audience, does not care
+        // either way -- it reads the set, not the sequence -- so keeping the
+        // real order costs nothing and makes the op honest about what it
+        // returns.  Divergence from upstream; do not restore the swap.
     }
 }
 

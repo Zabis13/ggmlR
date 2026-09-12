@@ -216,12 +216,18 @@ SEXP R_onnx_run(SEXP ctx_ptr_, SEXP input_names_, SEXP input_data_) {
                     rdata[j] = (double)buf[j];
             }
 
-            /* Set dim attribute in ONNX order (reverse ggml ne[]) */
+            /* dim() describes the buffer as it is actually laid out, not the
+             * shape the ONNX file declares.  The copy above is element for
+             * element, so ne[0] varies fastest -- which is exactly what R
+             * means by the first entry of dim().  Writing the reversed ONNX
+             * order here instead would make out$boxes[1, ] read down a column
+             * of the buffer and return four x1 values as if they were one box.
+             * predict() turns this into the declared ONNX order explicitly. */
             int ndims = ggml_n_dims(t);
             if (ndims > 1) {
                 SEXP dim = PROTECT(Rf_allocVector(INTSXP, ndims));
                 for (int d = 0; d < ndims; d++) {
-                    INTEGER(dim)[d] = (int)t->ne[ndims - 1 - d];
+                    INTEGER(dim)[d] = (int)t->ne[d];
                 }
                 Rf_setAttrib(vec, R_DimSymbol, dim);
                 UNPROTECT(1);
@@ -321,6 +327,64 @@ SEXP R_onnx_inputs(SEXP ctx_ptr_) {
 }
 
 /* ── R_onnx_device_info(ctx_ptr) — scheduler/backend diagnostics ─── */
+
+/* ── R_onnx_graph_info(ctx_ptr) — the parsed graph as a table ─────
+ *
+ * One row per node: its op_type, its output names, its input names.  That is
+ * enough to answer "which node produces edge X" and "what does X feed into"
+ * without re-deriving either from the file.
+ *
+ * It exists because the alternative was grepping the .onnx binary by hand,
+ * and that went wrong twice in one session: a name search that only matched
+ * NodeProto.input (field 1) and missed the outputs (field 2) concluded an
+ * edge had no producer, and the type of every probed edge was being guessed
+ * from ONNX Runtime's error text one rebuild at a time.  The parser already
+ * holds all of it. */
+SEXP R_onnx_graph_info(SEXP ctx_ptr_) {
+    onnx_ggml_ctx_t *ctx = (onnx_ggml_ctx_t *)R_ExternalPtrAddr(ctx_ptr_);
+    if (!ctx) Rf_error("onnx_graph_info: NULL context pointer");
+    if (!ctx->onnx) Rf_error("onnx_graph_info: NULL model");
+
+    const int n = ctx->onnx->n_nodes;
+
+    SEXP op   = PROTECT(Rf_allocVector(STRSXP, n));
+    SEXP out0 = PROTECT(Rf_allocVector(STRSXP, n));
+    SEXP outs = PROTECT(Rf_allocVector(VECSXP, n));
+    SEXP ins  = PROTECT(Rf_allocVector(VECSXP, n));
+    SEXP idx  = PROTECT(Rf_allocVector(INTSXP, n));
+
+    for (int i = 0; i < n; i++) {
+        const onnx_node_t *nd = &ctx->onnx->nodes[i];
+        INTEGER(idx)[i] = i;
+        SET_STRING_ELT(op, i, Rf_mkChar(nd->op_type));
+        SET_STRING_ELT(out0, i,
+                       Rf_mkChar(nd->n_outputs > 0 ? nd->outputs[0] : ""));
+
+        SEXP o = PROTECT(Rf_allocVector(STRSXP, nd->n_outputs));
+        for (int k = 0; k < nd->n_outputs; k++)
+            SET_STRING_ELT(o, k, Rf_mkChar(nd->outputs[k]));
+        SET_VECTOR_ELT(outs, i, o);
+        UNPROTECT(1);
+
+        SEXP v = PROTECT(Rf_allocVector(STRSXP, nd->n_inputs));
+        for (int k = 0; k < nd->n_inputs; k++)
+            SET_STRING_ELT(v, k, Rf_mkChar(nd->inputs[k]));
+        SET_VECTOR_ELT(ins, i, v);
+        UNPROTECT(1);
+    }
+
+    SEXP result = PROTECT(Rf_allocVector(VECSXP, 5));
+    SEXP names  = PROTECT(Rf_allocVector(STRSXP, 5));
+    SET_STRING_ELT(names, 0, Rf_mkChar("index"));   SET_VECTOR_ELT(result, 0, idx);
+    SET_STRING_ELT(names, 1, Rf_mkChar("op_type")); SET_VECTOR_ELT(result, 1, op);
+    SET_STRING_ELT(names, 2, Rf_mkChar("output"));  SET_VECTOR_ELT(result, 2, out0);
+    SET_STRING_ELT(names, 3, Rf_mkChar("outputs")); SET_VECTOR_ELT(result, 3, outs);
+    SET_STRING_ELT(names, 4, Rf_mkChar("inputs"));  SET_VECTOR_ELT(result, 4, ins);
+    Rf_setAttrib(result, R_NamesSymbol, names);
+
+    UNPROTECT(7);
+    return result;
+}
 
 SEXP R_onnx_device_info(SEXP ctx_ptr_) {
     onnx_ggml_ctx_t *ctx = (onnx_ggml_ctx_t *)R_ExternalPtrAddr(ctx_ptr_);

@@ -107,11 +107,20 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             }
         }
         out = onnx_reshape_nd(c->ctx, a, ne, ndims);
-        /* Register with ONNX shape for correct axis mapping downstream.
-         * If >5D was collapsed, use collapsed ndims (not orig) so downstream
-         * ops don't see dimensions beyond what ggml can represent. */
-        int reg_ndims = (orig_ndims > GGML_MAX_DIMS) ? ndims : orig_ndims;
-        int64_t *reg_shape = (orig_ndims > GGML_MAX_DIMS) ? shape : orig_shape;
+        /* Register the shape the MODEL asked for, even past 5D.  The tmap
+         * field holds up to ONNX_MAX_DIMS, and a ggml reshape is a view over
+         * the same bytes -- nothing moves -- so the physical tensor being
+         * collapsed to 5D does not make the logical rank a lie.
+         *
+         * Keeping it matters for the op that comes next.  Collapsing here
+         * always merges the LEADING dims, which is a guess about what the
+         * following Transpose will do with them: Swin window partition
+         * reshapes to 6D purely to express a permutation, and merging its
+         * batch into H/M is right only while the batch is 1.  Transpose can
+         * merge the pair that ITS perm leaves adjacent -- but only if the
+         * real shape is still here to read. */
+        int reg_ndims = orig_ndims;
+        int64_t *reg_shape = orig_shape;
         if (out) {
             for (int i = 0; i < n->n_outputs; i++) {
                 if (n->outputs[i][0] != '\0') {
@@ -147,6 +156,7 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
 
         /* Check for identity perm first */
         int is_identity = 0;
+        int merged_rank = 0;   /* set when axes were merged below */
         if (n_perm > 0) {
             is_identity = 1;
             for (int i = 0; i < n_perm; i++) {
@@ -187,6 +197,113 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                     if (perm[i] != i) { is_identity = 0; break; }
             }
         }
+        /* Rank above what ggml can hold: merge axes the permutation keeps
+         * together.  If perm maps two ONNX axes to adjacent output positions
+         * in the same order, no reshape can tell them apart and no permute
+         * separates them -- so they are one axis as far as this op is
+         * concerned, and merging them drops the rank without changing a byte.
+         *
+         * Swin's window partition is the case this exists for: it reshapes
+         * [B,H,W,C] to 6D [B,H/M,M,W/M,M,C] purely to express one swap of the
+         * middle axes, then reshapes straight back.  Merging the trailing
+         * (M,C) pair -- untouched by that perm -- leaves 5D, which ggml holds.
+         * Verified against a hand-computed 6D permutation before it was
+         * written, for a merge at the head as well as at the tail.
+         *
+         * Only the perm decides what may merge.  Reshape, which produced this
+         * tensor, always merges the LEADING axes because it has no way to know
+         * what comes next; that is right only when the leading pair happens to
+         * be the one the perm leaves alone.
+         *
+         * Entry is gated on the rank ggml cannot hold at all (> GGML_MAX_DIMS)
+         * while the loop reduces to 4.  The asymmetry is deliberate: rank 5 is
+         * representable and the 5-D branch below handles it, so merging there
+         * would rewrite permutations that already work -- xcit's [48,4,3,784]
+         * with perm 2,0,3,4,1 came out as [784,192,1,3] the one time this was
+         * entered at rank 5.  Once a merge IS needed, though, stopping at 5
+         * lands in that same branch, which requires a unit axis to squeeze and
+         * silently mis-permutes without one; 4 is the rank that always works. */
+        if (nd > GGML_MAX_DIMS && n_perm == nd) {
+            int pos[ONNX_MAX_DIMS];
+            for (int i = 0; i < nd; i++) pos[i] = -1;
+            for (int i = 0; i < n_perm; i++)
+                if (perm[i] >= 0 && perm[i] < nd) pos[perm[i]] = i;
+
+            int64_t shape[ONNX_MAX_DIMS];
+            int have_shape = tmap_get_shape(c, n->inputs[0], shape, ONNX_MAX_DIMS);
+            if (have_shape < nd) {
+                /* Without the real shape there is nothing to merge FROM: the
+                 * tensor in hand was already collapsed by Reshape along its
+                 * leading axes, and reinterpreting it needs to know what the
+                 * model's axes actually were. */
+                fprintf(stderr, "[onnx] Transpose %s: rank %d but only %d stored dims\n",
+                        n->outputs[0], nd, have_shape);
+                return -1;
+            }
+
+            while (nd > 4) {
+                /* find an input axis k whose successor k+1 stays right after
+                 * it in the output */
+                int k = -1;
+                for (int i = 0; i + 1 < nd; i++) {
+                    if (pos[i] >= 0 && pos[i + 1] == pos[i] + 1) { k = i; break; }
+                }
+                if (k < 0) break;   /* nothing mergeable -- leave it to fail loudly */
+
+                if (have_shape >= nd) {
+                    shape[k] *= shape[k + 1];
+                    for (int i = k + 1; i + 1 < nd; i++) shape[i] = shape[i + 1];
+                }
+                /* drop input axis k+1 and output position pos[k]+1 */
+                int drop_out = pos[k] + 1;
+                int64_t np[ONNX_MAX_DIMS];
+                int c2 = 0;
+                for (int i = 0; i < n_perm; i++) {
+                    if (i == drop_out) continue;
+                    int64_t v = perm[i];
+                    if (v > k) v--;             /* input axis k+1 is gone */
+                    np[c2++] = v;
+                }
+                memcpy(perm, np, (size_t)c2 * sizeof(int64_t));
+                n_perm = c2;
+                nd--;
+                for (int i = 0; i < nd; i++) pos[i] = -1;
+                for (int i = 0; i < n_perm; i++)
+                    if (perm[i] >= 0 && perm[i] < nd) pos[perm[i]] = i;
+            }
+
+            /* Merging down to 4 is preferred, but 5 is still representable:
+             * if the permutation offers no further mergeable pair, hand the
+             * node to the 5-D branch rather than refuse it.  Refusing at 5 is
+             * what dropped super-resolution's Transpose -- a rank-6 node that
+             * merges once and then has nothing left adjacent, which the 5-D
+             * branch had been handling correctly all along. */
+            if (nd > GGML_MAX_DIMS) {
+                fprintf(stderr, "[onnx] Transpose %s: rank %d with no mergeable "
+                                "axis pair -- cannot be brought within %d axes\n",
+                        n->outputs[0], nd, GGML_MAX_DIMS);
+                return -1;
+            }
+            /* The tensor itself never changed; only the description of it. */
+            {
+                int64_t ne_m[GGML_MAX_DIMS] = {1, 1, 1, 1, 1};
+                for (int d = 0; d < nd && d < GGML_MAX_DIMS; d++)
+                    ne_m[d] = shape[nd - 1 - d];
+                a = onnx_reshape_nd(c->ctx, a, ne_m, nd);
+                merged_rank = 1;
+            }
+            if (onnx_trace_nodes()) {
+                fprintf(stderr, "[Transpose/merge] %s: rank -> %d perm=[", n->outputs[0], nd);
+                for (int i = 0; i < n_perm; i++)
+                    fprintf(stderr, "%lld%s", (long long)perm[i], i < n_perm-1 ? "," : "");
+                fprintf(stderr, "]\n");
+            }
+            /* recheck identity on the merged permutation */
+            is_identity = 1;
+            for (int i = 0; i < n_perm; i++)
+                if (perm[i] != i) { is_identity = 0; break; }
+        }
+
         if (is_identity) {
             out = a;
         } else if (nd >= 5 && n_perm >= 5) {
@@ -290,7 +407,10 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
              * ggml ax[k] means output ggml dim k ← input ggml dim ax[k].
              * ONNX dim i → ggml dim (reversed). */
             int onnx_nd = n_perm > nd ? n_perm : nd;
-            if (n->n_inputs > 0) {
+            /* After a merge the stored rank describes the shape the
+             * MODEL wrote, not the one being permuted here -- reading it
+             * back would undo the merge. */
+            if (n->n_inputs > 0 && !merged_rank) {
                 int in_nd = tmap_get_ndims(c, n->inputs[0]);
                 if (in_nd > onnx_nd) onnx_nd = in_nd;
             }
@@ -578,11 +698,34 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             ne[d] = onnx_out[nd_out - 1 - d];
 
         out = onnx_reshape_nd(c->ctx, a, ne, nd_out);
+        /* nd_out is what Squeeze actually computed, so report it -- including
+         * when every remaining dim is 1.
+         *
+         * Withholding it in that case (as `if (has_nonunit)` did) left out_nd
+         * at -1, and the generic path then inherited the INPUT's rank: a
+         * Squeeze of [1,1] down to [1] still reported rank 2.  MaskRCNN's
+         * five FPN levels each feed that result through Slice into a Gather
+         * index, where a rank above 1 selects the "pass the index straight
+         * through" branch -- so no gather happened, each level kept its full
+         * length (9408, 2352, 588, 147, 48), and the Concat that joins them
+         * refused shapes that no longer matched.
+         *
+         * An all-ones shape is exactly where the rank cannot be recovered
+         * later by looking at the tensor, since ggml_n_dims collapses it to
+         * 1 -- which is why it has to be recorded here. */
+        out_nd = nd_out;
+        /* cval propagation.  Squeeze drops unit axes and touches no value, so
+         * whatever is known about the contents survives unchanged -- and a
+         * shape value passing through here is the common case, not the
+         * exception: whisper's decoder builds its position range as
+         * Shape -> Slice -> Squeeze -> Range, and Range needs a build-time
+         * limit.  Without this the chain went dark at the last step and the
+         * positional embedding was dropped from the graph entirely. */
         {
-            int has_nonunit = 0;
-            for (int d = 0; d < nd_out; d++)
-                if (ne[d] > 1) { has_nonunit = 1; break; }
-            if (has_nonunit) out_nd = nd_out;
+            int64_t cv[ONNX_MAX_DIMS];
+            int ncv = cval_get(c, n->inputs[0], cv, ONNX_MAX_DIMS);
+            if (ncv > 0)
+                cval_put(c, n->outputs[0], cv, ncv);
         }
     }
 
@@ -610,17 +753,82 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         int dim = eff_nd - 1 - onnx_axis;
         if (dim < 0) dim = 0;
         if (dim > GGML_MAX_DIMS - 1) dim = GGML_MAX_DIMS - 1;
-        /* Concat supports N inputs — chain pairwise */
-        out = a;
-        for (int i = 1; i < n->n_inputs; i++) {
+        /* Concat supports N inputs — chain pairwise.
+         *
+         * Logically empty inputs are left out of the chain entirely, so the
+         * result really is shorter rather than carrying a row that ONNX says
+         * does not exist.  Skipping them only at read time would keep the
+         * output its full length with unselected rows still inside it, which
+         * is exactly the bug this is here to fix: MaskRCNN concatenates one
+         * branch per class, and the 79 classes where nothing passed the score
+         * threshold each contributed a phantom box built from the unfilled
+         * element of an empty NonZero. */
+        int first = -1;
+        for (int i = 0; i < n->n_inputs; i++) {
+            if (n->inputs[i][0] == '\0') continue;
+            if (tmap_is_empty(c, n->inputs[i])) continue;
+            if (!get_input(c, n, i)) continue;
+            first = i;
+            break;
+        }
+        if (first < 0) {
+            /* Every branch was empty.  There is no shorter tensor to build --
+             * ggml cannot hold one -- so keep input 0's single row and mark the
+             * result, leaving the decision to whoever consumes it. */
+            out = a;
+            if (onnx_trace_nodes())
+                fprintf(stderr, "[Concat] %s: all %d input(s) empty -> marking output empty\n",
+                        n->outputs[0], n->n_inputs);
+            for (int i = 0; i < n->n_outputs; i++)
+                if (n->outputs[i][0] != '\0') {
+                    tmap_put_nd(c, n->outputs[i], out, nd);
+                    tmap_mark_empty(c, n->outputs[i]);
+                }
+            return 1; /* already registered */
+        }
+        out = get_input(c, n, first);
+        for (int i = first + 1; i < n->n_inputs; i++) {
             struct ggml_tensor *inp = get_input(c, n, i);
             if (!inp) continue;
+            if (tmap_is_empty(c, n->inputs[i])) {
+                if (onnx_trace_nodes())
+                    fprintf(stderr, "[Concat] %s: skipping empty input '%s'\n",
+                            n->outputs[0], n->inputs[i]);
+                continue;
+            }
             /* ggml_concat requires matching types — cast if needed */
+            /* cast_numeric throughout: these convert between integer and
+             * float, where ggml_cast would hand over the bit pattern. */
             if (out->type != inp->type) {
                 if (inp->type == GGML_TYPE_I32 && out->type == GGML_TYPE_F32)
-                    inp = ggml_cast(c->ctx, inp, GGML_TYPE_F32);
+                    inp = ggml_cast_numeric(c->ctx, inp, GGML_TYPE_F32);
                 else if (out->type == GGML_TYPE_I32 && inp->type == GGML_TYPE_F32) {
-                    out = ggml_cast(c->ctx, out, GGML_TYPE_F32);
+                    out = ggml_cast_numeric(c->ctx, out, GGML_TYPE_F32);
+                }
+            }
+            /* ggml_concat asserts on every axis but `dim`, and its abort names
+             * no tensor -- so print the two shapes here first.  Reading them
+             * off the model is what turns "assert failed somewhere in a 284
+             * node graph" into a specific mismatched axis. */
+            if (onnx_trace_nodes()) {
+                fprintf(stderr, "[Concat] %s dim=%d  a='%s' ne=[%lld,%lld,%lld,%lld,%lld]"
+                                "  b='%s' ne=[%lld,%lld,%lld,%lld,%lld]\n",
+                        n->outputs[0], dim,
+                        ggml_get_name(out),
+                        (long long)out->ne[0], (long long)out->ne[1], (long long)out->ne[2],
+                        (long long)out->ne[3], (long long)out->ne[4],
+                        ggml_get_name(inp),
+                        (long long)inp->ne[0], (long long)inp->ne[1], (long long)inp->ne[2],
+                        (long long)inp->ne[3], (long long)inp->ne[4]);
+            }
+            for (int d = 0; d < GGML_MAX_DIMS; d++) {
+                if (d == dim) continue;
+                if (out->ne[d] != inp->ne[d]) {
+                    fprintf(stderr, "[onnx] Concat %s: axis %d differs (%lld vs %lld) "
+                                    "concatenating '%s' and '%s' along dim %d\n",
+                            n->outputs[0], d, (long long)out->ne[d], (long long)inp->ne[d],
+                            ggml_get_name(out), ggml_get_name(inp), dim);
+                    return -1;
                 }
             }
             out = ggml_concat(c->ctx, out, inp, dim);
@@ -730,7 +938,14 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
 
         /* Case 2: embedding lookup — ggml_get_rows */
         if (b->type != GGML_TYPE_I32) {
-            b = ggml_cast(c->ctx, b, GGML_TYPE_I32);
+            /* cast_numeric, not cast: ggml_cast reinterprets the bits, so an
+             * index arrives as whatever the float's bit pattern means as an
+             * integer.  Small indices land close enough to plausible values to
+             * hide it -- MaskRCNN's 0, 62, 63 came out as 1, 63, 64, which
+             * reads as an off-by-one and sent this hunt after a phantom
+             * 1-based/0-based mismatch -- until index 80 ran off the end of an
+             * 80-row table.  TopK already avoids this; Gather did not. */
+            b = ggml_cast_numeric(c->ctx, b, GGML_TYPE_I32);
         }
 
         /* Normalize negative axis */
@@ -759,15 +974,52 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             if (a->ne[d] != 1) g_nd = d + 1;
         if (g_nd < 2) g_nd = 2;
 
+        /* Gathering a unit ONNX axis with a scalar index selects the only
+         * slice there is, so the data passes through untouched.  This has to
+         * be caught before the clamp below, which would otherwise move the
+         * gather onto a neighbouring populated axis and cut the tensor down to
+         * one element of it.
+         *
+         * MaskRCNN does exactly this: the decoded boxes are [1,147,4] and a
+         * Gather with axis=0 drops the batch axis, leaving all 147 boxes.  The
+         * clamp turned it into a gather over the 147 instead, so a single box
+         * reached NMS -- which then had nothing to suppress, and the detection
+         * counts came out wrong with no error anywhere. */
+        {
+            int64_t oshape[ONNX_MAX_DIMS];
+            int ond = tmap_get_shape(c, n->inputs[0], oshape, ONNX_MAX_DIMS);
+            if (ond == a_nd && axis >= 0 && axis < ond && oshape[axis] == 1 &&
+                idx_rank == 0) {
+                if (onnx_trace_nodes())
+                    fprintf(stderr, "[Gather] %s: ONNX axis %lld is unit; "
+                                    "scalar gather is a passthrough\n",
+                            n->outputs[0], (long long)axis);
+                /* Materialise rather than forward the view.  The gather this
+                 * replaces went through get_rows, which always produced a
+                 * contiguous result, so every consumer downstream was written
+                 * against that guarantee -- MaskRCNN's next Reshape asserts on
+                 * it directly (ggml_reshape_1d), and a permuted view arriving
+                 * there aborts the process instead of returning an error.
+                 *
+                 * Always a fresh node, never `a` itself: the output is named
+                 * below, and renaming the input in place would make every
+                 * other consumer of it -- and every trace line -- refer to a
+                 * tensor by the wrong name. */
+                out = ggml_cont(c->ctx, a);
+                ggml_set_name(out, n->outputs[0]);
+                tmap_put_nd(c, n->outputs[0], out, a_nd > 1 ? a_nd - 1 : 1);
+                return 1;
+            }
+        }
+
         /* The ONNX rank can exceed the ggml one, because ONNX dims of size 1
          * need no ggml axis.  Those extra dims are leading, so clamping keeps
          * ONNX axis 0 on the highest populated ggml axis, where it belongs. */
         int g_ax = a_nd - 1 - (int)axis;
         if (g_ax > g_nd - 1) g_ax = g_nd - 1;
 
-        if (g_ax < 0 || b_nd > 1 || a_nd < 2) {
-            /* Outside the mapping above -- gather as before.  A 1-D `a` has
-             * only one axis to gather, which is what get_rows already does. */
+        if (g_ax < 0 || b_nd > 1) {
+            /* Outside the mapping above -- gather as before. */
             out = ggml_get_rows(c->ctx, a, b);
         } else if (g_ax == 1) {
             /* Already in place; ggml_get_rows handles the rest itself. */
@@ -866,11 +1118,10 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
 
     /* ── TopK ───────────────────────────────────────────────────── */
     /* TopK(X, K) -> Values, Indices, both taken along `axis` (default -1).
-     * ggml sorts along ne[0] only, which is the LAST ONNX axis, so that is
-     * the case handled here; any other axis is rejected rather than answered
-     * with a silently wrong ordering.  ggml_argsort_top_k returns sorted
-     * indices, matching ONNX's default sorted=1, and the values are then
-     * read back with get_rows. */
+     * ggml sorts along ne[0] only, so any other axis is rotated there and
+     * back.  ggml_argsort_top_k returns sorted indices, matching ONNX's
+     * default sorted=1, and the values are then read back with a per-row
+     * get_rows gather (see the offset formula below). */
     else if (strcmp(op, "TopK") == 0) {
         if (!a) return -1;
 
@@ -878,12 +1129,26 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         int a_nd = tmap_get_ndims(c, n->inputs[0]);
         if (a_nd <= 0) a_nd = (int)ggml_n_dims(a);
         if (axis < 0) axis += a_nd;
-        if (axis != a_nd - 1) {
-            fprintf(stderr, "[onnx] TopK: only the last axis is supported "
-                            "(axis=%d of rank %d)\n", (int)axis, a_nd);
+        /* TopK runs along ne[0], so an axis elsewhere is rotated there and
+         * back -- the same swap Softmax and CumSum use, and self-inverse for
+         * the same reason.  MaskRCNN's final TopK picks over axis 0 of a
+         * rank-3 tensor, and refusing it left the whole detection branch
+         * unbuilt: the graph came out with zero nodes and every output stayed
+         * at its uninitialised value. */
+        int ggml_d = a_nd - 1 - (int)axis;
+        if (ggml_d < 0) ggml_d = 0;
+        if (ggml_d > 3) {
+            fprintf(stderr, "[onnx] TopK %s: axis %d of rank %d maps to ggml "
+                            "dim %d, past what permute reaches\n",
+                    n->outputs[0], (int)axis, a_nd, ggml_d);
             return -1;
         }
-
+        int tk_ax[4] = {0, 1, 2, 3};
+        if (ggml_d > 0) { tk_ax[0] = ggml_d; tk_ax[ggml_d] = 0; }
+        struct ggml_tensor *src = a;
+        if (ggml_d > 0)
+            src = ggml_cont(c->ctx,
+                      ggml_permute(c->ctx, a, tk_ax[0], tk_ax[1], tk_ax[2], tk_ax[3]));
         int64_t largest = onnx_attr_int(n, "largest", 1);
         if (!largest) {
             fprintf(stderr, "[onnx] TopK: largest=0 is not supported\n");
@@ -909,30 +1174,137 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             return -1;
         }
         int k = (int)kv[0];
-        if (k < 1) k = 1;
-        if (k > (int)a->ne[0]) k = (int)a->ne[0];
 
-        struct ggml_tensor *idx = ggml_argsort_top_k(c->ctx, a, k);
+        /* The measurement is an upper BOUND on k, never its value.
+         *
+         * K is the op's second input, and ONNX lets it be computed rather than
+         * stored: MaskRCNN builds it as ReduceMin(Concat(limit, n_candidates))
+         * -- "at most `limit` proposals, fewer if fewer arrived" -- which the
+         * constant folder resolves to a real number by the time we get here.
+         * onnx_resolved_size, by contrast, measures the axis being ranked once
+         * the previous segment has run: that is how many candidates EXIST, not
+         * how many the model asked to keep.
+         *
+         * Taking the measurement as k outright (as this did) throws the limit
+         * away and turns TopK into a full sort.  MaskRCNN's two RPN nodes then
+         * handed NMS 9408 and 2352 proposals instead of 1000 each, and the
+         * model returned 80 detections where onnxruntime returns 51.
+         *
+         * The clamp is still needed the other way: k may exceed the candidate
+         * count, and ggml_argsort_top_k cannot return more than exists. */
+        if (k <= 0) {
+            /* Not the "K is larger than the axis" case the clamp below covers:
+             * the spec requires K positive, so this is a K that was resolved
+             * to something TopK has no meaning for.  Refusing beats ranking a
+             * nonsense number of elements and reporting success. */
+            fprintf(stderr, "[onnx] TopK %s: K resolved to %d; the spec requires "
+                            "a positive value\n", n->outputs[0], k);
+            return -1;
+        }
+        {
+            int64_t measured = onnx_resolved_size(c, n->outputs[0]);
+            if (measured > 0) {
+                int km = (int)measured;
+                if (k > km) {
+                    /* The model asked for more than exists.  A valid model does
+                     * not, so say so -- but keep going at the axis size, which
+                     * is what every element there can supply. */
+                    fprintf(stderr, "[onnx] TopK %s: K=%d exceeds the %d elements "
+                                    "on the ranked axis; clamped\n",
+                            n->outputs[0], k, km);
+                    k = km;
+                }
+                if (onnx_trace_nodes())
+                    fprintf(stderr, "[TopK] node=%s: k_graph=%d, axis_size=%d, "
+                                    "k_used=%d\n",
+                            n->outputs[0], (int)kv[0], km, k);
+            }
+        }
+        /* k < 1 is refused above, so only the upper bound is left -- and this
+         * one still matters when nothing was measured, since argsort_top_k
+         * cannot return more elements than the axis holds. */
+        if (k > (int)src->ne[0]) k = (int)src->ne[0];
+
+        struct ggml_tensor *idx = ggml_argsort_top_k(c->ctx, src, k);
         idx = ggml_cont(c->ctx, idx);   /* argsort_top_k returns a view */
 
-        /* Values: gather the selected columns row by row.  get_rows indexes
-         * ne[1] of its data argument, so a transposed view puts the sorted
-         * axis there; the result is transposed back. */
-        struct ggml_tensor *vals = NULL;
-        if (ggml_n_dims(a) <= 2 && a->ne[1] == 1) {
-            /* Single row: the index vector addresses ne[0] directly. */
-            struct ggml_tensor *a2 =
-                ggml_reshape_2d(c->ctx, ggml_cont(c->ctx, a), 1, a->ne[0]);
-            struct ggml_tensor *g =
-                ggml_get_rows(c->ctx, a2, ggml_reshape_1d(c->ctx, idx, k));
-            vals = ggml_reshape_2d(c->ctx, ggml_cont(c->ctx, g), k, 1);
-        } else {
-            /* Multi-row TopK needs a per-row gather, which ggml_get_rows does
-             * not express; leave it unsupported rather than return wrong
-             * values. */
-            fprintf(stderr, "[onnx] TopK: only a single row is supported "
-                            "(got ne[1]=%lld)\n", (long long)a->ne[1]);
+        /* Values: a per-row gather.  argsort_top_k ranks each row of ne[0]
+         * independently and its indices are row-local, while get_rows copies
+         * whole rows of its data argument and cannot pick an element inside
+         * one.  Treating every scalar of src as a row of length 1 turns the
+         * element pick into a row pick, which get_rows does express:
+         *
+         *   flat_idx(j,r) = idx(j,r) + r*n0,  0 <= j < k, 0 <= r < nrows
+         *
+         * where r is the linear index of [i1,i2,i3] in ggml memory order.
+         *
+         * This is one path for every shape, not a single-row special case and
+         * a multi-row one: at nrows == 1 the offset is zero, flat_idx equals
+         * idx, and the reshape returns the same [k,1,1,1] the old single-row
+         * branch did.  The two-branch version had TopK's semantics written
+         * twice, and every later fix -- negative axis, k=1, contiguity after
+         * permute, index dtype -- would have had to land in both. */
+        const int64_t n0    = src->ne[0];
+        const int64_t nrows = ggml_nrows(src);
+
+        /* src is contiguous here (cont() above, or untouched when ggml_d == 0),
+         * so ne[0]-sized blocks of its data are exactly the independent rows
+         * the indices address, and idx carries src's trailing dims, so its
+         * rows enumerate in the same order.  Both are the assumptions the
+         * offset formula rests on; state them rather than infer them. */
+        if (!ggml_is_contiguous(src) ||
+            idx->ne[1] != src->ne[1] || idx->ne[2] != src->ne[2] ||
+            idx->ne[3] != src->ne[3]) {
+            fprintf(stderr, "[onnx] TopK %s: gather precondition failed "
+                            "(contig=%d src ne=[%lld,%lld,%lld,%lld] "
+                            "idx ne=[%lld,%lld,%lld,%lld])\n",
+                    n->outputs[0], (int)ggml_is_contiguous(src),
+                    (long long)src->ne[0], (long long)src->ne[1],
+                    (long long)src->ne[2], (long long)src->ne[3],
+                    (long long)idx->ne[0], (long long)idx->ne[1],
+                    (long long)idx->ne[2], (long long)idx->ne[3]);
             return -1;
+        }
+
+        /* The offsets travel through F32 because arange and the binary ops are
+         * F32-only, and cast_numeric truncates -- so every offset has to be an
+         * exactly representable integer.  Past 2^24 it is not, and the gather
+         * would quietly read a neighbouring element instead of failing. */
+        if (n0 * nrows >= (1LL << 24)) {
+            fprintf(stderr, "[onnx] TopK %s: %lld elements exceeds the 2^24 "
+                            "index range an F32 offset can carry exactly\n",
+                    n->outputs[0], (long long)(n0 * nrows));
+            return -1;
+        }
+
+        struct ggml_tensor *idx_fv = ggml_cast_numeric(c->ctx, idx, GGML_TYPE_F32);
+        struct ggml_tensor *flat  = idx_fv;
+        if (nrows > 1) {
+            /* r*n0, shaped [1,r1,r2,r3] so it broadcasts along the k axis. */
+            struct ggml_tensor *off =
+                ggml_scale(c->ctx, ggml_arange(c->ctx, 0.0f, (float)nrows, 1.0f),
+                           (float)n0);
+            off = ggml_reshape_4d(c->ctx, off, 1, src->ne[1], src->ne[2], src->ne[3]);
+            off = ggml_repeat(c->ctx, off, idx_fv);
+            flat = ggml_add(c->ctx, idx_fv, off);
+        }
+        struct ggml_tensor *flat_i = ggml_reshape_1d(c->ctx,
+            ggml_cont(c->ctx, ggml_cast_numeric(c->ctx, flat, GGML_TYPE_I32)),
+            (int64_t)k * nrows);
+
+        struct ggml_tensor *a2 =
+            ggml_reshape_2d(c->ctx, ggml_cont(c->ctx, src), 1, n0 * nrows);
+        struct ggml_tensor *g = ggml_get_rows(c->ctx, a2, flat_i);
+        struct ggml_tensor *vals = ggml_reshape_4d(c->ctx, ggml_cont(c->ctx, g),
+            k, src->ne[1], src->ne[2], src->ne[3]);
+
+        /* Back to the model's axis order.  The swap is its own inverse, so
+         * the same permutation serves both ways. */
+        if (ggml_d > 0) {
+            vals = ggml_cont(c->ctx,
+                       ggml_permute(c->ctx, vals, tk_ax[0], tk_ax[1], tk_ax[2], tk_ax[3]));
+            idx  = ggml_cont(c->ctx,
+                       ggml_permute(c->ctx, idx,  tk_ax[0], tk_ax[1], tk_ax[2], tk_ax[3]));
         }
 
         if (n->n_outputs > 0 && n->outputs[0][0] != '\0') {
@@ -940,7 +1312,9 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             tmap_put_nd(c, n->outputs[0], vals, a_nd);
         }
         if (n->n_outputs > 1 && n->outputs[1][0] != '\0') {
-            struct ggml_tensor *idx_f = ggml_cast(c->ctx, idx, GGML_TYPE_F32);
+            /* cast_numeric, not cast: the latter reinterprets the bits, so an
+             * index of 3 would come out as 4.2e-45 rather than 3.0. */
+            struct ggml_tensor *idx_f = ggml_cast_numeric(c->ctx, idx, GGML_TYPE_F32);
             ggml_set_name(idx_f, n->outputs[1]);
             tmap_put_nd(c, n->outputs[1], idx_f, a_nd);
         }
@@ -984,17 +1358,17 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             }
         }
 
-        /* Cast indices to I32 if needed */
+        /* Cast indices to I32 if needed -- by value, not by bit pattern. */
         if (b->type != GGML_TYPE_I32) {
-            b = ggml_cast(c->ctx, b, GGML_TYPE_I32);
+            b = ggml_cast_numeric(c->ctx, b, GGML_TYPE_I32);
         }
         /* Cast updates to F32 if needed */
         if (c_upd->type != GGML_TYPE_F32) {
-            c_upd = ggml_cast(c->ctx, c_upd, GGML_TYPE_F32);
+            c_upd = ggml_cast_numeric(c->ctx, c_upd, GGML_TYPE_F32);
         }
         /* Cast data to F32 if needed */
         if (a->type != GGML_TYPE_F32) {
-            a = ggml_cast(c->ctx, a, GGML_TYPE_F32);
+            a = ggml_cast_numeric(c->ctx, a, GGML_TYPE_F32);
         }
 
         out = ggml_scatter_elements(c->ctx, a, c_upd, b, reduction, ggml_axis);
@@ -1005,6 +1379,227 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         return 1;
     }
 
+
+
+    /* ── GatherND ───────────────────────────────────────────────── */
+    else if (strcmp(op, "GatherND") == 0) {
+        if (!a || !b) return -1;
+        /* GatherND(data, indices): each row of `indices` is a q-tuple naming
+         * one slice of `data`, and the slices are stacked in the order the
+         * tuples appear.
+         *
+         * The mirror image of ScatterND above, and built the same way: fold
+         * the q addressed axes of data into one and the slice becomes a row,
+         * which is exactly what ggml_get_rows takes.  The flat row index is
+         * computed in the graph -- sum over k of idx[..., k] * stride_k --
+         * so indices produced at runtime work as well as constant ones.
+         *
+         * batch_dims is refused rather than approximated: it changes which
+         * axes are addressed and which are carried, and no model here uses it.
+         */
+        int64_t batch_dims = onnx_attr_int(n, "batch_dims", 0);
+        if (batch_dims != 0) {
+            fprintf(stderr, "[onnx] GatherND %s: batch_dims=%lld not supported\n",
+                    n->outputs[0], (long long)batch_dims);
+            return -1;
+        }
+
+        int r_nd = tmap_get_ndims(c, n->inputs[0]);
+        int i_nd = tmap_get_ndims(c, n->inputs[1]);
+        if (r_nd <= 0) r_nd = (int)ggml_n_dims(a);
+        if (i_nd <= 0) i_nd = (int)ggml_n_dims(b);
+        int64_t q = b->ne[0];            /* last ONNX axis of indices */
+        if (q < 1 || q > r_nd) {
+            fprintf(stderr, "[onnx] GatherND %s: index width %lld against rank %d\n",
+                    n->outputs[0], (long long)q, r_nd);
+            return -1;
+        }
+
+        int64_t row_len = 1;
+        for (int d = 0; d < r_nd - (int)q; d++) row_len *= a->ne[d];
+        int64_t total = ggml_nelements(a);
+        int64_t n_rows = row_len > 0 ? total / row_len : 0;
+        if (row_len <= 0 || n_rows <= 0) {
+            fprintf(stderr, "[onnx] GatherND %s: empty data\n", n->outputs[0]);
+            return -1;
+        }
+
+        /* Stride of each addressed axis, counted in rows: ONNX index component
+         * k walks ONNX axis k, which is ggml axis r_nd-1-k. */
+        int64_t stride_of_k[GGML_MAX_DIMS];
+        for (int k = 0; k < (int)q; k++) {
+            int ggml_d = r_nd - 1 - k;
+            int64_t s = 1;
+            for (int d = r_nd - (int)q; d < ggml_d; d++) s *= a->ne[d];
+            stride_of_k[k] = s;
+        }
+
+        int64_t n_idx = ggml_nelements(b) / q;
+
+        struct ggml_tensor *idx = b;
+        if (idx->type != GGML_TYPE_F32) idx = ggml_cast_numeric(c->ctx, idx, GGML_TYPE_F32);
+        struct ggml_tensor *idx2 = ggml_reshape_2d(c->ctx, idx, q, n_idx);
+
+        struct ggml_tensor *flat = NULL;
+        for (int k = 0; k < (int)q; k++) {
+            struct ggml_tensor *row = ggml_cont(c->ctx,
+                ggml_view_2d(c->ctx, idx2, 1, n_idx, idx2->nb[1],
+                             (size_t)k * idx2->nb[0]));
+            struct ggml_tensor *term = ggml_scale(c->ctx, row, (float)stride_of_k[k]);
+            flat = flat ? ggml_add(c->ctx, flat, term) : term;
+        }
+        if (!flat) return -1;
+        /* get_rows wants a 1-D I32 index list. */
+        flat = ggml_cast_numeric(c->ctx,
+                   ggml_reshape_1d(c->ctx, ggml_cont(c->ctx, flat), n_idx),
+                   GGML_TYPE_I32);
+
+        struct ggml_tensor *data2 = ggml_reshape_2d(c->ctx, a, row_len, n_rows);
+        if (data2->type != GGML_TYPE_F32 && data2->type != GGML_TYPE_I32)
+            data2 = ggml_cast_numeric(c->ctx, data2, GGML_TYPE_F32);
+
+        struct ggml_tensor *g = ggml_get_rows(c->ctx, data2, flat);   /* [row_len, n_idx] */
+        if (!g) return -1;
+
+        /* Output shape: indices.shape[:-1] ++ data.shape[q:], which in ggml
+         * order is the carried data axes first, then the index axes. */
+        int64_t out_ne[GGML_MAX_DIMS] = {1, 1, 1, 1, 1};
+        int od = 0;
+        for (int d = 0; d < r_nd - (int)q && od < GGML_MAX_DIMS; d++)
+            out_ne[od++] = a->ne[d];
+        int64_t idx_shape[ONNX_MAX_DIMS];
+        int have_idx = tmap_get_shape(c, n->inputs[1], idx_shape, ONNX_MAX_DIMS);
+        if (have_idx >= i_nd && i_nd >= 1) {
+            /* index axes, ONNX order minus the trailing q, reversed for ggml */
+            for (int d = i_nd - 2; d >= 0 && od < GGML_MAX_DIMS; d--)
+                out_ne[od++] = idx_shape[d];
+        } else if (od < GGML_MAX_DIMS) {
+            out_ne[od++] = n_idx;
+        }
+        int out_rank = od > 0 ? od : 1;
+        out = onnx_reshape_nd(c->ctx, g, out_ne, out_rank);
+        out_nd = (r_nd - (int)q) + (i_nd - 1);
+        if (out_nd < 1) out_nd = 1;
+    }
+    /* ── ScatterND ──────────────────────────────────────────────── */
+    else if (strcmp(op, "ScatterND") == 0) {
+        if (!a || !b) return -1;
+        /* ScatterND(data, indices, updates): each row of `indices` is a
+         * q-tuple naming one slice of `data`, and the matching slice of
+         * `updates` is written there.
+         *
+         * With the leading q axes of data folded into one, that slice IS a
+         * row, and the op becomes ggml_scatter_elements over a 2-D view --
+         * no new kernel, no new shader.  What has to be built is the flat
+         * row index: sum over k of idx[..., k] * stride_k.  It is computed
+         * in the GRAPH, not on the host, because Swin's masks derive their
+         * indices from Mod on runtime shapes; a build-time reading of them
+         * would be the same defect that made strided Slice publish
+         * uninitialised memory.
+         *
+         * Layouts, in ggml order (ONNX reversed):
+         *   data    ne = [d_{r-1}, ..., d_0]      rank r
+         *   indices ne = [q, m_{p-2}, ..., m_0]   last ONNX axis is q, so it
+         *                                          is ggml axis 0
+         *   updates ne = [d_{r-1}, ..., d_q, m...]
+         */
+        struct ggml_tensor *upd = NULL;
+        if (n->n_inputs > 2 && n->inputs[2][0] != '\0')
+            upd = tmap_get(c, n->inputs[2]);
+        if (!upd) {
+            fprintf(stderr, "[onnx] ScatterND %s: missing updates\n", n->outputs[0]);
+            return -1;
+        }
+
+        {
+            char red[64] = {0};
+            int rl = onnx_attr_str(n, "reduction", red, sizeof(red));
+            if (rl > 0 && strcmp(red, "none") != 0) {
+                /* add/mul/max/min exist in the spec; scatter_elements offers
+                 * add only, and the rest have no caller here.  Refuse by name
+                 * rather than silently overwrite. */
+                fprintf(stderr, "[onnx] ScatterND %s: reduction='%s' not supported\n",
+                        n->outputs[0], red);
+                return -1;
+            }
+        }
+
+        int r_nd = tmap_get_ndims(c, n->inputs[0]);
+        int i_nd = tmap_get_ndims(c, n->inputs[1]);
+        if (r_nd <= 0) r_nd = (int)ggml_n_dims(a);
+        if (i_nd <= 0) i_nd = (int)ggml_n_dims(b);
+        int64_t q = b->ne[0];            /* last ONNX axis of indices */
+        if (q < 1 || q > r_nd) {
+            fprintf(stderr, "[onnx] ScatterND %s: index width %lld against rank %d\n",
+                    n->outputs[0], (long long)q, r_nd);
+            return -1;
+        }
+
+        /* Row length = product of the data axes NOT addressed by an index,
+         * i.e. ggml axes 0 .. r_nd-1-q.  n_rows is the rest. */
+        int64_t row_len = 1;
+        for (int d = 0; d < r_nd - (int)q; d++) row_len *= a->ne[d];
+        int64_t total = ggml_nelements(a);
+        int64_t n_rows = row_len > 0 ? total / row_len : 0;
+        if (row_len <= 0 || n_rows <= 0) {
+            fprintf(stderr, "[onnx] ScatterND %s: empty data\n", n->outputs[0]);
+            return -1;
+        }
+
+        /* Strides of the addressed axes, in rows.  ONNX index component k
+         * counts along ONNX axis k, which is ggml axis r_nd-1-k; the stride
+         * of that axis measured in rows is the product of the row-counts
+         * below it. */
+        int64_t stride_of_k[GGML_MAX_DIMS];
+        for (int k = 0; k < (int)q; k++) {
+            int ggml_d = r_nd - 1 - k;
+            int64_t s = 1;
+            for (int d = r_nd - (int)q; d < ggml_d; d++) s *= a->ne[d];
+            stride_of_k[k] = s;
+        }
+
+        /* Number of index tuples = everything in `indices` except the q axis. */
+        int64_t n_upd = ggml_nelements(b) / q;
+
+        struct ggml_tensor *idx = b;
+        if (idx->type != GGML_TYPE_F32) idx = ggml_cast_numeric(c->ctx, idx, GGML_TYPE_F32);
+        struct ggml_tensor *idx2 = ggml_reshape_2d(c->ctx, idx, q, n_upd);
+
+        /* flat = sum_k idx2[k, :] * stride_k, built from views of one row
+         * each so the arithmetic stays inside the graph. */
+        struct ggml_tensor *flat = NULL;
+        for (int k = 0; k < (int)q; k++) {
+            struct ggml_tensor *row = ggml_view_2d(c->ctx, idx2, 1, n_upd,
+                                                   idx2->nb[1],
+                                                   (size_t)k * idx2->nb[0]);
+            row = ggml_cont(c->ctx, row);
+            struct ggml_tensor *term = ggml_scale(c->ctx, row, (float)stride_of_k[k]);
+            flat = flat ? ggml_add(c->ctx, flat, term) : term;
+        }
+        if (!flat) return -1;
+        /* scatter_elements wants the index at every element of the row it
+         * writes, so the one flat index per update is repeated across the
+         * row: [1, n_upd] -> [row_len, n_upd]. */
+        struct ggml_tensor *idx_rep = flat;
+        if (row_len > 1)
+            idx_rep = ggml_repeat_4d(c->ctx, flat, row_len, n_upd, 1, 1);
+        idx_rep = ggml_cast_numeric(c->ctx, ggml_cont(c->ctx, idx_rep), GGML_TYPE_I32);
+
+        struct ggml_tensor *data2 = ggml_reshape_2d(c->ctx, a, row_len, n_rows);
+        struct ggml_tensor *upd2  = ggml_reshape_2d(c->ctx, upd, row_len, n_upd);
+        if (data2->type != GGML_TYPE_F32)
+            data2 = ggml_cast_numeric(c->ctx, data2, GGML_TYPE_F32);
+        if (upd2->type != GGML_TYPE_F32)
+            upd2 = ggml_cast_numeric(c->ctx, upd2, GGML_TYPE_F32);
+
+        struct ggml_tensor *sc = ggml_scatter_elements(c->ctx, data2, upd2,
+                                                       idx_rep, 0 /* none */,
+                                                       1 /* axis: the row axis */);
+        if (!sc) return -1;
+        out = onnx_reshape_nd(c->ctx, sc, a->ne,
+                              r_nd > GGML_MAX_DIMS ? GGML_MAX_DIMS : r_nd);
+        out_nd = r_nd;
+    }
     /* ── Slice ──────────────────────────────────────────────────── */
     else if (strcmp(op, "Slice") == 0) {
         if (!a) return -1;
@@ -1112,7 +1707,90 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         for (int i = 0; i < n_slices; i++)
             if (steps[i] != 1) { all_step1 = 0; break; }
 
-        if (all_step1) {
+
+        /* A strided slice along ONE axis, where the step divides that axis
+         * evenly and the start picks one element of each group, is expressible
+         * as ggml graph ops -- no deferred host copy needed.
+         *
+         * That matters for correctness, not just speed: the deferred path
+         * (below) reads its source with ggml_backend_tensor_get at ALLOCATION
+         * time, before inputs are uploaded and before the graph is computed.
+         * When the source is a computed tensor -- as in xcit's positional
+         * embedding, where the sin/cos halves are sliced out of a Div result --
+         * it copies uninitialized memory, and the model gets NaN and 1e19
+         * garbage that looks like an arithmetic disagreement three hundred
+         * nodes later.
+         *
+         * Two shapes of the same idea, by which ggml dim is sliced:
+         *   dim > 0: ggml_view takes an explicit nb for that dim, so a step of
+         *            k is just nb[d]*k with ne[d] = len.
+         *   dim = 0: nb[0] must stay the element size, so instead reshape the
+         *            axis  [.., n, ..] -> [.., k, n/k, ..], which puts each
+         *            group of k in the new leading dim, and view element
+         *            `start` of it.
+         * Both were verified against ggml before this was written. */
+        int fast_axis = -1;      /* the single ggml dim being strided */
+        if (!all_step1) {
+            int n_strided = 0, ok = 1;
+            for (int i = 0; i < n_slices && ok; i++) {
+                int onnx_ax = has_axes ? (int)axes_arr[i] : i;
+                if (onnx_ax < 0) onnx_ax += nd_onnx;
+                int ggml_d = nd_onnx - 1 - onnx_ax;
+                if (ggml_d < 0 || ggml_d > GGML_MAX_DIMS - 1) continue;
+                if (steps[i] == 1) {
+                    /* a step-1 axis is only free if it slices nothing away */
+                    if (out_ne[ggml_d] != a->ne[ggml_d]) ok = 0;
+                    continue;
+                }
+                int64_t st  = steps[i];
+                int64_t dim = a->ne[ggml_d];
+                int64_t s   = norm_starts[ggml_d];
+                if (st <= 0 || dim <= 0 || dim % st != 0 ||
+                    s < 0 || s >= st || out_ne[ggml_d] != dim / st) { ok = 0; break; }
+                n_strided++;
+                fast_axis = ggml_d;
+            }
+            if (!ok || n_strided != 1) fast_axis = -1;
+        }
+
+        if (fast_axis >= 0) {
+            int64_t d   = fast_axis;
+            int64_t st  = norm_steps[d];
+            int64_t s   = norm_starts[d];
+            int64_t len = out_ne[d];
+            struct ggml_tensor *v;
+
+            if (d > 0) {
+                /* Step along a non-leading dim: widen that dim's stride. */
+                int64_t ne_v[GGML_MAX_DIMS];
+                for (int k = 0; k < GGML_MAX_DIMS; k++) ne_v[k] = a->ne[k];
+                ne_v[d] = len;
+                size_t off = (size_t)s * a->nb[d];
+                v = ggml_view_4d(c->ctx, a, ne_v[0], ne_v[1], ne_v[2], ne_v[3],
+                                 d == 1 ? a->nb[1] * (size_t)st : a->nb[1],
+                                 d == 2 ? a->nb[2] * (size_t)st : a->nb[2],
+                                 d == 3 ? a->nb[3] * (size_t)st : a->nb[3],
+                                 off);
+            } else {
+                /* Step along ne[0]: split it into (st, len) and take row s. */
+                struct ggml_tensor *r = ggml_reshape_4d(c->ctx, a, st, len,
+                                                        a->ne[1],
+                                                        a->ne[2] * a->ne[3]);
+                v = ggml_view_4d(c->ctx, r, 1, len, r->ne[2], r->ne[3],
+                                 r->nb[1], r->nb[2], r->nb[3],
+                                 (size_t)s * r->nb[0]);
+            }
+            out = ggml_cont(c->ctx, v);
+            /* Back to the slice's own shape: the view above carries the
+             * split/strided layout, not the shape the model expects. */
+            out = onnx_reshape_nd(c->ctx, out, out_ne,
+                                  nd_onnx > GGML_MAX_DIMS ? GGML_MAX_DIMS : nd_onnx);
+            out_nd = nd_onnx;
+            if (onnx_trace_nodes())
+                fprintf(stderr, "[Slice/strided-view] %s: dim=%d start=%lld step=%lld len=%lld\n",
+                        n->outputs[0], (int)d, (long long)s,
+                        (long long)st, (long long)len);
+        } else if (all_step1) {
             size_t offset_bytes = 0;
             for (int d = 0; d < GGML_MAX_DIMS; d++)
                 offset_bytes += offsets[d] * a->nb[d];
@@ -1147,7 +1825,45 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             }
             /* Make contiguous so downstream ops work correctly */
             out = ggml_cont(c->ctx, out);
+            if (onnx_trace_nodes()) {
+                /* The strided path prints its start; this one printed nothing,
+                 * so a slice that took the wrong element of a per-class block
+                 * looked identical in the trace to one that took the right
+                 * one -- same output shape either way. */
+                fprintf(stderr, "[Slice/view] %s: off=%zu bytes (elem %zu) ne=[%lld,%lld,%lld,%lld]"
+                                " offsets=[%lld,%lld,%lld,%lld]\n",
+                        n->outputs[0], offset_bytes,
+                        a->nb[0] ? offset_bytes / a->nb[0] : (size_t)0,
+                        (long long)out_ne[0], (long long)out_ne[1],
+                        (long long)out_ne[2], (long long)out_ne[3],
+                        (long long)offsets[0], (long long)offsets[1],
+                        (long long)offsets[2], (long long)offsets[3]);
+            }
         } else {
+            /* Deferred host copy: correct only while the source already holds
+             * its final data when the copy runs -- an initializer, a constant,
+             * or a model input (set_model_inputs calls the fill after upload).
+             * A source produced BY the graph does not, and the copy then
+             * publishes uninitialized memory as if it were data.  Say so here
+             * rather than let the wrong numbers surface hundreds of nodes
+             * later: that silence cost a long bisection on xcit once.
+             *
+             * The fix for such a slice is the graph path above; when its
+             * arithmetic does not apply (step not dividing the axis, several
+             * strided axes, start >= step, negative step), the slice needs to
+             * run as its own graph segment, not another special case here. */
+            /* Only when the slice actually produces something.  An empty
+             * result -- ends = INT64_MIN with a positive step, which the spec
+             * and ONNX Runtime both resolve to zero elements -- copies nothing
+             * and so cannot publish garbage; warning about it sends the reader
+             * after a defect that is not there.  MaskRCNN has twenty such
+             * slices and every one of them was reported. */
+            if (a->op != GGML_OP_NONE && ne_product(out_ne, GGML_MAX_DIMS) > 0)
+                fprintf(stderr, "[onnx] strided Slice %s: source %s is computed by the "
+                                "graph, so the deferred copy reads it before it holds "
+                                "anything -- output will be garbage\n",
+                        n->outputs[0], n->inputs[0]);
+
             /* step != 1: deferred strided copy after alloc */
             if (c->n_slice_fills >= ONNX_MAX_DEFERRED) {
                 fprintf(stderr, "onnx_ggml: too many strided Slice ops (max 64)\n");
@@ -1340,6 +2056,7 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         /* Try sizes input (Resize input 3) */
         if (n->n_inputs > 3 && n->inputs[3][0] != '\0') {
             const onnx_initializer_t *si = onnx_find_initializer(c->onnx, n->inputs[3]);
+            if (!si) si = find_constant_tensor(c->onnx, n->inputs[3]);
             if (si && si->raw_data && si->data_type == ONNX_DTYPE_INT64) {
                 int nsz = (int)(si->raw_size / sizeof(int64_t));
                 int64_t sizes[4];
@@ -1357,6 +2074,12 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             int scales_idx = (strcmp(op, "Upsample") == 0) ? 1 : 2;
             if (n->n_inputs > scales_idx && n->inputs[scales_idx][0] != '\0') {
                 const onnx_initializer_t *sci = onnx_find_initializer(c->onnx, n->inputs[scales_idx]);
+                /* Exporters emit these as a Constant node just as often as an
+                 * initializer -- yolov8n's two upsamples do -- and reading
+                 * only the latter left Resize a no-op: the tensor came out
+                 * the same size it went in, and the Concat downstream failed
+                 * on axes that had never been resized. */
+                if (!sci) sci = find_constant_tensor(c->onnx, n->inputs[scales_idx]);
                 if (sci && sci->raw_data && sci->data_type == ONNX_DTYPE_FLOAT) {
                     int nsc = (int)(sci->raw_size / sizeof(float));
                     float scales[4];
@@ -1393,12 +2116,18 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                 int64_t cv[ONNX_MAX_DIMS];
                 int ncv = cval_get(c, n->inputs[scales_idx], cv, ONNX_MAX_DIMS);
                 if (ncv > 0) {
+                    /* The cval map holds numbers, not bit patterns: a float
+                     * initializer is stored with (int64_t)value, so a scale of
+                     * 2.0 arrives here as 2.  Reinterpreting the int64 as float
+                     * bits instead read 2 as a denormal near 2e-45, multiplied
+                     * every extent to zero, and the clamp below turned that into
+                     * 1 -- which is how all nine of MaskRCNN's FPN upsamples
+                     * collapsed a [7,7,256] feature map to a single element and
+                     * then broadcast that scalar back over the level it was
+                     * meant to be added to. */
                     for (int d = 0; d < ncv && d < 4; d++) {
-                        float s;
-                        int32_t bits = (int32_t)cv[d];
-                        memcpy(&s, &bits, sizeof(float));
                         int ggml_d = ncv - 1 - d;
-                        target_ne[ggml_d] = (int64_t)(a->ne[ggml_d] * s);
+                        target_ne[ggml_d] = a->ne[ggml_d] * cv[d];
                         if (target_ne[ggml_d] < 1) target_ne[ggml_d] = 1;
                     }
                     got_target = 1;

@@ -865,6 +865,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_softplus[2];
     vk_pipeline pipeline_step[2];
     vk_pipeline pipeline_round[2];
+    vk_pipeline pipeline_round_even[2];
     vk_pipeline pipeline_ceil[2];
     vk_pipeline pipeline_floor[2];
     vk_pipeline pipeline_trunc[2];

@@ -140,8 +140,16 @@ onnx_summary <- function(model) {
 #' @param inputs A named list of numeric vectors/matrices.
 #'   Names must match the model's input tensor names.
 #'   Use \code{onnx_inputs()} to see expected names and shapes.
-#' @return A named list of output tensors (numeric vectors with dim
-#'   attributes for multi-dimensional outputs).
+#' @return A named list of output tensors: numeric vectors carrying a
+#'   \code{dim} attribute when the output has more than one dimension.
+#'
+#'   The buffers are row-major, as ONNX stores them, so \code{dim} is given in
+#'   storage order -- fastest-varying axis first -- which is the reverse of the
+#'   shape the ONNX file declares. An output declared \code{[nbox, 4]} arrives
+#'   as \code{dim = c(4, nbox)}, one detection per column. This keeps \code{dim}
+#'   an honest description of the memory, so ordinary R indexing is correct;
+#'   use \code{\link{predict.onnx_model}} to get arrays in the declared ONNX
+#'   order instead.
 #' @export
 onnx_run <- function(model, inputs) {
   stopifnot(inherits(model, "onnx_model"))
@@ -190,6 +198,49 @@ onnx_device_info <- function(model) {
   .Call("R_onnx_device_info", model$ptr)
 }
 
+#' ONNX graph structure
+#'
+#' The parsed graph as a table: one row per node, with its operator type and
+#' the names of its inputs and outputs. Use it to find which node produces a
+#' given edge, or what an edge feeds into, without re-parsing the file.
+#'
+#' Reading the structure beats searching the \code{.onnx} binary for a name:
+#' a name occurs both as a producer's output and as its consumers' input, and
+#' telling those apart by hand means getting the protobuf field numbers right
+#' every time.
+#'
+#' @param model An \code{onnx_model} object from \code{onnx_load()}.
+#' @param producer_of Optional edge name. When given, returns the rows whose
+#'   node lists that name among its outputs.
+#' @param consumer_of Optional edge name. When given, returns the rows whose
+#'   node lists that name among its inputs.
+#' @return A data frame with columns \code{index}, \code{op_type},
+#'   \code{output} (the first output) and list-columns \code{outputs} and
+#'   \code{inputs}.
+#' @export
+#' @examples
+#' \donttest{
+#' if (file.exists("model.onnx")) {
+#'   m <- onnx_load("model.onnx")
+#'   g <- onnx_graph_info(m)
+#'   head(g)
+#'   onnx_graph_info(m, producer_of = "881")
+#' }
+#' }
+onnx_graph_info <- function(model, producer_of = NULL, consumer_of = NULL) {
+  stopifnot(inherits(model, "onnx_model"))
+  g <- .Call("R_onnx_graph_info", model$ptr)
+  df <- data.frame(index = g$index, op_type = g$op_type, output = g$output,
+                   stringsAsFactors = FALSE)
+  df$outputs <- g$outputs
+  df$inputs  <- g$inputs
+  if (!is.null(producer_of))
+    df <- df[vapply(df$outputs, function(o) producer_of %in% o, logical(1)), ]
+  if (!is.null(consumer_of))
+    df <- df[vapply(df$inputs, function(o) consumer_of %in% o, logical(1)), ]
+  df
+}
+
 # ============================================================================
 # predict() -- keras-compatible entry point for ONNX models
 # ============================================================================
@@ -207,9 +258,9 @@ onnx_slice_samples <- function(a, idx) {
 }
 
 # R arrays are column-major, ONNX buffers are row-major with the batch
-# dimension first.  onnx_run() takes and returns flat buffers in ONNX order, so
-# the two directions need an explicit reversal of the axes -- the same thing the
-# tests do by hand with as.vector(t(x)) in the 2D case.
+# dimension first.  onnx_run() takes and returns buffers in that row-major
+# order, so the two directions need an explicit reversal of the axes -- the same
+# thing the tests do by hand with as.vector(t(x)) in the 2D case.
 onnx_flatten_rowmajor <- function(a) {
   d <- dim(a)
   if (is.null(d) || length(d) == 1L) return(as.vector(a))
@@ -346,11 +397,12 @@ predict.onnx_model <- function(object, x, batch_size = NULL, ...) {
 
     batch_in <- lapply(x, function(a) onnx_flatten_rowmajor(onnx_slice_samples(a, idx)))
     res      <- onnx_run(object, batch_in)
-    # onnx_run() sets dim in ONNX order but the data is row-major, so
-    # reinterpret rather than trusting the array as R laid it out.
+    # onnx_run() reports dim() in storage order (fastest axis first); the ONNX
+    # shape is its reverse.  predict() returns ordinary R arrays, so undo the
+    # row-major layout here.
     res <- lapply(res, function(o) {
       d <- dim(o)
-      if (is.null(d)) o else onnx_array_rowmajor(o, d)
+      if (is.null(d)) o else onnx_array_rowmajor(o, rev(d))
     })
     if (pad > 0L) {
       res <- lapply(res, function(o) onnx_slice_samples(o, seq_len(model_bs - pad)))

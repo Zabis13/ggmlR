@@ -243,7 +243,14 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
              * must match out ne[0]=W — doesn't match.
              * Need to reshape bias to [1,1,C_out,1] so it broadcasts over C dim. */
             int64_t c_out = ggml_nelements(bias);
-            struct ggml_tensor *bias_4d = ggml_reshape_4d(c->ctx, bias, 1, 1, c_out, 1);
+            /* Where the channel sits depends on the convolution's rank: a 2D
+             * output is [W,H,C,N] and a 1D output is [L,C,N], so the [1,1,C,1]
+             * bias that broadcasts over the former does not line up with the
+             * latter -- ggml_add refuses it outright, which is how whisper's
+             * first Conv1d failed to load. */
+            struct ggml_tensor *bias_4d = (ndims_kernel <= 3)
+                ? ggml_reshape_4d(c->ctx, bias, 1, c_out, 1, 1)
+                : ggml_reshape_4d(c->ctx, bias, 1, 1, c_out, 1);
             out = ggml_add(c->ctx, out, bias_4d);
         }
     }
@@ -300,7 +307,14 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         struct ggml_tensor *bias = get_input(c, n, 2);
         if (bias) {
             int64_t c_out = ggml_nelements(bias);
-            struct ggml_tensor *bias_4d = ggml_reshape_4d(c->ctx, bias, 1, 1, c_out, 1);
+            /* Where the channel sits depends on the convolution's rank: a 2D
+             * output is [W,H,C,N] and a 1D output is [L,C,N], so the [1,1,C,1]
+             * bias that broadcasts over the former does not line up with the
+             * latter -- ggml_add refuses it outright, which is how whisper's
+             * first Conv1d failed to load. */
+            struct ggml_tensor *bias_4d = (ndims_kernel <= 3)
+                ? ggml_reshape_4d(c->ctx, bias, 1, c_out, 1, 1)
+                : ggml_reshape_4d(c->ctx, bias, 1, 1, c_out, 1);
             out = ggml_add(c->ctx, out, bias_4d);
         }
     }
@@ -624,9 +638,78 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             out = ggml_cast_numeric(c->ctx, a, GGML_TYPE_BF16);
         } else if (to == 1 && a->type == GGML_TYPE_BF16) {
             out = ggml_cast_numeric(c->ctx, a, GGML_TYPE_F32);
+        } else if ((to == 2 || to == 3 || to == 4 || to == 5 || to == 9) &&
+                   a->type == GGML_TYPE_F32) {
+            /* Narrow integer targets (uint8, int8, uint16, int16) and bool.
+             * ggml has no tensor type for any of them, so the value stays F32
+             * and only its RANGE is made to match: truncate toward zero, as
+             * the spec says float-to-int does, then clamp to what the target
+             * type can hold.  A later op reading this sees the same numbers a
+             * real uint8 tensor would have held.
+             *
+             * MaskRCNN casts Greater(scores, threshold) to uint8 and gathers
+             * with it -- values are already 0 or 1, so neither step changes
+             * anything there; they matter for the general case, where letting
+             * an out-of-range value through unchanged is the silent corruption
+             * this branch exists to avoid.
+             *
+             * BOOL is not a range but a predicate, so it is the one target
+             * that is not a clamp: anything non-zero becomes 1. */
+            if (to == 9) {
+                /* Nonzero → 1, zero → 0.  step() on its own is the wrong
+                 * shape: it maps 0 to 1 and every negative to 0, whereas bool
+                 * cares about magnitude, not sign.
+                 *
+                 * step(|x| - eps) with a tiny eps would read better but is
+                 * not safe: a subnormal eps flushes to zero under a backend
+                 * running in flush-to-zero mode, and step(0) is 1 -- turning
+                 * false into true precisely where it matters.  Scaling up
+                 * first keeps the comparison in normal floating point: any
+                 * |x| at or above 1e-30 lands at or above 1e8 after the
+                 * scale, leaving the 0.5 threshold far below it, while a true
+                 * zero stays zero. */
+                struct ggml_tensor *ax = ggml_abs(c->ctx, a);
+                struct ggml_tensor *big = ggml_scale(c->ctx, ax, 1e38f);
+                out = ggml_step(c->ctx, ggml_scale_bias(c->ctx, big, 1.0f, -0.5f));
+            } else {
+                float lo, hi;
+                switch (to) {
+                    case 2: lo =      0.0f; hi =    255.0f; break;  /* uint8  */
+                    case 3: lo =   -128.0f; hi =    127.0f; break;  /* int8   */
+                    case 4: lo =      0.0f; hi =  65535.0f; break;  /* uint16 */
+                    default: lo = -32768.0f; hi =  32767.0f; break; /* int16  */
+                }
+                out = ggml_clamp(c->ctx, ggml_trunc(c->ctx, a), lo, hi);
+            }
         } else {
-            /* Same type or unsupported — pass-through */
-            out = a;
+            /* Everything left is either a cast that changes nothing, or one
+             * this handler cannot perform.  The two must not share a branch:
+             * passing a tensor through unchanged is right for the first and
+             * silently wrong for the second, and Cast is precisely the op
+             * whose whole purpose is to change the type, so a no-op there
+             * hands the next op a tensor of a type it did not ask for.
+             *
+             * Refuse rather than pass through.  The caller reports the node
+             * by name, which is what turns "the numbers are wrong somewhere"
+             * into a location -- the same reason TopK and Einsum below say so
+             * out loud instead of returning something plausible. */
+            enum ggml_type want = GGML_TYPE_COUNT;
+            switch (to) {
+                case 1:  want = GGML_TYPE_F32;  break;
+                case 6:
+                case 7:  want = GGML_TYPE_I32;  break;  /* i64 downcast to i32 */
+                case 10: want = GGML_TYPE_F16;  break;
+                case 16: want = GGML_TYPE_BF16; break;
+                default: break;
+            }
+            if (want != GGML_TYPE_COUNT && want == a->type) {
+                out = a;  /* genuine no-op: already the requested type */
+            } else {
+                fprintf(stderr, "[onnx] Cast %s: to=%lld from %s is not "
+                                "implemented\n",
+                        n->outputs[0], (long long)to, ggml_type_name(a->type));
+                return -1;
+            }
         }
         /* Propagate cval through Cast (values preserved as int64) */
         {
@@ -843,6 +926,11 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         if (!a || !b) return -1;
         struct ggml_tensor *cond_t = get_input(c, n, 2);
         if (!cond_t) return -1;
+        /* All three arms end up in mul/add below, so none of them may stay
+         * integer.  Two calls because the helper takes a pair; the condition
+         * is the one most likely to be integer, coming from Equal or Less. */
+        onnx_binary_promote(c->ctx, &a, &b);
+        onnx_binary_promote(c->ctx, &a, &cond_t);
         /* Where(condition, X, Y): output = condition ? X : Y
          * a=condition, b=X, cond_t=Y.
          * Implement as: out = condition * X_clamped + (1 - condition) * Y_clamped
@@ -885,7 +973,13 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
     else if (strcmp(op, "Equal") == 0) {
         if (!a || !b) return -1;
         /* Equal(A, B) → 0/1 float mask.
-         * step(0.5 - abs(a - b)): if a==b → step(0.5)=1, else step(neg)=0. */
+         * step(0.5 - abs(a - b)): if a==b → step(0.5)=1, else step(neg)=0.
+         *
+         * The comparison is expressed as arithmetic, so an integer operand
+         * has to be widened exactly as for Add or Sub: comparing indices is
+         * the common case here, not the exotic one -- MaskRCNN compares an
+         * FPN level against a constant level to pick a feature map. */
+        onnx_binary_promote(c->ctx, &a, &b);
         struct ggml_tensor *ta = a, *tb = b;
         onnx_broadcast_prepare(c->ctx, &ta, &tb);
         struct ggml_tensor *diff = ggml_sub(c->ctx, ta, tb);
@@ -923,11 +1017,23 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         int is_less  = (op[0] == 'L');
         int or_equal = (strstr(op, "OrEqual") != NULL);
 
+        /* Same widening as Equal: the comparison is built out of sub/step. */
+        onnx_binary_promote(c->ctx, &a, &b);
         struct ggml_tensor *ta = a, *tb = b;
         onnx_broadcast_prepare(c->ctx, &ta, &tb);
-        /* Less: b - a > 0 ;  Greater: a - b > 0 */
-        struct ggml_tensor *diff = is_less ? ggml_sub(c->ctx, tb, ta)
-                                           : ggml_sub(c->ctx, ta, tb);
+        /* Less: b - a > 0 ;  Greater: a - b > 0.
+         *
+         * Both are written with `ta` first and the Less case negated, rather
+         * than as sub(tb, ta): ggml_sub broadcasts its SECOND operand into the
+         * first and asserts ggml_can_repeat(b, a), so a scalar threshold in
+         * the first position aborts the process outright.  Comparing a tensor
+         * against a scalar bound is the common case -- MaskRCNN's Less(147
+         * boxes, scalar) hit it -- and it went unseen only while an upstream
+         * Gather defect was collapsing that tensor to a single element, where
+         * the two operands happened to be the same size.  Same reasoning as
+         * the Not case below, which says it outright. */
+        struct ggml_tensor *diff = ggml_sub(c->ctx, ta, tb);
+        if (is_less) diff = ggml_neg(c->ctx, diff);
         if (or_equal)
             diff = ggml_add(c->ctx, diff, make_scalar(c, 0.5f));
         out = ggml_step(c->ctx, diff);
@@ -973,6 +1079,10 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
     else if (strcmp(op, "And") == 0 || strcmp(op, "Or") == 0 ||
              strcmp(op, "Xor") == 0) {
         if (!a || !b) return -1;
+        /* These take BOOL operands, which arrive as F32 0/1 from the loader --
+         * except when they come from an integer-producing op, so widen here
+         * too rather than assume. */
+        onnx_binary_promote(c->ctx, &a, &b);
         struct ggml_tensor *ta = a, *tb = b;
         onnx_broadcast_prepare(c->ctx, &ta, &tb);
         if (strcmp(op, "And") == 0) {
@@ -1122,6 +1232,41 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                     cvals[j] = (int64_t)fill_val;
                 cval_put(c, n->outputs[0], cvals, (int)total_elems);
             }
+
+            /* Inherit emptiness across Shape.
+             *
+             * The generic transit rule one level up cannot carry the mark here:
+             * it asks whether this node's own inputs are empty, and a shape
+             * tensor never is -- it holds a length, and a length of zero is
+             * still a number.  What decides the result is the tensor whose
+             * shape was measured, one node back.
+             *
+             * MaskRCNN builds per-class labels as ConstantOfShape(Shape(boxes)),
+             * one branch per class.  For the 79 classes where nothing passed the
+             * score threshold the boxes are empty, so the labels must be empty
+             * too -- otherwise each contributes a phantom entry and the labels
+             * concat comes out 127 long against 48 for boxes and scores, which
+             * then reads the class of every detection off the wrong row.
+             *
+             * Deliberately narrow: only a ConstantOfShape fed directly by a
+             * Shape, and only when that Shape's own input is marked empty.
+             * Shape itself stays out of the transit list, where it would push
+             * the mark through 258 unrelated reshape chains. */
+            for (int k = 0; k < c->onnx->n_nodes; k++) {
+                const onnx_node_t *pn = &c->onnx->nodes[k];
+                if (strcmp(pn->op_type, "Shape") != 0) continue;
+                if (pn->n_outputs < 1 || strcmp(pn->outputs[0], n->inputs[0]) != 0) continue;
+                if (pn->n_inputs < 1 || pn->inputs[0][0] == '\0') break;
+                if (tmap_is_empty(c, pn->inputs[0])) {
+                    for (int i = 0; i < n->n_outputs; i++)
+                        if (n->outputs[i][0] != '\0')
+                            tmap_mark_empty(c, n->outputs[i]);
+                    if (onnx_trace_nodes())
+                        fprintf(stderr, "[empty] %s op=ConstantOfShape: inherited via "
+                                "Shape('%s')\n", n->outputs[0], pn->inputs[0]);
+                }
+                break;
+            }
         }
         return 1; /* already registered */
     }
@@ -1137,8 +1282,20 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             if (!pi) pi = find_constant_tensor(c->onnx, n->inputs[1]);
             if (pi && pi->raw_data && pi->data_type == ONNX_DTYPE_INT64) {
                 n_pads = (int)(pi->raw_size / sizeof(int64_t));
-                if (n_pads > 8) n_pads = 8;
-                memcpy(pads_arr, pi->raw_data, n_pads * sizeof(int64_t));
+                /* pads holds a begin and an end for every axis, so more than
+                 * 8 means a rank above 4 -- which the mapping below cannot
+                 * express anyway.  Truncating silently kept the first four
+                 * axes and dropped the rest, padding the wrong dimensions by
+                 * the right amounts; refuse instead. */
+                if (n_pads > 8) {
+                    fprintf(stderr, "[onnx] Pad %s: %d pad values (rank %d) "
+                                    "exceed the rank-4 limit\n",
+                            n->outputs[0], n_pads, n_pads / 2);
+                    return -1;
+                }
+                /* memcpy, not a cast through int64_t*: raw_data points into
+                 * the mmap and carries no alignment guarantee. */
+                memcpy(pads_arr, pi->raw_data, (size_t)n_pads * sizeof(int64_t));
             }
             /* Fallback: try cval (for dynamic Slice→Transpose→Cast chains) */
             if (n_pads == 0) {
@@ -1146,27 +1303,37 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             }
         }
         /* pads format: [begin_0, begin_1, ..., end_0, end_1, ...]
-         * For 4D: [b0,b1,b2,b3, e0,e1,e2,e3]. Only spatial padding supported.
-         * ggml_pad adds padding at the end only. For symmetric:
-         * ONNX dims [N,C,H,W] → ggml [W,H,C,N]. Pad H,W only. */
+         * For 4D: [b0,b1,b2,b3, e0,e1,e2,e3].
+         * ONNX dims [N,C,H,W] → ggml [W,H,C,N], so ggml_d = nd-1-onnx_d.
+         *
+         * begin and end are kept apart and passed to ggml_pad_ext, which takes
+         * a left and a right amount per axis.  They used to be SUMMED and
+         * handed to ggml_pad, which appends only: the output had the right
+         * shape and the data sat at the wrong offset, shifted left by begin.
+         * Every begin-side pad was silently a translation of the image, and
+         * the three configurations [0,1,0,1], [0,0,0,2] and [0,2,0,0] all
+         * produced the identical wrong answer, which is what makes a summing
+         * bug so easy to miss: the total is preserved, only the position is
+         * lost. */
         int nd = n_pads / 2;
-        if (nd > 4) nd = 4;
+        if (nd > 4) nd = 4;  /* unreachable: n_pads > 8 is refused above */
 
-        /* Map ONNX pad dims to ggml: pad ggml_d = nd-1-onnx_d */
-        int p0 = 0, p1 = 0, p2 = 0, p3 = 0;
+        int lp[4] = {0, 0, 0, 0}, rp[4] = {0, 0, 0, 0};
         for (int d = 0; d < nd; d++) {
             int ggml_d = nd - 1 - d;
-            int64_t begin = pads_arr[d];
-            int64_t end = pads_arr[nd + d];
-            int total = (int)(begin + end);
-            switch (ggml_d) {
-                case 0: p0 = total; break;
-                case 1: p1 = total; break;
-                case 2: p2 = total; break;
-                case 3: p3 = total; break;
-            }
+            if (ggml_d < 0 || ggml_d > 3) continue;
+            lp[ggml_d] = (int)pads_arr[d];
+            rp[ggml_d] = (int)pads_arr[nd + d];
         }
-        out = ggml_pad(c->ctx, a, p0, p1, p2, p3);
+        if (onnx_trace_nodes()) {
+            fprintf(stderr, "[Pad] %s: n_pads=%d pads=[", n->outputs[0], n_pads);
+            for (int d = 0; d < n_pads; d++)
+                fprintf(stderr, "%lld%s", (long long)pads_arr[d], d < n_pads-1 ? "," : "");
+            fprintf(stderr, "] -> ggml lp=[%d,%d,%d,%d] rp=[%d,%d,%d,%d]\n",
+                    lp[0], lp[1], lp[2], lp[3], rp[0], rp[1], rp[2], rp[3]);
+        }
+        out = ggml_pad_ext(c->ctx, a, lp[0], rp[0], lp[1], rp[1],
+                           lp[2], rp[2], lp[3], rp[3]);
     }
 
     /* ── Quantized ops (QLinear family) ──────────────────────────── */

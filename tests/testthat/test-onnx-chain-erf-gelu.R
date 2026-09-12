@@ -30,10 +30,11 @@ test_that("chain erf-gelu: Erf→Add (minimal)", {
   x <- c(0, 1, -1, 2)
   result <- run_onnx(path, list(X = x))
   r <- as.numeric(result)
-  # ggml uses fast erf approx: erf(x) ≈ tanh(sqrt(2/pi) * (x + 0.044715*x^3))
-  erf_approx <- function(v) tanh(sqrt(2/pi) * (v + 0.044715 * v^3))
-  expected <- 1 + sapply(x, erf_approx)
-  expect_equal(r, expected, tolerance = 1e-3)
+  # ggml computes a true erf via Abramowitz & Stegun 7.1.26 (~1.4e-7 over
+  # [-6,6]), not the tanh GELU stand-in.  Reference: erf(v) = 2*pnorm(v*sqrt(2)) - 1.
+  erf_ref <- function(v) 2 * pnorm(v * sqrt(2)) - 1
+  expected <- 1 + sapply(x, erf_ref)
+  expect_equal(r, expected, tolerance = 1e-4)
 })
 
 # ── Real (5 ops): manual GELU ───────────────────────────────
@@ -76,10 +77,10 @@ test_that("chain erf-gelu: manual GELU via Erf (BERT pattern)", {
   result <- run_onnx(path, list(X = x))
   r <- as.numeric(result)
   # GELU(x) = x * 0.5 * (1 + erf(x / sqrt(2)))
-  # ggml erf approx: tanh(sqrt(2/pi) * (x + 0.044715*x^3))
-  erf_approx <- function(v) tanh(sqrt(2/pi) * (v + 0.044715 * v^3))
-  expected <- x * 0.5 * (1 + sapply(x / sqrt(2), erf_approx))
-  expect_equal(r, expected, tolerance = 0.02)
+  # ggml computes a true erf (A&S 7.1.26), so this is the exact GELU.
+  erf_ref <- function(v) 2 * pnorm(v * sqrt(2)) - 1
+  expected <- x * 0.5 * (1 + sapply(x / sqrt(2), erf_ref))
+  expect_equal(r, expected, tolerance = 1e-4)
 })
 
 # ── Sin + Cos chain (positional encoding) ────────────────────

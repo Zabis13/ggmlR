@@ -89,8 +89,33 @@ static inline float op_ceil(float x) {
     return ceilf(x);
 }
 
+/* Half-away-from-zero, and it has to stay that way.
+ *
+ * ONNX QuantizeLinear wants half-to-even ("it rounds to the nearest even"),
+ * and this op is what the ONNX quantise path calls -- but ggml_round is also
+ * exported from this package as ggml_round()/ggml_round_inplace(), with a
+ * test asserting 2.5 -> 3 (test-inplace-ops.R).  Switching to rintf broke
+ * that contract, and it did not help the model it was meant to help:
+ * MaskRCNN's quantise arguments never land on a tie (measured: 0 in 802816),
+ * so the divergence being chased is not a rounding-mode issue, and the box
+ * count went 51 -> 48.
+ *
+ * Spec conformance for ONNX therefore belongs in the ONNX layer, as its own
+ * op or a flag -- not here.  It cannot be built out of this one either:
+ * 2*round(x/2) rounds non-ties to even as well, wrong on half of all inputs
+ * (measured: 9952 of 20042). */
 static inline float op_round(float x) {
     return roundf(x);
+}
+
+/* Half to even, the rule ONNX QuantizeLinear asks for.
+ *
+ * rintf honours the current rounding mode, which is round-to-nearest-even
+ * unless someone changes it, and nothing in this library does.  Not written
+ * by hand: the plausible-looking 2*roundf(x/2) rounds NON-ties to even as
+ * well and is wrong on half of all inputs (measured: 9952 of 20042). */
+static inline float op_round_even(float x) {
+    return rintf(x);
 }
 
 static inline float op_trunc(float x) {
@@ -327,6 +352,10 @@ void ggml_compute_forward_floor(const ggml_compute_params * params, ggml_tensor 
 
 void ggml_compute_forward_ceil(const ggml_compute_params * params, ggml_tensor * dst) {
     unary_op<op_ceil>(params, dst);
+}
+
+void ggml_compute_forward_round_even(const ggml_compute_params * params, ggml_tensor * dst) {
+    unary_op<op_round_even>(params, dst);
 }
 
 void ggml_compute_forward_round(const ggml_compute_params * params, ggml_tensor * dst) {

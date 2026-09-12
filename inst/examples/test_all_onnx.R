@@ -62,6 +62,11 @@ models <- list(
        inputs = list(x = c(1L, 3L, 224L, 224L)))
 )
 
+# ONNX_ONLY=<substring> restricts the run to matching model files
+.only <- Sys.getenv("ONNX_ONLY", "")
+if (nzchar(.only))
+  models <- Filter(function(m) grepl(.only, m$file, fixed = TRUE), models)
+
 cat(sprintf("Testing %d ONNX models on CPU\n\n", length(models)))
 
 pass <- 0L
@@ -97,8 +102,24 @@ for (m in models) {
     out <- onnx_run(model, input_data)
     n_out <- length(out)
     out_len <- length(out[[1]])
-    cat(sprintf("OK  (%d outputs, first length=%d)\n", n_out, out_len))
-    pass <- pass + 1L
+
+    # Returning without an error is not the same as having computed
+    # something.  A node that fails to map leaves everything downstream
+    # unbuilt, and onnx_run then hands back an empty vector -- which this
+    # counted as a pass, so MaskRCNN reported OK while producing nothing at
+    # all.  An all-NaN output is the same kind of false pass: the graph ran,
+    # the numbers are worthless.
+    first <- out[[1]]
+    if (out_len == 0) {
+      cat("FAIL: empty output (the graph produced nothing)\n")
+      fail <- fail + 1L
+    } else if (is.numeric(first) && all(is.nan(first))) {
+      cat(sprintf("FAIL: all %d output values are NaN\n", out_len))
+      fail <- fail + 1L
+    } else {
+      cat(sprintf("OK  (%d outputs, first length=%d)\n", n_out, out_len))
+      pass <- pass + 1L
+    }
     rm(model, out); gc(verbose = FALSE)
   }, error = function(e) {
     cat(sprintf("FAIL: %s\n", e$message))

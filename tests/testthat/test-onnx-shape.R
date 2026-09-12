@@ -329,3 +329,99 @@ test_that("ONNX Slice works on 2D with axes", {
   result <- run_onnx(path, list(X = x))
   expect_equal(as.numeric(result), c(2, 3, 6, 7), tolerance = 1e-5)
 })
+
+# ── Range ────────────────────────────────────────────────────────
+
+test_that("ONNX Range builds a sequence from build-time constants", {
+  # Range's three inputs are rank-0 tensors; ggml_arange takes plain floats,
+  # so they have to be known while the graph is built.  Added to X so the
+  # model has a real input and the range is not folded away entirely.
+  inp  <- .onnx_value_info("X", 1L, c(5L))
+  outp <- .onnx_value_info("Y", 1L, c(5L))
+
+  st_t <- .onnx_tensor("start", integer(0), 1L, .float_bytes(0))
+  li_t <- .onnx_tensor("limit", integer(0), 1L, .float_bytes(5))
+  dl_t <- .onnx_tensor("delta", integer(0), 1L, .float_bytes(1))
+  st_v <- .onnx_value_info("start", 1L, integer(0))
+  li_v <- .onnx_value_info("limit", 1L, integer(0))
+  dl_v <- .onnx_value_info("delta", 1L, integer(0))
+
+  rng <- .onnx_node("Range", c("start", "limit", "delta"), "r")
+  add <- .onnx_node("Add", c("X", "r"), "Y")
+  graph <- .onnx_graph("test", list(rng, add),
+                        list(inp, st_v, li_v, dl_v), list(outp),
+                        list(st_t, li_t, dl_t))
+  path <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+
+  x <- c(10, 20, 30, 40, 50)
+  result <- run_onnx(path, list(X = x))
+  expect_equal(as.numeric(result), x + 0:4, tolerance = 1e-5)
+})
+
+test_that("ONNX Range honours a non-unit delta", {
+  inp  <- .onnx_value_info("X", 1L, c(4L))
+  outp <- .onnx_value_info("Y", 1L, c(4L))
+
+  st_t <- .onnx_tensor("start", integer(0), 1L, .float_bytes(1))
+  li_t <- .onnx_tensor("limit", integer(0), 1L, .float_bytes(9))
+  dl_t <- .onnx_tensor("delta", integer(0), 1L, .float_bytes(2))
+  st_v <- .onnx_value_info("start", 1L, integer(0))
+  li_v <- .onnx_value_info("limit", 1L, integer(0))
+  dl_v <- .onnx_value_info("delta", 1L, integer(0))
+
+  rng <- .onnx_node("Range", c("start", "limit", "delta"), "r")
+  add <- .onnx_node("Add", c("X", "r"), "Y")
+  graph <- .onnx_graph("test", list(rng, add),
+                        list(inp, st_v, li_v, dl_v), list(outp),
+                        list(st_t, li_t, dl_t))
+  path <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+
+  x <- c(0, 0, 0, 0)
+  result <- run_onnx(path, list(X = x))
+  # 1, 3, 5, 7 -- ends before limit, as the spec requires
+  expect_equal(as.numeric(result), c(1, 3, 5, 7), tolerance = 1e-5)
+})
+
+test_that("ONNX Squeeze carries a shape value through to Range", {
+  # whisper's decoder derives its position range as
+  #   Shape -> Slice -> Squeeze -> Range
+  # and Range needs its limit at build time.  Squeeze only drops unit axes and
+  # changes no value, but if it does not pass the value on, the chain goes
+  # dark at the last step and Range -- and with it the whole positional
+  # embedding -- is dropped from the graph.
+  #
+  # Shape(X) = [4]; Slice[0:1] = [4]; Squeeze -> 4; Range(0,4,1) = 0,1,2,3.
+  inp  <- .onnx_value_info("X", 1L, c(4L))
+  outp <- .onnx_value_info("Y", 1L, c(4L))
+
+  c0 <- .onnx_tensor("c0", c(1L), 7L, .int64_bytes(0))
+  c1 <- .onnx_tensor("c1", c(1L), 7L, .int64_bytes(1))
+  st <- .onnx_tensor("st", integer(0), 7L, .int64_bytes(0))
+  dl <- .onnx_tensor("dl", integer(0), 7L, .int64_bytes(1))
+  ax <- .onnx_tensor("ax", c(1L), 7L, .int64_bytes(0))
+  vis <- list(inp,
+              .onnx_value_info("c0", 7L, c(1L)),
+              .onnx_value_info("c1", 7L, c(1L)),
+              .onnx_value_info("st", 7L, integer(0)),
+              .onnx_value_info("dl", 7L, integer(0)),
+              .onnx_value_info("ax", 7L, c(1L)))
+
+  nodes <- list(
+    .onnx_node("Shape",   "X", "shp"),
+    .onnx_node("Slice",   c("shp", "c0", "c1", "ax"), "sl"),
+    .onnx_node("Squeeze", c("sl", "ax"), "lim"),
+    .onnx_node("Range",   c("st", "lim", "dl"), "rng"),
+    .onnx_node("Add",     c("X", "rng"), "Y"))
+
+  graph <- .onnx_graph("test", nodes, vis, list(outp),
+                        list(c0, c1, st, dl, ax))
+  path <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+
+  x <- c(10, 20, 30, 40)
+  result <- as.numeric(run_onnx(path, list(X = x)))
+  expect_equal(length(result), 4L)
+  expect_equal(result, x + 0:3, tolerance = 1e-5)
+})

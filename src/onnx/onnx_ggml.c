@@ -37,12 +37,15 @@ void tmap_put_nd(onnx_ggml_ctx_t *c, const char *name,
                                        c->tensor_map_cap * sizeof(*c->tensor_map_ndims));
         c->tensor_map_onnx_ne = realloc(c->tensor_map_onnx_ne,
                                          c->tensor_map_cap * sizeof(*c->tensor_map_onnx_ne));
+        c->tensor_map_empty = realloc(c->tensor_map_empty,
+                                       c->tensor_map_cap * sizeof(*c->tensor_map_empty));
     }
     int idx = c->tensor_map_size;
     strncpy(c->tensor_map_keys[idx], name, ONNX_MAX_NAME - 1);
     c->tensor_map_keys[idx][ONNX_MAX_NAME - 1] = '\0';
     c->tensor_map_vals[idx] = t;
     c->tensor_map_ndims[idx] = onnx_ndims;
+    c->tensor_map_empty[idx] = 0;
     /* Default: reconstruct ONNX shape from ggml ne (reversed, ≤5D) */
     memset(c->tensor_map_onnx_ne[idx], 0, sizeof(c->tensor_map_onnx_ne[idx]));
     int nd = onnx_ndims < GGML_MAX_DIMS ? onnx_ndims : GGML_MAX_DIMS;
@@ -97,6 +100,27 @@ struct ggml_tensor *tmap_get(onnx_ggml_ctx_t *c, const char *name) {
     return NULL;
 }
 
+/* Mark the most recent entry for `name` as logically empty; see the field
+ * comment in onnx_ggml.h.  Marking after tmap_put_nd() rather than passing a
+ * flag through it keeps every existing call site unchanged. */
+void tmap_mark_empty(onnx_ggml_ctx_t *c, const char *name) {
+    for (int i = c->tensor_map_size - 1; i >= 0; i--) {
+        if (strcmp(c->tensor_map_keys[i], name) == 0) {
+            c->tensor_map_empty[i] = 1;
+            return;
+        }
+    }
+}
+
+int tmap_is_empty(onnx_ggml_ctx_t *c, const char *name) {
+    if (!name || name[0] == '\0') return 0;
+    for (int i = c->tensor_map_size - 1; i >= 0; i--) {
+        if (strcmp(c->tensor_map_keys[i], name) == 0)
+            return c->tensor_map_empty[i];
+    }
+    return 0;
+}
+
 /* Helper: squeeze trailing unit dims (5D→4D when ne[4]==1, etc.)
  * Keeps ggml tensors compact; real ONNX ndims tracked via tmap out_nd. */
 int onnx_squeeze_ndims(const int64_t *ne, int ndims) {
@@ -109,6 +133,21 @@ int onnx_squeeze_ndims(const int64_t *ne, int ndims) {
 struct ggml_tensor *onnx_reshape_nd(struct ggml_context *ctx,
                                            struct ggml_tensor *a,
                                            const int64_t *ne, int ndims) {
+    /* Every ggml_reshape_* asserts contiguity, and a reshape of a strided view
+     * is not something ggml can express -- the bytes would have to move.  This
+     * is the single point through which the ONNX layer reaches those builders
+     * (Reshape, Squeeze, Unsqueeze, Flatten all arrive here), so the contract
+     * is met once here rather than in each handler.
+     *
+     * Conditional, not unconditional: the overwhelming majority of inputs are
+     * already contiguous and stay zero-copy; only a genuinely strided one is
+     * materialised.  MaskRCNN's Squeeze of a [1,147,1,1] view is what found
+     * this -- it aborted the process, since an assert in a vendored builder is
+     * GGML_ABORT, not an error a caller can handle.  It went unnoticed while
+     * an upstream Gather defect was collapsing that tensor to one element,
+     * where a view is trivially contiguous. */
+    if (!ggml_is_contiguous(a))
+        a = ggml_cont(ctx, a);
     ndims = onnx_squeeze_ndims(ne, ndims);
     switch (ndims) {
         case 1: return ggml_reshape_1d(ctx, a, ne[0]);
@@ -211,7 +250,43 @@ enum ggml_type onnx_dtype_to_ggml(int32_t dt) {
         case ONNX_DTYPE_INT32:    return GGML_TYPE_I32;
         case ONNX_DTYPE_INT64:    return GGML_TYPE_I32; /* downcast to i32 */
         case ONNX_DTYPE_DOUBLE:   return GGML_TYPE_F32; /* downcast to f32 */
+        /* Widened to F32 on load, one byte or two per element in the file --
+         * see the conversion in create_initializer_tensors. */
+        case ONNX_DTYPE_INT8:
+        case ONNX_DTYPE_UINT8:
+        case ONNX_DTYPE_INT16:
+        case ONNX_DTYPE_UINT16:
+        case ONNX_DTYPE_BOOL:     return GGML_TYPE_F32;
         default:                  return GGML_TYPE_F32;
+    }
+}
+
+/* Is this dtype one the loader actually converts?
+ *
+ * The mapping above answers "which ggml type" and has to answer something, so
+ * an unhandled dtype used to leave as F32 and have its bytes copied verbatim:
+ * a UINT64 initializer became eight-bytes-read-as-two-floats, with no error
+ * anywhere.  That is the same silent corruption BOOL caused in GPT-NeoX's
+ * causal mask, and the reason for naming the supported set in one place
+ * rather than leaving each default branch to guess.
+ *
+ * UINT32/UINT64 are refused rather than converted because nothing in the
+ * reference set exercises them: writing the conversion blind would add code
+ * no test reaches.  STRING and UNDEFINED have no numeric meaning at all. */
+int onnx_dtype_supported(int32_t dt) {
+    switch (dt) {
+        case ONNX_DTYPE_FLOAT:
+        case ONNX_DTYPE_FLOAT16:
+        case ONNX_DTYPE_BFLOAT16:
+        case ONNX_DTYPE_DOUBLE:
+        case ONNX_DTYPE_INT8:
+        case ONNX_DTYPE_UINT8:
+        case ONNX_DTYPE_INT16:
+        case ONNX_DTYPE_UINT16:
+        case ONNX_DTYPE_INT32:
+        case ONNX_DTYPE_INT64:
+        case ONNX_DTYPE_BOOL:     return 1;
+        default:                  return 0;
     }
 }
 
@@ -228,7 +303,16 @@ size_t onnx_dtype_size(int32_t dt) {
         case ONNX_DTYPE_INT8:     return 1;
         case ONNX_DTYPE_UINT8:    return 1;
         case ONNX_DTYPE_INT16:    return 2;
+        case ONNX_DTYPE_UINT16:   return 2;
+        case ONNX_DTYPE_UINT32:   return 4;
+        case ONNX_DTYPE_UINT64:   return 8;
         case ONNX_DTYPE_BOOL:     return 1;
+        /* Falling through to 4 is how UINT16 and UINT64 used to be sized --
+         * wrong by half and by double respectively, before any conversion got
+         * a chance to look at them.  The remaining fall-through is UNDEFINED
+         * and STRING, neither of which has a byte width to report; callers
+         * that reach a real tensor of those types are stopped by
+         * onnx_dtype_supported() instead. */
         default:                  return 4;
     }
 }
@@ -238,6 +322,19 @@ size_t onnx_dtype_size(int32_t dt) {
 static int create_initializer_tensors(onnx_ggml_ctx_t *c) {
     for (int i = 0; i < c->onnx->n_initializers; i++) {
         onnx_initializer_t *init = &c->onnx->initializers[i];
+
+        /* Refuse before building anything.  An unsupported dtype has no
+         * conversion below, so the raw bytes would be copied into an F32
+         * tensor and read at the wrong width -- wrong numbers, no error.
+         * Name the tensor and the dtype: the number is from the ONNX spec's
+         * TensorProto.DataType, which is what a model dump shows. */
+        if (!onnx_dtype_supported(init->data_type)) {
+            fprintf(stderr, "[onnx] initializer '%s': unsupported dtype %d, "
+                            "refusing to load it as raw bytes\n",
+                    init->name, (int)init->data_type);
+            return -1;
+        }
+
         enum ggml_type type = onnx_dtype_to_ggml(init->data_type);
 
         /* Reverse ONNX dims → ggml ne[].
@@ -338,6 +435,16 @@ int onnx_upload_initializer(struct ggml_tensor *t,
     if (data && data_size > 0) {
         size_t tsize = ggml_nbytes(t);
 
+        /* Same refusal as in create_initializer_tensors, and needed
+         * separately: a Constant node's payload lives in a node attribute and
+         * arrives here without ever passing through onnx->initializers[]. */
+        if (!onnx_dtype_supported(init->data_type)) {
+            fprintf(stderr, "[onnx] tensor '%s': unsupported dtype %d, "
+                            "refusing to load it as raw bytes\n",
+                    init->name[0] ? init->name : "?", (int)init->data_type);
+            return -1;
+        }
+
         /* Sanity check: raw_data size vs expected from ONNX dtype */
         size_t expected = (size_t)ggml_nelements(t) * onnx_dtype_size(init->data_type);
         if (data_size < expected && init->data_type != ONNX_DTYPE_INT8 &&
@@ -352,10 +459,21 @@ int onnx_upload_initializer(struct ggml_tensor *t,
         /* With reversed dims, ONNX row-major data maps directly to ggml
          * column-major layout — no transposition needed. */
 
-        /* INT8/UINT8 → F32 conversion: raw bytes are 1-byte ints,
-         * but ggml tensor is F32 (4 bytes per element) */
+        /* INT8/UINT8/BOOL → F32 conversion: raw bytes are 1 byte per element,
+         * but ggml tensor is F32 (4 bytes per element).
+         *
+         * BOOL belongs here for the same reason as UINT8, and leaving it out
+         * was silent rather than fatal: onnx_dtype_to_ggml has no case for it,
+         * so it fell through to F32 and the raw bytes were copied verbatim.
+         * Four consecutive bools then read as one float -- GPT-NeoX's causal
+         * mask, 128x128 of 0x01/0x00, became 1.4e-45 and zeros, which is zero
+         * for every practical purpose.  Where() therefore took the "false"
+         * branch everywhere, filling the attention scores with -1e9, softmax
+         * of a row of equal values came back uniform, and the NaN surfaced a
+         * MatMul later, far from the cause. */
         if ((init->data_type == ONNX_DTYPE_INT8 ||
-             init->data_type == ONNX_DTYPE_UINT8) &&
+             init->data_type == ONNX_DTYPE_UINT8 ||
+             init->data_type == ONNX_DTYPE_BOOL) &&
             t->type == GGML_TYPE_F32) {
             int64_t n_elem = ggml_nelements(t);
             size_t src_elems = data_size; /* 1 byte per element */
@@ -366,9 +484,42 @@ int onnx_upload_initializer(struct ggml_tensor *t,
             if (init->data_type == ONNX_DTYPE_INT8) {
                 for (size_t j = 0; j < src_elems; j++)
                     buf[j] = (float)((int8_t)src[j]);
+            } else if (init->data_type == ONNX_DTYPE_BOOL) {
+                /* Any non-zero byte is true: the spec says 0 or 1, but an
+                 * exporter is not obliged to normalize what it writes. */
+                for (size_t j = 0; j < src_elems; j++)
+                    buf[j] = src[j] ? 1.0f : 0.0f;
             } else {
                 for (size_t j = 0; j < src_elems; j++)
                     buf[j] = (float)src[j];
+            }
+            for (size_t j = src_elems; j < (size_t)n_elem; j++)
+                buf[j] = 0.0f;
+            ggml_backend_tensor_set(t, buf, 0, n_elem * sizeof(float));
+            free(buf);
+        }
+        /* INT16/UINT16 → F32: two bytes per element in the file, four in the
+         * tensor.  Same shape of conversion as INT8/UINT8 above, only wider;
+         * memcpy rather than a cast through a short* because raw_data points
+         * into the mmap with no alignment guarantee. */
+        else if ((init->data_type == ONNX_DTYPE_INT16 ||
+                  init->data_type == ONNX_DTYPE_UINT16) &&
+                 t->type == GGML_TYPE_F32) {
+            int64_t n_elem = ggml_nelements(t);
+            size_t src_elems = data_size / 2;
+            if ((int64_t)src_elems > n_elem) src_elems = (size_t)n_elem;
+            float *buf = (float *)malloc(n_elem * sizeof(float));
+            if (!buf) return -1;
+            for (size_t j = 0; j < src_elems; j++) {
+                if (init->data_type == ONNX_DTYPE_INT16) {
+                    int16_t v;
+                    memcpy(&v, (const char *)data + j * 2, 2);
+                    buf[j] = (float)v;
+                } else {
+                    uint16_t v;
+                    memcpy(&v, (const char *)data + j * 2, 2);
+                    buf[j] = (float)v;
+                }
             }
             for (size_t j = src_elems; j < (size_t)n_elem; j++)
                 buf[j] = 0.0f;
@@ -487,7 +638,7 @@ static int create_input_tensors(onnx_ggml_ctx_t *c) {
 /* ── Map ONNX node → ggml op ────────────────────────────────────── */
 
 struct ggml_tensor *get_input(onnx_ggml_ctx_t *c, const onnx_node_t *n, int idx) {
-    if (idx >= n->n_inputs) return NULL;
+    if (idx < 0 || idx >= n->n_inputs) return NULL;
     if (n->inputs[idx][0] == '\0') return NULL; /* optional empty input */
     return tmap_get(c, n->inputs[idx]);
 }
@@ -554,6 +705,35 @@ static int bcast_fits(const int64_t *b_ne, const int64_t *a_ne) {
     return 1;
 }
 
+
+/* Bring both operands of an elementwise binary op to a type ggml can compute.
+ *
+ * ggml's binary kernels are F32/F16 only, so two integer operands abort in
+ * binary_op rather than returning anything.  ONNX reaches that case through
+ * ordinary index arithmetic: MaskRCNN assigns each box an FPN level with
+ * floor/clamp/Cast(to=INT64) and then Sub(level, min_level), which arrives
+ * here as i32 minus i32.
+ *
+ * F32 holds every integer up to 2^24 exactly, and these are levels, counts
+ * and indices -- an index that large would have overflowed the tensor it
+ * indexes long before precision became the problem.  The result stays F32:
+ * the ops that consume it (Equal, Where, get_rows) take F32 indices already,
+ * and casting back would cost a node for nothing.
+ *
+ * Returns 1 if it converted anything, so a caller can tell.  A mixed pair
+ * (one integer, one float) is handled too -- the same widening, one side. */
+int onnx_binary_promote(struct ggml_context *ctx,
+                        struct ggml_tensor **pa, struct ggml_tensor **pb) {
+    struct ggml_tensor *a = *pa, *b = *pb;
+    const int a_int = (a->type == GGML_TYPE_I32);
+    const int b_int = (b->type == GGML_TYPE_I32);
+
+    if (!a_int && !b_int) return 0;          /* already floating point */
+
+    if (a_int) *pa = ggml_cast_numeric(ctx, a, GGML_TYPE_F32);
+    if (b_int) *pb = ggml_cast_numeric(ctx, b, GGML_TYPE_F32);
+    return 1;
+}
 
 /* ── Broadcast helper for binary ops ────────────────────────────── */
 /* Reshape b so that it is broadcastable into a (ggml requires b->ne[d] == 1 or a->ne[d]).
@@ -837,6 +1017,35 @@ reg_output:
                 if (in_nd > out_ndims) out_ndims = in_nd;
             }
         }
+        /* The model's own declaration, where it made one.  Inferring the rank
+         * from the inputs propagates any earlier mistake down the whole chain:
+         * MaskRCNN's mask branch reaches NonZero with rank 2 where the export
+         * says 1, purely because a DequantizeLinear eight ops upstream was
+         * read as rank 2 and everything after it inherited that.
+         *
+         * Only the rank is taken.  The dimensions in value_info may be
+         * symbolic, and the real ones are in the tensor already.
+         *
+         * ggml_n_dims remains the floor for the same reason it was before:
+         * a rank below the physical shape desynchronises the two, and the
+         * reconstruction in tmap_put_nd would then drop elements.  So the
+         * declaration can only ever raise or confirm, never lower. */
+        {
+            /* Only where the rank was INFERRED.  A handler that set out_nd
+             * knows the shape it just built, and the declaration is about the
+             * ONNX-level tensor, not that construction: NonMaxSuppression
+             * builds ggml [3, N] and says rank 2, while value_info declares
+             * [?, 3] -- overriding it there dropped the rank to 1 and sent the
+             * next Gather down the wrong axis. */
+            int declared = (out_nd > 0) ? 0 : onnx_declared_rank(c->onnx, n->outputs[0]);
+            int floor_nd = (int)ggml_n_dims(out);
+            if (declared > 0 && declared >= floor_nd && declared != out_ndims) {
+                if (onnx_trace_nodes())
+                    fprintf(stderr, "[rank/declared] %s: %d -> %d (value_info)\n",
+                            n->outputs[0], out_ndims, declared);
+                out_ndims = declared;
+            }
+        }
         if (onnx_trace_nodes()) {
             int in_nd0 = (n->n_inputs > 0 && n->inputs[0][0] != '\0')
                        ? tmap_get_ndims(c, n->inputs[0]) : -1;
@@ -850,6 +1059,81 @@ reg_output:
             if (n->outputs[i][0] != '\0') {
                 ggml_set_name(out, n->outputs[i]);
                 tmap_put_nd(c, n->outputs[i], out, out_ndims);
+            }
+        }
+    }
+
+    /* Inherit the logically-empty mark.  Deliberately outside the `if (out)`
+     * above: the group handlers keep their own local `out`, separate from the
+     * `out_p` they were passed, and a branch that registers its outputs itself
+     * returns 1 without ever writing through that pointer -- so `out` is NULL
+     * here for every one of them.  Gather is one, which is why not one of this
+     * model's 849 Gather nodes reaches the block above.  Only names are needed
+     * here; the tensor is already in the map.
+     *
+     * The list is deliberately short: these are the ops that are a pure
+     * pass-through, view or index of a single input, so "the input had no
+     * rows" and "the output has no rows" are the same statement.  Anything
+     * else has to decide for itself what an empty operand means, and gets no
+     * mark by default.
+     *
+     * Concat is not here -- it aggregates, and handles the mark in its own
+     * handler by dropping empty inputs outright.
+     *
+     * Which operands count depends on the op, not on how many there are.
+     * Gather selects rows, so an empty INDEX means an empty result however
+     * full the data is -- requiring both to be empty would never fire, as the
+     * data side never is.  For the rest the condition is over every named
+     * input: an op whose operands come from different branches is only empty
+     * when all of them are.  In MaskRCNN both of NonMaxSuppression's operands
+     * descend from the same NonZero, but a graph where they do not must not
+     * have the mark spread across. */
+    {
+        static const char *const transit[] = {
+            "Squeeze", "Unsqueeze", "Gather", "NonMaxSuppression"
+        };
+        int is_transit = 0;
+        for (size_t k = 0; k < sizeof(transit) / sizeof(*transit); k++)
+            if (strcmp(n->op_type, transit[k]) == 0) { is_transit = 1; break; }
+
+        if (is_transit) {
+            int n_named = 0, n_empty = 0;
+            if (strcmp(n->op_type, "Gather") == 0) {
+                /* Either operand empties the result, so this one is an OR
+                 * rather than the AND used below: selecting no rows leaves
+                 * nothing, and selecting from nothing leaves nothing too.
+                 * MaskRCNN needs both directions -- the per-class branch
+                 * starts by indexing full boxes with an empty NonZero, and
+                 * ends by indexing the empty NMS result with a constant. */
+                n_named = 1;
+                n_empty = 0;
+                for (int i = 0; i < 2 && i < n->n_inputs; i++)
+                    if (n->inputs[i][0] != '\0' && tmap_is_empty(c, n->inputs[i]))
+                        n_empty = 1;
+            } else if (strcmp(n->op_type, "NonMaxSuppression") == 0) {
+                /* Boxes and scores.  Inputs 2..4 are the limits and
+                 * thresholds -- scalars off an initializer, never empty,
+                 * so counting them would keep the condition from ever
+                 * being met. */
+                for (int i = 0; i < 2 && i < n->n_inputs; i++) {
+                    if (n->inputs[i][0] == '\0') continue;
+                    n_named++;
+                    if (tmap_is_empty(c, n->inputs[i])) n_empty++;
+                }
+            } else {
+                for (int i = 0; i < n->n_inputs; i++) {
+                    if (n->inputs[i][0] == '\0') continue;
+                    n_named++;
+                    if (tmap_is_empty(c, n->inputs[i])) n_empty++;
+                }
+            }
+            if (n_named > 0 && n_empty == n_named) {
+                for (int i = 0; i < n->n_outputs; i++)
+                    if (n->outputs[i][0] != '\0')
+                        tmap_mark_empty(c, n->outputs[i]);
+                if (onnx_trace_nodes())
+                    fprintf(stderr, "[empty] %s op=%s: inherited from %d input(s)\n",
+                            n->outputs[0], n->op_type, n_empty);
             }
         }
     }
@@ -1026,7 +1310,76 @@ static int resolve_segment_sizes(onnx_ggml_ctx_t *c, int seg) {
 
     for (int j = 0; j < sg->n_cut_nodes; j++) {
         const onnx_node_t *cn = &c->onnx->nodes[sg->cut_nodes[j]];
-        if (strcmp(cn->op_type, "NonZero") != 0) continue;   /* NMS/TopK: stage 2c */
+        /* NonMaxSuppression: the kernel already wrote how many boxes it kept
+         * into op_params[NMS_COUNT_SLOT], so the measurement is a read rather
+         * than a scan. */
+        if (strcmp(cn->op_type, "NonMaxSuppression") == 0) {
+            struct ggml_tensor *out = tmap_get(c, cn->outputs[0]);
+            if (!out || !out->buffer) continue;
+            int64_t sel = (int64_t)out->op_params[NMS_COUNT_SLOT];
+            if (sel < 0) continue;
+            resolved_put(c, cn->outputs[0], sel);
+            if (onnx_trace_nodes())
+                fprintf(stderr, "[resolve] %s: NMS selected %lld box(es)\n",
+                        cn->outputs[0], (long long)sel);
+            continue;
+        }
+
+        /* TopK: its own K is min(limit, however many candidates arrived), and
+         * the candidate count is the input's first ONNX dimension -- known
+         * only once the previous segment has run.  Measuring it here lets the
+         * re-map below rebuild the node at the real K instead of the
+         * build-time guess, which for MaskRCNN was 1 and collapsed every
+         * downstream shape to a single box. */
+        if (strcmp(cn->op_type, "TopK") == 0) {
+            struct ggml_tensor *src = tmap_get(c, cn->inputs[0]);
+            if (!src || !src->buffer) continue;
+            int src_nd = tmap_get_ndims(c, cn->inputs[0]);
+            if (src_nd <= 0) src_nd = (int)ggml_n_dims(src);
+            /* The candidates lie along the axis this TopK ranks, so the
+             * measurement has to ask the node which axis that is.  ONNX axis
+             * `ax` of a rank-`nd` tensor is ggml dimension nd-1-ax, the same
+             * mapping the TopK op itself computes before rotating that axis
+             * into ne[0] and capping k at it.
+             *
+             * Reading ne[src_nd-1] unconditionally, as this did, is that
+             * formula with axis pinned to 0.  MaskRCNN has both kinds: its
+             * five early TopKs carry axis=1 over a rank-2 [N,1] input, where
+             * the candidates sit on ggml ne[0] -- 9408, 2352, 588, 147 and 48
+             * of them -- while ne[1] is the shape's trailing 1.  Measuring
+             * that 1 set k=1, collapsed every downstream shape to a single
+             * box, and left the detection branch with nothing: segments 10
+             * onwards built zero nodes, no NMS kernel ever ran, and all four
+             * model outputs came back empty.  Its two late TopKs carry axis=0,
+             * which is where the old formula happened to be right.
+             *
+             * The distinction cannot be made from the source's shape alone --
+             * counting from ggml_n_dims(src) instead of the tmap rank was
+             * tried and broke TopK on a non-final axis (test-onnx-reduce.R),
+             * because ggml_n_dims collapses trailing ones whether or not the
+             * ONNX rank behind them is real. */
+            int64_t ax = onnx_attr_int(cn, "axis", -1);
+            if (ax < 0) ax += src_nd;
+            int gd = src_nd - 1 - (int)ax;
+            if (gd < 0) gd = 0;
+            if (gd >= GGML_MAX_DIMS) gd = GGML_MAX_DIMS - 1;
+            int64_t n_cand = src->ne[gd];
+            /* A count of 1 that survives the right axis is the honest
+             * measurement, and the collapse lies further upstream. */
+            if (n_cand <= 0) continue;
+            resolved_put(c, cn->outputs[0], n_cand);
+            if (onnx_trace_nodes())
+                fprintf(stderr, "[resolve] %s: TopK src='%s' src_nd=%d axis=%d gd=%d "
+                                "ggml_nd=%d ne=[%lld,%lld,%lld,%lld] -> %lld candidate(s)\n",
+                        cn->outputs[0], cn->inputs[0], src_nd, (int)ax, gd,
+                        (int)ggml_n_dims(src),
+                        (long long)src->ne[0], (long long)src->ne[1],
+                        (long long)src->ne[2], (long long)src->ne[3],
+                        (long long)n_cand);
+            continue;
+        }
+
+        if (strcmp(cn->op_type, "NonZero") != 0) continue;
 
         struct ggml_tensor *src = tmap_get(c, cn->inputs[0]);
         if (!src || !src->buffer) continue;
@@ -1100,13 +1453,111 @@ static void trace_segment_graph(onnx_ggml_ctx_t *c, int seg) {
             seg, n, c->segments[seg].first_node, c->segments[seg].last_node);
     for (int i = 0; i < n; i++) {
         struct ggml_tensor *t = ggml_graph_node(c->graph, i);
-        fprintf(stderr, "[sgraph]   %d '%s' op=%s type=%s src0=%s(%s) src1=%s(%s)\n",
+        /* The OUTPUT flag decides whether ggml-alloc may hand this tensor's
+         * buffer to a later node, so it belongs in a dump meant to explain who
+         * overwrote what.  view_src too: a tensor sitting on someone else's
+         * storage is freed by that owner's refcount, not its own. */
+        /* Identity by pointer, not by name.  Three separate cast results all
+         * inherit the name "6566 (cast_numeric)", so a dump keyed on names
+         * cannot say which one carries a flag or shares storage with which --
+         * and that distinction is the whole question here.  data= is what
+         * makes an overwrite visible; view_src says whose refcount actually
+         * governs that storage. */
+        fprintf(stderr, "[sgraph]   %d '%s' op=%s type=%s%s%s obj=%p data=%p"
+                        " src0=%s(%s,%p) src1=%s(%s,%p)%s%s%s\n",
                 i, ggml_get_name(t), ggml_op_name(t->op), ggml_type_name(t->type),
+                (t->flags & GGML_TENSOR_FLAG_OUTPUT) ? " OUT" : "",
+                (t->flags & GGML_TENSOR_FLAG_INPUT)  ? " IN"  : "",
+                (void *)t, (void *)t->data,
                 t->src[0] ? ggml_get_name(t->src[0]) : "-",
                 t->src[0] ? ggml_type_name(t->src[0]->type) : "-",
+                t->src[0] ? (void *)t->src[0]->data : NULL,
                 t->src[1] ? ggml_get_name(t->src[1]) : "-",
-                t->src[1] ? ggml_type_name(t->src[1]->type) : "-");
+                t->src[1] ? ggml_type_name(t->src[1]->type) : "-",
+                t->src[1] ? (void *)t->src[1]->data : NULL,
+                t->view_src ? " view_src=" : "",
+                t->view_src ? ggml_get_name(t->view_src) : "");
     }
+}
+
+/* The storage a tensor actually lives in: a view owns nothing, so its
+ * lifetime is decided by whoever it sits on.  Marking a view has no effect on
+ * when its bytes are reused; the owner has to be marked instead. */
+static struct ggml_tensor *storage_owner(struct ggml_tensor *t) {
+    while (t && t->view_src) t = t->view_src;
+    return t;
+}
+
+/* Keep alive anything the graph reads more than once.
+ *
+ * ggml-alloc hands a node's output the storage of an input it believes is
+ * finished with, which is right when that input has one reader and wrong when
+ * it has several.  MaskRCNN's TopK indices have three: the tensor feeds three
+ * casts, one per Gather, and the second Gather's output was placed on top of
+ * it -- so the third Gather read detection class numbers where indices should
+ * have been, and index 80 ran off the end of an 80-row table.
+ *
+ * The OUTPUT flag is what tells the allocator not to do that.  It is a blunt
+ * instrument: it holds the buffer for the whole graph rather than until the
+ * last read, so peak memory goes up.  That trade is deliberate -- a wrong
+ * answer costs more than a buffer, and a real liveness analysis is a larger
+ * change than this defect warrants.
+ *
+ * This runs over the finished graph rather than over ONNX consumer counts: a
+ * value with three consumers in the model may well have one in this segment,
+ * and only what is actually in gf->nodes can overwrite anything.  Counting is
+ * by storage owner, not by tensor object, because the readers here arrive
+ * through views and would otherwise each look unique.
+ *
+ * Independent of tensor_crosses_boundary(), which answers a different
+ * question -- who reads this in a LATER segment -- and stays as it is. */
+static void hold_multi_consumer_tensors(onnx_ggml_ctx_t *c) {
+    if (!c->graph) return;
+    const int n = ggml_graph_n_nodes(c->graph);
+
+    /* Counting goes in a side table, never in a field of the tensor: extra
+     * and op_params belong to the backends, and borrowing one of them here
+     * would be the same kind of shared-state defect this is fixing.
+     *
+     * Two entries per node is the worst case that matters (a node reads at
+     * most GGML_MAX_SRC sources), so the table is bounded by the graph. */
+    struct ggml_tensor **owners = (struct ggml_tensor **)
+        malloc((size_t)n * GGML_MAX_SRC * sizeof(struct ggml_tensor *));
+    int *counts = (int *)calloc((size_t)n * GGML_MAX_SRC, sizeof(int));
+    if (!owners || !counts) { free(owners); free(counts); return; }
+    int n_owners = 0;
+
+    for (int i = 0; i < n; i++) {
+        struct ggml_tensor *node = ggml_graph_node(c->graph, i);
+
+        /* A node reading one owner through two of its srcs counts once: it
+         * cannot overwrite a buffer it is itself still reading. */
+        struct ggml_tensor *seen_here[GGML_MAX_SRC];
+        int n_here = 0;
+
+        for (int k = 0; k < GGML_MAX_SRC; k++) {
+            struct ggml_tensor *src = node->src[k];
+            if (!src) continue;
+            struct ggml_tensor *own = storage_owner(src);
+            if (!own) continue;
+
+            int dup = 0;
+            for (int q = 0; q < n_here; q++)
+                if (seen_here[q] == own) { dup = 1; break; }
+            if (dup) continue;
+            seen_here[n_here++] = own;
+
+            int slot = -1;
+            for (int q = 0; q < n_owners; q++)
+                if (owners[q] == own) { slot = q; break; }
+            if (slot < 0) { slot = n_owners++; owners[slot] = own; }
+
+            if (++counts[slot] == 2) ggml_set_output(own);
+        }
+    }
+
+    free(owners);
+    free(counts);
 }
 
 static void build_segment_graph(onnx_ggml_ctx_t *c, int seg) {
@@ -1137,6 +1588,8 @@ static void build_segment_graph(onnx_ggml_ctx_t *c, int seg) {
             if (t) { ggml_set_output(t); ggml_build_forward_expand(c->graph, t); }
         }
     }
+
+    hold_multi_consumer_tensors(c);
 
     trace_segment_graph(c, seg);
 }
@@ -1736,6 +2189,17 @@ static int map_node_range(onnx_ggml_ctx_t *c, int node_lo, int node_hi) {
             continue;
         }
         if (map_node(c, &onnx->nodes[i]) != 0) {
+            /* Remember the first node that failed, whatever the reason: a
+             * group that declined it (r=-1) or no group claiming it at all.
+             * Both leave the output unregistered, and everything downstream
+             * then goes unbuilt -- so the first failure is the cause and the
+             * rest are consequences.  Without this the empty-graph message
+             * can only say "look for r=-1 yourself". */
+            const onnx_node_t *fn = &onnx->nodes[i];
+            if (c->first_failed_node[0] == '\0' && fn->n_outputs > 0) {
+                strncpy(c->first_failed_node, fn->outputs[0], ONNX_MAX_NAME - 1);
+                strncpy(c->first_failed_op, fn->op_type, sizeof(c->first_failed_op) - 1);
+            }
             /* Non-fatal: skip unsupported/invalid ops silently */
             (void)0;
         }
@@ -1917,15 +2381,17 @@ static void fill_deferred_tensors(onnx_ggml_ctx_t *c) {
         }
     }
 
-    /* Fill NMS param tensors with [max_boxes, iou_thresh, score_thresh] */
+    /* Fill NMS param tensors with
+     * [max_boxes, iou_thresh, score_thresh, have_score_thresh] */
     for (int i = 0; i < c->n_nms_deferred; i++) {
         struct ggml_tensor *t = c->nms_param_tensors[i];
         if (!t || !t->buffer) continue;
-        float params[3];
+        float params[4];
         params[0] = (float)c->nms_max_boxes[i];
         memcpy(&params[1], &c->nms_iou_thresh[i], sizeof(float));
         memcpy(&params[2], &c->nms_score_thresh[i], sizeof(float));
-        ggml_backend_tensor_set(t, params, 0, 3 * sizeof(float));
+        params[3] = (float)c->nms_have_score_thresh[i];
+        ggml_backend_tensor_set(t, params, 0, 4 * sizeof(float));
     }
 }
 
@@ -1937,6 +2403,8 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
     onnx_ggml_ctx_t *c = calloc(1, sizeof(onnx_ggml_ctx_t));
     if (!c) return NULL;
     c->onnx = onnx;
+    if (onnx_trace_nodes())
+        fprintf(stderr, "[value_info] parsed %d declarations\n", onnx->n_value_info);
     c->model_dtype = (model_dtype == GGML_TYPE_F16) ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
     /* Estimate memory: rough heuristic based on file size */
@@ -2109,14 +2577,28 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
 
     c->backend_gpu = NULL;
     int use_vulkan = 0;
-    if (device == NULL || strcmp(device, "vulkan") == 0) {
+    /* "gpu" is a synonym for "vulkan": the rest of the package spells the
+     * device that way (ag_device("gpu")), and an unrecognised name used to
+     * fall through to CPU silently -- a benchmark asking for the GPU then
+     * reported CPU timings as GPU ones, and a session spent a GPU bug hunt
+     * on runs that were never on the GPU. */
+    const int want_gpu = device == NULL
+                      || strcmp(device, "vulkan") == 0
+                      || strcmp(device, "gpu") == 0;
+    if (want_gpu) {
 #ifdef GGML_USE_VULKAN
         use_vulkan = 1;
 #else
-        if (device && strcmp(device, "vulkan") == 0) {
+        if (device) {
             fprintf(stderr, "onnx_ggml: Vulkan not available, falling back to CPU\n");
         }
 #endif
+    } else if (device && strcmp(device, "cpu") != 0) {
+        /* Anything else is a typo, not a device.  Saying so beats running on
+         * a backend the caller did not ask for. */
+        fprintf(stderr, "onnx_ggml: unknown device '%s' "
+                        "(expected \"cpu\", \"gpu\" or \"vulkan\")\n", device);
+        goto fail;
     }
 
     if (use_vulkan) {
@@ -2232,11 +2714,11 @@ fail:
  * a plain function pointer so that r_ggml_io.c, which knows nothing about
  * ONNX, does not have to link against this file. */
 
-#define ONNX_RING_N     3
-#define ONNX_RING_EDGE  4
+#define ONNX_RING_N     8
+#define ONNX_RING_EDGE  6
 
 typedef struct {
-    char    name[64];
+    char    name[GGML_MAX_NAME];
     int     op;
     int     idx;
     int64_t ne[4];
@@ -2259,6 +2741,179 @@ int onnx_trace_ring(void) {
         cached = (e && *e && *e != '0') ? 1 : 0;
     }
     return cached;
+}
+
+/* ONNX_TRACE_VALS: print every node's output as it is computed, rather than
+ * keeping the last few for a post-mortem.
+ *
+ * The ring exists because a corrupting run buries the interesting nodes under
+ * thousands of lines.  That is the right default, but it answers only "what
+ * did the last few nodes hold"; when the question is where a value first
+ * departs from the reference -- comparing a whole run against ONNX Runtime,
+ * say -- the whole sequence is the point, and it belongs in a file rather
+ * than a terminal. */
+int onnx_trace_vals(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("ONNX_TRACE_VALS");
+        cached = (e && *e && *e != '0') ? 1 : 0;
+    }
+    return cached;
+}
+
+/* ONNX_DUMP_NODES=<name>[,<name>...]: write those nodes' contents in full to
+ * ONNX_DUMP_DIR, as little-endian float32 with no header.
+ *
+ * ONNX_TRACE_VALS cannot answer this.  It prints three values per node, from
+ * the tensor's edges, deliberately: a MaskRCNN node can hold millions of
+ * elements and pulling all of them back for every node would move the timing.
+ * That is the right trade for "where does a run first go wrong", and the
+ * wrong one for "do these 594 boxes match the reference" -- three numbers
+ * from the edge of a list say nothing about element 300, and a value read
+ * off that edge has already been mistaken for a difference once.
+ *
+ * So: whole tensors, but only for nodes named on the way in.  The names are
+ * ONNX edge names, the same ones a reference run can be asked to return --
+ * a ggml-internal name like "node_59 (cont)" has no counterpart to compare
+ * against, and is rejected rather than silently dumped.
+ *
+ * Everything is written as f32, indices included: an I32 index fits a float
+ * exactly at these sizes, and one dtype keeps the comparison one code path. */
+#define ONNX_DUMP_MAX 64
+
+static int g_dump_n = -1;
+static char g_dump_names[ONNX_DUMP_MAX][ONNX_MAX_NAME];
+static const char *g_dump_dir = NULL;
+
+/* How many times each requested name has been computed this run.
+ *
+ * An ONNX edge can be computed more than once: MaskRCNN's graph is cut into
+ * segments and a name near a cut shows up in two of them, with the same value
+ * both times.  Only the first is written and the rest are counted --
+ * overwriting would silently hand the comparison whichever copy ran last, and
+ * that is a different question from the one being asked. */
+static int g_dump_seen[ONNX_DUMP_MAX];
+
+static void onnx_dump_init(void) {
+    /* The seen-counts reset on every call, the name list is parsed once: a
+     * second onnx_run() in the same process is a second run and should write
+     * its own dump, not be mistaken for a repeat of the first. */
+    memset(g_dump_seen, 0, sizeof(g_dump_seen));
+    if (g_dump_n >= 0) return;
+    g_dump_n = 0;
+    const char *e = getenv("ONNX_DUMP_NODES");
+    if (!e || !*e) return;
+    g_dump_dir = getenv("ONNX_DUMP_DIR");
+    if (!g_dump_dir || !*g_dump_dir) g_dump_dir = ".";
+
+    const char *p = e;
+    while (*p && g_dump_n < ONNX_DUMP_MAX) {
+        const char *q = strchr(p, ',');
+        size_t len = q ? (size_t)(q - p) : strlen(p);
+        while (len > 0 && (*p == ' ' || *p == '\t')) { p++; len--; }
+        while (len > 0 && (p[len-1] == ' ' || p[len-1] == '\t')) len--;
+        if (len > 0 && len < ONNX_MAX_NAME) {
+            memcpy(g_dump_names[g_dump_n], p, len);
+            g_dump_names[g_dump_n][len] = '\0';
+            g_dump_n++;
+        }
+        if (!q) break;
+        p = q + 1;
+    }
+    fprintf(stderr, "[dump] %d node(s) requested, dir=%s\n", g_dump_n, g_dump_dir);
+}
+
+/* Whether any node was requested.
+ *
+ * This does NOT initialise: it used to, and the initialisation was then lost
+ * to short-circuit evaluation.  The setup sites read
+ *   trace_ring() || trace_live() || trace_vals() || dump_active()
+ * so turning on any trace flag made the earlier term true and dump_active()
+ * was never called -- the dump silently did nothing, but only in combination
+ * with a trace, which is exactly when someone is looking at something else.
+ * onnx_dump_init() is called on its own before the predicate instead. */
+static int onnx_dump_active(void) {
+    return g_dump_n > 0;
+}
+
+/* Which requested node this is, or -1. */
+static int onnx_dump_wanted(const char *name) {
+    if (g_dump_n <= 0 || !name || !*name) return -1;
+    for (int i = 0; i < g_dump_n; i++)
+        if (strcmp(g_dump_names[i], name) == 0) return i;
+    return -1;
+}
+
+/* Pull one tensor back from the backend and write it as f32.
+ *
+ * Appends a manifest row rather than a header in the file: the comparison
+ * side already reads flat f32 plus a manifest, and keeping that shape means
+ * ref_compare_ops.R needs no second reader. */
+static void onnx_dump_tensor(const struct ggml_tensor *t) {
+    int64_t nel = ggml_nelements(t);
+    if (nel <= 0 || !t->buffer) return;
+
+    size_t nbytes = ggml_nbytes(t);
+    void *raw = malloc(nbytes);
+    if (!raw) return;
+    ggml_backend_tensor_get((struct ggml_tensor *)t, raw, 0, nbytes);
+
+    float *out = (float *)malloc((size_t)nel * sizeof(float));
+    if (!out) { free(raw); return; }
+
+    int ok = 1;
+    switch (t->type) {
+        case GGML_TYPE_F32:
+            memcpy(out, raw, (size_t)nel * sizeof(float));
+            break;
+        case GGML_TYPE_I32:
+            for (int64_t i = 0; i < nel; i++) out[i] = (float)((int32_t *)raw)[i];
+            break;
+        case GGML_TYPE_I64:
+            for (int64_t i = 0; i < nel; i++) out[i] = (float)((int64_t *)raw)[i];
+            break;
+        case GGML_TYPE_F16:
+            for (int64_t i = 0; i < nel; i++)
+                out[i] = ggml_fp16_to_fp32(((ggml_fp16_t *)raw)[i]);
+            break;
+        default:
+            ok = 0;
+            break;
+    }
+
+    if (ok) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s.ggmlr.bin", g_dump_dir, t->name);
+        /* '/' in an ONNX edge name would open a path; keep it to one file. */
+        for (char *s = path + strlen(g_dump_dir) + 1; *s; s++)
+            if (*s == '/') *s = '_';
+        FILE *f = fopen(path, "wb");
+        if (f) {
+            fwrite(out, sizeof(float), (size_t)nel, f);
+            fclose(f);
+            char mpath[1024];
+            snprintf(mpath, sizeof(mpath), "%s/nodes.tsv", g_dump_dir);
+            FILE *mf = fopen(mpath, "a");
+            if (mf) {
+                fprintf(mf, "%s\t%lld\t%lld,%lld,%lld,%lld\t%s\n",
+                        t->name, (long long)nel,
+                        (long long)t->ne[0], (long long)t->ne[1],
+                        (long long)t->ne[2], (long long)t->ne[3],
+                        ggml_type_name(t->type));
+                fclose(mf);
+            }
+            fprintf(stderr, "[dump] '%s' n=%lld ne=[%lld,%lld,%lld,%lld]\n",
+                    t->name, (long long)nel,
+                    (long long)t->ne[0], (long long)t->ne[1],
+                    (long long)t->ne[2], (long long)t->ne[3]);
+        }
+    } else {
+        fprintf(stderr, "[dump] '%s' skipped: type %s not convertible\n",
+                t->name, ggml_type_name(t->type));
+    }
+
+    free(out);
+    free(raw);
 }
 
 /* Read the leading and trailing ONNX_RING_EDGE values of a tensor.
@@ -2390,10 +3045,55 @@ static int g_nan_reported = 0;
  * numbering runs continuously across segments instead of restarting. */
 static int g_ring_node_idx = 0;
 
+/* ONNX_TRACE_LIVE=1: name every node on stderr as it is about to run.
+ *
+ * The ring holds the same information and reads far better, but it is printed
+ * from the abort hook, and a run that dies of a plain segfault never reaches
+ * an abort: the ring is written and then lost with the process.  This prints
+ * unbuffered, before the node runs, so the last line to appear IS the node
+ * that killed the run -- the one question the ring cannot answer for a
+ * segfault.
+ *
+ * Beware of reading its silence as good news: it reads every node's edges
+ * through ggml_backend_tensor_get, which perturbs allocator and memory-access
+ * order, and a run that dies without it can survive with it.  That happened
+ * here -- the dangling NMS userdata (onnx_ops_special.c) only crashed with the
+ * trace off.  A bug that disappears under this flag has been masked, not
+ * fixed, and the difference itself is the clue: it points at memory whose
+ * lifetime is wrong. */
+static int onnx_trace_live(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("ONNX_TRACE_LIVE");
+        cached = (e && *e && *e != '0') ? 1 : 0;
+    }
+    return cached;
+}
+
 static bool onnx_ring_eval_cb(struct ggml_tensor *t, bool ask, void *user_data) {
     int *idx = (int *)user_data;
 
     if (ask) {
+        if (onnx_trace_live()) {
+            fprintf(stderr, "[live] %d '%s' op=%d(%s) type=%s ne=[%lld,%lld,%lld,%lld]"
+                            " data=%p buf=%p\n",
+                    *idx, t->name, (int)t->op, ggml_op_name(t->op),
+                    ggml_type_name(t->type),
+                    (long long)t->ne[0], (long long)t->ne[1],
+                    (long long)t->ne[2], (long long)t->ne[3],
+                    (void *)t->data, (void *)t->buffer);
+            for (int s = 0; s < GGML_MAX_SRC; s++) {
+                if (!t->src[s]) continue;
+                fprintf(stderr, "[live]     src%d '%s' op=%s type=%s "
+                                "ne=[%lld,%lld,%lld,%lld] data=%p\n",
+                        s, t->src[s]->name, ggml_op_name(t->src[s]->op),
+                        ggml_type_name(t->src[s]->type),
+                        (long long)t->src[s]->ne[0], (long long)t->src[s]->ne[1],
+                        (long long)t->src[s]->ne[2], (long long)t->src[s]->ne[3],
+                        (void *)t->src[s]->data);
+            }
+            fflush(stderr);
+        }
         /* Record the srcs, so the ring shows what this node was fed. */
         for (int s = 0; s < GGML_MAX_SRC; s++) {
             if (!t->src[s]) continue;
@@ -2402,6 +3102,119 @@ static bool onnx_ring_eval_cb(struct ggml_tensor *t, bool ask, void *user_data) 
         return true;
     }
     onnx_ring_record(t, *idx, 1);
+
+    {
+        int di = onnx_dump_wanted(t->name);
+        if (di >= 0) {
+            if (g_dump_seen[di]++ == 0) {
+                onnx_dump_tensor(t);
+            } else {
+                fprintf(stderr, "[dump] '%s' seen again (#%d), keeping the first\n",
+                        t->name, g_dump_seen[di]);
+            }
+        }
+    }
+
+    if (onnx_trace_vals()) {
+        /* The first three values of what this node just produced.  Integer
+         * types print as integers: these carry shapes and indices, and %g
+         * turning 128 into 1.28e+02 is exactly the wrong rendering for a
+         * value whose whole meaning is which element it selects. */
+        double v[ONNX_RING_EDGE], tail[ONNX_RING_EDGE];
+        int nv = onnx_ring_read_edges(t, v, tail);
+        fprintf(stderr, "[val] %d '%s' op=%s %s ne=[%lld,%lld,%lld,%lld] :",
+                *idx, t->name, ggml_op_name(t->op), ggml_type_name(t->type),
+                (long long)t->ne[0], (long long)t->ne[1],
+                (long long)t->ne[2], (long long)t->ne[3]);
+        if (!nv) {
+            fprintf(stderr, " <not readable>");
+        } else {
+            int n_show = nv < 3 ? nv : 3;
+            for (int i = 0; i < n_show; i++) {
+                if (t->type == GGML_TYPE_I32)
+                    fprintf(stderr, " %lld", (long long)v[i]);
+                else
+                    fprintf(stderr, " %g", v[i]);
+            }
+        }
+        fprintf(stderr, "\n");
+    }
+
+    /* ONNX_TRACE_MAX=<name>: per-row maximum of one named 2D tensor.
+     *
+     * The edge trace above prints three leading values, which answers "what
+     * is in here" but not "how big does it get" -- and a threshold question
+     * is entirely about the latter.  MaskRCNN filters an [n_class, n_cand]
+     * score tensor against 0.05 and keeps one branch per class; whether the
+     * classes that kept nothing were far below the threshold or sitting just
+     * under it is the difference between a structural fault and quantisation
+     * noise, and neither the first three values nor the final detections can
+     * tell the two apart.
+     *
+     * Off unless asked for by name: it reads the whole tensor back from the
+     * backend, which is the cost the edge reader exists to avoid. */
+    {
+        static const char *want = NULL;
+        static int want_init = 0;
+        if (!want_init) { want = getenv("ONNX_TRACE_MAX"); want_init = 1; }
+        if (want && *want && t->name[0] && strstr(t->name, want) &&
+            t->type == GGML_TYPE_F32 && t->buffer && t->data &&
+            ggml_is_contiguous(t) && t->ne[0] > 0 && t->ne[1] > 0 &&
+            t->ne[2] == 1 && t->ne[3] == 1) {
+            /* ONNX_TRACE_MAX_DIR=<dir>: also write the whole tensor there as
+             * raw float32, named "<dir>/<tensor>.bin".  Aggregates answer
+             * "how big does it get"; replaying an algorithm against the very
+             * numbers it ran on needs all of them. */
+            const char *dumpdir = getenv("ONNX_TRACE_MAX_DIR");
+            if (dumpdir && *dumpdir) {
+                char path[1024];
+                snprintf(path, sizeof(path), "%s/%s.bin", dumpdir, t->name);
+                FILE *f = fopen(path, "wb");
+                if (f) {
+                    int64_t nel = ggml_nelements(t);
+                    float *all = (float *)malloc((size_t)nel * sizeof(float));
+                    if (all) {
+                        ggml_backend_tensor_get((struct ggml_tensor *)t, all, 0,
+                                                (size_t)nel * sizeof(float));
+                        fwrite(all, sizeof(float), (size_t)nel, f);
+                        free(all);
+                        fprintf(stderr, "[max] wrote %lld floats to %s\n",
+                                (long long)nel, path);
+                    }
+                    fclose(f);
+                }
+            }
+            /* Aggregate down ne[0], not across it.  The tensor is
+             * [n_class, n_cand] in ggml order, so a contiguous row is one
+             * candidate's distribution over classes -- and the threshold
+             * question is the other way round: for each class, how high did
+             * any candidate get.  Reducing the wrong way gives a per-candidate
+             * softmax profile, which looks informative and answers nothing. */
+            int64_t ncls = t->ne[0], ncand = t->ne[1];
+            float *row = (float *)malloc((size_t)ncls * sizeof(float));
+            double *mx = (double *)malloc((size_t)ncls * sizeof(double));
+            int64_t *n_over = (int64_t *)calloc((size_t)ncls, sizeof(int64_t));
+            if (row && mx && n_over) {
+                for (int64_t k = 0; k < ncls; k++) mx[k] = -1e30;
+                for (int64_t r = 0; r < ncand; r++) {
+                    ggml_backend_tensor_get((struct ggml_tensor *)t, row,
+                                            (size_t)r * ncls * sizeof(float),
+                                            (size_t)ncls * sizeof(float));
+                    for (int64_t k = 0; k < ncls; k++) {
+                        if (row[k] > mx[k]) mx[k] = row[k];
+                        if (row[k] > 0.05f) n_over[k]++;
+                    }
+                }
+                fprintf(stderr, "[max] '%s' ne=[%lld,%lld] per-class over %lld candidates:\n",
+                        t->name, (long long)ncls, (long long)ncand, (long long)ncand);
+                for (int64_t k = 0; k < ncls; k++)
+                    fprintf(stderr, "[max]   class %lld  max=%.8g  n>0.05=%lld\n",
+                            (long long)k, mx[k], (long long)n_over[k]);
+                fflush(stderr);
+            }
+            free(row); free(mx); free(n_over);
+        }
+    }
 
     /* First node to manufacture a NaN out of clean inputs.  Everything after
      * it inherits the NaN, so only this one names the defect. */
@@ -2635,6 +3448,15 @@ static int set_model_inputs(onnx_ggml_ctx_t *ctx,
             }
         }
     }
+
+    /* Strided Slice outputs whose source is a model input.  This runs here,
+     * after the upload above, because the copy reads the source with
+     * ggml_backend_tensor_get -- at sched-alloc time that source still holds
+     * whatever the buffer happened to contain.  Sources that are computed by
+     * the graph are not fixed by this and take the graph path in
+     * onnx_ops_tensor.c instead; what remains here is diagnosed there. */
+    fill_strided_slices(ctx);
+
     return 0;
 }
 
@@ -2683,7 +3505,9 @@ static ggml_backend_sched_t seg_sched(onnx_ggml_ctx_t *c, int s) {
         fprintf(stderr, "[onnx] could not create scheduler for segment %d\n", s);
         return NULL;
     }
-    if (onnx_trace_ring()) onnx_ring_attach(c->seg_scheds[s]);
+    onnx_dump_init();
+    if (onnx_trace_ring() || onnx_trace_live() || onnx_trace_vals() || onnx_dump_active())
+        onnx_ring_attach(c->seg_scheds[s]);
     if (onnx_trace_nodes())
         fprintf(stderr, "[segcache] new scheduler for segment %d\n", s);
     return c->seg_scheds[s];
@@ -2772,7 +3596,8 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
      * a single node in one run, after four separate readings of the code had
      * each proposed a cause that turned out to be wrong.  Costs nothing while
      * the variable is unset. */
-    if (onnx_trace_ring()) {
+    onnx_dump_init();
+    if (onnx_trace_ring() || onnx_trace_live() || onnx_trace_vals() || onnx_dump_active()) {
         g_ring_node_idx = 0;
         g_nan_reported = 0;
         r_ggml_abort_hook = onnx_ring_dump;
@@ -2936,6 +3761,49 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
     /* Clear callback after compute */
     ggml_backend_sched_set_eval_callback(ctx->sched, NULL, NULL);
 #endif
+
+    /* Every op that map_node declines leaves its output unregistered, and if
+     * one of those sits on the path to a model output, nothing downstream gets
+     * built either: the output then keeps whatever its buffer happened to hold
+     * and the run still reports success.
+     *
+     * Worth naming loudly because the symptoms point everywhere but here:
+     * MaskRCNN's rejected TopK surfaced as a custom kernel that never ran, an
+     * index of -1 in a gather, and a segfault in an unrelated segment, none of
+     * which mentions a missing output.
+     *
+     * The test is whether the outputs resolve, not whether the graph has
+     * nodes.  An empty graph is perfectly legitimate when nothing needs
+     * computing -- Min with a single input, Transpose with an identity perm, a
+     * Reshape that is only a view -- and those handlers hand the input tensor
+     * straight back, correctly.  Warning there is a false alarm, the kind that
+     * teaches the reader to skim past the real one.
+     *
+     * Asked here, after the segment loop, rather than before segment 0's
+     * compute: a segmented model builds its outputs in the LAST segment, so
+     * the earlier question reported an ordinary two-segment model as broken
+     * (ConstantOfShape->NonZero cuts at NonZero, leaving segment 0 with the
+     * cut op alone and the real output three nodes into segment 1). */
+    if (status == GGML_STATUS_SUCCESS) {
+        int n_missing = 0;
+        for (int i = 0; i < ctx->onnx->n_outputs; i++)
+            if (!tmap_get(ctx, ctx->onnx->outputs[i].name)) n_missing++;
+
+        if (n_missing > 0) {
+            fprintf(stderr, "[onnx] %d of %d model outputs were never built: "
+                            "every path to them was cut by an op that could not "
+                            "be mapped.\n", n_missing, ctx->onnx->n_outputs);
+            for (int i = 0; i < ctx->onnx->n_outputs; i++)
+                if (!tmap_get(ctx, ctx->onnx->outputs[i].name))
+                    fprintf(stderr, "[onnx]   unresolved output: '%s'\n",
+                            ctx->onnx->outputs[i].name);
+            if (ctx->first_failed_node[0])
+                fprintf(stderr, "[onnx]   first failure: node '%s' (%s) -- the "
+                                "later ones follow from it\n",
+                        ctx->first_failed_node, ctx->first_failed_op);
+            fprintf(stderr, "[onnx]   outputs will be whatever their buffers held.\n");
+        }
+    }
 
     return (status == GGML_STATUS_SUCCESS) ? 0 : -1;
 }
@@ -3131,14 +3999,21 @@ void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     free(ctx->tensor_map_vals);
     free(ctx->tensor_map_ndims);
     free(ctx->tensor_map_onnx_ne);
+    free(ctx->tensor_map_empty);
     free(ctx->cval_keys);
     free(ctx->cval_data);
     free(ctx->cval_lens);
     for (int i = 0; i < ctx->n_pos_embed_blocks; i++)
         free(ctx->pos_embed_blocks[i].params.w_cpu);
     free(ctx->pos_embed_params);
+    for (int i = 0; i < ctx->n_roi_aligns; i++) free(ctx->roi_align_params[i]);
     free(ctx->roi_align_params);
+    /* Each entry is its own allocation (see onnx_ops_special.c), so the
+     * entries go before the array that holds them. */
+    for (int i = 0; i < ctx->n_nms_ops; i++) free(ctx->nms_params[i]);
     free(ctx->nms_params);
+    for (int i = 0; i < ctx->n_qconv_ops; i++) free(ctx->qconv_params[i]);
+    free(ctx->qconv_params);
     /* Note: onnx model is NOT freed here — caller manages it */
     free(ctx);
 }

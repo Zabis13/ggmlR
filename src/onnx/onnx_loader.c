@@ -431,10 +431,25 @@ static int parse_node(pb_reader_t *r, onnx_node_t *n) {
         uint32_t field = pb_read_tag(r, &wire);
         switch (field) {
             case NP_INPUT:
-                if (n->n_inputs < ONNX_MAX_INPUTS)
+                /* KNOWN DEFECT: inputs past ONNX_MAX_INPUTS are dropped in
+                 * silence, and an operator reads its arguments positionally,
+                 * so the node is simply built with fewer than the model
+                 * wrote.  Announce it rather than lose it quietly -- one line
+                 * per offending node, which is what turns "the model returns
+                 * the wrong numbers" into a named cause.  See TODO.md. */
+                if (n->n_inputs < ONNX_MAX_INPUTS) {
                     pb_read_string(r, n->inputs[n->n_inputs++], ONNX_MAX_NAME);
-                else
+                } else {
+                    /* n_inputs stays at the ceiling -- it is the count the ops
+                     * files index against, so raising it past what the array
+                     * holds would turn a dropped input into a read off the
+                     * end.  n_dropped carries the truth instead, and the
+                     * report waits until the node is fully parsed: NodeProto
+                     * puts its inputs before its name and op_type, so
+                     * printing here names an empty node. */
+                    n->n_dropped_inputs++;
                     pb_skip(r, wire);
+                }
                 break;
             case NP_OUTPUT:
                 if (n->n_outputs < ONNX_MAX_OUTPUTS)
@@ -466,6 +481,22 @@ static int parse_node(pb_reader_t *r, onnx_node_t *n) {
                 break;
         }
     }
+
+    /* KNOWN DEFECT, reported once per offending node: inputs past
+     * ONNX_MAX_INPUTS are dropped, and an operator reads its arguments
+     * positionally, so the node is simply built with fewer than the model
+     * wrote.  Naming it here is what turns "the model returns the wrong
+     * numbers" into a cause -- MaskRCNN's QLinearConcat wants 17 (two output
+     * params plus five (tensor, scale, zero_point) triples) and loses its
+     * fifth FPN level; three of its Concat nodes want 80.  See TODO.md. */
+    if (n->n_dropped_inputs > 0)
+        fprintf(stderr, "[onnx] node '%s' (%s) has %d inputs, %d over the "
+                        "limit of %d -- the extras are dropped and the node "
+                        "is built incomplete\n",
+                n->name[0] ? n->name : (n->n_outputs > 0 ? n->outputs[0] : "?"),
+                n->op_type[0] ? n->op_type : "?",
+                n->n_inputs + n->n_dropped_inputs,
+                n->n_dropped_inputs, ONNX_MAX_INPUTS);
     return 0;
 }
 
@@ -571,10 +602,11 @@ static int parse_value_info(pb_reader_t *r, onnx_value_info_t *vi) {
 #define GP_INITIALIZER  5   /* repeated TensorProto */
 #define GP_INPUT       11   /* repeated ValueInfoProto */
 #define GP_OUTPUT      12   /* repeated ValueInfoProto */
+#define GP_VALUE_INFO  13   /* repeated ValueInfoProto (intermediates) */
 
 static int parse_graph(pb_reader_t *r, onnx_model_t *m) {
     int wire;
-    int nodes_cap = 0, init_cap = 0, inp_cap = 0, out_cap = 0;
+    int nodes_cap = 0, init_cap = 0, inp_cap = 0, out_cap = 0, vi_cap = 0;
 
     while (!pb_eof(r)) {
         uint32_t field = pb_read_tag(r, &wire);
@@ -608,6 +640,13 @@ static int parse_graph(pb_reader_t *r, onnx_model_t *m) {
                 pb_read_submsg(r, &sub);
                 DA_GROW(m->outputs, m->n_outputs, out_cap, onnx_value_info_t);
                 parse_value_info(&sub, &m->outputs[m->n_outputs++]);
+                break;
+            }
+            case GP_VALUE_INFO: {
+                pb_reader_t sub;
+                pb_read_submsg(r, &sub);
+                DA_GROW(m->value_info, m->n_value_info, vi_cap, onnx_value_info_t);
+                parse_value_info(&sub, &m->value_info[m->n_value_info++]);
                 break;
             }
             default:
@@ -718,9 +757,31 @@ void onnx_free(onnx_model_t *m) {
     free(m->initializers);
     free(m->inputs);
     free(m->outputs);
+    free(m->value_info);
 
     onnx_munmap(m->mmap_data, m->mmap_size, m->mmap_fd);
     free(m);
+}
+
+const void *onnx_init_payload(const onnx_initializer_t *t, size_t *size) {
+    if (!t) return NULL;
+    if (t->raw_data && t->raw_size > 0) {
+        if (size) *size = t->raw_size;
+        return t->raw_data;
+    }
+    if (t->decoded_data && t->decoded_size > 0) {
+        if (size) *size = t->decoded_size;
+        return t->decoded_data;
+    }
+    return NULL;
+}
+
+int onnx_declared_rank(const onnx_model_t *model, const char *name) {
+    if (!model || !name || !name[0]) return 0;
+    for (int i = 0; i < model->n_value_info; i++)
+        if (strcmp(model->value_info[i].name, name) == 0)
+            return model->value_info[i].n_dims;
+    return 0;
 }
 
 const onnx_initializer_t *onnx_find_initializer(const onnx_model_t *model,

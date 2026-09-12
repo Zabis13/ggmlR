@@ -139,3 +139,70 @@ test_that("chain batched-matmul: batch=1 [1,3,4]x[1,4,2] (boundary)", {
   expect_true(all(r >= 0))  # Relu
   expect_true(all(is.finite(r)))
 })
+
+# ── 4D MatMul: the attention shape [B,H,M,K] x [B,H,K,N] ────
+
+test_that("chain batched-matmul: 4D MatMul [2,2,3,4]x[2,2,4,5] matches a hand-computed reference", {
+  # The shape attention actually uses before anything reshapes it down to 3D:
+  # batch and head are BOTH batch dims, so ggml has to broadcast ne[2] and
+  # ne[3] together.  The 3D tests above check length and finiteness only --
+  # a matmul contracting the wrong axis passes that just as well -- so this
+  # one compares against a reference computed per (batch, head) in R.
+  inp_a <- .onnx_value_info("A", 1L, c(2L, 2L, 3L, 4L))
+  inp_b <- .onnx_value_info("B", 1L, c(2L, 2L, 4L, 5L))
+  outp  <- .onnx_value_info("Y", 1L, c(2L, 2L, 3L, 5L))
+
+  mm_node <- .onnx_node("MatMul", c("A", "B"), "Y")
+  graph <- .onnx_graph("test", list(mm_node), list(inp_a, inp_b), list(outp))
+  path <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+
+  set.seed(5)
+  B <- 2L; H <- 2L; M <- 3L; K <- 4L; N <- 5L
+  a <- round(rnorm(B * H * M * K), 3)
+  b <- round(rnorm(B * H * K * N), 3)
+
+  result <- as.numeric(run_onnx(path, list(A = a, B = b)))
+
+  # ONNX is row-major, so ONNX [B,H,M,K] laid out flat is column-major
+  # [K,M,H,B]; likewise [B,H,K,N] is [N,K,H,B] and the result is [N,M,H,B].
+  Aa <- array(a, dim = c(K, M, H, B))
+  # The product is written B %*% A, not t(A) %*% t(B): the latter is [M,N], and assigning it into an [N,M] slice reorders the values in silence.
+  Bb <- array(b, dim = c(N, K, H, B))
+  ref <- array(0, dim = c(N, M, H, B))
+  for (bb in seq_len(B)) for (hh in seq_len(H))
+    ref[, , hh, bb] <- Bb[, , hh, bb] %*% Aa[, , hh, bb]
+
+  expect_equal(length(result), B * H * M * N)
+  expect_equal(result, as.numeric(ref), tolerance = 1e-4)
+})
+
+test_that("chain batched-matmul: 4D broadcast [1,1,3,4]x[2,2,4,5]", {
+  # Both batch dims broadcast at once -- a single [M,K] matrix applied across
+  # every (batch, head).  ggml requires the smaller operand's ne[2..3] to
+  # divide the larger's, which is exactly this case with 1.
+  inp_a <- .onnx_value_info("A", 1L, c(1L, 1L, 3L, 4L))
+  inp_b <- .onnx_value_info("B", 1L, c(2L, 2L, 4L, 5L))
+  outp  <- .onnx_value_info("Y", 1L, c(2L, 2L, 3L, 5L))
+
+  mm_node <- .onnx_node("MatMul", c("A", "B"), "Y")
+  graph <- .onnx_graph("test", list(mm_node), list(inp_a, inp_b), list(outp))
+  path <- tempfile(fileext = ".onnx")
+  writeBin(.onnx_model(graph), path)
+
+  set.seed(6)
+  M <- 3L; K <- 4L; N <- 5L; B <- 2L; H <- 2L
+  a <- round(rnorm(M * K), 3)
+  b <- round(rnorm(B * H * K * N), 3)
+
+  result <- as.numeric(run_onnx(path, list(A = a, B = b)))
+
+  Aa <- matrix(a, nrow = K, ncol = M)          # [K,M]
+  Bb <- array(b, dim = c(N, K, H, B))
+  ref <- array(0, dim = c(N, M, H, B))
+  for (bb in seq_len(B)) for (hh in seq_len(H))
+    ref[, , hh, bb] <- Bb[, , hh, bb] %*% Aa
+
+  expect_equal(length(result), B * H * M * N)
+  expect_equal(result, as.numeric(ref), tolerance = 1e-4)
+})
