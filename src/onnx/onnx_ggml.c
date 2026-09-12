@@ -2823,6 +2823,112 @@ static void onnx_dump_init(void) {
     fprintf(stderr, "[dump] %d node(s) requested, dir=%s\n", g_dump_n, g_dump_dir);
 }
 
+/* ONNX_INJECT_NODES=<name>[,<name>...] with ONNX_INJECT_DIR: after a named
+ * node is computed, overwrite its contents with <dir>/<name>.ort.bin -- the
+ * same flat little-endian f32 the reference runner writes.
+ *
+ * The mirror image of ONNX_DUMP_NODES, and it answers a question dumping
+ * cannot: whether a disagreement downstream is ONE divergence being amplified
+ * or several independent ones.  Dumping says two runs differ at node N and
+ * again at node M; only replacing N's output with the reference's says
+ * whether M would have agreed had N been right.
+ *
+ * Scope is deliberately small: f32 tensors, element count must match, and the
+ * file is read once per node per run.  A mismatch is refused loudly rather
+ * than padded or truncated, because a silent partial overwrite would answer
+ * the question wrongly and look like a result. */
+#define ONNX_INJECT_MAX 32
+
+static int  g_inject_n = -1;
+static char g_inject_names[ONNX_INJECT_MAX][ONNX_MAX_NAME];
+static const char *g_inject_dir = NULL;
+static int  g_inject_done[ONNX_INJECT_MAX];
+
+static void onnx_inject_init(void) {
+    if (g_inject_n >= 0) { memset(g_inject_done, 0, sizeof(g_inject_done)); return; }
+    g_inject_n = 0;
+    memset(g_inject_done, 0, sizeof(g_inject_done));
+    const char *e = getenv("ONNX_INJECT_NODES");
+    if (!e || !*e) return;
+    g_inject_dir = getenv("ONNX_INJECT_DIR");
+    if (!g_inject_dir || !*g_inject_dir) g_inject_dir = ".";
+
+    const char *p = e;
+    while (*p && g_inject_n < ONNX_INJECT_MAX) {
+        const char *q = strchr(p, ',');
+        size_t len = q ? (size_t)(q - p) : strlen(p);
+        while (len > 0 && (*p == ' ' || *p == '\t')) { p++; len--; }
+        while (len > 0 && (p[len-1] == ' ' || p[len-1] == '\t')) len--;
+        if (len > 0 && len < ONNX_MAX_NAME) {
+            memcpy(g_inject_names[g_inject_n], p, len);
+            g_inject_names[g_inject_n][len] = '\0';
+            g_inject_n++;
+        }
+        if (!q) break;
+        p = q + 1;
+    }
+    if (g_inject_n > 0)
+        fprintf(stderr, "[inject] %d node(s) requested, dir=%s\n",
+                g_inject_n, g_inject_dir);
+}
+
+/* Whether any node is being replaced.  The eval callback is installed only
+ * when something asks for it, and injection has to be on that list: without
+ * it the requested names are parsed, the banner prints, and nothing is ever
+ * replaced -- which reads exactly like "the substitution made no difference"
+ * and would have been believed. */
+static int onnx_inject_active(void) {
+    return g_inject_n > 0;
+}
+
+static int onnx_inject_wanted(const char *name) {
+    if (g_inject_n <= 0 || !name || !*name) return -1;
+    for (int i = 0; i < g_inject_n; i++)
+        if (strcmp(g_inject_names[i], name) == 0) return i;
+    return -1;
+}
+
+/* Overwrite one computed tensor with the reference's values. */
+static void onnx_inject_tensor(struct ggml_tensor *t) {
+    int64_t nel = ggml_nelements(t);
+    if (nel <= 0 || !t->buffer) return;
+    if (t->type != GGML_TYPE_F32) {
+        fprintf(stderr, "[inject] '%s': type %s is not F32 -- skipped\n",
+                t->name, ggml_type_name(t->type));
+        return;
+    }
+
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s.ort.bin", g_inject_dir, t->name);
+    for (char *s = path + strlen(g_inject_dir) + 1; *s; s++)
+        if (*s == '/') *s = '_';
+
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "[inject] '%s': cannot open %s\n", t->name, path); return; }
+    fseek(f, 0, SEEK_END);
+    long bytes = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (bytes != (long)(nel * (int64_t)sizeof(float))) {
+        fprintf(stderr, "[inject] '%s': %s holds %ld bytes, tensor wants %lld "
+                        "-- refused\n", t->name, path, bytes,
+                (long long)(nel * (int64_t)sizeof(float)));
+        fclose(f);
+        return;
+    }
+
+    float *buf = (float *)malloc((size_t)bytes);
+    if (!buf) { fclose(f); return; }
+    size_t got = fread(buf, 1, (size_t)bytes, f);
+    fclose(f);
+    if (got != (size_t)bytes) { free(buf); return; }
+
+    ggml_backend_tensor_set(t, buf, 0, (size_t)bytes);
+    fprintf(stderr, "[inject] '%s': replaced %lld values from the reference\n",
+            t->name, (long long)nel);
+    free(buf);
+}
+
 /* Whether any node was requested.
  *
  * This does NOT initialise: it used to, and the initialisation was then lost
@@ -3113,6 +3219,15 @@ static bool onnx_ring_eval_cb(struct ggml_tensor *t, bool ask, void *user_data) 
                         t->name, g_dump_seen[di]);
             }
         }
+    }
+
+    /* Injection goes AFTER the dump on purpose: the dump then still records
+     * what this build actually computed, and only the consumers downstream
+     * see the reference's values.  Both can therefore run in one pass. */
+    {
+        int ii = onnx_inject_wanted(t->name);
+        if (ii >= 0 && g_inject_done[ii]++ == 0)
+            onnx_inject_tensor((struct ggml_tensor *)t);
     }
 
     if (onnx_trace_vals()) {
@@ -3506,7 +3621,8 @@ static ggml_backend_sched_t seg_sched(onnx_ggml_ctx_t *c, int s) {
         return NULL;
     }
     onnx_dump_init();
-    if (onnx_trace_ring() || onnx_trace_live() || onnx_trace_vals() || onnx_dump_active())
+    onnx_inject_init();
+    if (onnx_trace_ring() || onnx_trace_live() || onnx_trace_vals() || onnx_dump_active() || onnx_inject_active())
         onnx_ring_attach(c->seg_scheds[s]);
     if (onnx_trace_nodes())
         fprintf(stderr, "[segcache] new scheduler for segment %d\n", s);
@@ -3597,7 +3713,8 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
      * each proposed a cause that turned out to be wrong.  Costs nothing while
      * the variable is unset. */
     onnx_dump_init();
-    if (onnx_trace_ring() || onnx_trace_live() || onnx_trace_vals() || onnx_dump_active()) {
+    onnx_inject_init();
+    if (onnx_trace_ring() || onnx_trace_live() || onnx_trace_vals() || onnx_dump_active() || onnx_inject_active()) {
         g_ring_node_idx = 0;
         g_nan_reported = 0;
         r_ggml_abort_hook = onnx_ring_dump;

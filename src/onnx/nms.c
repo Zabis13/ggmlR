@@ -6,23 +6,56 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+/* Order a pair, the way ONNX Runtime's MaxMin does. */
+static inline void nms_maxmin(float lhs, float rhs, float *mn, float *mx) {
+    if (lhs >= rhs) { *mn = rhs; *mx = lhs; }
+    else            { *mn = lhs; *mx = rhs; }
+}
+
+/* IoU, computed the way non_max_suppression_helper.h computes it.
+ *
+ * The shape of this is copied deliberately, operation for operation, because
+ * the answer sits on a knife edge: MaskRCNN's RPN has a pair whose IoU is
+ * 0.7000000477 against a threshold of 0.7 -- four parts in a hundred million
+ * over the line.  Reassociating the arithmetic moves it to 0.6999989, which
+ * is UNDER, and that one flip changes which box survives and cascades through
+ * the whole detection list.
+ *
+ * Two details matter and neither is cosmetic:
+ *   - each coordinate pair is ORDERED first (MaxMin), rather than assuming
+ *     y1 < y2, and the areas are computed from the ordered bounds;
+ *   - the overlap is rejected on the bounds themselves, before any area is
+ *     formed, so a degenerate box never reaches the division. */
 static float iou_corner(float y1_a, float x1_a, float y2_a, float x2_a,
                         float y1_b, float x1_b, float y2_b, float x2_b) {
-    float inter_y1 = y1_a > y1_b ? y1_a : y1_b;
-    float inter_x1 = x1_a > x1_b ? x1_a : x1_b;
-    float inter_y2 = y2_a < y2_b ? y2_a : y2_b;
-    float inter_x2 = x2_a < x2_b ? x2_a : x2_b;
+    float x1_min, x1_max, x2_min, x2_max;
+    float y1_min, y1_max, y2_min, y2_max;
 
-    float inter_h = inter_y2 - inter_y1;
-    float inter_w = inter_x2 - inter_x1;
-    if (inter_h <= 0.0f || inter_w <= 0.0f) return 0.0f;
+    nms_maxmin(x1_a, x2_a, &x1_min, &x1_max);
+    nms_maxmin(x1_b, x2_b, &x2_min, &x2_max);
 
-    float inter_area = inter_h * inter_w;
-    float area_a = (y2_a - y1_a) * (x2_a - x1_a);
-    float area_b = (y2_b - y1_b) * (x2_b - x1_b);
-    float union_area = area_a + area_b - inter_area;
+    const float inter_x_min = x1_min > x2_min ? x1_min : x2_min;
+    const float inter_x_max = x1_max < x2_max ? x1_max : x2_max;
+    if (inter_x_max <= inter_x_min) return 0.0f;
 
-    return union_area > 0.0f ? inter_area / union_area : 0.0f;
+    nms_maxmin(y1_a, y2_a, &y1_min, &y1_max);
+    nms_maxmin(y1_b, y2_b, &y2_min, &y2_max);
+
+    const float inter_y_min = y1_min > y2_min ? y1_min : y2_min;
+    const float inter_y_max = y1_max < y2_max ? y1_max : y2_max;
+    if (inter_y_max <= inter_y_min) return 0.0f;
+
+    const float inter_area = (inter_x_max - inter_x_min) *
+                             (inter_y_max - inter_y_min);
+    if (inter_area <= 0.0f) return 0.0f;
+
+    const float area_a = (x1_max - x1_min) * (y1_max - y1_min);
+    const float area_b = (x2_max - x2_min) * (y2_max - y2_min);
+    const float union_area = area_a + area_b - inter_area;
+
+    if (area_a <= 0.0f || area_b <= 0.0f || union_area <= 0.0f) return 0.0f;
+
+    return inter_area / union_area;
 }
 
 /* Does this score clear the threshold?
@@ -171,8 +204,12 @@ void nms_cpu(struct ggml_tensor *dst,
 
     /* Temp arrays */
     score_pair_t *sorted = (score_pair_t *)malloc((size_t)num_boxes * sizeof(score_pair_t));
-    int *suppressed = (int *)malloc((size_t)num_boxes * sizeof(int));
-    if (!sorted || !suppressed) { free(sorted); free(suppressed); return; }
+    /* Boxes kept so far for the current class.  A candidate is tested against
+     * these and nothing else, which is what ONNX Runtime does; there is no
+     * "suppressed" flag array any more, because a flag set by a box that the
+     * per-class cap later dropped would outlive the box that set it. */
+    int *selected_idx = (int *)malloc((size_t)num_boxes * sizeof(int));
+    if (!sorted || !selected_idx) { free(sorted); free(selected_idx); return; }
 
     int total_selected = 0;
 
@@ -243,25 +280,30 @@ void nms_cpu(struct ggml_tensor *dst,
             }
             qsort(sorted, (size_t)n_candidates, sizeof(score_pair_t), cmp_score_desc);
 
-            memset(suppressed, 0, (size_t)num_boxes * sizeof(int));
+            /* A candidate is tested against the boxes ALREADY SELECTED, and
+             * nothing is marked ahead of time.
+             *
+             * The kernel used to walk forward from each winner and flag every
+             * overlapping candidate as suppressed.  That is the same thing
+             * only while every winner survives to the end.  It is not the same
+             * once max_output_boxes_per_class cuts the loop short: a candidate
+             * flagged by a box that the cap later dropped stays flagged, and
+             * can never be picked, though nothing that was actually selected
+             * overlaps it.  ONNX Runtime's loop (non_max_suppression.cc) has
+             * no such state -- it compares next_top_score against
+             * selected_boxes_inside_class and nothing else.
+             *
+             * Measured on MaskRCNN node 1170, 510 selections: the forward
+             * marking disagreed with ONNX Runtime on 49 of them, this form on
+             * 3, and the residual 3 are boxes whose IoU sits within a float
+             * ulp of the 0.7 threshold. */
             int selected_this_class = 0;
+            int sel_count = 0;   /* indices into `selected_idx` for this class */
 
-            for (int i = 0; i < n_candidates; i++) {
+            for (int i = 0; i < n_candidates && selected_this_class < max_output
+                                             && total_selected < max_selected; i++) {
                 int idx_i = sorted[i].idx;
-                if (suppressed[idx_i]) continue;
 
-                /* Output this box */
-                if (total_selected < max_selected) {
-                    /* dst layout: [3, max_selected], so out[coord + 3*sel] */
-                    out_data[0 + 3 * total_selected] = (float)batch;
-                    out_data[1 + 3 * total_selected] = (float)cls;
-                    out_data[2 + 3 * total_selected] = (float)idx_i;
-                    total_selected++;
-                    selected_this_class++;
-                }
-                if (selected_this_class >= max_output) break;
-
-                /* Suppress overlapping boxes */
                 float y1_i, x1_i, y2_i, x2_i;
                 if (p->center_point_box == 1) {
                     float cx = boxes_n[0 + 4 * idx_i];
@@ -277,9 +319,9 @@ void nms_cpu(struct ggml_tensor *dst,
                     x2_i = boxes_n[3 + 4 * idx_i];
                 }
 
-                for (int j = i + 1; j < n_candidates; j++) {
-                    int idx_j = sorted[j].idx;
-                    if (suppressed[idx_j]) continue;
+                int keep = 1;
+                for (int s = 0; s < sel_count; s++) {
+                    int idx_j = selected_idx[s];
 
                     float y1_j, x1_j, y2_j, x2_j;
                     if (p->center_point_box == 1) {
@@ -299,11 +341,24 @@ void nms_cpu(struct ggml_tensor *dst,
                     float iou = iou_corner(y1_i, x1_i, y2_i, x2_i,
                                            y1_j, x1_j, y2_j, x2_j);
                     if (iou > iou_thresh) {
-                        suppressed[idx_j] = 1;
+                        keep = 0;
                         if (getenv("ONNX_TRACE_NMS_SUPPRESS"))
                             fprintf(stderr, "[nmssup] '%s' cls=%d: %d suppresses %d (iou=%.6f > %.6f)\n",
-                                    dst->name, cls, idx_i, idx_j, (double)iou, (double)iou_thresh);
+                                    dst->name, cls, idx_j, idx_i, (double)iou, (double)iou_thresh);
+                        break;
                     }
+                }
+                if (!keep) continue;
+
+                selected_idx[sel_count++] = idx_i;
+                selected_this_class++;
+
+                if (total_selected < max_selected) {
+                    /* dst layout: [3, max_selected], so out[coord + 3*sel] */
+                    out_data[0 + 3 * total_selected] = (float)batch;
+                    out_data[1 + 3 * total_selected] = (float)cls;
+                    out_data[2 + 3 * total_selected] = (float)idx_i;
+                    total_selected++;
                 }
             }
         }
@@ -313,5 +368,5 @@ void nms_cpu(struct ggml_tensor *dst,
     dst->op_params[NMS_COUNT_SLOT] = total_selected;
 
     free(sorted);
-    free(suppressed);
+    free(selected_idx);
 }

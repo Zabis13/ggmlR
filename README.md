@@ -1584,7 +1584,10 @@ for (batch in data_batches) {
 
 ### Tested models
 
-13 out of 15 ONNX Model Zoo models load and run successfully (native 5D tensor support):
+All 15 ONNX Model Zoo models below load, run, and match ONNX Runtime bit for bit —
+including the quantised detector MaskRCNN-12-int8 (`max|d| = 0`). The reference
+check is `inst/scripts/ref_check_vs_onnxruntime.sh`, which runs each model through
+both implementations and diffs the values, rather than checking output length.
 
 | Model | Nodes | Key ops |
 |---|---|---|
@@ -1595,12 +1598,13 @@ for (batch in data_batches) {
 | bat_resnext26ts (Opset 18) | 570 | Conv, BatchNorm, SiLU, Concat, Expand, Split |
 | bert (Opset 17) | 533 | MatMul, LayerNorm, GELU/Erf, Softmax, Shape, Gather, Where |
 | gptneox (Opset 18) | 482 | MatMul, LayerNorm, GELU, Softmax, Shape, Gather |
-| MaskRCNN-12-int8 | 937 | QLinearConv, DequantizeLinear, Resize, Concat, Reshape |
+| MaskRCNN-12-int8 | 3001 | QLinearConv, QLinearMatMul, NonMaxSuppression, RoiAlign, NonZero, TopK |
 | roberta-9 | 1180 | MatMul, LayerNorm, Erf, Softmax, Shape, Gather, Cast |
 | sageconv (Opset 16) | 24 | MatMul, Add, Mul, Sigmoid, ScatterElements |
 | super-resolution-10 | 12 | Conv, Reshape, Transpose |
 | botnet26t_256 (Opset 16) | 530 | Conv, BatchNorm, RelPosBias2D (fused custom op), Softmax |
 | xcit_tiny | 436 | MatMul, LayerNorm, Softmax, Concat, Transpose |
+| cait_xs24_384 (Opset 16) | 1748 | MatMul, LayerNorm, Softmax, Transpose, Gather |
 
 ### Supported ONNX ops (50+)
 

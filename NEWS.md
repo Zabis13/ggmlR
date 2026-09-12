@@ -1,3 +1,9 @@
+# ggmlR 0.8.6
+
+* **ONNX inference matches ONNX Runtime bit for bit on all 15 reference models**, MaskRCNN-12-int8 included (`max|d| = 0`, was 14/15).
+* New integer-accumulator `QLinearMatMul` kernel, alongside the existing `QLinearConv` one. Scoped to 2-D A x B.
+* New `ONNX_INJECT_NODES` / `ONNX_INJECT_DIR`: replace a node's output with a reference dump mid-run, to tell one amplified divergence from several independent ones.
+
 # ggmlR 0.8.5
 
 * **GPU-resident training** — weights, Adam moments, gradients and forward activations stay in device buffers across steps, cutting a training step from 10 host/device crossings to 4 (0.188 MB to 0.047); graph backward and resident gradients are now the default, and training is numerically unchanged.

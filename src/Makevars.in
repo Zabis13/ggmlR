@@ -71,7 +71,8 @@ ONNX_OBJECTS = \
   onnx/onnx_loader.o onnx/onnx_ggml.o \
   onnx/onnx_ops_basic.o onnx/onnx_ops_tensor.o onnx/onnx_ops_nn.o \
   onnx/onnx_ops_quant.o onnx/onnx_ops_special.o \
-  onnx/r_onnx.o onnx/rel_pos_bias.o onnx/roi_align.o onnx/nms.o onnx/qconv_i32.o
+  onnx/r_onnx.o onnx/rel_pos_bias.o onnx/roi_align.o onnx/nms.o onnx/qconv_i32.o \
+  onnx/qmatmul_i32.o
 
 # R interface objects
 # Note: r_backend_ops_test.o belongs here and NOT in GGML_OBJECTS -- the static

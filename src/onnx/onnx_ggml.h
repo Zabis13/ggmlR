@@ -11,6 +11,7 @@
 #include "roi_align.h"
 #include "nms.h"
 #include "qconv_i32.h"
+#include "qmatmul_i32.h"
 #include "../ggml.h"
 #include "../ggml-backend.h"
 

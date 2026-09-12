@@ -105,10 +105,18 @@ void roi_align_cpu(struct ggml_tensor *dst,
 
         int batch_idx = (int)batch_data[roi_idx];
 
+        /* A degenerate ROI is forced to 1x1, not to an epsilon.
+         *
+         * Clamping to 1e-6 keeps the box degenerate: every sample inside it
+         * lands on the same pixel, and the bin size underflows.  ONNX Runtime
+         * says it plainly -- "Force malformed ROIs to be 1x1" -- and uses 1.0,
+         * which spreads the 7x7 grid over a real pixel instead.  MaskRCNN's
+         * RPN emits 95 such ROIs of 895 (zero width or zero height), and every
+         * channel of every one of them came out wrong. */
         float roi_h = y2 - y1;
         float roi_w = x2 - x1;
-        if (roi_h < 1e-6f) roi_h = 1e-6f;
-        if (roi_w < 1e-6f) roi_w = 1e-6f;
+        if (roi_h < 1.0f) roi_h = 1.0f;
+        if (roi_w < 1.0f) roi_w = 1.0f;
 
         float bin_h = roi_h / (float)oh;
         float bin_w = roi_w / (float)ow;
@@ -116,7 +124,11 @@ void roi_align_cpu(struct ggml_tensor *dst,
         int sr_h = p->sampling_ratio > 0 ? p->sampling_ratio : (int)ceilf(roi_h / oh);
         int sr_w = p->sampling_ratio > 0 ? p->sampling_ratio : (int)ceilf(roi_w / ow);
 
-        float count = (float)(sr_h * sr_w);
+        /* At least one, as ONNX Runtime does: a zero grid would divide by
+         * zero rather than simply contribute nothing. */
+        int grid_count = sr_h * sr_w;
+        if (grid_count < 1) grid_count = 1;
+        float count = (float)grid_count;
 
         for (int c_idx = 0; c_idx < C; c_idx++) {
             for (int ph = 0; ph < oh; ph++) {

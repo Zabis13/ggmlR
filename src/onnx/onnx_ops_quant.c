@@ -71,16 +71,54 @@ static int qparam_read(const onnx_ggml_ctx_t *c, const char *name,
         case ONNX_DTYPE_UINT8: esz = 1; break;
         default: return 0;
     }
-    int n = (int)(payload_size / esz);
+    /* Count comes from the DECLARED shape, and the element size follows from
+     * it -- not the other way round.
+     *
+     * Deriving the count as payload_size/esz trusts esz, and esz is a guess
+     * from data_type.  MaskRCNN's per-channel weight zero points are declared
+     * INT8 (data_type 3) with 256 entries and carry 1024 bytes: four per
+     * entry, stored the way int32_data would be.  Dividing by the assumed 1
+     * returned 1024, which is not 256, so the caller's `n_wz == C_out` test
+     * failed and it fell back to broadcasting ONE zero point across all 256
+     * channels -- and read that one from the first byte of a 4-byte group.
+     * With an exact integer accumulator a wrong zero point is a wrong answer,
+     * not a rounding wobble: 21 elements of node 455 came out one code off,
+     * and that is the first divergence from ONNX Runtime in the whole graph.
+     *
+     * A declared count of 0 (scalar with no dims, which is legal) keeps the
+     * old behaviour, since there is no shape to divide by. */
+    long long declared = 1;
+    for (int k = 0; k < ini->n_dims; k++) declared *= ini->dims[k];
+
+    int n;
+    if (ini->n_dims > 0 && declared > 0 &&
+        payload_size % (size_t)declared == 0) {
+        n = (int)declared;
+        esz = payload_size / (size_t)declared;   /* what is actually stored */
+    } else {
+        n = (int)(payload_size / esz);
+    }
     if (n > max_n) n = max_n;
 
     for (int i = 0; i < n; i++) {
         const unsigned char *pos = (const unsigned char *)payload + (size_t)i * esz;
-        switch (ini->data_type) {
-            case ONNX_DTYPE_FLOAT: { float v;   memcpy(&v, pos, 4); out[i] = v; break; }
-            case ONNX_DTYPE_INT32: { int32_t v; memcpy(&v, pos, 4); out[i] = (float)v; break; }
-            case ONNX_DTYPE_INT8:  { signed char v; memcpy(&v, pos, 1); out[i] = (float)v; break; }
-            default:               { unsigned char v; memcpy(&v, pos, 1); out[i] = (float)v; break; }
+        /* Read by the STORED width, then interpret by data_type.  An INT8 zero
+         * point stored four bytes wide is a whole int32 value, and taking only
+         * its first byte is right solely for the values that happen to fit --
+         * the sign of a negative one lives in the bytes that would be skipped.
+         * Widths other than the declared type's own are read as integers,
+         * since that is what the wider encodings (int32_data, int64_data) are
+         * used to carry here. */
+        if (esz == 4 && ini->data_type == ONNX_DTYPE_FLOAT) {
+            float v; memcpy(&v, pos, 4); out[i] = v;
+        } else if (esz == 4) {
+            int32_t v; memcpy(&v, pos, 4); out[i] = (float)v;
+        } else if (esz == 8) {
+            int64_t v; memcpy(&v, pos, 8); out[i] = (float)v;
+        } else if (ini->data_type == ONNX_DTYPE_INT8) {
+            signed char v; memcpy(&v, pos, 1); out[i] = (float)v;
+        } else {
+            unsigned char v; memcpy(&v, pos, 1); out[i] = (float)v;
         }
     }
     return n;
@@ -267,10 +305,31 @@ int map_node_quant(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                 int n_bias = qparam_read(c, n->n_inputs > 8 ? n->inputs[8] : NULL,
                                          bsv, QCONV_I32_MAX_CHANNELS);
 
-                if (onnx_trace_nodes())
+                if (onnx_trace_nodes()) {
                     fprintf(stderr, "[qconv]   params: n_xs=%d n_ys=%d n_ws=%d "
                                     "n_wz=%d n_bias=%d C_out=%lld\n",
                             n_xs, n_ys, n_ws, n_wz, n_bias, (long long)C_out_q);
+                    /* What the weight zero point ACTUALLY is, as declared:
+                     * qparam_read derives its count from the payload size,
+                     * which disagrees with the declared shape whenever the
+                     * element size assumed does not match the stored one. */
+                    const char *wzn = n->n_inputs > 5 ? n->inputs[5] : NULL;
+                    if (wzn && wzn[0]) {
+                        const onnx_initializer_t *wzi =
+                            onnx_find_initializer(c->onnx, wzn);
+                        if (wzi) {
+                            size_t psz = 0;
+                            (void)onnx_init_payload(wzi, &psz);
+                            long long decl = 1;
+                            for (int k = 0; k < wzi->n_dims; k++) decl *= wzi->dims[k];
+                            fprintf(stderr, "[qconv]   w_zp '%s': dtype=%d "
+                                            "declared=%lld payload=%zu bytes "
+                                            "=> %.2f bytes/elem\n",
+                                    wzn, (int)wzi->data_type, decl, psz,
+                                    decl ? (double)psz / (double)decl : 0.0);
+                        }
+                    }
+                }
                 /* n_wz is deliberately NOT a gate condition.
                  *
                  * It was one, as `n_wz == 0 || n_wz == 1 || n_wz == C_out`,
@@ -342,8 +401,21 @@ int map_node_quant(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                              * pointers: the scheduler then brings them back to
                              * the host for this CPU-only op.  A pointer kept in
                              * userdata would not be copied, and reading it on a
-                             * device buffer faults. */
-                            out = ggml_map_custom3(c->ctx, shape, x, w,
+                             * device buffer faults.
+                             *
+                             * Both are made contiguous first.  The kernel walks
+                             * them as xd[iw + W*ih + W*H*ic], which is only the
+                             * right address when the row stride really is ne[0]
+                             * elements; hand it a view whose nb[1] says
+                             * otherwise -- anything upstream that slices or
+                             * permutes without materialising -- and it reads
+                             * neighbouring data instead, silently, producing
+                             * plausible numbers rather than a crash.
+                             * ggml_cont on an already-contiguous tensor is a
+                             * no-op, so this costs nothing in the normal case. */
+                            out = ggml_map_custom3(c->ctx, shape,
+                                                   ggml_cont(c->ctx, x),
+                                                   ggml_cont(c->ctx, w),
                                                    qconv_i32_cpu, 1, qp);
                             *out_p = out;
                             *out_nd_p = 4;
@@ -511,6 +583,86 @@ int map_node_quant(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         struct ggml_tensor *y_scale  = get_input(c, n, 6);
         struct ggml_tensor *y_zp     = get_input(c, n, 7);
         if (!xa || !a_scale || !xb || !b_scale || !y_scale) return -1;
+
+        /* Exact integer accumulator, same reason as QLinearConv: summing
+         * dequantised floats lets each product's error into the sum, and an
+         * accumulator landing within a ULP of a code boundary rounds the wrong
+         * way.  Measured on MaskRCNN's classifier head, that cost one whole
+         * detection (see qmatmul_i32.c).  Scoped to plain 2-D A x B, which is
+         * what a quantised fully connected head is; anything batched or
+         * broadcast keeps the f32 path below. */
+        if (ggml_n_dims(xa) == 2 && ggml_n_dims(xb) == 2 &&
+            xa->ne[0] == xb->ne[1]) {
+            const int64_t Kq = xa->ne[0];
+            const int64_t Mq = xa->ne[1];
+            const int64_t Nq = xb->ne[0];
+            (void)Kq;
+
+            float as[1], ys[1], azp[1] = {0}, yzp[1] = {0};
+            float bsv[QMATMUL_I32_MAX_COLS];
+            float bzv[QMATMUL_I32_MAX_COLS] = {0};
+            int n_as = qparam_read(c, n->inputs[1], as, 1);
+            int n_ys = qparam_read(c, n->n_inputs > 6 ? n->inputs[6] : NULL, ys, 1);
+            int n_bs = qparam_read(c, n->n_inputs > 4 ? n->inputs[4] : NULL,
+                                   bsv, QMATMUL_I32_MAX_COLS);
+            qparam_read(c, n->n_inputs > 2 ? n->inputs[2] : NULL, azp, 1);
+            int n_bz = qparam_read(c, n->n_inputs > 5 ? n->inputs[5] : NULL,
+                                   bzv, QMATMUL_I32_MAX_COLS);
+            qparam_read(c, n->n_inputs > 7 ? n->inputs[7] : NULL, yzp, 1);
+
+            if (n_as == 1 && n_ys == 1 && n_bs >= 1 &&
+                Nq <= QMATMUL_I32_MAX_COLS &&
+                (n_bs == 1 || n_bs == (int)Nq)) {
+
+                if (c->n_qconv_ops >= c->qconv_params_cap) {
+                    int newcap = c->qconv_params_cap ? c->qconv_params_cap * 2 : 16;
+                    void **np = (void **)realloc(c->qconv_params,
+                                                 (size_t)newcap * sizeof(void *));
+                    if (!np) return -1;
+                    c->qconv_params = np;
+                    c->qconv_params_cap = newcap;
+                }
+                qmatmul_i32_params_t *qp =
+                    (qmatmul_i32_params_t *)malloc(sizeof(*qp));
+                if (qp) {
+                    c->qconv_params[c->n_qconv_ops++] = qp;
+                    memset(qp, 0, sizeof(*qp));
+                    qp->a_scale = as[0];
+                    qp->y_scale = ys[0];
+                    qp->a_zp = (int32_t)azp[0];
+                    qp->y_zp = (int32_t)yzp[0];
+                    qp->n_b_scale = n_bs;
+                    for (int i = 0; i < n_bs; i++) qp->b_scale[i] = bsv[i];
+                    /* Per column only when the read covered every column;
+                     * otherwise entry 0 is shared, which is correct whenever
+                     * the zero points are equal and never reads past what was
+                     * actually read. */
+                    qp->n_b_zp = (n_bz == (int)Nq) ? n_bz : 1;
+                    for (int i = 0; i < qp->n_b_zp; i++)
+                        qp->b_zp[i] = (int32_t)bzv[i];
+                    quant_bounds(c, n->n_inputs > 7 ? n->inputs[7] : NULL,
+                                 &qp->out_lo, &qp->out_hi);
+
+                    /* B arrives as [N, K]; the kernel walks K contiguously on
+                     * both operands, so it is handed [K, N]. */
+                    struct ggml_tensor *bt_i32 =
+                        ggml_cont(c->ctx, ggml_transpose(c->ctx, xb));
+                    struct ggml_tensor *shape =
+                        ggml_new_tensor_2d(c->ctx, GGML_TYPE_F32, Nq, Mq);
+                    /* xa and bt_i32 go in as SRCS, not as remembered pointers:
+                     * the scheduler then brings them back to the host for this
+                     * CPU-only op.  Made contiguous for the same reason the
+                     * conv path does it: the kernel addresses both operands by
+                     * ne[0]-stride arithmetic, which a view silently breaks. */
+                    out = ggml_map_custom3(c->ctx, shape,
+                                           ggml_cont(c->ctx, xa), bt_i32,
+                                           qmatmul_i32_cpu, 1, qp);
+                    *out_p = out;
+                    *out_nd_p = 2;
+                    return 1;
+                }
+            }
+        }
 
         /* Dequant a */
         struct ggml_tensor *da = xa;
