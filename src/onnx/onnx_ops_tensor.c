@@ -1894,7 +1894,17 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             /* Create output tensor with correct shape */
             int nd = nd_onnx;
             if (nd > GGML_MAX_DIMS) nd = GGML_MAX_DIMS;
-            out = onnx_new_tensor_nd(c->ctx, a->type, out_ne, nd);
+            /* ctx_weight, not ctx: this tensor is filled by
+             * fill_strided_slices() after every allocation, so the pointer in
+             * slice_fill_dst[] has to stay valid for as long as that list
+             * does. c->ctx is the segment's own pool, released once the segment
+             * has computed, and a registration pointing into it would be read
+             * after the free. Every other deferred list already targets
+             * ctx_weight or ctx_host for this reason. */
+            {
+                struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
+                out = onnx_new_tensor_nd(wctx, a->type, out_ne, nd);
+            }
             ggml_set_input(out);
 
             /* Every other deferred list checks this bound before appending;

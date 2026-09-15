@@ -299,47 +299,40 @@ typedef struct {
     int64_t resolved_sizes[ONNX_MAX_RESOLVED];
     int    n_resolved;
 
-    /* Per-segment graphs kept from the previous run, and the resolved sizes
-     * they were built for.
+    /* One scheduler per segment, so each segment keeps its own allocation.
      *
-     * Rebuilding the segments on every inference is what the graphs above are
-     * saved to avoid.  The mapping allocates fresh ggml tensors each time and
-     * a ggml context frees nothing until it is destroyed, so an unchanged
-     * model grew its metadata by ~195 constants and ~193 shape tensors per
-     * call and died on the fourth, 64 bytes short of its 816640-byte weight
-     * context.  Beyond surviving, this also skips re-mapping over a thousand
-     * nodes for a graph that is identical to the one just used.
+     * A single shared scheduler cannot do this: ggml_gallocr_needs_realloc
+     * compares a graph against the last one allocated, segments differ in node
+     * count, so every segment transition re-reserves the arena and frees the
+     * buffers the previous segment's tensors point into -- losing them within
+     * one run, not only between runs.
      *
-     * The cache is keyed on the resolved sizes because those are exactly what
-     * the segment structure depends on: a data-dependent op whose output count
-     * differs from last time changes the shapes downstream of it, and every
-     * graph after the cut has to be rebuilt.  Same sizes, same graphs. */
-    struct ggml_cgraph *seg_graphs[ONNX_MAX_SEGMENTS];
-    int                 n_seg_graphs;      /* 0 = nothing cached yet */
-
-    /* One scheduler per segment, so a cached graph keeps its allocation.
-     *
-     * Caching the graph alone is not enough, and cannot be made enough with
-     * the single shared scheduler: ggml_gallocr_needs_realloc compares a graph
-     * against the last one allocated, segments differ in node count, so every
-     * segment transition re-reserves the arena and frees the buffers the
-     * previous segment's tensors point into.  A cached graph therefore lost
-     * its memory before it was ever reused -- within the same run, not even
-     * between runs.
-     *
-     * Giving each segment its own scheduler makes the allocation survive:
-     * that scheduler sees the same graph every time and leaves the placement
-     * alone.  The cost is one arena per segment, which is the price of the
-     * reuse rather than an accident of it. */
+     * Giving each segment its own scheduler makes the allocation survive until
+     * that segment has computed.  The cost is one arena per segment. */
     ggml_backend_sched_t seg_scheds[ONNX_MAX_SEGMENTS];
     /* Segment 0's graph, which the build produced and the segment loop used
      * to overwrite: ctx->graph is reassigned for each later segment, so after
      * one run the pointer named the LAST segment and a second run computed
-     * that instead of the first.  Saved here so a cached run can put it back. */
+     * that instead of the first.  Saved here so the next run can put it back. */
     struct ggml_cgraph *seg0_graph;
-    int64_t             seg_key_sizes[ONNX_MAX_RESOLVED];
-    char                seg_key_names[ONNX_MAX_RESOLVED][ONNX_MAX_NAME];
-    int                 n_seg_key;
+
+    /* The context a segment's graph and intermediates are built in.
+     *
+     * c->ctx points here while a segment is being mapped, so every op builder
+     * -- which all allocate from c->ctx -- puts this segment's tensors in a
+     * pool that can be thrown away once the segment has computed. Without it
+     * the mapping's tensors accumulate for the life of the model: a ggml
+     * context frees nothing until it is destroyed, and re-mapping every
+     * segment on every run added ~195 constants and ~193 shape tensors per
+     * inference, which exhausted the pool within a handful of predictions.
+     *
+     * Only tensors nothing outlives the segment may live here. Weights,
+     * constants and the outputs of cut ops go to ctx_weight or ctx_host;
+     * whatever a later segment reads is copied into ctx_boundary first. */
+    struct ggml_context *ctx_seg;
+    struct ggml_context *ctx_prev;   /* the segment before it, still open */
+    struct ggml_context *ctx_main;   /* c->ctx outside a segment */
+    size_t               seg_ctx_size;  /* bytes per segment pool */
 
     /* Copies queued by one segment: the destination tensors have to be given
      * memory before any data can be written into them, so the pairs are
