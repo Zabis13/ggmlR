@@ -752,8 +752,25 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_BACKENDS 16
 #endif
 
+// ggmlR: 128, not upstream's 64.
+//
+// ⚠️ DIVERGENCE FROM UPSTREAM, deliberate. MaskRCNN-12-int8 aborts at 64 before
+// it can run on the GPU at all: three consecutive 22-node CPU splits each want
+// exactly 64 inputs, because the detector's CPU-only custom ops (NMS, RoiAlign,
+// the quantised conv and matmul) sit in 80 per-class branches and every tensor
+// crossing back to the host costs a slot. Measured with GGML_SCHED_DEBUG_SPLITS.
+//
+// The cost is real and everyone pays it: context_buffer is
+// graph_size * this * 2 * sizeof(ggml_tensor), so for MaskRCNN's 3001 nodes it
+// goes from 141 MB to 283 MB, and that allocation happens per scheduler, not
+// per model that needs the headroom.
+//
+// This is a workaround, not the fix. The right fix is for those custom ops to
+// become real GPU ops (supports_op == true), which stops them splitting the
+// graph in the first place; until then this buys enough headroom for the
+// detector to run and be measured. Override with -DGGML_SCHED_MAX_SPLIT_INPUTS.
 #ifndef GGML_SCHED_MAX_SPLIT_INPUTS
-#define GGML_SCHED_MAX_SPLIT_INPUTS 64
+#define GGML_SCHED_MAX_SPLIT_INPUTS 128
 #endif
 
 #ifndef GGML_SCHED_MAX_COPIES
@@ -1372,6 +1389,38 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                             SET_CAUSE(tensor_copy, "4.cpy");
                         }
                         int n_inputs = split->n_inputs++;
+                        if (n_inputs >= GGML_SCHED_MAX_SPLIT_INPUTS) {
+                            /* Diagnostic mode: report and keep going with a
+                             * deliberately wrong graph, so the run reaches the
+                             * summary below and shows every oversized split
+                             * rather than only the first one to overflow.
+                             * Results are garbage under this env var. */
+                            if (getenv("GGML_SCHED_DEBUG_SPLITS")) {
+                                /* Count how far past the limit this split would
+                                 * have gone, so a run reports the size the
+                                 * constant would actually need instead of only
+                                 * saying "too many". */
+                                static int worst_overflow = 0;
+                                if (n_inputs + 1 > worst_overflow) {
+                                    worst_overflow = n_inputs + 1;
+                                    fprintf(stderr,
+                                        "[sched] would need at least %d inputs "
+                                        "(limit %d)\n",
+                                        worst_overflow, GGML_SCHED_MAX_SPLIT_INPUTS);
+                                }
+                                fprintf(stderr,
+                                    "[sched] split %d (backend %s, from node %d) overflowed at input %d\n"
+                                    "        node '%s' op=%s needs src[%d] '%s' (op=%s) from backend %s\n",
+                                    i_split, ggml_backend_name(sched->backends[split->backend_id]),
+                                    split->i_start, n_inputs,
+                                    node->name, ggml_op_name(node->op), j,
+                                    src->name, ggml_op_name(src->op),
+                                    ggml_backend_name(sched->backends[src_backend_id]));
+                                split->n_inputs = GGML_SCHED_MAX_SPLIT_INPUTS;
+                                node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
+                                continue;
+                            }
+                        }
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split->inputs[n_inputs] = src;
                     }
@@ -1381,6 +1430,56 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         }
         split->i_end = graph->n_nodes;
         sched->n_splits = i_split + 1;
+
+        if (getenv("GGML_SCHED_DEBUG_SPLITS")) {
+            int worst = 0, worst_id = -1, n_big = 0;
+            for (int s = 0; s < sched->n_splits; s++) {
+                const int ni = sched->splits[s].n_inputs;
+                if (ni > worst) { worst = ni; worst_id = s; }
+                if (ni > GGML_SCHED_MAX_SPLIT_INPUTS / 2) n_big++;
+            }
+            fprintf(stderr,
+                "[sched] %d splits over %d nodes; worst split %d has %d inputs "
+                "(limit %d); %d splits above half the limit\n",
+                sched->n_splits, graph->n_nodes, worst_id, worst,
+                GGML_SCHED_MAX_SPLIT_INPUTS, n_big);
+            for (int s = 0; s < sched->n_splits; s++) {
+                const struct ggml_backend_sched_split * sp = &sched->splits[s];
+                if (sp->n_inputs <= GGML_SCHED_MAX_SPLIT_INPUTS / 2) continue;
+                /* List the inputs themselves, by size. Whether raising the
+                 * limit is the right fix or the wrong one depends on WHAT is
+                 * filling the slots: many tiny constants mean the graph is
+                 * paying a split input for a handful of floats, and pinning
+                 * those to the host would free the slots without more memory;
+                 * large tensors mean the traffic is real and the limit is
+                 * simply too small for this graph. */
+                {
+                    size_t small = 0, total_bytes = 0;
+                    for (int q = 0; q < sp->n_inputs; q++) {
+                        const size_t nb = ggml_nbytes(sp->inputs[q]);
+                        total_bytes += nb;
+                        if (nb <= 256) small++;
+                    }
+                    fprintf(stderr,
+                        "[sched]   split %d inputs: %d total, %zu of them <=256 B, "
+                        "%.2f MB altogether\n",
+                        s, sp->n_inputs, small, total_bytes / 1e6);
+                    /* Name the first few: when the slots are all tiny, what
+                     * matters is WHICH tensors they are -- a repeated constant
+                     * that could stay on the host reads very differently from
+                     * genuinely distinct per-node scalars. */
+                    for (int q = 0; q < sp->n_inputs && q < 12; q++) {
+                        const struct ggml_tensor * t = sp->inputs[q];
+                        fprintf(stderr, "[sched]     in[%2d] '%s' op=%s ne=[%lld,%lld] %zu B\n",
+                            q, t->name, ggml_op_name(t->op),
+                            (long long)t->ne[0], (long long)t->ne[1], ggml_nbytes(t));
+                    }
+                }
+                fprintf(stderr, "[sched]   split %d: backend %s, nodes %d..%d (%d), inputs %d\n",
+                    s, ggml_backend_name(sched->backends[sp->backend_id]),
+                    sp->i_start, sp->i_end, sp->i_end - sp->i_start, sp->n_inputs);
+            }
+        }
     }
 
     if (sched->debug) {

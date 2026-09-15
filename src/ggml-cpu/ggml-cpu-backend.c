@@ -14,6 +14,10 @@
 #include "vec.h"
 #include "ops.h"
 #include "ggml.h"
+/* ggmlR extension: the host kernel for GGML_OP_QCONV_I32 lives with the ONNX
+ * code it was written for, rather than in ops.c, because it reproduces ONNX
+ * Runtime's arithmetic and is only meaningful next to that reasoning. */
+#include "../onnx/qconv_i32.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -1922,6 +1926,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_conv_2d(params, tensor);
             } break;
+        case GGML_OP_QCONV_I32:
+            {
+                qconv_i32_compute(tensor, params->ith, params->nth);
+            } break;
         case GGML_OP_CONV_3D:
             {
                 ggml_compute_forward_conv_3d(params, tensor);
@@ -2386,6 +2394,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_CONV_TRANSPOSE_2D:
+        case GGML_OP_QCONV_I32:
             {
                 n_tasks = n_threads;
             } break;

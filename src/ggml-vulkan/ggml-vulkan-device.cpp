@@ -881,6 +881,10 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_umap_sgd;
     vk_pipeline pipeline_pairwise_dist;
+    vk_pipeline pipeline_roi_align;
+    vk_pipeline pipeline_qmatmul_i32;
+    vk_pipeline pipeline_qconv_i32;
+    vk_pipeline pipeline_nms;
     vk_pipeline pipeline_knn_tiled;
     vk_pipeline pipeline_matmul_f64;
     vk_pipeline pipeline_sparse_lognorm;
@@ -1465,6 +1469,96 @@ struct vk_op_pairwise_dist_push_constants {
 };
 static_assert(sizeof(vk_op_pairwise_dist_push_constants) <= 256, "sizeof(vk_op_pairwise_dist_push_constants) must be <= 256");
 
+// RoiAlign push constants. Must match the `parameter` block in
+// vulkan-shaders/roi_align.comp exactly: eight 4-byte scalars then one float.
+// sampling_ratio is SIGNED -- 0 means "adaptive" and the shader tests it with
+// `> 0`, which an unsigned copy would still pass but for the wrong reason if a
+// caller ever handed it a negative value.
+struct vk_op_roi_align_push_constants {
+    uint32_t W;
+    uint32_t H;
+    uint32_t C;
+    uint32_t num_rois;
+    uint32_t ow;
+    uint32_t oh;
+    int32_t  sampling_ratio;
+    uint32_t mode;
+    float    spatial_scale;
+};
+static_assert(sizeof(vk_op_roi_align_push_constants) <= 256, "sizeof(vk_op_roi_align_push_constants) must be <= 256");
+
+// QLinearMatMul (i32 accumulator) push constants. Must match the `parameter`
+// block in vulkan-shaders/qmatmul_i32.comp exactly. b_zp_any is computed on the
+// host so the shader does not scan the zero-point table in every thread.
+struct vk_op_qmatmul_i32_push_constants {
+    uint32_t M;
+    uint32_t N;
+    uint32_t K;
+    float    a_scale;
+    float    y_scale;
+    int32_t  a_zp;
+    int32_t  y_zp;
+    uint32_t n_b_scale;
+    uint32_t n_b_zp;
+    uint32_t b_zp_any;
+    float    out_lo;
+    float    out_hi;
+};
+static_assert(sizeof(vk_op_qmatmul_i32_push_constants) <= 256, "sizeof(vk_op_qmatmul_i32_push_constants) must be <= 256");
+
+// QLinearConv (i32 accumulator) push constants. Must match the `parameter`
+// block in vulkan-shaders/qconv_i32.comp exactly.
+struct vk_op_qconv_i32_push_constants {
+    uint32_t W_in;
+    uint32_t H_in;
+    uint32_t C_in;
+    uint32_t W_out;
+    uint32_t H_out;
+    uint32_t C_out;
+    uint32_t KW;
+    uint32_t KH;
+    int32_t  stride_w;
+    int32_t  stride_h;
+    int32_t  pad_w;
+    int32_t  pad_h;
+    int32_t  dil_w;
+    int32_t  dil_h;
+    float    x_scale;
+    float    y_scale;
+    int32_t  x_zp;
+    int32_t  y_zp;
+    uint32_t n_w_scale;
+    uint32_t n_w_zp;
+    uint32_t has_bias;
+    float    out_lo;
+    float    out_hi;
+    // w_zero_point is optional in the operator spec. Its binding is filled
+    // with another tensor when it is absent, because an unwritten descriptor
+    // is not a legal source -- so the shader needs to be told not to read it,
+    // rather than inferring absence from a length.
+    uint32_t has_w_zp;
+    // Diagnostic, GGMLR_QCONV_DEBUG_ACC=1: write the integer accumulator
+    // instead of the requantised value, so a per-node trace can tell a
+    // summation difference from a rounding one.
+    uint32_t debug_acc;
+};
+static_assert(sizeof(vk_op_qconv_i32_push_constants) <= 256, "sizeof(vk_op_qconv_i32_push_constants) must be <= 256");
+
+// NonMaxSuppression push constants. Must match the `parameter` block in
+// vulkan-shaders/nms.comp exactly.
+struct vk_op_nms_push_constants {
+    uint32_t num_boxes;
+    uint32_t num_classes;
+    uint32_t N;
+    uint32_t max_per_pair;
+    int32_t  max_output;
+    float    iou_thresh;
+    float    score_thresh;
+    uint32_t have_score_thresh;
+    uint32_t center_point_box;
+};
+static_assert(sizeof(vk_op_nms_push_constants) <= 256, "sizeof(vk_op_nms_push_constants) must be <= 256");
+
 // Tiled fused k-NN push constants. Must match the `parameter` block in
 // vulkan-shaders/knn_tiled.comp exactly (three uints). k must equal the K
 // specialization constant the pipeline was created with.
@@ -1521,11 +1615,11 @@ static vk_op_binary_push_constants vk_op_binary_push_constants_init(
     return p; // misalign_offsets set later in ggml_vk_op
 }
 
-struct vk_op_scatter_elements_push_constants {
-    uint32_t ne;        // row_size
-    uint32_t n_idx;     // number of indices
-    uint32_t reduction; // 0=overwrite, 1=add
-};
+/* No vk_op_scatter_elements_push_constants: SCATTER_ELEMENTS sends
+ * vk_op_binary_push_constants like the other binary ops, and the pipeline is
+ * declared with that size. A second, smaller struct for the same shader is
+ * what made the pipeline's push constant range too short to cover the fields
+ * the shader reads -- see the note at ggml_vk_create_pipeline for it. */
 
 struct vk_op_multi_add_push_constants {
     // shape for dst

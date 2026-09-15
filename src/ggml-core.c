@@ -1092,9 +1092,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GATED_LINEAR_ATTN_BACK",
     // DIVERGENCE from upstream: LayerNorm backward, see ggml_norm_back().
     "NORM_BACK",
+    // DIVERGENCE from upstream: ONNX QLinearConv, see ggml_qconv_i32().
+    "QCONV_I32",
 };
 
-static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
+static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1216,9 +1218,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "gated_linear_attn_back(x)",
     // DIVERGENCE from upstream: LayerNorm backward, see ggml_norm_back().
     "norm_back(x)",
+    // DIVERGENCE from upstream: ONNX QLinearConv, see ggml_qconv_i32().
+    "qconv_i32(x, w)",
 };
 
-static_assert(GGML_OP_COUNT == 106, "GGML_OP_COUNT != 106");
+static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 

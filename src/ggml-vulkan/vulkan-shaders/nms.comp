@@ -1,0 +1,285 @@
+#version 450
+
+// NonMaxSuppression (ONNX) — direct Vulkan dispatch.
+//
+// A port of src/onnx/nms.c. Unlike the other three ONNX shaders in this
+// directory, this one is NOT embarrassingly parallel, and the shape of it is
+// dictated by which parts can move and which cannot:
+//
+//   - filtering candidates by the score threshold   -- parallel
+//   - sorting them by score, ties broken by index   -- parallel (bitonic)
+//   - selecting, testing each against those ALREADY KEPT -- strictly serial
+//
+// The selection loop cannot be parallelised at all: whether candidate i
+// survives depends on which earlier candidates survived, so it is a sequential
+// dependence, not a reduction. ONE WORKGROUP PER (batch, class) pair therefore
+// does the first two phases cooperatively and the third on a single invocation.
+// The parallelism across classes is where the win is -- MaskRCNN runs 80 of
+// them, one per COCO class.
+//
+// ⚠️ TWO PLACES DECIDE WHETHER THIS AGREES WITH ONNX RUNTIME:
+//
+//   1. The tie-break. Equal scores are ordered by index, LOWEST FIRST. NMS is
+//      order-dependent -- whichever box comes first suppresses its neighbours
+//      rather than the other way round -- and MaskRCNN's surviving class puts
+//      95 candidates through here with the top five sharing one score to the
+//      bit. Leaving ties unordered dropped three detections that ORT keeps,
+//      and the highest-scoring ones at that. (The same fix already exists in
+//      argsort.comp; this shader sorts its own candidates, so it needs its own.)
+//
+//   2. iou_corner(). Copied operation for operation from the CPU kernel, which
+//      in turn mirrors non_max_suppression_helper.h. The answer sits on a
+//      knife edge: MaskRCNN's RPN has a pair whose IoU is 0.7000000477 against
+//      a threshold of 0.7 -- four parts in a hundred million over the line.
+//      Reassociating the arithmetic moves it to 0.6999989, which is UNDER, and
+//      that single flip cascades through the whole detection list. Hence
+//      `precise`, the MaxMin ordering of each coordinate pair, and the early
+//      rejection on the bounds BEFORE any area is formed.
+//
+// A candidate is tested against the boxes already SELECTED and nothing else --
+// no "suppressed" flag array. Flagging ahead of time is equivalent only while
+// every winner survives; once max_output_boxes_per_class cuts the loop short,
+// a candidate flagged by a box that the cap later dropped stays wrongly
+// flagged. Measured on MaskRCNN node 1170, 510 selections: forward marking
+// disagreed with ORT on 49, this form on 3, and those 3 sit within a float ulp
+// of the threshold.
+
+#extension GL_EXT_control_flow_attributes : enable
+
+// One workgroup per (batch, class); WG threads cooperate on filter and sort.
+const uint WG = 256u;
+// Bitonic sort needs a power-of-two array in shared memory. Classes with more
+// candidates than this fall back to the CPU kernel (the host checks before
+// dispatching), which keeps the shader simple rather than adding a slow path
+// that would rarely run and never be exercised.
+const uint MAX_CAND = 1024u;
+
+layout(local_size_x = WG, local_size_y = 1, local_size_z = 1) in;
+
+// boxes: ggml [4, num_boxes, N] — box b of batch n at 4*(b + num_boxes*n).
+layout (binding = 0) readonly buffer B  { float boxes[]; };
+// scores: ggml [num_boxes, num_classes, N].
+layout (binding = 1) readonly buffer S  { float scores[]; };
+// Per-(batch, class) selections, [max_per_pair, num_classes * N] — each
+// workgroup owns its own slice and writes only there. Compacting these into
+// the operator's [3, max_selected] output happens on the HOST, in the CPU
+// kernel, for two reasons that are not stylistic:
+//
+//   - ONNX orders the output batch-major then class-major, and workgroups
+//     finish in whatever order the GPU schedules them. An atomic counter would
+//     hand out slots in arrival order and permute the result.
+//   - max_output_boxes_per_class is a per-class cap, but max_selected is a
+//     GLOBAL one: the CPU loop STOPS once the output is full, so later classes
+//     contribute nothing. That is a sequential decision across workgroups and
+//     cannot be expressed by each of them claiming slots independently.
+//
+// So the shader answers the parallel question -- which boxes survive within
+// each class -- and the host does the serial bookkeeping.
+layout (binding = 2) writeonly buffer O { int   sel_idx[]; };
+// How many each (batch, class) pair kept; same flat pair index.
+layout (binding = 3) writeonly buffer C { int   sel_cnt[]; };
+
+layout (push_constant) uniform parameter {
+    uint  num_boxes;
+    uint  num_classes;
+    uint  N;                  // batch count
+    uint  max_per_pair;       // stride of sel_idx: cap on one (batch, class)
+    int   max_output;         // per class cap; <= 0 means num_boxes
+    float iou_thresh;
+    float score_thresh;
+    uint  have_score_thresh;  // 0 = no score filter at all
+    uint  center_point_box;   // 1 = (cx, cy, w, h) instead of corners
+} p;
+
+shared float sh_score[MAX_CAND];
+shared int   sh_idx[MAX_CAND];
+shared uint  sh_count;
+
+// Order a pair the way ONNX Runtime's MaxMin does.
+void nms_maxmin(float lhs, float rhs, out float mn, out float mx) {
+    if (lhs >= rhs) { mn = rhs; mx = lhs; }
+    else            { mn = lhs; mx = rhs; }
+}
+
+// IoU, operation for operation as non_max_suppression_helper.h computes it.
+// `precise` stops the compiler contracting or reassociating any of it -- see
+// note 2 in the header, this is the knife-edge comparison.
+precise float iou_corner(float y1_a, float x1_a, float y2_a, float x2_a,
+                         float y1_b, float x1_b, float y2_b, float x2_b) {
+    float x1_min, x1_max, x2_min, x2_max;
+    float y1_min, y1_max, y2_min, y2_max;
+
+    nms_maxmin(x1_a, x2_a, x1_min, x1_max);
+    nms_maxmin(x1_b, x2_b, x2_min, x2_max);
+
+    const float inter_x_min = max(x1_min, x2_min);
+    const float inter_x_max = min(x1_max, x2_max);
+    if (inter_x_max <= inter_x_min) { return 0.0; }
+
+    nms_maxmin(y1_a, y2_a, y1_min, y1_max);
+    nms_maxmin(y1_b, y2_b, y2_min, y2_max);
+
+    const float inter_y_min = max(y1_min, y2_min);
+    const float inter_y_max = min(y1_max, y2_max);
+    if (inter_y_max <= inter_y_min) { return 0.0; }
+
+    precise float inter_area = (inter_x_max - inter_x_min)
+                             * (inter_y_max - inter_y_min);
+    if (inter_area <= 0.0) { return 0.0; }
+
+    precise float area_a = (x1_max - x1_min) * (y1_max - y1_min);
+    precise float area_b = (x2_max - x2_min) * (y2_max - y2_min);
+    precise float union_area = area_a + area_b - inter_area;
+
+    if (area_a <= 0.0 || area_b <= 0.0 || union_area <= 0.0) { return 0.0; }
+
+    return inter_area / union_area;
+}
+
+// Fetch box `idx` of batch `n` as corners, converting from centre form when the
+// operator says so.
+void fetch_box(uint n, int idx, out float y1, out float x1,
+                                out float y2, out float x2) {
+    const uint base = 4u * (uint(idx) + p.num_boxes * n);
+    if (p.center_point_box == 1u) {
+        const float cx = boxes[base + 0u];
+        const float cy = boxes[base + 1u];
+        const float w  = boxes[base + 2u];
+        const float h  = boxes[base + 3u];
+        y1 = cy - h * 0.5; x1 = cx - w * 0.5;
+        y2 = cy + h * 0.5; x2 = cx + w * 0.5;
+    } else {
+        y1 = boxes[base + 0u];
+        x1 = boxes[base + 1u];
+        y2 = boxes[base + 2u];
+        x2 = boxes[base + 3u];
+    }
+}
+
+// Does this score clear the threshold? Absent threshold means no filter at
+// all, so a score of exactly 0 -- the bottom of a quantised range, and common
+// -- stays.
+bool nms_passes(float s) {
+    return p.have_score_thresh == 0u || s > p.score_thresh;
+}
+
+void main() {
+    const uint pair = gl_WorkGroupID.x;         // (batch, class) flattened
+    if (pair >= p.N * p.num_classes) { return; }
+
+    const uint n   = pair / p.num_classes;
+    const uint cls = pair % p.num_classes;
+    const uint tid = gl_LocalInvocationID.x;
+
+    if (tid == 0u) { sh_count = 0u; }
+    barrier();
+
+    // --- phase 1: collect candidates above the score threshold -------------
+    //
+    // The atomic hands out slots in arrival order, which is NOT index order,
+    // so the sort below cannot rely on the array starting sorted by index --
+    // the tie-break has to be explicit, and it is.
+    const uint score_base = p.num_boxes * (cls + p.num_classes * n);
+    for (uint i = tid; i < p.num_boxes; i += WG) {
+        const float s = scores[score_base + i];
+        if (nms_passes(s)) {
+            const uint slot = atomicAdd(sh_count, 1u);
+            if (slot < MAX_CAND) {
+                sh_score[slot] = s;
+                sh_idx[slot]   = int(i);
+            }
+        }
+    }
+    barrier();
+
+    uint n_cand = min(sh_count, MAX_CAND);
+
+    // Pad to a power of two with -inf so the bitonic network can run over a
+    // fixed size; the padding sorts to the end and is never selected.
+    uint n_pow2 = 1u;
+    while (n_pow2 < n_cand) { n_pow2 <<= 1u; }
+    for (uint i = n_cand + tid; i < n_pow2; i += WG) {
+        sh_score[i] = -1.0 / 0.0;   // -inf
+        sh_idx[i]   = 0x7fffffff;   // ties never prefer padding
+    }
+    barrier();
+
+    // --- phase 2: bitonic sort, score descending, ties by lowest index -----
+    for (uint k = 2u; k <= n_pow2; k <<= 1u) {
+        for (uint j = k >> 1u; j > 0u; j >>= 1u) {
+            for (uint i = tid; i < n_pow2; i += WG) {
+                const uint ixj = i ^ j;
+                if (ixj > i) {
+                    // Descending by score; equal scores put the LOWER INDEX
+                    // first -- note 1 in the header, this decides which box
+                    // suppresses which.
+                    const bool desc = (sh_score[i] != sh_score[ixj])
+                                    ? (sh_score[i] < sh_score[ixj])
+                                    : (sh_idx[i]   > sh_idx[ixj]);
+                    const bool up = ((i & k) == 0u);
+                    if (desc == up) {
+                        const float ts = sh_score[i];
+                        sh_score[i]    = sh_score[ixj];
+                        sh_score[ixj]  = ts;
+                        const int ti   = sh_idx[i];
+                        sh_idx[i]      = sh_idx[ixj];
+                        sh_idx[ixj]    = ti;
+                    }
+                }
+            }
+            barrier();
+        }
+    }
+
+    // --- phase 3: selection, serial by construction ------------------------
+    //
+    // One invocation walks the sorted candidates and tests each against the
+    // boxes it has already kept. There is no way to spread this: the test for
+    // candidate i reads the set produced by candidates 0..i-1.
+    if (tid == 0u) {
+        int cap = (p.max_output > 0) ? p.max_output : int(p.num_boxes);
+        // Never write past this pair's slice; the host sized it to the cap.
+        if (cap > int(p.max_per_pair)) { cap = int(p.max_per_pair); }
+
+        // Winners are compacted into the FRONT of sh_idx as they are found.
+        // That is safe because a winner is always at or before the slot it
+        // moves to: `sel` never exceeds `i`, so the write cannot clobber a
+        // candidate the loop has not read yet.
+        int sel = 0;
+        for (uint i = 0u; i < n_cand && sel < cap; ++i) {
+            const int idx_i = sh_idx[i];
+
+            float y1_i, x1_i, y2_i, x2_i;
+            fetch_box(n, idx_i, y1_i, x1_i, y2_i, x2_i);
+
+            bool keep = true;
+            for (int s = 0; s < sel; ++s) {
+                float y1_j, x1_j, y2_j, x2_j;
+                fetch_box(n, sh_idx[uint(s)], y1_j, x1_j, y2_j, x2_j);
+
+                const float iou = iou_corner(y1_i, x1_i, y2_i, x2_i,
+                                             y1_j, x1_j, y2_j, x2_j);
+                if (iou > p.iou_thresh) { keep = false; break; }
+            }
+            if (!keep) { continue; }
+
+            sh_idx[uint(sel)] = idx_i;   // compact the winner forward
+            sel += 1;
+        }
+
+        sel_cnt[pair] = sel;
+        sh_count = uint(sel);
+    }
+    barrier();
+
+    // --- phase 4: write this pair's winners into its own slice -------------
+    //
+    // No atomics and no sharing: the slice belongs to this workgroup alone, so
+    // the host can read the pairs back in the operator's own batch-major,
+    // class-major order regardless of the order the GPU ran them in.
+    const uint sel_n = sh_count;
+    const uint out_base = pair * p.max_per_pair;
+    for (uint i = tid; i < sel_n; i += WG) {
+        sel_idx[out_base + i] = sh_idx[i];
+    }
+}

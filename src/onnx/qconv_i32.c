@@ -74,40 +74,81 @@
  */
 
 #include "qconv_i32.h"
+#include "../ggml-impl.h"      /* ggml_get_op_params_* */
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 
-/* Everything this kernel needs that is not a tensor argument.
+/* GGML_OP_QCONV_I32 on the host.
  *
- * Held in the op's userdata, allocated once per graph build and owned by the
- * ONNX context -- NOT freed here.  The scales are copied by value rather than
- * kept as tensor pointers: a pointer to a tensor captured at build time can
- * dangle by the time the op runs, because segmented execution resets and
- * reallocates buffers in between.  That exact mistake is why nms_cpu has to
- * null-check a tensor it was handed at build time. */
-
-void qconv_i32_cpu(struct ggml_tensor *dst,
-                   const struct ggml_tensor *a,   /* dummy: shape only */
-                   const struct ggml_tensor *b,   /* x, quantised, F32-stored */
-                   const struct ggml_tensor *c,   /* w, quantised, F32-stored */
-                   int ith, int nth, void *userdata) {
-    (void)a;
-    const qconv_i32_params_t *p = (const qconv_i32_params_t *)userdata;
+ * Reads everything from the tensor it is handed: scalars out of op_params, the
+ * per-output-channel tables out of src[2..4]. It used to take a
+ * qconv_i32_params_t by userdata, which carried the tables as fixed 4096-entry
+ * arrays copied per node -- 48 KB each, 3 MB across a MaskRCNN graph, and a
+ * second copy of values the graph already held.
+ *
+ * src[4] (bias) is NULL when the convolution has none.
+ */
+void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
+    const struct ggml_tensor *b  = dst ? dst->src[0] : NULL;  /* x */
+    const struct ggml_tensor *c  = dst ? dst->src[1] : NULL;  /* w */
+    const struct ggml_tensor *ts = dst ? dst->src[2] : NULL;  /* w_scale */
+    const struct ggml_tensor *tz = dst ? dst->src[3] : NULL;  /* w_zp    */
+    const struct ggml_tensor *tb = dst ? dst->src[4] : NULL;  /* bias, may be NULL */
+    const struct ggml_tensor *tm = dst ? dst->src[5] : NULL;  /* mult, per channel */
 
     /* Every pointer is checked before it is followed: under segmented
      * execution a tensor that existed at build time may have no data now, and
      * reading it then is a bare segfault in a worker thread with no message,
      * because it never reaches GGML_ABORT. */
-    if (!p || !b || !c || !dst || !b->data || !c->data || !dst->data) {
+    if (!b || !c || !ts || !dst || !tm ||
+        !b->data || !c->data || !ts->data || !dst->data || !tm->data ||
+        (tz && !tz->data) || (tb && !tb->data)) {
         if (ith == 0)
-            fprintf(stderr, "[qconv_i32] missing tensor (p=%p x=%p w=%p dst=%p)"
-                            " -- output left untouched\n",
-                    (const void *)p, (const void *)b, (const void *)c,
-                    (const void *)dst);
+            fprintf(stderr, "[qconv_i32] missing tensor (x=%p w=%p ws=%p wz=%p"
+                            " dst=%p) -- output left untouched\n",
+                    (const void *)b, (const void *)c, (const void *)ts,
+                    (const void *)tz, (const void *)dst);
         return;
     }
+
+    /* op_params, in the order ggml_qconv_i32() wrote them. */
+    const int32_t stride_w = ggml_get_op_params_i32(dst, 0);
+    const int32_t stride_h = ggml_get_op_params_i32(dst, 1);
+    const int32_t pad_w    = ggml_get_op_params_i32(dst, 2);
+    const int32_t pad_h    = ggml_get_op_params_i32(dst, 3);
+    const int32_t dil_w    = ggml_get_op_params_i32(dst, 4);
+    const int32_t dil_h    = ggml_get_op_params_i32(dst, 5);
+    /* Slots 6 and 7 hold x_scale and y_scale. The kernel no longer reads them:
+     * both are folded into the precomputed mult in src[5]. They stay in
+     * op_params because they describe the op. */
+    const int32_t x_zp     = ggml_get_op_params_i32(dst, 8);
+    const int32_t y_zp     = ggml_get_op_params_i32(dst, 9);
+    const float   out_lo   = ggml_get_op_params_f32(dst, 10);
+    const float   out_hi   = ggml_get_op_params_f32(dst, 11);
+
+    /* Table lengths come off the tensors rather than a separate field, so the
+     * two cannot disagree. Length 1 means the exporter quantised per tensor. */
+    const float  *mult_t    = (const float *)tm->data;
+    const int64_t n_w_scale = ts->ne[0];
+    (void)n_w_scale;   /* w_scale reaches the kernel only through mult now */
+    const int64_t n_w_zp    = tz ? tz->ne[0] : 0;
+
+    /* A zero point reaches this kernel as F32 (INT8 in the file, widened on
+     * load) and a bias as I32 (the spec fixes that type). Both hold whole
+     * numbers, so each is read at whatever type it actually carries: casting
+     * the pointer instead would reinterpret a float's bit pattern as an
+     * integer -- not a wrong number but a wild one, and silently. */
+    const int   wz_is_f32 = (tz && tz->type == GGML_TYPE_F32);
+    const void *w_zp_raw  = tz ? tz->data : NULL;
+    const int   bi_is_f32 = (tb && tb->type == GGML_TYPE_F32);
+    const void *bias_raw  = tb ? tb->data : NULL;
+
+    #define QCONV_WZP(i)  (wz_is_f32 ? (int32_t)((const float   *)w_zp_raw)[i] \
+                                     :          ((const int32_t *)w_zp_raw)[i])
+    #define QCONV_BIAS(i) (bi_is_f32 ? (int32_t)((const float   *)bias_raw)[i] \
+                                     :          ((const int32_t *)bias_raw)[i])
 
     /* This kernel reads host memory.  A non-NULL ->data is not enough: on a
      * device backend it is an offset into VRAM, which passes a NULL check and
@@ -160,7 +201,7 @@ void qconv_i32_cpu(struct ggml_tensor *dst,
                     ew * (size_t)c->ne[0] * (size_t)c->ne[1]);
     }
     const int64_t W_out = dst->ne[0], H_out = dst->ne[1], C_out = dst->ne[2];
-    const int64_t KW = p->kw, KH = p->kh;
+    const int64_t KW = c->ne[0], KH = c->ne[1];
 
     /* Rows are split across threads; each output element is independent. */
     const int64_t total = H_out * C_out;
@@ -180,16 +221,18 @@ void qconv_i32_cpu(struct ggml_tensor *dst,
          * 44622, and the classifier logits from 25962 to 64591.  ONNX Runtime
          * itself requantises in float, so extra precision here does not move
          * toward the reference, it moves away from it.  Do not "fix" this. */
-        const float mult = p->x_scale * p->w_scale[p->n_w_scale > 1 ? oc : 0]
-                         / p->y_scale;
-        const int32_t wzp = p->w_zp[p->n_w_zp > 1 ? oc : 0];
-        const int32_t bias = p->bias ? p->bias[oc] : 0;
+        /* Read, not recomputed: see ggml_qconv_i32() in ggml.h for why the
+         * multiplier is precomputed. Recomputing it here would put this kernel
+         * one ulp away from the shader again. */
+        const float mult = mult_t[oc];
+        const int32_t wzp  = w_zp_raw ? QCONV_WZP(n_w_zp > 1 ? oc : 0) : 0;
+        const int32_t bias = bias_raw ? QCONV_BIAS(oc) : 0;
 
         /* sum(wq) over the whole filter for this output channel: it depends on
          * oc alone, so it is hoisted out of the ow loop.  ONNX Runtime folds
          * the same quantity into column_sums_ once at pre-pack time. */
         int32_t sum_w_oc = 0;
-        if (p->x_zp != 0) {
+        if (x_zp != 0) {
             for (int64_t kh = 0; kh < KH; kh++)
                 for (int64_t kw = 0; kw < KW; kw++)
                     for (int64_t ic = 0; ic < C_in; ic++)
@@ -207,10 +250,10 @@ void qconv_i32_cpu(struct ggml_tensor *dst,
             int32_t sum_pairs = 0;
 
             for (int64_t kh = 0; kh < KH; kh++) {
-                const int64_t ih = oh * p->stride_h - p->pad_h + kh * p->dil_h;
+                const int64_t ih = oh * stride_h - pad_h + kh * dil_h;
                 const int h_pad = (ih < 0 || ih >= H_in);
                 for (int64_t kw = 0; kw < KW; kw++) {
-                    const int64_t iw = ow * p->stride_w - p->pad_w + kw * p->dil_w;
+                    const int64_t iw = ow * stride_w - pad_w + kw * dil_w;
                     const int pad = h_pad || iw < 0 || iw >= W_in;
 
                     for (int64_t ic = 0; ic < C_in; ic += 2) {
@@ -219,10 +262,10 @@ void qconv_i32_cpu(struct ggml_tensor *dst,
                          * product is xq*wq with xq = x_zp -- the -x_zp*sum(wq)
                          * term below then cancels it, which is why skipping
                          * the tap entirely gives the same answer. */
-                        const int32_t xa = pad ? p->x_zp :
+                        const int32_t xa = pad ? x_zp :
                             (int32_t)xd[iw + W_in * ih + W_in * H_in * ic];
                         const int32_t xb = (ic + 1 < C_in)
-                            ? (pad ? p->x_zp :
+                            ? (pad ? x_zp :
                                (int32_t)xd[iw + W_in * ih + W_in * H_in * (ic + 1)])
                             : 0;
                         const int32_t wa =
@@ -254,33 +297,79 @@ void qconv_i32_cpu(struct ggml_tensor *dst,
              * RowSum: acc = sum(xq*wq) - x_zp*sum(wq) - w_zp*sum(xq) + bias.
              * w_zp is zero on every symmetric path, and MlasConvSymPackWSize
              * refuses the path otherwise, so only the x_zp term is present. */
-            int32_t acc = sum_pairs + bias - p->x_zp * sum_w_oc;
+            int32_t acc = sum_pairs + bias - x_zp * sum_w_oc;
             if (wzp != 0) {
                 /* Not reachable on the symmetric path; kept so a non-zero
                  * weight zero point is still arithmetically correct. */
                 int32_t sum_x = 0;
                 for (int64_t kh = 0; kh < KH; kh++) {
-                    const int64_t ih = oh * p->stride_h - p->pad_h + kh * p->dil_h;
+                    const int64_t ih = oh * stride_h - pad_h + kh * dil_h;
                     for (int64_t kw = 0; kw < KW; kw++) {
-                        const int64_t iw = ow * p->stride_w - p->pad_w + kw * p->dil_w;
+                        const int64_t iw = ow * stride_w - pad_w + kw * dil_w;
                         const int pad = ih < 0 || ih >= H_in || iw < 0 || iw >= W_in;
                         for (int64_t ic = 0; ic < C_in; ic++)
-                            sum_x += pad ? p->x_zp :
+                            sum_x += pad ? x_zp :
                                 (int32_t)xd[iw + W_in * ih + W_in * H_in * ic];
                     }
                 }
                 acc -= wzp * sum_x;
-                acc += wzp * p->x_zp * (int32_t)(KW * KH * C_in);
+                acc += wzp * x_zp * (int32_t)(KW * KH * C_in);
             }
 
             /* rintf is round-half-to-even, which is what the spec asks for
              * ("it rounds to the nearest even").  roundf would send ties away
              * from zero and reintroduce the very off-by-one this exists to
              * remove.  Float, not double: see the note on `mult`. */
-            float v = rintf((float)acc * mult) + (float)p->y_zp;
-            if (v < p->out_lo) v = p->out_lo;
-            if (v > p->out_hi) v = p->out_hi;
+            /* Same diagnostic the shader has: write the accumulator instead of
+             * the requantised value, so the two backends can be compared at
+             * the step before rounding. */
+            static int dbg_acc = -1;
+            if (dbg_acc < 0) {
+                const char *e = getenv("GGMLR_QCONV_DEBUG_ACC");
+                dbg_acc = (e && *e) ? atoi(e) : 0;
+            }
+            if (dbg_acc) {
+                float dv = (float)acc;
+                if (dbg_acc == 2) dv = mult;
+                if (dbg_acc == 3) dv = (float)oc;
+                if (dbg_acc == 4) dv = (float)y_zp;
+                if (dbg_acc == 5) dv = out_hi;
+                if (dbg_acc == 6) dv = rintf((float)acc * mult) + (float)y_zp;
+                od[ow + W_out * oh + W_out * H_out * oc] = dv;
+                continue;
+            }
+
+            float v = rintf((float)acc * mult) + (float)y_zp;
+            if (v < out_lo) v = out_lo;
+            if (v > out_hi) v = out_hi;
             od[ow + W_out * oh + W_out * H_out * oc] = v;
+
+            /* One element, both backends, printed identically so the two logs
+             * can be diffed: the integer accumulator and the requantisation
+             * are separate suspects, and only their bit patterns tell which
+             * one moved. GGMLR_QCONV_ELEM=oc,oh,ow selects the element. */
+            {
+                static int want = -1, w_oc, w_oh, w_ow;
+                if (want < 0) {
+                    const char *e = getenv("GGMLR_QCONV_ELEM");
+                    want = (e && sscanf(e, "%d,%d,%d", &w_oc, &w_oh, &w_ow) == 3);
+                }
+                if (want && oc == w_oc && oh == w_oh && ow == w_ow) {
+                    uint32_t mb, pb;
+                    const float prod = (float)acc * mult;
+                    memcpy(&mb, &mult, 4);
+                    memcpy(&pb, &prod, 4);
+                    fprintf(stderr,
+                        "[qelem] %s oc=%lld oh=%lld ow=%lld acc=%d wzp=%d "
+                        "bias=%d sum_w=%d mult=%.9g(0x%08x) prod=%.9g(0x%08x) "
+                        "v=%g\n",
+                        dst->name, (long long)oc, (long long)oh, (long long)ow,
+                        acc, wzp, bias, sum_w_oc, mult, mb, prod, pb, v);
+                }
+            }
         }
     }
+
+    #undef QCONV_WZP
+    #undef QCONV_BIAS
 }

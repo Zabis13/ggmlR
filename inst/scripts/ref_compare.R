@@ -25,8 +25,13 @@ cat(sprintf("Comparing against ONNX Runtime, tolerance %g\n\n", TOL))
 n_ok <- 0L; n_bad <- 0L; n_skip <- 0L
 
 for (tag in tags) {
-  f_ours <- file.path(DIR, paste0(tag, ".ggmlr.bin"))
-  f_ref  <- file.path(DIR, paste0(tag, ".ort.bin"))
+  # A tag of the form <model>@<device> is one backend's dump of <model>. The
+  # reference runner only ever produces <model>.ort.bin -- it knows nothing
+  # about our backends -- so the comparison strips the suffix to find it, and
+  # every backend is then read against the same reference.
+  base   <- sub("@.*$", "", tag)
+  f_ours <- file.path(DIR, paste0(tag,  ".ggmlr.bin"))
+  f_ref  <- file.path(DIR, paste0(base, ".ort.bin"))
   cat(sprintf("%-45s ", tag))
 
   if (!file.exists(f_ours) || !file.exists(f_ref)) {

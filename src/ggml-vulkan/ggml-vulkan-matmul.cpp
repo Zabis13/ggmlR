@@ -107,7 +107,20 @@ static vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const
     bool contig = ggml_is_contiguous(src) && (!dst || ggml_is_contiguous(dst));
 
     // Use optimized "transpose" shader if src dim1 is the innermost dimension.
-    bool transpose = dst && src->nb[1] == ggml_type_size(to) && ggml_are_same_shape(dst, src);
+    //
+    // Never when both sides are already contiguous: nb[1] == type_size is also
+    // true of a tensor whose ne[0] is 1, where the stride is trivial rather than
+    // transposed. Such a tensor is contiguous, and routing it here picks the
+    // 32x32 tiled shader, whose grid is sized from ne[0] and ne[1] -- both 1, so
+    // CEIL_DIV(1,32) = 1 -- leaving 1x1xN workgroups that each fill one element
+    // of a 1024-element tile. Measured on MaskRCNN: shapes of the form
+    // (1,1,N,M,1) cost ~4600-6100 us per million elements against ~300-660 for
+    // ordinary layouts, and made up two thirds of all CONT time (64 of 96.8 ms,
+    // ~30% of the model's whole GPU time) from a fifth of the dispatches.
+    // The contiguous copy shader below reads and writes linearly and needs no
+    // tiling, so preferring it costs a genuinely transposed tensor nothing --
+    // that one is not contiguous and still lands on the tiled path.
+    bool transpose = dst && !contig && src->nb[1] == ggml_type_size(to) && ggml_are_same_shape(dst, src);
 
     if (transpose && src->type == to) {
         if (ggml_type_size(to) == 4) {

@@ -1,0 +1,250 @@
+#version 450
+
+// QLinearConv with an exact integer accumulator — direct Vulkan dispatch.
+//
+// A line-for-line port of src/onnx/qconv_i32.c. Read that file's header first:
+// it explains why an EXACT integer sum is the wrong answer here, and this
+// shader inherits every bit of that reasoning.
+//
+// ⚠️ THE SHORT VERSION, because it inverts the usual instinct: this kernel is
+// deliberately LESS accurate than a plain integer convolution. ONNX Runtime's
+// AVX2 kernel multiplies with VPMADDUBSW, which adds ADJACENT PAIRS of products
+// and saturates each pair to int16 before widening. A pair reaches
+// 255*127*2 = 64770 against a limit of 32767, so it genuinely clips --
+// Microsoft ship a debug hook (CheckSaturationForVPMADDUBSW) to catch it.
+// Measured on MaskRCNN node 455, four outputs where exact and saturated
+// arithmetic disagree, ORT matches the SATURATED value every time:
+//     oc=191 oh=1  ow=25   exact -37737 -> 119   saturated -35057 -> 120 (ORT)
+//     oc=191 oh=27 ow=26   exact  23770 -> 133   saturated  24380 -> 134 (ORT)
+// Removing the clip makes this shader more correct and therefore wrong.
+//
+// ⚠️ FOUR THINGS MUST NOT BE REARRANGED:
+//
+//   1. The pairing is POSITIONAL, over input channels two at a time (ic += 2)
+//      inside a fixed kernel position. Pair different channels together and a
+//      different pair saturates, which changes the result -- not by a rounding
+//      step, by a whole quantisation code.
+//   2. The loop nest is kernel-position outer, input channels inner, matching
+//      MlasConvSymPackW's layout. It is shaped for agreement, not for speed.
+//   3. ONE THREAD PER OUTPUT ELEMENT, with the whole reduction inside it.
+//      Saturation makes the sum order-dependent, so a workgroup cooperating on
+//      one output would pair different neighbours and diverge.
+//   4. f32 for the multiplier, and round-half-to-EVEN at the end. Computing
+//      this in double was measured on node 455: disagreement went from 21
+//      elements to 44622. ORT requantises in float, so extra precision moves
+//      AWAY from the reference. GLSL's round() is half-away-from-zero and would
+//      reintroduce the off-by-one the op exists to remove.
+//      ⚠️ Ties are NOT the explanation for a +-1 disagreement with the CPU
+//      kernel: on node 511_quantized, 584 of 4096 outputs differ by exactly
+//      one code, and a check over every element found ZERO values where
+//      acc*mult lands on a .5 boundary. Replacing roundEven() with a hand
+//      written half-to-even therefore fixes nothing -- that was tried. The
+//      difference enters before the rounding.
+//
+// This mirrors ORT rather than preferring the clip. If ref_check ever starts
+// DISAGREEING on the int8 models with the clip in place, that is the signal ORT
+// moved to a VNNI-only path (VPDPBUSDS accumulates in int32 and never clips),
+// and the clip should be deleted here and in the CPU kernel together.
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// x: [W_in, H_in, C_in] with W fastest — quantised values held as f32.
+layout (binding = 0) readonly buffer X  { float xd[]; };
+// w: [KW, KH, C_in, C_out] with KW fastest — likewise.
+layout (binding = 1) readonly buffer Wt { float wd[]; };
+// Per-output-channel tables; length 1 when the exporter quantised per tensor.
+layout (binding = 2) readonly buffer WS { float w_scale[]; };
+// Zero point and bias are carried as FLOAT even though both are integers.
+//
+// The ONNX loader widens an INT8 zero point to F32 on load, so that is the
+// type the graph actually holds; declaring the buffer as int here would
+// reinterpret each float's bit pattern as an integer -- not a wrong value but
+// a wild one, and silently. Every value in these tables is a whole number well
+// inside f32's exact integer range, so the cast below is lossless.
+layout (binding = 3) readonly buffer WZ { float w_zp[]; };
+// Per-output-channel bias, already in i32 quantised units. Length 1 and unused
+// when the conv has none (has_bias == 0).
+// int, not float: the operator spec fixes the bias to INT32 and the loader
+// keeps it that way, so this buffer is bound at its own type. The zero point
+// above is the opposite case -- INT8 in the file, widened to F32 on load --
+// which is why the two tables are declared differently rather than uniformly.
+layout (binding = 4) readonly buffer BI { int bias[]; };
+// dst: [W_out, H_out, C_out] with W fastest.
+layout (binding = 5) writeonly buffer D { float dst[]; };
+// Per-output-channel requantisation multiplier, computed once on the host so
+// that this shader and the C kernel cannot disagree about it.
+layout (binding = 6) readonly buffer MT { float mult_t[]; };
+
+layout (push_constant) uniform parameter {
+    uint  W_in;
+    uint  H_in;
+    uint  C_in;
+    uint  W_out;
+    uint  H_out;
+    uint  C_out;
+    uint  KW;
+    uint  KH;
+    int   stride_w;
+    int   stride_h;
+    int   pad_w;
+    int   pad_h;
+    int   dil_w;
+    int   dil_h;
+    float x_scale;
+    float y_scale;
+    int   x_zp;
+    int   y_zp;
+    uint  n_w_scale;   // 1 = one shared value, else C_out
+    uint  n_w_zp;      // 1 = one shared value, else C_out
+    uint  has_bias;
+    float out_lo;
+    float out_hi;
+    uint  has_w_zp;    // 0 = the conv has no weight zero point; do not read it
+    // Diagnostic: 1 writes the raw integer accumulator instead of the
+    // requantised value, so a per-node trace shows what the GPU summed rather
+    // than what it rounded. The two are separate suspects and only this tells
+    // them apart. Host side: GGMLR_QCONV_DEBUG_ACC=1.
+    uint  debug_acc;
+} p;
+
+void main() {
+    const uint gid   = gl_GlobalInvocationID.x;
+    const uint total = p.W_out * p.H_out * p.C_out;
+    if (gid >= total) {
+        return;
+    }
+
+    // dst is [W_out, H_out, C_out] with W fastest, so neighbouring threads
+    // write neighbouring floats.
+    const uint ow = gid % p.W_out;
+    const uint oh = (gid / p.W_out) % p.H_out;
+    const uint oc = gid / (p.W_out * p.H_out);
+
+    // Read, never recomputed. Evaluating x_scale*w_scale[oc]/y_scale here
+    // landed one ulp away from the C kernel on 976 of 4096 channels, which is
+    // enough to move the rounded output by a whole code -- see note 4.
+    // `precise` and splitting the expression did not close that gap; handing
+    // both kernels the same precomputed number does.
+    const float mult = mult_t[oc];
+    const int   wzp  = (p.has_w_zp != 0u)
+                       ? int(w_zp[p.n_w_zp > 1u ? oc : 0u]) : 0;
+    const int   bs   = (p.has_bias != 0u) ? bias[oc] : 0;
+
+    // sum(wq) over the whole filter for this output channel. Depends on oc
+    // alone; ORT folds the same quantity into column_sums_ at pre-pack time.
+    int sum_w_oc = 0;
+    if (p.x_zp != 0) {
+        for (uint kh = 0u; kh < p.KH; ++kh) {
+            for (uint kw = 0u; kw < p.KW; ++kw) {
+                for (uint ic = 0u; ic < p.C_in; ++ic) {
+                    sum_w_oc += int(wd[kw + p.KW * kh + p.KW * p.KH * ic
+                                       + p.KW * p.KH * p.C_in * oc]);
+                }
+            }
+        }
+    }
+
+    // ⚠️ Kernel position outer, input channels inner, pairs of channels — see
+    // notes 1 and 2. None of this nest may be reordered or flattened.
+    int sum_pairs = 0;
+
+    for (uint kh = 0u; kh < p.KH; ++kh) {
+        const int ih = int(oh) * p.stride_h - p.pad_h + int(kh) * p.dil_h;
+        const bool h_pad = (ih < 0 || ih >= int(p.H_in));
+
+        for (uint kw = 0u; kw < p.KW; ++kw) {
+            const int iw = int(ow) * p.stride_w - p.pad_w + int(kw) * p.dil_w;
+            const bool pad = h_pad || iw < 0 || iw >= int(p.W_in);
+
+            for (uint ic = 0u; ic < p.C_in; ic += 2u) {
+                // Padding is a vector of x_zp (qlinearconv.cc fills
+                // padding_data with X_zero_point_value), so the product is
+                // xq*wq with xq = x_zp; the -x_zp*sum(wq) term below cancels
+                // it, which is why skipping the tap gives the same answer.
+                const int xa = pad ? p.x_zp
+                    : int(xd[uint(iw) + p.W_in * uint(ih) + p.W_in * p.H_in * ic]);
+                const int xb = (ic + 1u < p.C_in)
+                    ? (pad ? p.x_zp
+                           : int(xd[uint(iw) + p.W_in * uint(ih)
+                                    + p.W_in * p.H_in * (ic + 1u)]))
+                    : 0;
+                const int wa = int(wd[kw + p.KW * kh + p.KW * p.KH * ic
+                                      + p.KW * p.KH * p.C_in * oc]);
+                const int wb = (ic + 1u < p.C_in)
+                    ? int(wd[kw + p.KW * kh + p.KW * p.KH * (ic + 1u)
+                             + p.KW * p.KH * p.C_in * oc])
+                    : 0;
+
+                // VPMADDUBSW: multiply, add the adjacent pair, saturate to
+                // int16. This clip is the whole point -- see the header.
+                int pair = xa * wa + xb * wb;
+                pair = clamp(pair, -32768, 32767);
+                sum_pairs += pair;
+            }
+        }
+    }
+
+    // Zero points fold in from the packed sums, as qlinearconv.cc builds
+    // column_sums_ and the kernel adds RowSum:
+    //   acc = sum(xq*wq) - x_zp*sum(wq) - w_zp*sum(xq) + bias
+    // w_zp is zero on every symmetric path (MlasConvSymPackWSize refuses the
+    // path otherwise), so normally only the x_zp term is present.
+    int acc = sum_pairs + bs - p.x_zp * sum_w_oc;
+
+    if (wzp != 0) {
+        // Not reachable on the symmetric path; carried over so a non-zero
+        // weight zero point stays arithmetically correct rather than silently
+        // differing from the CPU kernel.
+        int sum_x = 0;
+        for (uint kh = 0u; kh < p.KH; ++kh) {
+            const int ih = int(oh) * p.stride_h - p.pad_h + int(kh) * p.dil_h;
+            for (uint kw = 0u; kw < p.KW; ++kw) {
+                const int iw = int(ow) * p.stride_w - p.pad_w + int(kw) * p.dil_w;
+                const bool pad = ih < 0 || ih >= int(p.H_in)
+                              || iw < 0 || iw >= int(p.W_in);
+                for (uint ic = 0u; ic < p.C_in; ++ic) {
+                    sum_x += pad ? p.x_zp
+                        : int(xd[uint(iw) + p.W_in * uint(ih)
+                                 + p.W_in * p.H_in * ic]);
+                }
+            }
+        }
+        acc -= wzp * sum_x;
+        acc += wzp * p.x_zp * int(p.KW * p.KH * p.C_in);
+    }
+
+    // 1 = accumulator, 2 = requantisation multiplier, 3 = the output channel
+    // this thread decided it owns. The three isolate the three things that can
+    // differ between the backends once the sum agrees: the integer total, the
+    // scale applied to it, and which channel's scale that was.
+    if (p.debug_acc != 0u) {
+        float dv = float(acc);
+        if (p.debug_acc == 2u) dv = mult;
+        if (p.debug_acc == 3u) dv = float(oc);
+        // 4 and 5 are the last two values in the requantisation that had not
+        // been compared: they travel to this shader as push constants and to
+        // the host kernel out of op_params, which are two different paths for
+        // the same number. 6 is the pre-clamp value, to tell a wrong bound
+        // from a wrong shift.
+        if (p.debug_acc == 4u) dv = float(p.y_zp);
+        if (p.debug_acc == 5u) dv = p.out_hi;
+        if (p.debug_acc == 6u) {
+            // Same rounding as the real path below, so this mode measures what
+            // actually runs rather than a second implementation of it.
+            float dx = float(acc) * mult;
+            float dr = floor(dx + 0.5);
+            if (dr - dx == 0.5 && mod(dr, 2.0) != 0.0) dr -= 1.0;
+            dv = dr + float(p.y_zp);
+        }
+        dst[ow + p.W_out * oh + p.W_out * p.H_out * oc] = dv;
+        return;
+    }
+
+    // f32 throughout, round-half-to-even, then saturate — note 4.
+    precise float v = roundEven(float(acc) * mult) + float(p.y_zp);
+    v = clamp(v, p.out_lo, p.out_hi);
+
+    dst[ow + p.W_out * oh + p.W_out * p.H_out * oc] = v;
+}

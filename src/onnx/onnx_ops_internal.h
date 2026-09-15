@@ -135,6 +135,10 @@ int onnx_trace_ring(void);
  * output as it is computed (first three values), for diffing a whole run
  * against a reference.  Thousands of lines on a real model: redirect it. */
 int onnx_trace_vals(void);
+/* onnx_trace_sum() — nonzero when ONNX_TRACE_SUM=1; adds a whole-tensor
+ * checksum (n/sum/min/max) to each [val] line, for comparing two backends
+ * on more than the three values that fit on the line. */
+int onnx_trace_sum(void);
 
 /* Print that ring.  Registered as r_ggml_abort_hook, since a ggml assertion
  * reaches R through Rf_error and never returns here. */

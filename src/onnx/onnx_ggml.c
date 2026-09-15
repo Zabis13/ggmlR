@@ -660,6 +660,20 @@ int onnx_trace_nodes(void) {
     return cached;
 }
 
+/* ONNX_TRACE_SUM: whole-tensor checksum on each [val] line.
+ *
+ * Separate from ONNX_TRACE_VALS because it reads every element of every node:
+ * that is the point (three leading values hide a difference anywhere else),
+ * and also the reason it is not always on. */
+int onnx_trace_sum(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("ONNX_TRACE_SUM");
+        cached = (e && *e && *e != '0') ? 1 : 0;
+    }
+    return cached;
+}
+
 /* Segmented execution for data-dependent shapes, gated by ONNX_SEGMENTS.
  * Default ON; ONNX_SEGMENTS=0 forces the original single-pass path so that
  * the two can be compared on one build.  A model with no data-dependent op
@@ -1463,8 +1477,15 @@ static void trace_segment_graph(onnx_ggml_ctx_t *c, int seg) {
          * and that distinction is the whole question here.  data= is what
          * makes an overwrite visible; view_src says whose refcount actually
          * governs that storage. */
+        /* %s%s for view_src, not %s%s%s: the third conversion had no argument
+         * and read whatever the stack held next, then followed it as a char*.
+         * On CPU that happened to be harmless (it printed "(null)" at the end
+         * of every line, which is what a missing argument looks like); on
+         * Vulkan it was a live address and the trace segfaulted at
+         * 'memory not mapped' -- so the only tool that could show a segment's
+         * graph could not be run on the backend under investigation. */
         fprintf(stderr, "[sgraph]   %d '%s' op=%s type=%s%s%s obj=%p data=%p"
-                        " src0=%s(%s,%p) src1=%s(%s,%p)%s%s%s\n",
+                        " src0=%s(%s,%p) src1=%s(%s,%p)%s%s\n",
                 i, ggml_get_name(t), ggml_op_name(t->op), ggml_type_name(t->type),
                 (t->flags & GGML_TENSOR_FLAG_OUTPUT) ? " OUT" : "",
                 (t->flags & GGML_TENSOR_FLAG_INPUT)  ? " IN"  : "",
@@ -1560,6 +1581,82 @@ static void hold_multi_consumer_tensors(onnx_ggml_ctx_t *c) {
     free(counts);
 }
 
+/* Record src[] of every node in the current graph, before the scheduler runs.
+ *
+ * Call after the graph is built and BEFORE ggml_backend_sched_alloc_graph(),
+ * which is where the rewrite happens: alloc_graph -> split_graph, and
+ * split_graph assigns node->src[j] = tensor_id_copy(...) for every source
+ * that sits on a different backend. See the field comment in onnx_ggml.h for
+ * what that costs a segmented model. */
+static void snapshot_graph_srcs(onnx_ggml_ctx_t *c) {
+    c->n_src_snap = 0;
+    if (!c->graph) return;
+
+    /* ON by default: it is what makes the FIRST run correct. Measured on
+     * MaskRCNN-12-int8 / Vulkan:
+     *   snapshot ON  -> 51 detections (max|d|=0 vs ORT), then a second run
+     *                   aborts in ggml_vk_tensor_subbuffer
+     *   snapshot OFF -> 52 detections, but two runs survive
+     * Neither is right. This is a stopgap for the first run, not the fix; the
+     * fix is a context per segment (see TODO), which removes the shared
+     * tensor objects the scheduler's rewrite rides on.
+     *
+     * GGMLR_NO_SRC_SNAPSHOT=1 turns it off, which is how the two rows above
+     * were measured. */
+    {
+        static int off = -1;
+        if (off < 0) {
+            const char *e = getenv("GGMLR_NO_SRC_SNAPSHOT");
+            off = (e && *e && *e != '0') ? 1 : 0;
+        }
+        if (off) return;
+    }
+
+    /* Only when a second backend exists.  With the CPU alone the scheduler
+     * never makes a cross-backend copy, so there is nothing to undo and the
+     * snapshot would be pure overhead on the path that already works. */
+    if (!c->backend_gpu) return;
+
+    const int n = ggml_graph_n_nodes(c->graph);
+    if (n > ONNX_MAX_SRC_SNAPSHOT) {
+        fprintf(stderr, "[onnx] segment graph has %d nodes, over the %d the "
+                        "src snapshot holds -- not restoring (a cross-backend "
+                        "copy may outlive this segment)\n",
+                n, ONNX_MAX_SRC_SNAPSHOT);
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        struct ggml_tensor *node = ggml_graph_node(c->graph, i);
+        if (!node) continue;
+        c->src_snap_node[c->n_src_snap] = node;
+        for (int j = 0; j < GGML_MAX_SRC; j++)
+            c->src_snap_src[c->n_src_snap][j] = node->src[j];
+        c->n_src_snap++;
+    }
+}
+
+/* Put back the src[] the scheduler replaced with its own copies.
+ *
+ * Only pointers the snapshot actually holds are written, and only where they
+ * differ, so a node the scheduler left alone is not touched at all. */
+static void restore_graph_srcs(onnx_ggml_ctx_t *c) {
+    int n_restored = 0;
+    for (int i = 0; i < c->n_src_snap; i++) {
+        struct ggml_tensor *node = c->src_snap_node[i];
+        if (!node) continue;
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            if (node->src[j] != c->src_snap_src[i][j]) {
+                node->src[j] = c->src_snap_src[i][j];
+                n_restored++;
+            }
+        }
+    }
+    if (n_restored > 0 && onnx_trace_nodes())
+        fprintf(stderr, "[src-restore] %d source pointer(s) put back after "
+                        "segment %d\n", n_restored, c->cur_segment);
+    c->n_src_snap = 0;
+}
+
 static void build_segment_graph(onnx_ggml_ctx_t *c, int seg) {
     const onnx_segment_t *sg = &c->segments[seg];
     onnx_model_t *onnx = c->onnx;
@@ -1570,6 +1667,13 @@ static void build_segment_graph(onnx_ggml_ctx_t *c, int seg) {
             struct ggml_tensor *t = tmap_get(c, cn->inputs[a]);
             if (t) { ggml_set_output(t); ggml_build_forward_expand(c->graph, t); }
         }
+
+        /* A cut op's OUTPUTS are not added here: a cut op's own segment is
+         * where it gets computed, and the result is carried across by
+         * copy_segment_boundaries (ordinary boundary tensors) or by the
+         * cut_carry list (a cut op's own GGML_OP_CUSTOM output, saved around
+         * the re-map that rebuilds it at its measured size).  See the
+         * ordering note at the copy_segment_boundaries call site. */
     }
 
     for (int i = sg->first_node; i <= sg->last_node; i++) {
@@ -1609,6 +1713,32 @@ static void build_segment_graph(onnx_ggml_ctx_t *c, int seg) {
 static int alloc_new_weight_tensors(onnx_ggml_ctx_t *c) {
     ggml_backend_t backend = c->backend_gpu ? c->backend_gpu : c->backend_cpu;
     if (!backend || !c->ctx_weight) return 0;
+
+    /* ctx_host first, and on the CPU backend whatever the weights use.
+     *
+     * Tensors land in ctx_host after load too: every re-map of a cut op builds
+     * a new NMS params block and a new NMS output there, and the one-shot
+     * allocation at load time never saw them. Left without a buffer the output
+     * cannot be measured, which is the whole reason it was moved out of c->ctx
+     * -- see the note at its ggml_custom_4d. Returns NULL when nothing new was
+     * added, which is the common case. */
+    if (c->ctx_host && c->backend_cpu) {
+        ggml_backend_buffer_t hbuf =
+            ggml_backend_alloc_ctx_tensors(c->ctx_host, c->backend_cpu);
+        if (hbuf) {
+            if (c->n_extra_weight_bufs >= ONNX_MAX_WEIGHT_BUFS) {
+                fprintf(stderr, "[onnx] too many weight buffers (>%d)\n",
+                        ONNX_MAX_WEIGHT_BUFS);
+                ggml_backend_buffer_free(hbuf);
+                return -1;
+            }
+            c->extra_weight_bufs[c->n_extra_weight_bufs++] = hbuf;
+            if (onnx_trace_nodes())
+                fprintf(stderr, "[wbuf] segment %d: host buffer %d (%zu bytes)\n",
+                        c->cur_segment, c->n_extra_weight_bufs - 1,
+                        ggml_backend_buffer_get_size(hbuf));
+        }
+    }
 
     ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(c->ctx_weight, backend);
     if (!buf) return 0;   /* nothing new to allocate */
@@ -2007,6 +2137,27 @@ static int pos_embed_block_end(onnx_ggml_ctx_t *c, int node_idx) {
     return -1;
 }
 
+/* Is this tensor's storage owned by an op the GPU cannot run?
+ *
+ * Asked along the whole view_src chain, not one step: a view sits on its
+ * source's bytes, so the two can never be placed on different backends, and a
+ * view of a view is just as bound.  Returns 0 for a leaf (GGML_OP_NONE) --
+ * supports_op says false for those too, and a weight must keep its normal
+ * placement. */
+static int storage_op_unsupported(onnx_ggml_ctx_t *c, struct ggml_tensor *t) {
+    if (!c->backend_gpu) return 0;
+    /* GGML_MAX_SRC is an arbitrary but finite bound: view chains are short,
+     * and a cycle here would otherwise hang the build. */
+    for (int depth = 0; t && depth < 64; depth++) {
+        if (t->op != GGML_OP_NONE &&
+            !ggml_backend_supports_op(c->backend_gpu, t)) {
+            return 1;
+        }
+        t = t->view_src;
+    }
+    return 0;
+}
+
 static int sched_alloc_and_fill_on(onnx_ggml_ctx_t *c, ggml_backend_sched_t sch) {
 
     /* Free orphan-input buffers from a previous run before re-allocating.
@@ -2036,17 +2187,143 @@ static int sched_alloc_and_fill_on(onnx_ggml_ctx_t *c, ggml_backend_sched_t sch)
      * Weight tensors already have ->buffer set (from weight_buf), so sched
      * will skip them.  Only non-weight inputs and intermediates get assigned. */
     if (c->backend_gpu) {
+        /* Does this tensor's storage belong to an op the GPU cannot run?
+         *
+         * Two tensors that share storage cannot be placed on different
+         * backends: ggml_permute returns a VIEW of its source, so pinning the
+         * view to the GPU while the source runs on the host makes the device
+         * read host memory -- measured, and it is not a soft failure:
+         * "GPUVM fault at 0x651cc4a25000, PERMISSION_FAULTS: 3", then
+         * vk::DeviceLostError and an aborted process.
+         *
+         * So the question is never "is THIS tensor supported" but "is the
+         * storage it sits on owned by something unsupported", and that is
+         * asked along the whole view_src chain rather than one step: a
+         * RESHAPE of a PERMUTE of an unsupported op is two links away, and
+         * a check that stops at the first would pin it exactly as before.
+         * MaskRCNN has no chain deeper than one today (measured: 6 views on a
+         * CPU-only tensor, none on those views), so the loop guards against
+         * the case rather than one already seen.
+         *
+         * Leaves are excluded deliberately: supports_op answers false for
+         * GGML_OP_NONE too, and treating a weight as unsupported would strip
+         * it of the assignment the comment above asks for. */
         int n_nodes = ggml_graph_n_nodes(c->graph);
         for (int i = 0; i < n_nodes; i++) {
             struct ggml_tensor *node = ggml_graph_node(c->graph, i);
+            /* A node whose storage belongs to an unsupported op is skipped
+             * WITH its sources: pinning the consumer while leaving the owner
+             * to the scheduler is the combination that faulted the device. */
+            if (storage_op_unsupported(c, node)) continue;
             if (ggml_backend_supports_op(c->backend_gpu, node)) {
                 ggml_backend_sched_set_tensor_backend(sch, node, c->backend_gpu);
                 for (int j = 0; j < GGML_MAX_SRC; j++) {
                     if (node->src[j]) {
-                        /* Tell sched about ALL sources — including weight tensors
-                         * that already have ->buffer on GPU.  Without this, sched
-                         * doesn't know their backend and may insert spurious copies
-                         * or fall back to CPU. */
+                        /* A source that is itself an op the GPU cannot run must
+                         * keep its own placement.
+                         *
+                         * This loop used to assign EVERY source of a supported
+                         * node to the GPU.  That is right for weights and for
+                         * intermediates, and wrong for an op the backend
+                         * refuses: NonMaxSuppression is GGML_OP_CUSTOM, which
+                         * Vulkan has no case for, but its consumer is a PERMUTE,
+                         * which is supported -- so the NMS output was handed to
+                         * the GPU because of who reads it.
+                         *
+                         * ggml_backend_sched_set_tensor_backend writes the id
+                         * directly and marks the cause "usr", which the
+                         * scheduler treats as authoritative: the pass that would
+                         * otherwise place the node on the first backend that
+                         * supports it never reconsiders.  Segment 14 of
+                         * MaskRCNN then planned as n_splits=1 (gpu~1 cpu~0) --
+                         * a graph holding a CPU-only op with no CPU split in it.
+                         * The kernel was never called, its output tensor kept
+                         * whatever the buffer already held (all ones, or the
+                         * denormal 0x00000001), and every consumer downstream
+                         * read that: box indices became 1 1 1, a Gather returned
+                         * one row 304 times, the ARGSORT over the resulting
+                         * constant vector produced an identity permutation, and
+                         * the detector's box count diverged from the CPU run.
+                         *
+                         * The test is `is an op` AND `unsupported`, not merely
+                         * `unsupported`: supports_op answers false for a leaf
+                         * (GGML_OP_NONE) too, so testing support alone would
+                         * strip the weights of the very assignment the comment
+                         * below asks for.  Measured on MaskRCNN with
+                         * ONNX_TRACE_PREASSIGN: 21 sources are skipped, all of
+                         * them real ops (17 CUSTOM, 4 MAP_CUSTOM3), no leaf and
+                         * no weight among them. */
+                        struct ggml_tensor *sj = node->src[j];
+                        int sj_unsupported = storage_op_unsupported(c, sj);
+                        if (getenv("ONNX_TRACE_PREASSIGN")) {
+                            struct ggml_tensor *s = sj;
+                            if (sj_unsupported) {
+                                /* Why it was refused, inferred from the tensor.
+                                 *
+                                 * The backend has no general "explain the last
+                                 * refusal" channel -- only QCONV_I32 carries one
+                                 * (QC_NO in ggml-vulkan-graph.cpp) -- and adding
+                                 * one for every op would be a far larger change
+                                 * than this measurement warrants.  The common
+                                 * conditions are readable from outside, so they
+                                 * are reconstructed here.
+                                 *
+                                 * The distinction that matters: an op with no
+                                 * case at all is refused for every tensor and is
+                                 * a known CPU-only op, while one refused over
+                                 * layout or dtype is normally a GPU op that fell
+                                 * out on THIS tensor -- unpredictable, and
+                                 * invisible in any static list of unsupported
+                                 * ops. */
+                                /* No "leaf" case here: sj_unsupported already
+                                 * requires sj to be an op, so a leaf never
+                                 * reaches this print.  Claiming otherwise would
+                                 * suggest the trace can report something it
+                                 * cannot. */
+                                const char *why = "op has no Vulkan case";
+                                if (!ggml_is_contiguous(s)) {
+                                    why = "dst not contiguous";
+                                } else if (s->src[0] && !ggml_is_contiguous(s->src[0])) {
+                                    why = "src0 not contiguous";
+                                } else if (s->type != GGML_TYPE_F32 &&
+                                           s->type != GGML_TYPE_F16) {
+                                    why = "dst dtype";
+                                } else if (s->src[0] && s->src[0]->type != s->type) {
+                                    why = "src0/dst dtype mismatch";
+                                }
+                                fprintf(stderr,
+                                    "[preassign] seg %d: '%s' op=%s <- src[%d] "
+                                    "'%s' op=%s type=%s NOT supported (%s) "
+                                    "leaf=%d buffer=%d cont=%d ne=[%lld,%lld]\n",
+                                    c->cur_segment, node->name,
+                                    ggml_op_name(node->op), j, s->name,
+                                    ggml_op_name(s->op), ggml_type_name(s->type),
+                                    why,
+                                    s->op == GGML_OP_NONE ? 1 : 0,
+                                    s->buffer ? 1 : 0,
+                                    ggml_is_contiguous(s) ? 1 : 0,
+                                    (long long)s->ne[0], (long long)s->ne[1]);
+                            }
+                        }
+                        if (sj_unsupported) {
+                            /* Leave it for the scheduler, which places it on a
+                             * backend that can run it and puts a split boundary
+                             * around it -- exactly what already happens for the
+                             * 85 CPU-only ops nothing reads inside their own
+                             * segment, and what makes those come out right.
+                             *
+                             * Skipping the source ALONE was tried first and
+                             * faulted the device, because its view stayed
+                             * pinned to the GPU.  The skip above, which drops
+                             * any node sitting on unsupported storage, is the
+                             * other half: without it this line reintroduces
+                             * that fault. */
+                            continue;
+                        }
+                        /* Tell sched about ALL other sources — including weight
+                         * tensors that already have ->buffer on GPU.  Without
+                         * this, sched doesn't know their backend and may insert
+                         * spurious copies or fall back to CPU. */
                         ggml_backend_sched_set_tensor_backend(
                             sch, node->src[j], c->backend_gpu);
                     }
@@ -2220,6 +2497,31 @@ static int map_node_range(onnx_ggml_ctx_t *c, int node_lo, int node_hi) {
  * Entries whose tensor still has no buffer are skipped, so re-running is
  * harmless: already-filled tensors are simply written the same values again.
  */
+/* Drop every deferred-fill registration.
+ *
+ * The registrations below hold raw tensor pointers recorded while the graph was
+ * mapped.  Re-mapping replaces those tensors, which leaves the recorded
+ * pointers dangling -- not NULL, just aimed at an arena that has since been
+ * reused.  fill_deferred_tensors()'s `!t || !t->buffer` guard lets a dangling
+ * pointer straight through and then writes through it, which is a segfault at
+ * an address with no obvious connection to this code.
+ *
+ * Call this on every path that re-maps nodes, BEFORE that run's first
+ * map_node_range(), and never on the cached path: there nothing is re-mapped,
+ * the previous run's registrations still name the live tensors, and clearing
+ * them would leave NonZero outputs holding whatever their buffer contained --
+ * the phantom-index failure these fills exist to prevent.
+ *
+ * Left uncleared the arrays also only ever grow, re-registering the same
+ * tensors on each rebuild until ONNX_MAX_DEFERRED silently drops the rest. */
+static void reset_deferred_fills(onnx_ggml_ctx_t *c) {
+    c->n_shape_tensors = 0;
+    c->n_const_fills   = 0;
+    c->n_cinit_fills   = 0;
+    c->n_nonzero_fills = 0;
+    c->n_eye_fills     = 0;
+}
+
 static void fill_deferred_tensors(onnx_ggml_ctx_t *c) {
     if (onnx_trace_nodes())
         fprintf(stderr, "[fill] segment %d: shape=%d const=%d cinit=%d nonzero=%d eye=%d nms=%d\n",
@@ -2393,6 +2695,16 @@ static void fill_deferred_tensors(onnx_ggml_ctx_t *c) {
         params[3] = (float)c->nms_have_score_thresh[i];
         ggml_backend_tensor_set(t, params, 0, 4 * sizeof(float));
     }
+
+    /* Per-channel requantisation multipliers for QCONV_I32. Host-computed at
+     * build time; refilled here because segmented execution blanks whatever
+     * lives in a scheduler buffer. */
+    for (int i = 0; i < c->n_qconv_mult; i++) {
+        struct ggml_tensor *t = c->qconv_mult_tensors[i];
+        if (!t || !t->buffer || !c->qconv_mult_values[i]) continue;
+        ggml_backend_tensor_set(t, c->qconv_mult_values[i], 0,
+                                (size_t)c->qconv_mult_n[i] * sizeof(float));
+    }
 }
 
 /* ── Build full graph ───────────────────────────────────────────── */
@@ -2439,6 +2751,19 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
         };
         c->ctx_weight = ggml_init(wp);
         if (!c->ctx_weight) { free(c); return NULL; }
+
+        /* Host context: same shape as ctx_weight, but allocated on the CPU
+         * backend so the tensors in it stay on the host.  Only small parameter
+         * blocks that a CPU-only kernel reads belong here -- see the note on
+         * ctx_host in onnx_ggml.h for why ggml_set_input() cannot do this job.
+         * One tensor per node is a generous bound; these are rare. */
+        struct ggml_init_params hp = {
+            .mem_size   = (size_t)onnx->n_nodes * 512 + 64 * 1024,
+            .mem_buffer = NULL,
+            .no_alloc   = true,
+        };
+        c->ctx_host = ggml_init(hp);
+        if (!c->ctx_host) { ggml_free(c->ctx_weight); free(c); return NULL; }
     }
 
     /* ctx: context for inputs, graph ops, and intermediate tensors */
@@ -2448,7 +2773,7 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
         .no_alloc   = true,
     };
     c->ctx = ggml_init(params);
-    if (!c->ctx) { ggml_free(c->ctx_weight); free(c); return NULL; }
+    if (!c->ctx) { ggml_free(c->ctx_host); ggml_free(c->ctx_weight); free(c); return NULL; }
 
     /* ctx_boundary: copies of tensors that outlive their segment.  Metadata
      * only (no_alloc), like ctx_weight -- the data buffer comes later. */
@@ -2459,7 +2784,7 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
             .no_alloc   = true,
         };
         c->ctx_boundary = ggml_init(bp);
-        if (!c->ctx_boundary) { ggml_free(c->ctx); ggml_free(c->ctx_weight); free(c); return NULL; }
+        if (!c->ctx_boundary) { ggml_free(c->ctx); ggml_free(c->ctx_host); ggml_free(c->ctx_weight); free(c); return NULL; }
     }
     c->cur_segment = -1;
 
@@ -2617,6 +2942,13 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
     {
         ggml_backend_t weight_backend = c->backend_gpu ? c->backend_gpu : c->backend_cpu;
         c->weight_buf = ggml_backend_alloc_ctx_tensors(c->ctx_weight, weight_backend);
+
+        /* Always the CPU backend, whatever the weights went to: the whole
+         * point of ctx_host is that these tensors are read by host-only
+         * kernels and must not cost a split input slot each. Returns NULL when
+         * nothing was placed there, which is the normal case for a model with
+         * no CPU-only custom ops. */
+        c->host_buf = ggml_backend_alloc_ctx_tensors(c->ctx_host, c->backend_cpu);
         if (onnx_trace_nodes())
             fprintf(stderr, "[wbuf] initial weight_buf=%s\n",
                     c->weight_buf ? "allocated" : "NULL (deferred fills will be skipped)");
@@ -3252,6 +3584,49 @@ static bool onnx_ring_eval_cb(struct ggml_tensor *t, bool ask, void *user_data) 
                     fprintf(stderr, " %g", v[i]);
             }
         }
+        /* ONNX_TRACE_SUM=1 adds a checksum over the WHOLE tensor.
+         *
+         * Three leading values are not evidence that two tensors are equal:
+         * comparing backends on them called a 14x14x256 input identical when
+         * its first three elements merely happened to be zero, and sent a
+         * diagnosis in the wrong direction twice. This reads every element.
+         *
+         * Sum, min and max rather than a hash: a hash says only "differs",
+         * while these say by how much and where to look. Sum is in double so
+         * it does not itself lose the difference it is meant to expose. */
+        if (onnx_trace_sum() && t->data) {
+            const int64_t nel = ggml_nelements(t);
+            const size_t  esz = ggml_type_size(t->type);
+            if ((t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_I32) &&
+                ggml_is_contiguous(t) && nel > 0) {
+                void *buf = malloc((size_t)nel * esz);
+                if (buf) {
+                    ggml_backend_tensor_get((struct ggml_tensor *)t, buf, 0,
+                                            (size_t)nel * esz);
+                    double sum = 0.0, mn, mx;
+                    if (t->type == GGML_TYPE_F32) {
+                        const float *f = (const float *)buf;
+                        mn = mx = f[0];
+                        for (int64_t i = 0; i < nel; i++) {
+                            sum += f[i];
+                            if (f[i] < mn) mn = f[i];
+                            if (f[i] > mx) mx = f[i];
+                        }
+                    } else {
+                        const int32_t *q = (const int32_t *)buf;
+                        mn = mx = q[0];
+                        for (int64_t i = 0; i < nel; i++) {
+                            sum += (double)q[i];
+                            if (q[i] < mn) mn = q[i];
+                            if (q[i] > mx) mx = q[i];
+                        }
+                    }
+                    fprintf(stderr, " | n=%lld sum=%.9g min=%g max=%g",
+                            (long long)nel, sum, mn, mx);
+                    free(buf);
+                }
+            }
+        }
         fprintf(stderr, "\n");
     }
 
@@ -3681,9 +4056,20 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
         /* First run: allocate compute buffers and fill small deferred tensors.
          * Weights live in a separate weight_buf that sched never touches,
          * so subsequent runs need NO reload — just set inputs and compute. */
+
+        /* Before the allocation, for the same reason as in the segment loop:
+         * this is the last moment segment 0's nodes still point at the tensors
+         * its graph was built from.  A cached run does not come through here —
+         * its graph was allocated by the run that built it, and the restore at
+         * the end of that run's segment 0 already put these pointers back. */
+        snapshot_graph_srcs(ctx);
         if (sched_alloc_and_fill(ctx) != 0) return -1;
         ctx->is_allocated = 1;
     }
+
+    /* Segment 0's graph was mapped during build and its registrations are the
+     * ones just used above, so nothing is dropped here; the reset that matters
+     * is the one guarding the rebuild path in the segment loop below. */
 
     if (set_model_inputs(ctx, input_names, input_data, input_lens, n_inputs) != 0) return -1;
 
@@ -3728,6 +4114,10 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
 
     enum ggml_status status = ggml_backend_sched_graph_compute(ctx->sched, ctx->graph);
 
+    /* Segment 0 has computed; put its src[] back before any later segment is
+     * built over the same tensors. */
+    restore_graph_srcs(ctx);
+
     /* Segmented models: the compute above finished segment 0 only.  Walk the
      * remaining segments, each time saving what later segments still need,
      * mapping the next batch of nodes now that the shapes they depend on are
@@ -3744,6 +4134,15 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
          * run proceeds, so the earliest a mismatch can be seen is after the
          * segment that produced it. */
         int reuse = (ctx->n_seg_graphs == ctx->n_segments);
+
+        /* Whether this run has already dropped the previous run's deferred-fill
+         * registrations.  The drop cannot simply go before the loop: `reuse`
+         * starts true on a cached run and only turns false at the segment whose
+         * sizes changed, so the rebuild can begin at any iteration.  It must
+         * also happen exactly once -- a reset per segment would discard the
+         * registrations made by the segments already rebuilt in this same run,
+         * whose tensors are live and still need filling. */
+        int fills_reset = 0;
 
         for (int s = 1; s < ctx->n_segments; s++) {
             /* The segment just computed has given its cut ops real inputs, so
@@ -3769,6 +4168,117 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
                 if (!sch) return -1;
                 ctx->cur_segment = s;
                 ctx->graph = ctx->seg_graphs[s];
+
+                /* Re-allocate before computing, even though nothing here was
+                 * re-mapped.
+                 *
+                 * The cached graph holds the FIRST run's tensor objects, and
+                 * their memory came from that run's
+                 * sched_alloc_and_fill_on() -- an arena nothing has held since.
+                 * Segment 0 re-allocates ctx->sched on every run, so by the
+                 * time a cached segment computes, its tensors address memory
+                 * that has been handed out again. ->buffer is still a valid
+                 * pointer, which is why the GGMLR_TRACE_REUSE probe below finds
+                 * nothing wrong; the storage behind it is what moved. On Vulkan
+                 * that surfaces as GGML_ASSERT(buffer != nullptr) inside
+                 * ggml_vk_tensor_subbuffer on the SECOND run, with the NMS
+                 * kernel first reporting its boxes as non-host.
+                 *
+                 * Only the allocation is repeated -- not map_node_range() and
+                 * not copy_segment_boundaries(). Re-mapping a range is what
+                 * broke the CPU path ("index -332 out of range"), and it is not
+                 * needed: the shapes are unchanged, which is precisely what
+                 * seg_cache_key_matches() just established. */
+                /* GGMLR_NO_SEG_REALLOC=1 skips the whole block, restoring the
+                 * behaviour before it existed: the cached graph computes on
+                 * whatever memory it still holds. The switch exists to keep one
+                 * build answering both questions -- with the re-allocation and
+                 * without it -- because the alternative is stashing changes
+                 * that are not this block's. */
+                if (!getenv("GGMLR_NO_SEG_REALLOC")) {
+                    /* An NMS output is an ordinary GGML_OP_CUSTOM node that
+                     * nothing in THIS graph recomputes -- its value was carried
+                     * in when the graph was built. The allocation below hands
+                     * it fresh memory, so the bytes have to make the trip
+                     * themselves, exactly as cut_carry does on the rebuild
+                     * path. Without this the second run reads whatever the new
+                     * buffer holds and the detection list walks off. */
+                    struct ggml_tensor *carry_t[ONNX_MAX_DEFERRED];
+                    void   *carry_b[ONNX_MAX_DEFERRED];
+                    size_t  carry_n[ONNX_MAX_DEFERRED];
+                    int     n_carry = 0;
+
+                    const int n_nodes = ggml_graph_n_nodes(ctx->graph);
+                    for (int i = 0; i < n_nodes && n_carry < ONNX_MAX_DEFERRED; i++) {
+                        struct ggml_tensor *t = ggml_graph_node(ctx->graph, i);
+                        if (!t || t->op != GGML_OP_CUSTOM || !t->buffer) continue;
+                        size_t nb = ggml_nbytes(t);
+                        void  *bp = malloc(nb);
+                        if (!bp) continue;
+                        ggml_backend_tensor_get(t, bp, 0, nb);
+                        carry_t[n_carry] = t;
+                        carry_b[n_carry] = bp;
+                        carry_n[n_carry] = nb;
+                        n_carry++;
+                    }
+
+                    ggml_backend_sched_reset(sch);
+                    if (sched_alloc_and_fill_on(ctx, sch) != 0) {
+                        for (int k = 0; k < n_carry; k++) free(carry_b[k]);
+                        return -1;
+                    }
+
+                    for (int k = 0; k < n_carry; k++) {
+                        struct ggml_tensor *t = carry_t[k];
+                        if (t && t->buffer) {
+                            size_t nb = ggml_nbytes(t);
+                            if (nb > carry_n[k]) nb = carry_n[k];
+                            ggml_backend_tensor_set(t, carry_b[k], 0, nb);
+                        }
+                        free(carry_b[k]);
+                    }
+                    if (n_carry && onnx_trace_nodes())
+                        fprintf(stderr, "[segcache] seg %d: re-allocated, "
+                                        "%d custom output(s) carried\n", s, n_carry);
+                }
+
+                /* Which cached tensors lost their buffer since the run that
+                 * built them.
+                 *
+                 * A reused graph holds the FIRST run's tensor objects, and
+                 * nothing here re-allocates them. If the allocator has since
+                 * handed their memory to something else, the tensor arrives at
+                 * dispatch with buffer == NULL and Vulkan aborts inside
+                 * ggml_vk_tensor_subbuffer -- which is the whole error message,
+                 * with no indication of WHICH tensor or WHEN it was lost.
+                 * Naming them here is the difference between a bisection over
+                 * 24 segments and reading one line. */
+                if (getenv("GGMLR_TRACE_REUSE")) {
+                    int n = ggml_graph_n_nodes(ctx->graph), n_bad = 0;
+                    for (int i = 0; i < n; i++) {
+                        struct ggml_tensor *t = ggml_graph_node(ctx->graph, i);
+                        if (!t) continue;
+                        if (!t->buffer) {
+                            if (n_bad < 8)
+                                fprintf(stderr, "[reuse] seg %d: '%s' op=%s HAS NO BUFFER\n",
+                                        s, t->name, ggml_op_name(t->op));
+                            n_bad++;
+                        }
+                        for (int j = 0; j < GGML_MAX_SRC; j++) {
+                            struct ggml_tensor *sj = t->src[j];
+                            if (sj && !sj->buffer) {
+                                if (n_bad < 8)
+                                    fprintf(stderr, "[reuse] seg %d: '%s' src[%d] '%s' op=%s HAS NO BUFFER\n",
+                                            s, t->name, j, sj->name, ggml_op_name(sj->op));
+                                n_bad++;
+                            }
+                        }
+                    }
+                    if (n_bad)
+                        fprintf(stderr, "[reuse] seg %d: %d tensor(s) without a buffer\n",
+                                s, n_bad);
+                }
+
                 fill_deferred_tensors(ctx);
                 if (set_model_inputs(ctx, input_names, input_data,
                                      input_lens, n_inputs) != 0) return -1;
@@ -3777,7 +4287,38 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
                             s, ggml_graph_n_nodes(ctx->graph));
                 status = ggml_backend_sched_graph_compute(sch, ctx->graph);
                 if (status != GGML_STATUS_SUCCESS) break;
+
+                /* Measure this segment's cut ops NOW, while their inputs still
+                 * hold what it just computed.
+                 *
+                 * The call at the top of the next iteration is too late: the
+                 * allocation that runs before it hands this segment's arena to
+                 * other tensors, and the scan then reads whichever bytes landed
+                 * there. Measured on MaskRCNN-12-int8 run 3: node 2595 counted
+                 * 0 non-zero elements against the CPU reference's 895, while
+                 * 2709 counted 895 -- 2595's own number, read from its memory.
+                 * Detections stayed right, so only the cache key was poisoned,
+                 * and the run reported a hit on sizes it had never verified.
+                 *
+                 * Copying the inputs instead was tried and reverted: a boundary
+                 * copy replaces its original in tmap and repoints the graph
+                 * built over it. What is needed here is one integer per cut op,
+                 * which resolved_put() already stores by name -- the redundant
+                 * call next iteration simply writes the same value again. */
+                if (resolve_segment_sizes(ctx, s) != 0) return -1;
                 continue;
+            }
+
+            /* Everything from here re-maps nodes, so the registrations held
+             * from the previous run are about to be replaced by new tensors.
+             * Drop them before the first map_node_range() below rather than
+             * after: the ones recorded from here on belong to this run. */
+            if (!fills_reset) {
+                reset_deferred_fills(ctx);
+                fills_reset = 1;
+                if (onnx_trace_nodes())
+                    fprintf(stderr, "[fill] reset deferred registrations "
+                                    "at segment %d (rebuild)\n", s);
             }
 
             /* Re-map the cut ops themselves.  They were first mapped as part
@@ -3788,12 +4329,125 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
              * the old for every consumer that follows. */
             for (int j = 0; j < ctx->segments[s - 1].n_cut_nodes; j++) {
                 int ni = ctx->segments[s - 1].cut_nodes[j];
-                if (onnx_resolved_size(ctx, ctx->onnx->nodes[ni].outputs[0]) < 0)
+                const char *onm = ctx->onnx->nodes[ni].outputs[0];
+                int64_t rs = onnx_resolved_size(ctx, onm);
+                /* Trace the re-map, not just its inputs.
+                 *
+                 * On Vulkan six NMS nodes keep their guessed shape while the
+                 * size measured for them is right, so the fault lies between
+                 * "measured" and "rebuilt" -- and every step in between is
+                 * silent.  Printing the measured size, whether the node was
+                 * skipped, and the shape tmap holds before and after says
+                 * which of them it is: no measurement, no call, or a call
+                 * whose new tensor does not end up shadowing the old one. */
+                if (getenv("ONNX_TRACE_REMAP")) {
+                    struct ggml_tensor *before = tmap_get(ctx, onm);
+                    fprintf(stderr,
+                        "[remap] seg %d cut %d '%s' op=%s resolved=%lld "
+                        "before=[%lld,%lld] %s\n",
+                        s, j, onm, ctx->onnx->nodes[ni].op_type, (long long)rs,
+                        before ? (long long)before->ne[0] : -1,
+                        before ? (long long)before->ne[1] : -1,
+                        rs < 0 ? "-> SKIP (not measured)" : "-> remapping");
+                }
+                if (rs < 0)
                     continue;   /* nothing measured -- leave the original */
-                if (map_node_range(ctx, ni, ni) != 0) return -1;
+
+                /* ⚠️ Save the computed values before the re-map abandons them.
+                 *
+                 * map_node_range() below rebuilds this cut op at the measured
+                 * size and shadows the old tensor in tmap. NonZero, TopK,
+                 * Shape and EyeLike do not need anything more: their outputs
+                 * are deferred fills, rewritten after every allocation.
+                 * NonMaxSuppression is the exception -- only its PARAMS are
+                 * deferred; the output is an ordinary ggml_custom_4d node that
+                 * nms_cpu evaluated when its own segment ran, and nothing
+                 * evaluates the rebuilt one. Its buffer arrives empty and
+                 * every later read gets whatever it happens to hold.
+                 *
+                 * Measured on MaskRCNN-12-int8, node 1170: rebuilt
+                 * [3,1000] -> [3,979], and the second read came back as
+                 * 1000,1,4 instead of 0,0,0 on Vulkan -- box indices 0,1,2
+                 * became 0,3,6 and, through Gather -> ArgSort -> TopK -> box
+                 * decode, 51 detections became 100. On CPU the abandoned
+                 * buffer still held the right bytes, so only Vulkan showed it.
+                 *
+                 * ⚠️ GGML_OP_CUSTOM only. The first version tested
+                 * `op != GGML_OP_NONE` ("anything the graph computes"), which
+                 * also caught TopK -- its output reaches tmap through a
+                 * RESHAPE -- and writing stale values over those deferred
+                 * fills corrupted the run. Widen this only with a measurement
+                 * showing another op in the same position. */
+                struct ggml_tensor *old_out = tmap_get(ctx, onm);
+                void  *carry_buf   = NULL;
+                size_t carry_bytes = 0;
+                const int carry_op = old_out && old_out->buffer &&
+                                     old_out->op == GGML_OP_CUSTOM;
+                if (carry_op) {
+                    carry_bytes = ggml_nbytes(old_out);
+                    carry_buf   = malloc(carry_bytes);
+                    if (carry_buf)
+                        ggml_backend_tensor_get(old_out, carry_buf, 0, carry_bytes);
+                }
+
+                if (map_node_range(ctx, ni, ni) != 0) { free(carry_buf); return -1; }
+
+                if (carry_buf) {
+                    struct ggml_tensor *new_out = tmap_get(ctx, onm);
+                    if (new_out && new_out != old_out &&
+                        new_out->type == old_out->type &&
+                        ctx->n_cut_carry < ONNX_MAX_DEFERRED) {
+                        /* The rebuilt tensor has no memory until the scheduler
+                         * allocates it further down, so the write waits. */
+                        ctx->cut_carry_dst[ctx->n_cut_carry]   = new_out;
+                        ctx->cut_carry_buf[ctx->n_cut_carry]   = carry_buf;
+                        ctx->cut_carry_bytes[ctx->n_cut_carry] = carry_bytes;
+                        ctx->n_cut_carry++;
+                        carry_buf = NULL;   /* the list owns it now */
+                    }
+                    free(carry_buf);
+                }
+                if (getenv("ONNX_TRACE_REMAP")) {
+                    struct ggml_tensor *after = tmap_get(ctx, onm);
+                    fprintf(stderr, "[remap]   after=[%lld,%lld]\n",
+                        after ? (long long)after->ne[0] : -1,
+                        after ? (long long)after->ne[1] : -1);
+                }
             }
 
+            /* Carry every tensor this segment produces that a later one reads
+             * into memory the scheduler will not reuse.
+             *
+             * The cut_carry above is not a substitute: it saves the outputs of
+             * CUT OPS only, and only those whose op is GGML_OP_CUSTOM.  An
+             * ordinary tensor that happens to cross the boundary -- a Slice
+             * lowered to cont(view(x)), say -- is neither, so nothing kept it
+             * and its buffer was handed to the next allocation.
+             *
+             * Measured on MaskRCNN-12-int8 with this call absent: node 447
+             * (Mul, 1999 * 2064) read 1924's bytes instead of 1999's, because
+             * 1999 crosses a boundary and is a CONT.  Elementwise, -164 * 176
+             * = -28864 where ORT has -0.00984 * 176 = -1.732; the error rides
+             * the RPN box decode down to 39 detections against ORT's 51.
+             *
+             * Placed AFTER the re-map loop, not before: the loop rebuilds the
+             * cut ops at their measured sizes, and the copy has to see the
+             * tensors tmap ends up holding.  The rebuilt ones have no buffer
+             * yet -- they are allocated further down -- so the !src->buffer
+             * guard inside skips them and the cut_carry list keeps its
+             * pointers. */
             if (copy_segment_boundaries(ctx, s - 1) != 0) return -1;
+
+            /* ⚠️ MEASURED AND REVERTED: re-mapping the whole owning segment
+             * here (to rebuild the cut ops' consumers against the fresh
+             * tensors) breaks the CPU path outright --
+             * "ggml_compute_forward_get_rows_f32: index -332 out of range
+             * [0,48) dst='2253' src0='2252'", then a segfault. Re-mapping a
+             * range re-creates every tensor in it, including ones OTHER
+             * segments already hold pointers to, and those consumers are left
+             * addressing half-built objects. Whatever fixes the consumers has
+             * to give them a new tensor without invalidating the old one for
+             * everybody else -- see the per-segment context plan in TODO. */
 
             ctx->cur_segment = s;
             if (map_node_range(ctx, ctx->segments[s].first_node,
@@ -3802,6 +4456,7 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
             /* Weight-like tensors this segment added (Constant, scalars,
              * NonZero/NMS outputs) still need a buffer of their own. */
             if (alloc_new_weight_tensors(ctx) != 0) return -1;
+
 
             /* A fresh graph for this segment: up to its own cut ops, or to
              * the model outputs for the last one. */
@@ -3821,6 +4476,13 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
             }
             build_segment_graph(ctx, s);
 
+            /* Take the snapshot BEFORE the allocation below: that is the last
+             * moment the nodes still point at the tensors this graph was built
+             * from.  sched_alloc_and_fill_on() -> ggml_backend_sched_alloc_graph()
+             * -> split_graph() is where a src on another backend is replaced by
+             * a scheduler copy, and the next segment inherits that. */
+            snapshot_graph_srcs(ctx);
+
             /* Keep it for the next run.  Graph and tensors both live in
              * ctx->ctx, which outlives the run, so the pointer stays good for
              * as long as the resolved sizes it was built for hold. */
@@ -3834,6 +4496,31 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
             if (!sch) return -1;
             ggml_backend_sched_reset(sch);
             if (sched_alloc_and_fill_on(ctx, sch) != 0) return -1;
+
+            /* ⚠️ HERE, not after alloc_new_weight_tensors() above.
+             *
+             * NMS builds its output with ggml_custom_4d(c->ctx, ...), so the
+             * rebuilt tensor's memory comes from the scheduler on the line
+             * above -- alloc_new_weight_tensors only allocates ctx_weight.
+             * Writing any earlier finds t->buffer still NULL and silently
+             * does nothing, which is what the first attempt at this did.
+             * See the note at the re-map for what the write is carrying. */
+            for (int k = 0; k < ctx->n_cut_carry; k++) {
+                struct ggml_tensor *t = ctx->cut_carry_dst[k];
+                void *src = ctx->cut_carry_buf[k];
+                if (t && t->buffer && src) {
+                    size_t nb = ggml_nbytes(t);
+                    if (nb > ctx->cut_carry_bytes[k]) nb = ctx->cut_carry_bytes[k];
+                    ggml_backend_tensor_set(t, src, 0, nb);
+                    if (onnx_trace_nodes())
+                        fprintf(stderr, "[cut-carry] '%s': %zu bytes into the "
+                                        "rebuilt tensor\n", ggml_get_name(t), nb);
+                }
+                free(src);
+                ctx->cut_carry_buf[k] = NULL;
+            }
+            ctx->n_cut_carry = 0;
+
 
             /* This segment registered its own Shape/ConstantOfShape/NonZero/
              * EyeLike/NMS tensors, which only now have buffers to write into.
@@ -3852,6 +4539,15 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
                         s, ggml_graph_n_nodes(ctx->graph));
 
             status = ggml_backend_sched_graph_compute(sch, ctx->graph);
+
+            /* Undo the scheduler's src[] rewrites now that this segment has
+             * computed.  Unconditional, and before the status check: a run
+             * that broke partway still leaves the graph mutated, and the
+             * cached graphs outlive the run.  Leaving a copy in place would
+             * hide the producer from the NEXT graph built over these tensors,
+             * which is the defect this restores. */
+            restore_graph_srcs(ctx);
+
             if (status != GGML_STATUS_SUCCESS) break;
         }
 
@@ -3949,7 +4645,17 @@ static int copy_segment_boundaries(onnx_ggml_ctx_t *c, int seg) {
             if (nm[0] == '\0') continue;
 
             /* Same test the graph builder uses to decide what to compute --
-             * shared so the two cannot disagree about what a boundary is. */
+             * shared so the two cannot disagree about what a boundary is.
+             *
+             * ⚠️ Do NOT widen this to keep a cut op's input alive for
+             * resolve_segment_sizes(). Tried, measured, reverted: a copy
+             * REPLACES its original in tmap (see the persistent-buffer note
+             * below), so copying an input that no later segment reads still
+             * repoints everything built over it afterwards. MaskRCNN-12-int8
+             * went from 68 detections to 134 on run 2, with "TopK 6565: K=100
+             * exceeds the 51 elements on the ranked axis". The measurement is
+             * taken right after the segment computes instead -- it needs one
+             * integer, not the bytes. */
             if (!tensor_crosses_boundary(c, seg, nm)) continue;
 
             struct ggml_tensor *src = tmap_get(c, nm);
@@ -4087,6 +4793,10 @@ struct ggml_tensor *onnx_ggml_output(onnx_ggml_ctx_t *ctx, int index) {
 
 void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     if (!ctx) return;
+    /* Carry buffers are normally consumed a few lines after they are filled;
+     * these are the ones a run that failed in between left behind. */
+    for (int i = 0; i < ctx->n_cut_carry; i++) free(ctx->cut_carry_buf[i]);
+    ctx->n_cut_carry = 0;
     for (int i = 0; i < ctx->n_orphan_input_bufs; i++) {
         if (ctx->orphan_input_bufs[i]) ggml_backend_buffer_free(ctx->orphan_input_bufs[i]);
     }
@@ -4107,9 +4817,13 @@ void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     }
     ctx->n_extra_weight_bufs = 0;
     if (ctx->boundary_buf) ggml_backend_buffer_free(ctx->boundary_buf);
+    /* Before the backends below: a buffer belongs to the backend that made it
+     * and freeing it afterwards touches a destroyed object. */
+    if (ctx->host_buf)    ggml_backend_buffer_free(ctx->host_buf);
     if (ctx->backend_gpu) ggml_backend_free(ctx->backend_gpu);
     if (ctx->backend_cpu) ggml_backend_free(ctx->backend_cpu);
     if (ctx->ctx_boundary) ggml_free(ctx->ctx_boundary);
+    if (ctx->ctx_host)    ggml_free(ctx->ctx_host);
     if (ctx->ctx_weight)  ggml_free(ctx->ctx_weight);
     if (ctx->ctx)         ggml_free(ctx->ctx);
     free(ctx->tensor_map_keys);
@@ -4131,6 +4845,7 @@ void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     free(ctx->nms_params);
     for (int i = 0; i < ctx->n_qconv_ops; i++) free(ctx->qconv_params[i]);
     free(ctx->qconv_params);
+    for (int i = 0; i < ctx->n_qconv_mult; i++) free(ctx->qconv_mult_values[i]);
     /* Note: onnx model is NOT freed here — caller manages it */
     free(ctx);
 }

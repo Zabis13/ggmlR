@@ -21,6 +21,10 @@ ORT_DIR="${ORT_DIR:-/mnt/Data2/DS_projects/onnxruntime-linux-x64-1.29.0}"
 ONNX_DIR="${ONNX_DIR:-/mnt/Data2/DS_projects/ONNX models-main}"
 DATA_DIR="${DATA_DIR:-/tmp/ggmlR-ref/data}"
 FILTER="${1:-}"
+# Comma-separated ggmlR backends to check, each against the same ORT reference.
+# Default is cpu alone, which is what this script has always done; DEVICES=cpu,vulkan
+# adds a second dump per model, reported as <model>@vulkan.
+DEVICES="${DEVICES:-cpu}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 runner="$DATA_DIR/ort_reference"
@@ -32,7 +36,7 @@ done
 mkdir -p "$DATA_DIR"
 
 echo "=== 1/3  ggmlR ==============================================="
-Rscript "$here/ref_dump_io.R" "$DATA_DIR" "$FILTER" || exit 1
+Rscript "$here/ref_dump_io.R" "$DATA_DIR" "$FILTER" "$DEVICES" || exit 1
 
 echo
 echo "=== 2/3  ONNX Runtime ========================================"

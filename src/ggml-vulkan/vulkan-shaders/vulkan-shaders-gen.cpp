@@ -1010,6 +1010,18 @@ void process_shaders() {
     // Pairwise squared-distance matrix: fixed f32 types, no variants.
     string_to_spv("pairwise_dist", "pairwise_dist.comp", {});
 
+    // RoiAlign (ONNX): fixed f32 in and out, no variants.
+    string_to_spv("roi_align", "roi_align.comp", {});
+
+    // QLinearMatMul with an exact i32 accumulator (ONNX): fixed types.
+    string_to_spv("qmatmul_i32", "qmatmul_i32.comp", {});
+
+    // QLinearConv with an exact i32 accumulator (ONNX): fixed types.
+    string_to_spv("qconv_i32", "qconv_i32.comp", {});
+
+    // NonMaxSuppression (ONNX): one workgroup per (batch, class).
+    string_to_spv("nms", "nms.comp", {});
+
     // Tiled fused k-NN: fixed f32 distance / uint index types. WG/K/MAXD are
     // specialization constants set at pipeline creation, not compile-time
     // variants, so no A_TYPE/D_TYPE permutations are needed.

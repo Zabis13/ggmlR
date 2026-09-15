@@ -283,7 +283,15 @@ int map_node_quant(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                     c->backend_gpu != NULL,
                     (long long)dw->ne[0], (long long)dw->ne[1],
                     (long long)dw->ne[2], (long long)dw->ne[3]);
-        if (ndims_kernel > 2 && groups == 1 && c->backend_gpu == NULL) {
+        /* Device-independent: the op is placed by the scheduler, so the same
+         * graph is built whether or not a GPU is present.
+         *
+         * It used to require backend_gpu == NULL, from when this path was a
+         * host-only ggml_map_custom3. That read the field DURING graph
+         * construction, which runs before the backend is created, so it was
+         * true on a Vulkan model too -- every quantised conv became a CPU-only
+         * node that the scheduler then had to split the graph around. */
+        if (ndims_kernel > 2 && groups == 1) {
             const int64_t KWq = dw->ne[0], KHq = dw->ne[1];
             const int64_t C_out_q = dw->ne[3];
             if ((KWq == 1 && KHq == 1) || (KWq == 3 && KHq == 3)) {
@@ -343,84 +351,139 @@ int map_node_quant(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                  * no difference to the arithmetic.  Whatever is read is used;
                  * a short read just means channels past it share entry 0. */
                 if (n_xs == 1 && n_ys == 1 && n_ws >= 1 &&
-                    C_out_q <= QCONV_I32_MAX_CHANNELS &&
                     (n_ws == 1 || n_ws == (int)C_out_q) &&
                     (n_bias == 0 || n_bias == (int)C_out_q)) {
 
-                    /* Registered so the context frees it; the array of
-                     * pointers may be reallocated, the entries never are. */
-                    if (c->n_qconv_ops >= c->qconv_params_cap) {
-                        int newcap = c->qconv_params_cap ? c->qconv_params_cap * 2 : 16;
-                        void **np = (void **)realloc(c->qconv_params,
-                                                     (size_t)newcap * sizeof(void *));
-                        if (!np) return -1;
-                        c->qconv_params = np;
-                        c->qconv_params_cap = newcap;
-                    }
-                    qconv_i32_params_t *qp =
-                        (qconv_i32_params_t *)malloc(sizeof(*qp));
-                    if (qp) {
-                        c->qconv_params[c->n_qconv_ops++] = qp;
-                        memset(qp, 0, sizeof(*qp));
-                        qp->x_scale = xs[0];
-                        qp->y_scale = ys[0];
-                        qp->x_zp = (int32_t)xz[0];
-                        qp->y_zp = (int32_t)yz[0];
-                        qp->n_w_scale = n_ws;
-                        for (int i = 0; i < n_ws; i++) qp->w_scale[i] = wsv[i];
-                        /* Per-channel only when the read actually covered
-                         * every channel; otherwise entry 0 is shared, which
-                         * is correct whenever the zero points are equal (they
-                         * are all zero in this model) and never reads past
-                         * what was read. */
-                        qp->n_w_zp = (n_wz == (int)C_out_q) ? n_wz : 1;
-                        for (int i = 0; i < qp->n_w_zp; i++)
-                            qp->w_zp[i] = (int32_t)wzv[i];
-                        if (n_bias > 0) {
-                            for (int i = 0; i < n_bias; i++)
-                                qp->bias_data[i] = (int32_t)bsv[i];
-                            qp->bias = qp->bias_data;
-                        }
-                        qp->kw = (int)KWq;       qp->kh = (int)KHq;
-                        qp->stride_w = (int)strides[1]; qp->stride_h = (int)strides[0];
-                        qp->pad_w = (int)pads[1];       qp->pad_h = (int)pads[0];
-                        qp->dil_w = (int)dilations[1];  qp->dil_h = (int)dilations[0];
+                    /* Output geometry, same formula the f32 path gets from
+                     * ggml_conv_2d_direct. */
+                    int64_t OW = (x->ne[0] + pads[1] + pads[3]
+                                  - ((KWq - 1) * dilations[1] + 1)) / strides[1] + 1;
+                    int64_t OH = (x->ne[1] + pads[0] + pads[2]
+                                  - ((KHq - 1) * dilations[0] + 1)) / strides[0] + 1;
+                    if (OW > 0 && OH > 0) {
+                        float out_lo, out_hi;
                         quant_bounds(c, n->n_inputs > 7 ? n->inputs[7] : NULL,
-                                     &qp->out_lo, &qp->out_hi);
+                                     &out_lo, &out_hi);
 
-                        /* Output geometry, same formula the f32 path gets from
-                         * ggml_conv_2d_direct. */
-                        int64_t OW = (x->ne[0] + pads[1] + pads[3]
-                                      - ((KWq - 1) * dilations[1] + 1)) / strides[1] + 1;
-                        int64_t OH = (x->ne[1] + pads[0] + pads[2]
-                                      - ((KHq - 1) * dilations[0] + 1)) / strides[0] + 1;
-                        if (OW > 0 && OH > 0) {
-                            struct ggml_tensor *shape = ggml_new_tensor_4d(
-                                c->ctx, GGML_TYPE_F32, OW, OH, C_out_q, 1);
-                            /* x and w go in as SRCS, not as remembered
-                             * pointers: the scheduler then brings them back to
-                             * the host for this CPU-only op.  A pointer kept in
-                             * userdata would not be copied, and reading it on a
-                             * device buffer faults.
-                             *
-                             * Both are made contiguous first.  The kernel walks
-                             * them as xd[iw + W*ih + W*H*ic], which is only the
-                             * right address when the row stride really is ne[0]
-                             * elements; hand it a view whose nb[1] says
-                             * otherwise -- anything upstream that slices or
-                             * permutes without materialising -- and it reads
-                             * neighbouring data instead, silently, producing
-                             * plausible numbers rather than a crash.
-                             * ggml_cont on an already-contiguous tensor is a
-                             * no-op, so this costs nothing in the normal case. */
-                            out = ggml_map_custom3(c->ctx, shape,
-                                                   ggml_cont(c->ctx, x),
-                                                   ggml_cont(c->ctx, w),
-                                                   qconv_i32_cpu, 1, qp);
-                            *out_p = out;
-                            *out_nd_p = 4;
-                            return 1;
+                        /* The requantisation multiplier, computed ONCE here
+                         * rather than in each kernel -- see the note on
+                         * qconv_mult_tensors in onnx_ggml.h for what happened
+                         * when the two backends each derived it themselves.
+                         *
+                         * ctx_weight, not ctx_host: unlike the CPU-only
+                         * kernels' parameter blocks, this one is read by
+                         * whichever backend the scheduler picks. */
+                        if (c->n_qconv_mult >= ONNX_MAX_DEFERRED) return -1;
+                        struct ggml_context *mctx = c->ctx_weight ? c->ctx_weight
+                                                                  : c->ctx;
+                        struct ggml_tensor *mult_t =
+                            ggml_new_tensor_1d(mctx, GGML_TYPE_F32, C_out_q);
+                        if (!mult_t) return -1;
+                        {
+                            char mname[GGML_MAX_NAME];
+                            snprintf(mname, sizeof(mname), "%.48s_qmult",
+                                     n->outputs[0]);
+                            ggml_set_name(mult_t, mname);
                         }
+                        float *mv = (float *)malloc((size_t)C_out_q * sizeof(float));
+                        if (!mv) return -1;
+                        for (int64_t mi = 0; mi < C_out_q; mi++) {
+                            /* f32 throughout and in this order: the value has
+                             * to match what ONNX Runtime computes, not what is
+                             * most accurate. */
+                            mv[mi] = xs[0] * wsv[n_ws > 1 ? mi : 0] / ys[0];
+                        }
+                        c->qconv_mult_tensors[c->n_qconv_mult] = mult_t;
+                        c->qconv_mult_values[c->n_qconv_mult]  = mv;
+                        c->qconv_mult_n[c->n_qconv_mult]       = (int)C_out_q;
+                        c->n_qconv_mult++;
+
+                        /* The per-channel tables go in as SOURCES, which is
+                         * what lets the scheduler place this op: they travel
+                         * to whichever backend runs it. They used to be copied
+                         * by value into a 48 KB userdata struct per node --
+                         * 3 MB across this graph, duplicating values the graph
+                         * already held, and unreachable from a shader.
+                         *
+                         * x and w are made contiguous first. The kernel walks
+                         * them as xd[iw + W*ih + W*H*ic], which is the right
+                         * address only when the row stride really is ne[0]
+                         * elements; hand it a view whose nb[1] says otherwise
+                         * -- anything upstream that slices or permutes without
+                         * materialising -- and it reads neighbouring data
+                         * instead, silently, producing plausible numbers
+                         * rather than a crash. ggml_cont on an already
+                         * contiguous tensor is a no-op. */
+                        /* The tables now travel as tensors, so what the kernel
+                         * reads is their ne[0] -- not the count qparam_read
+                         * derived from the payload. Print both: they are two
+                         * different numbers whenever the stored element width
+                         * differs from the declared dtype's, which is exactly
+                         * the case this model's weight zero points hit. */
+                        if (onnx_trace_nodes())
+                            fprintf(stderr,
+                                "[qconv-tab] %s: C_out=%lld | read n_ws=%d "
+                                "n_wz=%d n_bias=%d | tensor ws.ne0=%lld "
+                                "wz.ne0=%lld bias.ne0=%lld | wz[0]=%g "
+                                "ws[0]=%g\n",
+                                n->outputs[0], (long long)C_out_q,
+                                n_ws, n_wz, n_bias,
+                                (long long)(w_scale ? w_scale->ne[0] : -1),
+                                (long long)(w_zp    ? w_zp->ne[0]    : -1),
+                                (long long)(bias    ? bias->ne[0]    : -1),
+                                n_wz > 0 ? (double)wzv[0] : 0.0,
+                                n_ws > 0 ? (double)wsv[0] : 0.0);
+                        if (onnx_trace_nodes()) {
+                            /* Two formulas compute this output size: the one
+                             * below, from the ONNX attributes, and
+                             * ggml_calc_conv_output_size() inside the op
+                             * constructor. They agree only when the padding is
+                             * symmetric -- ONNX carries begin and end
+                             * separately, ggml takes one value and doubles it.
+                             * A disagreement means the tensor is one size and
+                             * the kernel's arithmetic another. */
+                            const int64_t ow_onnx =
+                                (x->ne[0] + pads[1] + pads[3]
+                                 - ((KWq - 1) * dilations[1] + 1)) / strides[1] + 1;
+                            const int64_t oh_onnx =
+                                (x->ne[1] + pads[0] + pads[2]
+                                 - ((KHq - 1) * dilations[0] + 1)) / strides[0] + 1;
+                            const int64_t ow_ggml =
+                                (x->ne[0] + 2 * pads[1]
+                                 - dilations[1] * (KWq - 1) - 1) / strides[1] + 1;
+                            const int64_t oh_ggml =
+                                (x->ne[1] + 2 * pads[0]
+                                 - dilations[0] * (KHq - 1) - 1) / strides[0] + 1;
+                            fprintf(stderr,
+                                "[qconv-pad] %s: pads=[%lld,%lld,%lld,%lld] "
+                                "in=[%lld,%lld] k=[%lld,%lld] s=[%lld,%lld] "
+                                "OW onnx=%lld ggml=%lld | OH onnx=%lld "
+                                "ggml=%lld%s\n",
+                                n->outputs[0],
+                                (long long)pads[0], (long long)pads[1],
+                                (long long)pads[2], (long long)pads[3],
+                                (long long)x->ne[0], (long long)x->ne[1],
+                                (long long)KWq, (long long)KHq,
+                                (long long)strides[1], (long long)strides[0],
+                                (long long)ow_onnx, (long long)ow_ggml,
+                                (long long)oh_onnx, (long long)oh_ggml,
+                                (ow_onnx != ow_ggml || oh_onnx != oh_ggml)
+                                    ? "   <<< MISMATCH" : "");
+                        }
+
+                        out = ggml_qconv_i32(c->ctx,
+                                             ggml_cont(c->ctx, x),
+                                             ggml_cont(c->ctx, w),
+                                             w_scale, w_zp, bias, mult_t,
+                                             (int)strides[1], (int)strides[0],
+                                             (int)pads[1],    (int)pads[0],
+                                             (int)dilations[1], (int)dilations[0],
+                                             xs[0], ys[0],
+                                             (int)xz[0], (int)yz[0],
+                                             out_lo, out_hi);
+                        *out_p = out;
+                        *out_nd_p = 4;
+                        return 1;
                     }
                 }
             }
@@ -640,6 +703,9 @@ int map_node_quant(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                     qp->n_b_zp = (n_bz == (int)Nq) ? n_bz : 1;
                     for (int i = 0; i < qp->n_b_zp; i++)
                         qp->b_zp[i] = (int32_t)bzv[i];
+                    /* NULL for a CPU-loaded model; the kernel then never
+                     * offers the matmul to the shader. */
+                    qp->gpu_backend = c->backend_gpu;
                     quant_bounds(c, n->n_inputs > 7 ? n->inputs[7] : NULL,
                                  &qp->out_lo, &qp->out_hi);
 

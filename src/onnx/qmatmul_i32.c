@@ -28,12 +28,26 @@
  */
 
 #include "qmatmul_i32.h"
+#ifdef GGML_USE_VULKAN
+#include "../ggml-vulkan.h"    /* ggml_vk_qmatmul_i32_run: the GPU fast path */
+#endif
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 
-void qmatmul_i32_cpu(struct ggml_tensor *dst,
+/* On unless GGMLR_ONNX_QMATMUL_GPU=0 -- see the note in qmatmul_i32.h.
+ * Cached: this runs per node per inference and getenv walks the environment. */
+int qmatmul_i32_gpu_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("GGMLR_ONNX_GPU_QMATMUL");
+        cached = (e && e[0] == '0' && e[1] == '\0') ? 0 : 1;
+    }
+    return cached;
+}
+
+static void qmatmul_i32_cpu_impl(struct ggml_tensor *dst,
                      const struct ggml_tensor *a,   /* dummy: shape only */
                      const struct ggml_tensor *b,   /* A, quantised, F32-stored */
                      const struct ggml_tensor *c,   /* B, quantised, F32-stored */
@@ -102,9 +116,67 @@ void qmatmul_i32_cpu(struct ggml_tensor *dst,
         return;
     }
 
+#ifdef GGML_USE_VULKAN
+    /* Offer the whole matmul to the shader before splitting it across threads.
+     *
+     * Single-threaded only. The dispatch covers the ENTIRE output, so with
+     * several workers each would submit its own identical dispatch and they
+     * would race writing the same dst. The op is created with n_tasks = 1
+     * (onnx_ops_quant.c:659).  That reasoning was wrong: n_tasks caps the work
+     * items, nth is the size of the backend thread pool -- whatever n_threads
+     * the model was loaded with, 12 by default -- so `nth == 1` was false on
+     * every real inference and the GPU path never ran.  The warning below sits
+     * inside this same block, so it never printed either: the shader was dead
+     * code that cost nothing and did nothing.  Thread 0 now makes the single
+     * dispatch and the rest return; see the note in qconv_i32.c.
+     *
+     * Declining is normal (no Vulkan backend, or a grid above the driver's
+     * workgroup limit) and simply leaves the CPU loop below to do the work, so
+     * this is a pure fast path: it cannot make a working model wrong by being
+     * absent, only by being incorrect -- which the test suite is there to
+     * catch, since a drifting requantisation changes detections rather than
+     * merely perturbing numbers. */
+    /* Set when this thread took the GPU branch and the dispatch turned it down:
+     * thread 0 then owns all M rows, not a slice of them. */
+    int gpu_attempted = 0;
+
+    if (p->gpu_backend && qmatmul_i32_gpu_enabled()) {
+        /* Everyone but thread 0 is done -- thread 0's dispatch covers the
+         * whole output, and a second one would race it. */
+        if (ith != 0) return;
+        gpu_attempted = 1;
+        int b_zp_any = 0;
+        for (int i = 0; i < p->n_b_zp; i++)
+            if (p->b_zp[i] != 0) { b_zp_any = 1; break; }
+
+        if (ggml_vk_qmatmul_i32_run(
+                p->gpu_backend, ad, bd, p->b_scale, p->b_zp, od,
+                (unsigned)M, (unsigned)N, (unsigned)K,
+                p->a_scale, p->y_scale, p->a_zp, p->y_zp,
+                (unsigned)p->n_b_scale, (unsigned)p->n_b_zp,
+                (unsigned)b_zp_any, p->out_lo, p->out_hi)) {
+            return;
+        }
+        {
+            static int warned = 0;
+            if (!warned) {
+                warned = 1;
+                fprintf(stderr,
+                    "[qmatmul_i32] '%s': the Vulkan dispatch declined (output "
+                    "grid above the driver's workgroup limit) -- using the CPU "
+                    "kernel.\n              Results are unaffected; only this "
+                    "op runs on the host.  Further occurrences are not "
+                    "reported.\n", dst->name);
+            }
+        }
+    }
+#endif
+
     /* Rows are split across threads; each output element is independent. */
-    const int64_t per   = (M + nth - 1) / nth;
-    const int64_t begin = per * ith;
+    /* Unless the GPU branch was taken and declined: the other threads returned
+     * at that branch, so thread 0 is alone here and takes every row. */
+    const int64_t per   = gpu_attempted ? M : (M + nth - 1) / nth;
+    const int64_t begin = gpu_attempted ? 0 : per * ith;
     const int64_t end   = begin + per < M ? begin + per : M;
 
     for (int64_t m = begin; m < end; m++) {
@@ -169,5 +241,51 @@ void qmatmul_i32_cpu(struct ggml_tensor *dst,
             if (v > p->out_hi) v = p->out_hi;
             od[n + N * m] = v;
         }
+    }
+}
+
+/* Timing wrapper, the qconv_i32.c one shaped for this operator
+ * (GGMLR_QCONV_PROFILE=1 drives both, since the question they answer -- where
+ * the host-side time in a quantised model goes -- spans the two).
+ *
+ * ggml_map_custom runs on the host, so these nodes are invisible to the Vulkan
+ * perf logger, which on MaskRCNN accounts for 136 ms of a ~1066 ms run.
+ *
+ * A wrapper rather than timers in the body because that body returns early on
+ * a missing tensor, and an inline stop would eventually be missed on one of
+ * those paths.
+ */
+void qmatmul_i32_cpu(struct ggml_tensor *dst,
+                     const struct ggml_tensor *a,
+                     const struct ggml_tensor *b,
+                     const struct ggml_tensor *c,
+                     int ith, int nth, void *userdata) {
+    static int  prof = -1;
+    static long calls = 0;
+
+    if (prof < 0) prof = (getenv("GGMLR_QCONV_PROFILE") != NULL);
+    if (!prof) {
+        qmatmul_i32_cpu_impl(dst, a, b, c, ith, nth, userdata);
+        return;
+    }
+
+    const qmatmul_i32_params_t *p = (const qmatmul_i32_params_t *)userdata;
+
+    const int64_t t0 = ggml_time_us();
+    qmatmul_i32_cpu_impl(dst, a, b, c, ith, nth, userdata);
+    const long us = (long)(ggml_time_us() - t0);
+
+    if (ith == 0) {
+        calls++;
+        fprintf(stderr,
+                "[qmatmul-prof] %3ld %-24s %8.2f ms  out(%lld,%lld,%lld,%lld)"
+                "  gpu=%d\n",
+                calls, dst && dst->name[0] ? dst->name : "(unnamed)",
+                us / 1000.0,
+                (long long)(dst ? dst->ne[0] : 0),
+                (long long)(dst ? dst->ne[1] : 0),
+                (long long)(dst ? dst->ne[2] : 0),
+                (long long)(dst ? dst->ne[3] : 0),
+                (p && p->gpu_backend && qmatmul_i32_gpu_enabled()) ? 1 : 0);
     }
 }

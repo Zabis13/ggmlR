@@ -2,9 +2,23 @@
 
 #include "nms.h"
 #include "../ggml-backend.h"   /* buffer_is_host: this kernel reads host memory */
+#ifdef GGML_USE_VULKAN
+#include "../ggml-vulkan.h"    /* ggml_vk_nms_run: the GPU fast path */
+#endif
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+
+/* On unless GGMLR_ONNX_GPU_NMS=0 -- see the note in nms.h.
+ * Cached: this runs per node per inference and getenv walks the environment. */
+int nms_gpu_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *e = getenv("GGMLR_ONNX_GPU_NMS");
+        cached = (e && e[0] == '0' && e[1] == '\0') ? 0 : 1;
+    }
+    return cached;
+}
 
 /* Order a pair, the way ONNX Runtime's MaxMin does. */
 static inline void nms_maxmin(float lhs, float rhs, float *mn, float *mx) {
@@ -73,6 +87,36 @@ static inline int nms_passes(float score, float thresh, int have_thresh) {
     return !have_thresh || score > thresh;
 }
 
+/* What did this kernel actually leave in dst?
+ *
+ * The per-node value trace reads dst LATER, through the scheduler, and on
+ * Vulkan it reports sums that no selection could produce -- 111 elements all
+ * equal to 1, or the denormal 0x00000001 -- while the inputs feeding this op
+ * match the CPU bit for bit.  That is consistent with two very different
+ * faults: the kernel computing the wrong answer, or the kernel computing the
+ * right one into a buffer nobody reads back.
+ *
+ * Summing dst here, at the moment of writing, separates them.  If this number
+ * matches the CPU reference and the node trace does not, the loss is in the
+ * hand-off, not in the selection.  Called from every path that returns after
+ * touching dst, so a path that quietly leaves dst alone is visible too. */
+static void nms_dump_dst(const struct ggml_tensor *dst, const char *where,
+                         int count) {
+    if (!getenv("ONNX_TRACE_NMS_ENTER") || !dst || !dst->data) return;
+    const float  *od = (const float *)dst->data;
+    const int64_t n  = ggml_nelements(dst);
+    double sum = 0.0;
+    float  mn  = n ? od[0] : 0.0f, mx = mn;
+    for (int64_t q = 0; q < n; q++) {
+        sum += od[q];
+        if (od[q] < mn) mn = od[q];
+        if (od[q] > mx) mx = od[q];
+    }
+    fprintf(stderr, "[nms-wrote] '%s' via %s: n=%lld sum=%.6g min=%g max=%g "
+                    "selected=%d\n",
+            dst->name, where, (long long)n, sum, (double)mn, (double)mx, count);
+}
+
 /* Sort indices by score descending */
 typedef struct { int idx; float score; } score_pair_t;
 
@@ -91,28 +135,46 @@ static int cmp_score_desc(const void *a, const void *b) {
     return (pa->idx > pb->idx) - (pa->idx < pb->idx);
 }
 
-void nms_cpu(struct ggml_tensor *dst,
-             const struct ggml_tensor *a,
-             const struct ggml_tensor *b,
-             const struct ggml_tensor *c_tensor,
-             int ith, int nth, void *userdata) {
+void nms_cpu(struct ggml_tensor *dst, int ith, int nth, void *userdata) {
     (void)ith; (void)nth;
 
-    (void)a; /* dummy — shape only */
+    /* Diagnostic: did this kernel run at all?
+     *
+     * Every other print below sits behind a condition, so silence from this
+     * function is ambiguous -- "never called" and "called, took a path that
+     * happens not to print" look identical from outside.  On Vulkan the NMS
+     * nodes produce output while ONNX_TRACE_NMS prints nothing at all, and
+     * those two readings lead to opposite places: the kernel, or the segment
+     * dispatch that should reach it.  This line is unconditional within the
+     * function, so it separates them.
+     *
+     * The call counter makes the answer usable if the kernel IS reached: the
+     * next question is always "from which call does it go wrong", and the
+     * split index is not available here (a ggml_custom_4d callback is not told
+     * which split it belongs to), so an ordinal is the closest stand-in. */
+    if (getenv("ONNX_TRACE_NMS_ENTER")) {
+        static int n_enter = 0;
+        fprintf(stderr, "[nms-enter] #%d dst=%p name='%s'\n",
+                ++n_enter, (const void *)dst, dst ? dst->name : "(null)");
+    }
 
     const nms_params_t *p = (const nms_params_t *)userdata;
 
-    /* Every pointer here has to be checked before it is followed.  The scores
-     * tensor is remembered in userdata when the graph is BUILT, while the op
-     * runs later and, under segmented execution, after buffers have been
-     * reset and reallocated in between -- so a tensor that existed at build
+    /* All three inputs are srcs of dst, so the scheduler has already brought
+     * them to the host by the time this runs.  They are still checked before
+     * being followed: under segmented execution buffers are reset and
+     * reallocated between build and run, so a tensor that existed at build
      * time may have no data now.  Reading it then is a null dereference in a
      * worker thread, which comes out as a bare segfault with no message and
      * no ring dump, because it never reaches GGML_ABORT. */
-    if (!p || !p->scores || !b || !c_tensor || !dst) {
+    const struct ggml_tensor *b        = dst ? dst->src[0] : NULL;
+    const struct ggml_tensor *scores_s = dst ? dst->src[1] : NULL;
+    const struct ggml_tensor *c_tensor = dst ? dst->src[2] : NULL;
+
+    if (!p || !scores_s || !b || !c_tensor || !dst) {
         fprintf(stderr, "[nms] missing tensor (params=%p scores=%p boxes=%p "
                         "c=%p dst=%p) -- output left empty\n",
-                (const void *)p, (const void *)(p ? p->scores : NULL),
+                (const void *)p, (const void *)scores_s,
                 (const void *)b, (const void *)c_tensor, (const void *)dst);
         if (dst && dst->data) {
             float *od = (float *)dst->data;
@@ -120,10 +182,10 @@ void nms_cpu(struct ggml_tensor *dst,
         }
         return;
     }
-    if (!b->data || !p->scores->data || !c_tensor->data || !dst->data) {
+    if (!b->data || !scores_s->data || !c_tensor->data || !dst->data) {
         fprintf(stderr, "[nms] tensor without data (boxes=%p scores=%p "
                         "params=%p dst=%p) -- output left empty\n",
-                (const void *)b->data, (const void *)p->scores->data,
+                (const void *)b->data, (const void *)scores_s->data,
                 (const void *)c_tensor->data, (const void *)dst->data);
         if (dst->data) {
             float *od = (float *)dst->data;
@@ -141,12 +203,12 @@ void nms_cpu(struct ggml_tensor *dst,
      * GGML_ABORT.  That crash cost a session: the address in the report
      * (0x124c) looks like a corrupted pointer rather than what it is.
      *
-     * The scheduler does make host copies of an op's srcs, which is why the
-     * boxes and params arrive fine.  scores does NOT come through a src: it
-     * is a pointer remembered in userdata when the graph was built, so
-     * nothing brings it back from the device.  Refuse rather than read it. */
+     * The scheduler makes host copies of an op's srcs, and boxes, scores and
+     * params are all srcs of dst now, so all three arrive on the host.  The
+     * check stays as a guard: scores used to travel in userdata instead, and
+     * on Vulkan it silently stayed in VRAM.  Refuse rather than read it. */
     {
-        const struct ggml_tensor *need_host[] = { b, p->scores, c_tensor, dst };
+        const struct ggml_tensor *need_host[] = { b, scores_s, c_tensor, dst };
         const char *names[] = { "boxes", "scores", "params", "dst" };
         for (int q = 0; q < 4; q++) {
             const struct ggml_tensor *t = need_host[q];
@@ -163,13 +225,14 @@ void nms_cpu(struct ggml_tensor *dst,
                     float *od = (float *)dst->data;
                     for (int64_t z = 0; z < ggml_nelements(dst); z++) od[z] = -1.0f;
                 }
+                nms_dump_dst(dst, "nonhost-guard", -1);
                 return;
             }
         }
     }
 
     const struct ggml_tensor *boxes_t  = b;
-    const struct ggml_tensor *scores_t = p->scores;
+    const struct ggml_tensor *scores_t = scores_s;
 
     /* boxes: ggml [4, num_boxes, N] */
     const int num_boxes = (int)boxes_t->ne[1];
@@ -212,6 +275,76 @@ void nms_cpu(struct ggml_tensor *dst,
     if (!sorted || !selected_idx) { free(sorted); free(selected_idx); return; }
 
     int total_selected = 0;
+
+#ifdef GGML_USE_VULKAN
+    /* Offer the per-class work to the shader.
+     *
+     * The shader answers only the parallel half: for each (batch, class) pair
+     * it filters by score, sorts with the index tie-break, and runs that pair's
+     * selection, writing the survivors into its own slice. This kernel still
+     * does the serial half below -- walking the pairs in the operator's
+     * batch-major, class-major order and stopping at the GLOBAL max_selected.
+     * Those cannot move into the shader: workgroups finish in an arbitrary
+     * order, and the global cap is a decision that spans them.
+     *
+     * Declining is normal (no backend, too many boxes for the shader's fixed
+     * sort capacity, too many pairs for the driver) and simply leaves the CPU
+     * loop to do everything, so this is a pure fast path. */
+    if (p->gpu_backend && nms_gpu_enabled()) {
+        const int cap = max_output < num_boxes ? max_output : num_boxes;
+        const size_t n_pairs = (size_t)num_classes * N;
+        int *sel_idx = (int *)malloc(n_pairs * (size_t)cap * sizeof(int));
+        int *sel_cnt = (int *)malloc(n_pairs * sizeof(int));
+
+        if (sel_idx && sel_cnt &&
+            ggml_vk_nms_run(p->gpu_backend, box_data, score_data,
+                            sel_idx, sel_cnt,
+                            (unsigned)num_boxes, (unsigned)num_classes,
+                            (unsigned)N, (unsigned)cap, max_output,
+                            iou_thresh, score_thresh,
+                            (unsigned)have_score_thresh,
+                            (unsigned)p->center_point_box)) {
+            /* Assemble in the operator's order, applying the global cap. This
+             * is the same nesting as the CPU loop below, which is what makes
+             * the two agree element for element. */
+            for (int batch = 0; batch < N && total_selected < max_selected; batch++) {
+                for (int cls = 0; cls < num_classes && total_selected < max_selected; cls++) {
+                    const size_t pair = (size_t)batch * num_classes + cls;
+                    const int    got  = sel_cnt[pair];
+                    for (int s = 0; s < got && total_selected < max_selected; s++) {
+                        out_data[0 + 3 * total_selected] = (float)batch;
+                        out_data[1 + 3 * total_selected] = (float)cls;
+                        out_data[2 + 3 * total_selected] =
+                            (float)sel_idx[pair * (size_t)cap + s];
+                        total_selected++;
+                    }
+                }
+            }
+            dst->op_params[NMS_COUNT_SLOT] = total_selected;
+            nms_dump_dst(dst, "gpu", total_selected);
+            free(sel_idx);
+            free(sel_cnt);
+            free(sorted);
+            free(selected_idx);
+            return;
+        }
+
+        free(sel_idx);
+        free(sel_cnt);
+        {
+            static int warned = 0;
+            if (!warned) {
+                warned = 1;
+                fprintf(stderr,
+                    "[nms] '%s': the Vulkan dispatch declined (more boxes than "
+                    "the shader's sort capacity, or too many classes for the "
+                    "driver) -- using the CPU kernel.\n      Results are "
+                    "unaffected; only this op runs on the host.  Further "
+                    "occurrences are not reported.\n", dst->name);
+            }
+        }
+    }
+#endif
 
     /* One print that answers both questions at once.
      *
@@ -366,6 +499,7 @@ void nms_cpu(struct ggml_tensor *dst,
 
     /* Store actual count in op_params for downstream */
     dst->op_params[NMS_COUNT_SLOT] = total_selected;
+    nms_dump_dst(dst, "cpu", total_selected);
 
     free(sorted);
     free(selected_idx);

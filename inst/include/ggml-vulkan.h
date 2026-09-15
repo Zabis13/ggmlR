@@ -104,6 +104,67 @@ GGML_BACKEND_API bool ggml_vk_pairwise_dist_run(
     const float * x, float * d2,
     unsigned int n, unsigned int dims);
 
+// RoiAlign (ONNX opset 10+), dispatched directly. Samples num_rois regions out
+// of the feature map x (ggml layout [W, H, C, N]) into dst (ggml layout
+// [ow, oh, C, num_rois]); rois is [4, num_rois] as x1, y1, x2, y2 and
+// batch_indices is [num_rois] F32 indices into N. sampling_ratio 0 means
+// adaptive, mode 0 = avg / 1 = max. Returns false if the backend is not Vulkan.
+//
+// This is a bit-exact port of the CPU kernel in src/onnx/roi_align.c and must
+// stay one: MaskRCNN-12-int8 matches ONNX Runtime exactly, and that agreement
+// depends on reproducing ORT's arithmetic rather than a cleaner equivalent.
+GGML_BACKEND_API bool ggml_vk_roi_align_run(
+    ggml_backend_t backend,
+    const float * x, const float * rois, const float * batch_indices,
+    float * dst,
+    unsigned int W, unsigned int H, unsigned int C, unsigned int N,
+    unsigned int num_rois, unsigned int ow, unsigned int oh,
+    int sampling_ratio, unsigned int mode, float spatial_scale);
+
+// QLinearMatMul with an exact i32 accumulator (ONNX), dispatched directly.
+// A is [K, M] and b_mat is [K, N], both quantised values held as f32, K fastest
+// in each; dst receives [N, M]. b_scale / b_zp are per output column when
+// n_b_scale / n_b_zp exceed 1, otherwise one shared value. b_zp_any tells the
+// shader whether any zero point is non-zero, so it can skip a row sum.
+// Returns false if the backend is not Vulkan.
+//
+// This is a bit-exact port of src/onnx/qmatmul_i32.c, including ORT's
+// VPMADDUBSW int16 pair saturation -- reproducing that LOSS of precision is
+// what makes the numbers match; exact arithmetic here disagrees.
+GGML_BACKEND_API bool ggml_vk_qmatmul_i32_run(
+    ggml_backend_t backend,
+    const float * a, const float * b_mat,
+    const float * b_scale, const int * b_zp,
+    float * dst,
+    unsigned int M, unsigned int N, unsigned int K,
+    float a_scale, float y_scale, int a_zp, int y_zp,
+    unsigned int n_b_scale, unsigned int n_b_zp, unsigned int b_zp_any,
+    float out_lo, float out_hi);
+
+// NonMaxSuppression (ONNX), dispatched directly. boxes is ggml [4, num_boxes,
+// N] and scores ggml [num_boxes, num_classes, N]. One workgroup per
+// (batch, class) pair filters, sorts and selects that pair independently and
+// writes its survivors into its own slice: sel_idx is
+// [max_per_pair, num_classes * N] and sel_cnt holds how many each pair kept,
+// both indexed by the flat pair (n * num_classes + cls).
+//
+// The caller assembles the operator's [3, max_selected] output from those in
+// batch-major, class-major order and applies the GLOBAL max_selected cap. That
+// bookkeeping is deliberately not in the shader: workgroups finish in an
+// arbitrary order, and the global cap is a sequential decision across them.
+//
+// max_per_pair caps one pair's survivors; a class with more candidates than the
+// shader's fixed sort capacity is refused (returns false) so the caller can
+// fall back. Also returns false if the backend is not Vulkan.
+GGML_BACKEND_API bool ggml_vk_nms_run(
+    ggml_backend_t backend,
+    const float * boxes, const float * scores,
+    int * sel_idx, int * sel_cnt,
+    unsigned int num_boxes, unsigned int num_classes, unsigned int N,
+    unsigned int max_per_pair, int max_output,
+    float iou_thresh, float score_thresh, unsigned int have_score_thresh,
+    unsigned int center_point_box);
+
 // Tiled fused k-NN, dispatched directly. For each of n rows of x (dims each),
 // finds the k nearest other rows in honest f32 without materialising the n x n
 // distance matrix. Outputs knn_idx (n*k 0-based row indices) and knn_dist (n*k

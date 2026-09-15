@@ -11,46 +11,17 @@
 
 #include <stdint.h>
 
+/* Upper bound on a per-output-channel table, used only to size the scratch
+ * buffers the graph builder counts entries into. The kernel itself no longer
+ * has a fixed limit: it reads the tables straight out of their tensors. */
 #define QCONV_I32_MAX_CHANNELS 4096
 
-/* Scalars and per-channel tables the kernel needs, copied by VALUE at graph
- * build time.
+/* GGML_OP_QCONV_I32 on the host: dst = requantise(qconv(src[0], src[1])).
  *
- * Copied rather than referenced: a tensor pointer captured at build time can
- * dangle when the op actually runs, because segmented execution resets and
- * reallocates buffers in between.  w_scale and bias are per output channel in
- * real models, so they are arrays, not scalars. */
-typedef struct {
-    float   x_scale;
-    float   y_scale;
-    int32_t x_zp;
-    int32_t y_zp;
-
-    /* Weight scale AND zero point are both per output channel in real models:
-     * MaskRCNN's node 482 carries 256 of each.  Reading only the first left
-     * six outputs in channel 89 one code off -- an integer accumulator is
-     * exact, so a wrong zero point is a wrong answer, not a rounding wobble. */
-    int     n_w_scale;                        /* 1 = shared, else C_out */
-    float   w_scale[QCONV_I32_MAX_CHANNELS];
-    int     n_w_zp;                           /* 1 = shared, else C_out */
-    int32_t w_zp[QCONV_I32_MAX_CHANNELS];
-    int32_t bias_data[QCONV_I32_MAX_CHANNELS];
-    const int32_t *bias;                      /* NULL when the conv has none */
-
-    int     kw, kh;
-    int     stride_w, stride_h;
-    int     pad_w, pad_h;
-    int     dil_w, dil_h;
-
-    float   out_lo, out_hi;                   /* saturation, from the zp dtype */
-} qconv_i32_params_t;
-
-/* ggml_map_custom3 kernel: dst = requantise(conv_i32(b, c)).
- * `a` carries the output shape only; x is `b` and w is `c`. */
-void qconv_i32_cpu(struct ggml_tensor *dst,
-                   const struct ggml_tensor *a,
-                   const struct ggml_tensor *b,
-                   const struct ggml_tensor *c,
-                   int ith, int nth, void *userdata);
+ * Scalars come from op_params and the per-output-channel tables from
+ * src[2..4], so nothing is copied per node and nothing can dangle -- the
+ * graph already owns every value this reads. See ggml_qconv_i32() in ggml.h
+ * for the operand layout, and qconv_i32.c for why the arithmetic saturates. */
+void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth);
 
 #endif /* QCONV_I32_H */

@@ -8,12 +8,29 @@
 
 layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
+/* ⚠️ Must match vk_op_binary_push_constants in ggml-vulkan-device.cpp field for
+ * field -- FIVE ne/nb per tensor, not four.
+ *
+ * ggml tensors carry GGML_MAX_DIMS == 5 dimensions and the C++ struct has the
+ * ne04/nb04, ne14/nb14, ne24/nb24 entries to match. This block used to declare
+ * only four of each (29 fields, 116 bytes against the struct's 35 / 140), so
+ * everything after ne03 was read from the wrong offset: ne20..ne22 -- the dst
+ * strides -- picked up nb11..nb13, and param3 -- the scatter AXIS -- picked up
+ * nb22.
+ *
+ * `total` still came out right (it only uses ne00..ne03, which precede the
+ * first missing field), so the shader ran over the correct number of elements
+ * and wrote every one of them to an address computed from garbage. Measured on
+ * MaskRCNN-12-int8 node 1211: 2 non-zero rows in the output where ONNX Runtime
+ * has 805, with both inputs matching ORT exactly.
+ *
+ * Keep this layout identical to generic_binary_head.glsl. */
 layout (push_constant) uniform parameter
 {
     uint ne;
-    uint ne00; uint ne01; uint ne02; uint ne03; uint nb00; uint nb01; uint nb02; uint nb03;
-    uint ne10; uint ne11; uint ne12; uint ne13; uint nb10; uint nb11; uint nb12; uint nb13;
-    uint ne20; uint ne21; uint ne22; uint ne23; uint nb20; uint nb21; uint nb22; uint nb23;
+    uint ne00; uint ne01; uint ne02; uint ne03; uint ne04; uint nb00; uint nb01; uint nb02; uint nb03; uint nb04;
+    uint ne10; uint ne11; uint ne12; uint ne13; uint ne14; uint nb10; uint nb11; uint nb12; uint nb13; uint nb14;
+    uint ne20; uint ne21; uint ne22; uint ne23; uint ne24; uint nb20; uint nb21; uint nb22; uint nb23; uint nb24;
     uint misalign_offsets;
     float param1; float param2; int param3;
 } p;
@@ -27,7 +44,38 @@ uint get_boffset() { return (p.misalign_offsets >> 8) & 0xFF; }
 uint get_doffset() { return p.misalign_offsets & 0xFF; }
 
 void main() {
-    const uint gid = gl_GlobalInvocationID.x;
+    /* Flat index across ALL THREE dispatch axes.
+     *
+     * ⚠️ gl_GlobalInvocationID.x alone is not the thread index here.  The
+     * dispatch in ggml-vulkan-elemwise.cpp splits the work over y (and z) as
+     * soon as it does not fit one axis:
+     *     ne = CEIL_DIV(nelements(updates), 256)
+     *     ne > 256    -> { 256, CEIL_DIV(ne, 256), 1 }
+     *     ne > 262144 -> { 256, 256, CEIL_DIV(ne, 65536) }
+     * so .x covers only 256 workgroups * 256 threads = 65536 elements and
+     * every element past that is never visited -- it keeps the value the
+     * data->dst copy left there.
+     *
+     * On MaskRCNN-12-int8 (node 1211, ScatterElements) the dispatch for its
+     * 11226880 updates is { 256, 172, 1 }, so .x alone reaches 65536 of them
+     * -- 0.58%, with the rest keeping whatever the data->dst copy left.
+     *
+     * ⚠️ Fixing this alone changes nothing visible, measured twice: the push
+     * constant block above was declaring a 4-dimension layout against the
+     * struct's 5, so the axis and the dst strides were read from the wrong
+     * offsets and every write landed somewhere arbitrary regardless of how
+     * many threads reached it. The pipeline's declared push constant range was
+     * a third, separate defect (12 bytes against 140) -- see the note at
+     * ggml_vk_create_pipeline in ggml-vulkan-shaders.cpp. All three are
+     * independent and all three have to be fixed.
+     *
+     * The strides are the dispatch's own: 65536 = 256 x-workgroups * 256
+     * threads, 16777216 = that times the 256 y-workgroups of the z branch.
+     * They differ from the 512/262144 in generic_unary_head.glsl because this
+     * shader's local_size_x and CEIL_DIV divisor are 256, not 512. */
+    const uint gid = gl_GlobalInvocationID.z * 16777216
+                   + gl_GlobalInvocationID.y * 65536
+                   + gl_GlobalInvocationID.x;
 
     /* Total elements in updates = ne00 * ne01 * ne02 * ne03 */
     const uint total = p.ne00 * p.ne01 * p.ne02 * p.ne03;

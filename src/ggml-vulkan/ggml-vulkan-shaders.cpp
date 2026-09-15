@@ -1236,8 +1236,38 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_acc_f32, "acc_f32", acc_f32_len, acc_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 1}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_set_f32, "set_f32", acc_f32_len, acc_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 0}, 1);
 
-    ggml_vk_create_pipeline(device, device->pipeline_scatter_elements_none, "scatter_elements_none", scatter_elements_none_len, scatter_elements_none_data, "main", 3, sizeof(vk_op_scatter_elements_push_constants), {256, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_scatter_elements_add,  "scatter_elements_add",  scatter_elements_add_len,  scatter_elements_add_data,  "main", 3, sizeof(vk_op_scatter_elements_push_constants), {256, 1, 1}, {}, 1);
+    /* ⚠️ vk_op_binary_push_constants, NOT vk_op_scatter_elements_push_constants.
+     *
+     * The push constant range declared here must match what the dispatcher
+     * actually sends: ggml_vk_scatter_elements() calls ggml_vk_op_f32 with
+     * vk_op_binary_push_constants_init(...), i.e. 140 bytes. This line used to
+     * declare the 3-uint (12 byte) struct left over from an earlier version of
+     * the shader, so everything the shader reads past offset 12 -- ne02, ne03
+     * (the tail of `total`), ne20..ne22 (the dst strides), misalign_offsets and
+     * param3 (the axis) -- lay outside the declared range.
+     *
+     * Measured on MaskRCNN-12-int8 (node 1211, 11226880 updates into a
+     * [7,7,256,1000] dst): the output came back with 2 non-zero rows where
+     * ONNX Runtime has 805, and 8838153 of 12544000 elements disagreed, while
+     * BOTH inputs matched ORT exactly (updates 1.4e-05, indices 0). The CPU
+     * kernel matched ORT to 7.6e-06. */
+    /* ⚠️ wg_denoms {1,1,1}, not {256,1,1}.
+     *
+     * ggml_vk_dispatch_pipeline divides again: workgroups = CEIL_DIV(elements,
+     * wg_denoms). The elements this op passes are ALREADY workgroup counts --
+     * ggml-vulkan-elemwise.cpp computes CEIL_DIV(nelements(updates), 256)
+     * before splitting it over the axes -- so a denominator of 256 divided a
+     * second time and launched a fraction of the work.
+     *
+     * Measured: updates of 3072 elements dispatched elements={12,1,1}, which
+     * became CEIL_DIV(12,256) = 1 workgroup, 256 threads. The output held
+     * exactly the elements written by gid 0..255 -- one destination row of the
+     * six expected. At 163840 updates it was 3 rows of 40.
+     *
+     * GGML_OP_SET_ROWS is the same shape (same push constants, same
+     * pre-divided elements) and declares {1,1,1}; keep these in step. */
+    ggml_vk_create_pipeline(device, device->pipeline_scatter_elements_none, "scatter_elements_none", scatter_elements_none_len, scatter_elements_none_data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_scatter_elements_add,  "scatter_elements_add",  scatter_elements_add_len,  scatter_elements_add_data,  "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_concat_f32, "concat_f32", concat_f32_len, concat_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_concat_f16, "concat_f16", concat_f16_len, concat_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
@@ -1335,6 +1365,33 @@ static void ggml_vk_load_shaders(vk_device& device) {
     // output cell, tiled 32x32 with shared-memory staging. wg_denoms = local_size
     // (32, 32) = the tile side TS in pairwise_dist.comp.
     ggml_vk_create_pipeline(device, device->pipeline_pairwise_dist, "pairwise_dist", pairwise_dist_len, pairwise_dist_data, "main", 2, sizeof(vk_op_pairwise_dist_push_constants), {32, 32, 1}, {}, 1);
+
+    // RoiAlign (ONNX): 4 buffers (X, rois, batch_indices in; dst out), one thread
+    // per output element over a flat 1-D grid. wg_denoms = local_size (256, 1, 1)
+    // from roi_align.comp, so the dispatch's element count rounds up to whole
+    // workgroups and the shader's own bounds test drops the tail.
+    ggml_vk_create_pipeline(device, device->pipeline_roi_align, "roi_align", roi_align_len, roi_align_data, "main", 4, sizeof(vk_op_roi_align_push_constants), {256, 1, 1}, {}, 1);
+
+    // QLinearMatMul with an i32 accumulator (ONNX): 5 buffers (A, B, b_scale,
+    // b_zp in; dst out), one thread per output element. The K loop stays inside
+    // the thread on purpose -- the VPMADDUBSW pair saturation it reproduces is
+    // order-dependent, so it cannot be split across a workgroup.
+    // wg_denoms {16,16,1} match the shader's 2D block tile (BM x BN): the
+    // dispatch is now sized in output COLUMNS by ROWS, not in flat elements.
+    ggml_vk_create_pipeline(device, device->pipeline_qmatmul_i32, "qmatmul_i32", qmatmul_i32_len, qmatmul_i32_data, "main", 5, sizeof(vk_op_qmatmul_i32_push_constants), {16, 16, 1}, {}, 1);
+
+    // QLinearConv with an i32 accumulator (ONNX): 6 buffers (x, w, w_scale,
+    // w_zp, bias in; dst out), one thread per output element. As with the
+    // matmul, the reduction stays inside the thread because the VPMADDUBSW
+    // pair saturation is order-dependent.
+    ggml_vk_create_pipeline(device, device->pipeline_qconv_i32, "qconv_i32", qconv_i32_len, qconv_i32_data, "main", 7, sizeof(vk_op_qconv_i32_push_constants), {256, 1, 1}, {}, 1);
+
+    // NonMaxSuppression (ONNX): 4 buffers (boxes, scores in; per-pair selected
+    // indices and counts out). ONE WORKGROUP PER (batch, class) pair, so
+    // wg_denoms is {1,1,1} and the dispatch's element count becomes the group
+    // count directly -- the 256 threads inside cooperate on filtering and
+    // sorting, while the selection itself is serial on one invocation.
+    ggml_vk_create_pipeline(device, device->pipeline_nms, "nms", nms_len, nms_data, "main", 4, sizeof(vk_op_nms_push_constants), {1, 1, 1}, {}, 1);
 
     // Tiled fused k-NN: 3 buffers (X in, KNN_IDX out, KNN_DIST out), ONE workgroup
     // per query row (wg_denoms = {1,1,1} so the dispatch's n elements become n

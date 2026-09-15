@@ -106,13 +106,17 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         /* Allocate params (must outlive graph).
          *
          * The same lifetime trap as nms_params, and it had already bitten:
-         * `p` is handed to ggml_map_custom3 as userdata and dereferenced when
+         * `p` is handed to the custom op as userdata and dereferenced when
          * the graph runs, so it must not move.  Growing an array of structs
          * with realloc moves the block, leaving every earlier RoiAlign node
          * pointing into freed memory -- MaskRCNN has four of them, and the
-         * first one's kernel read p->X as NULL and refused.
+         * first one's kernel read its feature map as NULL and refused.
          *
-         * One allocation per entry: only the array OF POINTERS moves. */
+         * One allocation per entry: only the array OF POINTERS moves.
+         *
+         * Scalars only travel this way.  Tensors must NOT: a pointer
+         * remembered here is invisible to the scheduler, which is exactly how
+         * X ended up stranded in VRAM. */
         if (c->n_roi_aligns >= c->roi_align_params_cap) {
             int newcap = c->roi_align_params_cap ? c->roi_align_params_cap * 2 : 8;
             roi_align_params_t **np = (roi_align_params_t **)realloc(
@@ -129,10 +133,12 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         p->sampling_ratio = sr;
         p->spatial_scale  = ss;
         p->mode           = mode;
+        /* NULL for a CPU-loaded model; the kernel then never offers the work
+         * to the shader.  Unlike a tensor, a backend handle is stable across
+         * buffer reallocation and is not graph state, so userdata is the right
+         * place for it. */
+        p->gpu_backend    = c->backend_gpu;
 
-        /* Output: ggml [ow, oh, C, num_rois] */
-        struct ggml_tensor *dummy = ggml_new_tensor_4d(c->ctx, GGML_TYPE_F32,
-                                                        ow, oh, C_feat, num_rois_val);
         if (!bi) {
             /* Create zero batch_indices if missing */
             struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
@@ -141,11 +147,24 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             /* Will be zero-filled by default */
         }
 
-        p->X = X; /* callback reads feature map from params */
-        out = ggml_map_custom3(c->ctx, dummy, rois, bi,
-                               roi_align_cpu, 1, p);
-        /* Add X as dependency so scheduler keeps its buffer alive */
-        out->src[3] = X;
+        /* Output: ggml [ow, oh, C, num_rois].
+         *
+         * ggml_custom_4d rather than ggml_map_custom3, because this op needs
+         * THREE real inputs and map_custom3 only has room for two: its first
+         * argument is consumed as the output-shape template, leaving b and c
+         * for data.  rois and batch_indices fitted; X did not, and was passed
+         * as a pointer inside userdata with out->src[3] patched in afterwards.
+         * Neither reaches the scheduler -- a hand-written src past the op's
+         * own arity is not walked when splits are planned -- so on Vulkan the
+         * feature map stayed in VRAM and this host-only kernel could not read
+         * it.  As proper srcs all three are copied back to the host first.
+         *
+         * The kernel addresses X as base[x + W*y], so a view whose row stride
+         * is not ne[0] elements would read neighbouring data silently rather
+         * than crash; ggml_cont is a no-op when it is already contiguous. */
+        struct ggml_tensor *roi_args[3] = { ggml_cont(c->ctx, X), rois, bi };
+        out = ggml_custom_4d(c->ctx, GGML_TYPE_F32, ow, oh, C_feat, num_rois_val,
+                             roi_args, 3, roi_align_cpu, 1, p);
         c->n_roi_aligns++;
         out_nd = 4;
     }
@@ -208,7 +227,7 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
 
         /* Allocate NMS params.
          *
-         * The address of `p` is handed to ggml_map_custom3 as the kernel's
+         * The address of `p` is handed to the custom op as the kernel's
          * userdata and is dereferenced when the graph runs, long after this
          * function has returned -- so it has to stay put.  This used to be an
          * array of structs grown one element at a time with realloc, which
@@ -221,7 +240,11 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
          * freed block mapped.
          *
          * Each entry now gets its own allocation, so only the array OF
-         * POINTERS moves when it grows, and the entries themselves never do. */
+         * POINTERS moves when it grows, and the entries themselves never do.
+         *
+         * Only center_point_box travels this way now.  Tensors must NOT: a
+         * pointer remembered here is invisible to the scheduler, which is
+         * exactly how scores ended up stranded in VRAM. */
         if (c->n_nms_ops >= c->nms_params_cap) {
             int newcap = c->nms_params_cap ? c->nms_params_cap * 2 : 16;
             nms_params_t **np = (nms_params_t **)realloc(
@@ -234,7 +257,9 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         if (!p) return -1;
         c->nms_params[c->n_nms_ops] = p;
         p->center_point_box = cpb;
-        p->scores = scores;
+        /* NULL for a CPU-loaded model; the kernel then never offers the
+         * selection to the shader. */
+        p->gpu_backend = c->backend_gpu;
 
         /* boxes ggml [4, num_boxes, N], scores ggml [num_boxes, num_classes, N] */
         int num_boxes_val = (int)boxes->ne[1];
@@ -276,7 +301,23 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
          * carries whether score_threshold was given at all, which the kernel
          * cannot infer from the value: 0 is both a legal threshold and the
          * placeholder for "no threshold". */
-        struct ggml_context *wctx = c->ctx_weight ? c->ctx_weight : c->ctx;
+        /* ctx_host, not ctx_weight: this block is read only by nms_cpu, which
+         * runs on the host, and everything in ctx_weight is pre-allocated on
+         * the weight backend -- the GPU, for a Vulkan model.
+         *
+         * The cost of getting that wrong is not the 16 bytes of traffic, it is
+         * one GGML_SCHED_MAX_SPLIT_INPUTS slot per node. MaskRCNN puts ~42 NMS
+         * nodes in a single CPU split, each pulling boxes, scores and its own
+         * params back from the GPU: measured at 128 inputs, every one under
+         * 256 bytes, 0.00 MB altogether -- the graph aborted having moved
+         * essentially no data. Hosting the params takes that split to 86.
+         *
+         * ggml_set_input() does NOT achieve this on its own: the scheduler
+         * refuses to move a tensor that already sits in a buffer
+         * (ggml-backend.cpp:913) before it ever looks at the flag on line 918.
+         * The flag is kept anyway -- it is still a graph input. */
+        struct ggml_context *wctx = c->ctx_host ? c->ctx_host
+                                  : c->ctx_weight ? c->ctx_weight : c->ctx;
         struct ggml_tensor *params_t = ggml_new_tensor_1d(wctx, GGML_TYPE_F32, 4);
         ggml_set_input(params_t);
         ggml_set_name(params_t, "nms_params");
@@ -291,14 +332,43 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             c->n_nms_deferred++;
         }
 
-        /* Output: ggml [3, max_selected] */
-        struct ggml_tensor *nms_dummy = ggml_new_tensor_2d(c->ctx, GGML_TYPE_F32,
-                                                            3, max_selected);
-        out = ggml_map_custom3(c->ctx, nms_dummy, boxes, params_t,
-                               nms_cpu, 1, p);
-        /* Add boxes and scores as dependencies */
-        out->src[3] = boxes;
-        out->src[4] = scores;
+        /* Output: ggml [3, max_selected].
+         *
+         * ggml_custom_4d rather than ggml_map_custom3, because this op needs
+         * THREE real inputs and map_custom3 only has room for two: its first
+         * argument is consumed as the output-shape template (the result is a
+         * dup of it), leaving b and c for data.  boxes and params fitted;
+         * scores did not, and was passed as a pointer inside userdata with
+         * out->src[4] patched in afterwards.  Neither reaches the scheduler:
+         * a hand-written src past the op's own arity is not walked when
+         * splits are planned, so on Vulkan scores stayed in VRAM, nms_cpu
+         * refused to read device memory and left its output empty, and the
+         * graph built around those empty outputs hit
+         * GGML_SCHED_MAX_SPLIT_INPUTS.
+         *
+         * As proper srcs, all three are copied back to the host before this
+         * CPU-only op runs, which is what QLinearMatMul already relies on. */
+        /* ctx_host, not ctx: this output must keep its memory BETWEEN runs.
+         *
+         * Built in c->ctx it is an ordinary graph tensor, so the scheduler
+         * aliases other results on top of it once the segment that produced it
+         * is done -- which is correct for an intermediate and wrong for this
+         * one. resolve_segment_sizes() reads it after the NEXT run to learn how
+         * many boxes survived, and by then the memory belongs to something
+         * else: the measurement is skipped (out->buffer is non-NULL but the
+         * bytes are foreign), the cache key silently keeps the previous run's
+         * number, and the graph is reused as if it had been verified. Measured
+         * on MaskRCNN-12-int8: run 2 verified 19 of its 204 recorded sizes.
+         *
+         * ctx_host rather than ctx_weight because nms_cpu writes here directly
+         * and reads host memory only; ctx_weight is pre-allocated on the weight
+         * backend, which is the GPU for a Vulkan model. Consumers that want it
+         * on the device get a scheduler copy, the same as the other CPU-only
+         * ops in this graph. */
+        struct ggml_context *octx = c->ctx_host ? c->ctx_host : c->ctx;
+        struct ggml_tensor *nms_args[3] = { boxes, scores, params_t };
+        out = ggml_custom_4d(octx, GGML_TYPE_F32, 3, max_selected, 1, 1,
+                             nms_args, 3, nms_cpu, 1, p);
         c->n_nms_ops++;
         out_nd = 2;
     }

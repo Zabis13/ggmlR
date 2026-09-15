@@ -2129,6 +2129,40 @@ ggml_get_rows <- function(ctx, a, b) {
   .Call("R_ggml_get_rows", ctx, a, b, PACKAGE = "ggmlR")
 }
 
+#' Scatter elements into a copy of a tensor (ONNX ScatterElements)
+#'
+#' Copies `data`, then writes each element of `updates` into the copy at the
+#' position given by the matching element of `indices` along `axis`. Every
+#' other coordinate is the element's own, so `updates` and `indices` share a
+#' shape and only their position along `axis` is redirected.
+#'
+#' @param ctx A ggml context
+#' @param data Base tensor (F32); the result starts as a copy of it
+#' @param updates Values to write (F32), same shape as `indices`
+#' @param indices Destination positions along `axis` (I32)
+#' @param reduction 0 to overwrite, 1 to add
+#' @param axis Axis to scatter along, in ggml dim order (0 = ne[0])
+#' @return A new tensor with the shape of `data`
+#'
+#' @examples
+#' \donttest{
+#' ctx  <- ggml_init(16 * 1024 * 1024)
+#' base <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 4)   # 4 rows of 3
+#' ggml_set_f32(base, rep(0, 12))
+#' upd  <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2)
+#' ggml_set_f32(upd, c(1, 2, 3, 4, 5, 6))
+#' idx  <- ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 3, 2)
+#' ggml_set_i32(idx, c(3L, 3L, 3L, 0L, 0L, 0L))           # rows 3 and 0
+#' out  <- ggml_scatter_elements(ctx, base, upd, idx, 0L, 1L)
+#' ggml_free(ctx)
+#' }
+#' @export
+ggml_scatter_elements <- function(ctx, data, updates, indices,
+                                  reduction = 0L, axis = 0L) {
+  .Call("R_ggml_scatter_elements", ctx, data, updates, indices,
+        as.integer(reduction), as.integer(axis), PACKAGE = "ggmlR")
+}
+
 # ============================================================================
 # Diagonal Masking Operations (for Causal Attention)
 # ============================================================================

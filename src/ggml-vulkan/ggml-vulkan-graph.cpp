@@ -497,6 +497,14 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_conv_2d_dw(ctx, compute_ctx, src0, src1, node);
 
         break;
+    case GGML_OP_QCONV_I32:
+        // Five sources, two of them optional -- read from node rather than the
+        // src0/src1 locals this switch names.
+        ggml_vk_qconv_i32(ctx, compute_ctx, node->src[0], node->src[1],
+                          node->src[2], node->src[3], node->src[4],
+                          node->src[5], node);
+
+        break;
     case GGML_OP_LEAKY_RELU:
         ggml_vk_leaky_relu(ctx, compute_ctx, src0, node);
 
@@ -3460,6 +3468,102 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                     ggml_is_contiguous(op->src[0]) &&
                     ggml_is_contiguous(op->src[1]) &&
                     ggml_is_contiguous(op));
+            }
+        // ggmlR extension: ONNX QLinearConv. The shader is a line-for-line
+        // port of the host kernel, int16 pair saturation included, so the two
+        // backends agree bit for bit -- see vulkan-shaders/qconv_i32.comp.
+        case GGML_OP_QCONV_I32:
+            {
+                // Says WHICH condition declined the op. Several can, and a bare
+                // false leaves the node on the CPU with nothing to read: the op
+                // simply appears under CPU-only in a profile, exactly as it
+                // would if the backend had never heard of it.
+                //
+                // This is the only place the reason is visible, and it is a
+                // blind spot worth keeping lit: the same shape of bug -- a GPU
+                // path silently declining and no way to see why -- has cost
+                // this op two debugging sessions already.
+                //
+                // Gated on ONNX_TRACE_NODES, the flag the rest of the ONNX
+                // layer already uses, rather than a private one. The value is
+                // read with getenv instead of calling onnx_trace_nodes(),
+                // because the Vulkan backend deliberately does not link
+                // against the ONNX layer; an environment variable is part of
+                // the program's external interface, so sharing it is not the
+                // same as sharing code.
+                static int trace = -1;
+                if (trace < 0) {
+                    const char * e = getenv("ONNX_TRACE_NODES");
+                    trace = (e && *e && *e != '0') ? 1 : 0;
+                }
+                // GGML_LOG_INFO, the same channel the rest of this backend
+                // logs through (the device-caps line, the unsupported-op
+                // summary below). A plain fprintf does NOT work here:
+                // r_ggml_compat.h rewrites it to REvprintf, which routes to
+                // R's console, and a line emitted from the scheduler's call
+                // into supports_op never reached the terminal at all.
+                #define QC_NO(reason) do {                                     \
+                    if (trace) GGML_LOG_INFO(                                  \
+                        "[qconv-supports] '%s': NO (%s) types x=%d w=%d ws=%d " \
+                        "wz=%d bi=%d dst=%d\n", op->name, reason,              \
+                        (int)op->src[0]->type, (int)op->src[1]->type,          \
+                        op->src[2] ? (int)op->src[2]->type : -1,               \
+                        op->src[3] ? (int)op->src[3]->type : -1,               \
+                        op->src[4] ? (int)op->src[4]->type : -1,               \
+                        (int)op->type);                                        \
+                    return false;                                              \
+                } while (0)
+
+                // The kernel indexes x, w and dst as packed arrays, so a view
+                // with any other stride would read neighbouring data and
+                // return plausible numbers rather than fail.
+                if (!ggml_is_contiguous(op))          QC_NO("dst not contiguous");
+                if (!ggml_is_contiguous(op->src[0]))  QC_NO("x not contiguous");
+                if (!ggml_is_contiguous(op->src[1]))  QC_NO("w not contiguous");
+                if (op->type != GGML_TYPE_F32)          QC_NO("dst not f32");
+                if (op->src[0]->type != GGML_TYPE_F32)  QC_NO("x not f32");
+                if (op->src[1]->type != GGML_TYPE_F32)  QC_NO("w not f32");
+
+                // Each table is bound at the type it actually arrives with,
+                // which is not the same for all three: a scale is float, a
+                // zero point is INT8 in the file and comes out F32 because the
+                // loader widens it, and a bias is INT32 by the operator spec
+                // and stays integer. Requiring one type for all of them
+                // declined every convolution in the model over its bias.
+                if (!op->src[2])                         QC_NO("no w_scale");
+                if (op->src[2]->type != GGML_TYPE_F32)   QC_NO("w_scale not f32");
+                if (op->src[3] && op->src[3]->type != GGML_TYPE_F32)
+                                                         QC_NO("w_zp not f32");
+                if (op->src[4] && op->src[4]->type != GGML_TYPE_I32)
+                                                         QC_NO("bias not i32");
+                if (!op->src[5])                         QC_NO("no mult table");
+                if (op->src[5]->type != GGML_TYPE_F32)   QC_NO("mult not f32");
+
+                // One thread per output element, so the grid is the whole
+                // output. A dispatch axis over the driver's limit does not
+                // fail -- it aborts inside the dispatch, which on NVIDIA
+                // (65535) kills the process with nothing printed. Decline and
+                // let the host kernel take it instead.
+                {
+                    ggml_backend_vk_device_context * dev_ctx =
+                        (ggml_backend_vk_device_context *)dev->context;
+                    vk_device vkdev = ggml_vk_get_device(dev_ctx->device);
+                    const uint64_t total  = (uint64_t)op->ne[0] * (uint64_t)op->ne[1] *
+                                            (uint64_t)op->ne[2];
+                    const uint64_t groups = (total + 255u) / 256u;   // local_size_x
+                    if (groups > (uint64_t)vkdev->properties.limits.maxComputeWorkGroupCount[0]) {
+                        QC_NO("output grid above the workgroup limit");
+                    }
+                }
+                #undef QC_NO
+                // Accepted nodes are reported too: "which of the 63 went to the
+                // GPU" is the other half of the same question, and a trace that
+                // only prints refusals cannot distinguish an op that was
+                // accepted from one that was never asked about.
+                if (trace) {
+                    GGML_LOG_INFO("[qconv-supports] '%s': YES\n", op->name);
+                }
+                return true;
             }
         default:
             return false;

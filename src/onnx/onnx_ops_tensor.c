@@ -1053,9 +1053,31 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             ax[g_ax] = 1;
             ax[1]    = g_ax;
 
+            /* ⚠️ EXPERIMENT, not a finished change: break the view between
+             * `a` and the permute, unconditionally, to find out whether that
+             * is what the Vulkan fault needs.
+             *
+             * ggml_permute returns a VIEW of `a`, so the two share storage and
+             * the scheduler cannot place them on different backends.  When `a`
+             * is an op Vulkan cannot run (NonMaxSuppression is GGML_OP_CUSTOM)
+             * and the permute is one it can, the pre-assign in
+             * sched_alloc_and_fill_on pins the view to the GPU and drags the
+             * CPU-only tensor along with it -- and moving only the source
+             * instead was already measured to fault the device.
+             *
+             * A cont here gives the permute its own storage, so the source is
+             * free to live on the host.  Doing it for EVERY gather on this path
+             * (496 permutes, of which 9 sit on a CPU-only tensor) is wasteful
+             * and is not the shape of the eventual fix; it is the cheapest way
+             * to learn whether breaking the view helps at all, before paying
+             * for a narrow version that has to plumb the backend handle into
+             * this file. */
+            struct ggml_tensor *a_src =
+                getenv("ONNX_EXPERIMENT_CONT_BEFORE_PERMUTE")
+                    ? ggml_cont(c->ctx, a) : a;
             struct ggml_tensor *ap =
                 ggml_cont(c->ctx,
-                          ggml_permute(c->ctx, a, ax[0], ax[1], ax[2], ax[3]));
+                          ggml_permute(c->ctx, a_src, ax[0], ax[1], ax[2], ax[3]));
             struct ggml_tensor *gathered = ggml_get_rows(c->ctx, ap, b);
 
             /* A scalar index (ONNX rank 0) drops the gathered axis, so the

@@ -1367,10 +1367,67 @@ static void ggml_vk_scatter_elements(ggml_backend_vk_context * ctx, vk_context& 
     const ggml_tensor * updates = dst->src[1];
     const ggml_tensor * indices = dst->src[2];
 
+    /* TEMPORARY probe: does supports_op promise more than this function can
+     * keep?  It validates only `reduction` and dst type, never src[0] -- yet
+     * step 1 below copies device-to-device out of src[0], which requires it to
+     * live in a Vulkan buffer.  Printed before the first subbuffer call so the
+     * line survives a fault raised inside it. */
+    if (getenv("GGMLR_TRACE_SCATTER")) {
+        /* GGML_LOG_INFO, never fprintf(stderr, ...): r_ggml_compat.h redirects
+         * `stderr` to a sentinel pointer AND `fprintf` to a wrapper that knows
+         * about it.  In this translation unit only the first half applies, so a
+         * direct fprintf hands the sentinel (0x1) to libc as a FILE* and
+         * segfaults inside vfprintf -- measured, with the probe's own format
+         * string in frame #0. */
+        GGML_LOG_INFO(
+            "[scatter] dst='%s' ne=[%lld,%lld,%lld,%lld] cont=%d\n"
+            "          data='%s' buf=%p buft='%s' cont=%d type=%s ne=[%lld,%lld,%lld,%lld]\n"
+            "          upd ='%s' buf=%p buft='%s' cont=%d type=%s\n"
+            "          idx ='%s' buf=%p buft='%s' cont=%d type=%s\n",
+            dst->name,
+            (long long)dst->ne[0], (long long)dst->ne[1],
+            (long long)dst->ne[2], (long long)dst->ne[3],
+            ggml_is_contiguous(dst) ? 1 : 0,
+            data->name, (void *)data->buffer,
+            data->buffer ? ggml_backend_buft_name(data->buffer->buft) : "(null)",
+            ggml_is_contiguous(data) ? 1 : 0, ggml_type_name(data->type),
+            (long long)data->ne[0], (long long)data->ne[1],
+            (long long)data->ne[2], (long long)data->ne[3],
+            updates->name, (void *)updates->buffer,
+            updates->buffer ? ggml_backend_buft_name(updates->buffer->buft) : "(null)",
+            ggml_is_contiguous(updates) ? 1 : 0, ggml_type_name(updates->type),
+            indices->name, (void *)indices->buffer,
+            indices->buffer ? ggml_backend_buft_name(indices->buffer->buft) : "(null)",
+            ggml_is_contiguous(indices) ? 1 : 0, ggml_type_name(indices->type));
+    }
+
     /* Step 1: copy data → dst buffer */
     {
         vk_subbuffer src_sb = ggml_vk_tensor_subbuffer(ctx, data, true);
         vk_subbuffer dst_sb = ggml_vk_tensor_subbuffer(ctx, dst,  true);
+
+        /* TEMPORARY probe, part 2: are the subbuffer offsets rounded down?
+         *
+         * ggml_vk_tensor_subbuffer(allow_misalign=true) rounds `offset` DOWN to
+         * minStorageBufferOffsetAlignment and adds the same slack to `size`.
+         * The copy below then pairs those rounded offsets with a RAW length
+         * (ggml_nbytes), which is the one mismatch worth measuring: every other
+         * copy_async caller in the tree pairs raw offsets with a raw length
+         * (ggml-vulkan-graph.cpp:1193).  If raw != rounded here, the copy runs
+         * off the end of its region by exactly that difference. */
+        if (getenv("GGMLR_TRACE_SCATTER")) {
+            const size_t src_raw = vk_tensor_offset(data) + data->view_offs;
+            const size_t dst_raw = vk_tensor_offset(dst)  + dst->view_offs;
+            GGML_LOG_INFO(
+                "[scatter-off] align=%zu nbytes=%zu\n"
+                "          src raw=%zu sb.off=%zu delta=%zu sb.size=%zu\n"
+                "          dst raw=%zu sb.off=%zu delta=%zu sb.size=%zu\n",
+                (size_t)ctx->device->properties.limits.minStorageBufferOffsetAlignment,
+                ggml_nbytes(data),
+                src_raw, src_sb.offset, src_raw - src_sb.offset, src_sb.size,
+                dst_raw, dst_sb.offset, dst_raw - dst_sb.offset, dst_sb.size);
+        }
+
         ggml_vk_buffer_copy_async(subctx, dst_sb.buffer, dst_sb.offset,
                                            src_sb.buffer, src_sb.offset,
                                            ggml_nbytes(data));
@@ -1385,8 +1442,27 @@ static void ggml_vk_scatter_elements(ggml_backend_vk_context * ctx, vk_context& 
     }
 
     /* Step 2: run scatter shader — pass updates as src0, indices as src1 */
-    ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, updates, indices, nullptr, nullptr, dst, GGML_OP_SCATTER_ELEMENTS,
-        vk_op_binary_push_constants_init(updates, indices, dst, 0, 0.0f, 0.0f, ((int32_t *)dst->op_params)[1]));
+    {
+        vk_op_binary_push_constants pc =
+            vk_op_binary_push_constants_init(updates, indices, dst, 0, 0.0f, 0.0f,
+                                             ((int32_t *)dst->op_params)[1]);
+        if (getenv("GGMLR_TRACE_SCATTER")) {
+            /* What the shader will actually see.  `total` is recomputed here
+             * exactly as the shader computes it, because that product -- not
+             * ggml_nelements(updates) -- is what bounds its loop, and a
+             * mismatch between the two is invisible from either side alone. */
+            GGML_LOG_INFO(
+                "[scatter-pc] ne=%u ne00..03=%u,%u,%u,%u total=%u "
+                "ne20..22=%u,%u,%u axis=%d misalign=0x%x\n",
+                pc.ne, pc.ne00, pc.ne01, pc.ne02, pc.ne03,
+                pc.ne00 * pc.ne01 * pc.ne02 * pc.ne03,
+                pc.ne20, pc.ne21, pc.ne22, pc.param3, pc.misalign_offsets);
+        }
+        /* std::move: ggml_vk_op_f32 takes PC&&, so a named local has to be
+         * handed over as an rvalue. */
+        ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, updates, indices, nullptr, nullptr, dst,
+                                                    GGML_OP_SCATTER_ELEMENTS, std::move(pc));
+    }
 }
 
 static void ggml_vk_silu_back(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -2343,6 +2419,85 @@ static void ggml_vk_conv_2d_dw(ggml_backend_vk_context * ctx, vk_context& subctx
     GGML_ASSERT(src1->ne[3] == p.batches);
 
     ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_CONV_2D_DW, std::move(p));
+}
+
+// ggmlR extension: GGML_OP_QCONV_I32 (ONNX QLinearConv).
+//
+// Written out rather than routed through ggml_vk_op_f32 for two reasons: the op
+// has FIVE sources where that helper carries four, and its shader takes its own
+// push constant block rather than the shared one.
+//
+// Everything is read from where the scheduler already put it -- no buffer is
+// created, filled or destroyed here, and there is no fence wait. An earlier
+// direct-dispatch version of this shader did all of that per call, re-uploading
+// the weights every time and blocking on the result; that is what running as a
+// real op removes.
+static void ggml_vk_qconv_i32(ggml_backend_vk_context * ctx, vk_context& subctx,
+                              const ggml_tensor * src0, const ggml_tensor * src1,
+                              const ggml_tensor * src2, const ggml_tensor * src3,
+                              const ggml_tensor * src4, const ggml_tensor * src5,
+                              ggml_tensor * dst) {
+    GGML_ASSERT(src0 != nullptr && src1 != nullptr && src2 != nullptr);
+    GGML_ASSERT(src5 != nullptr);   // the precomputed multiplier is required
+    GGML_ASSERT(dst->buffer != nullptr);
+
+    vk_op_qconv_i32_push_constants p{};
+    p.W_in      = (uint32_t)src0->ne[0];
+    p.H_in      = (uint32_t)src0->ne[1];
+    p.C_in      = (uint32_t)src0->ne[2];
+    p.W_out     = (uint32_t)dst->ne[0];
+    p.H_out     = (uint32_t)dst->ne[1];
+    p.C_out     = (uint32_t)dst->ne[2];
+    p.KW        = (uint32_t)src1->ne[0];
+    p.KH        = (uint32_t)src1->ne[1];
+    p.stride_w  = ggml_get_op_params_i32(dst, 0);
+    p.stride_h  = ggml_get_op_params_i32(dst, 1);
+    p.pad_w     = ggml_get_op_params_i32(dst, 2);
+    p.pad_h     = ggml_get_op_params_i32(dst, 3);
+    p.dil_w     = ggml_get_op_params_i32(dst, 4);
+    p.dil_h     = ggml_get_op_params_i32(dst, 5);
+    p.x_scale   = ggml_get_op_params_f32(dst, 6);
+    p.y_scale   = ggml_get_op_params_f32(dst, 7);
+    p.x_zp      = ggml_get_op_params_i32(dst, 8);
+    p.y_zp      = ggml_get_op_params_i32(dst, 9);
+    p.out_lo    = ggml_get_op_params_f32(dst, 10);
+    p.out_hi    = ggml_get_op_params_f32(dst, 11);
+    p.n_w_scale = (uint32_t)src2->ne[0];
+    p.n_w_zp    = src3 ? (uint32_t)src3->ne[0] : 1u;
+    p.has_bias  = src4 ? 1u : 0u;
+    p.has_w_zp  = src3 ? 1u : 0u;
+    {
+        static int dbg = -1;
+        if (dbg < 0) {
+            const char * e = getenv("GGMLR_QCONV_DEBUG_ACC");
+            dbg = (e && *e) ? atoi(e) : 0;
+        }
+        p.debug_acc = (uint32_t)dbg;
+    }
+
+    // One thread per output element, the whole reduction inside it: the int16
+    // pair saturation this reproduces is order-dependent, so a workgroup
+    // cooperating on one output would pair different neighbours and diverge.
+    const uint32_t total = (uint32_t)(dst->ne[0] * dst->ne[1] * dst->ne[2]);
+    const std::array<uint32_t, 3> elements = { total, 1, 1 };
+
+    ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_qconv_i32, 1);
+
+    vk_subbuffer x_buf  = ggml_vk_tensor_subbuffer(ctx, src0, true);
+    vk_subbuffer w_buf  = ggml_vk_tensor_subbuffer(ctx, src1, true);
+    vk_subbuffer ws_buf = ggml_vk_tensor_subbuffer(ctx, src2, true);
+    // Bindings 3 and 4 must be filled even when the tensor is absent: an
+    // unwritten descriptor is not a legal source, and the shader gates every
+    // read behind n_w_zp / has_bias rather than skipping the binding. w_scale
+    // stands in because it is always present and always float.
+    vk_subbuffer wz_buf = src3 ? ggml_vk_tensor_subbuffer(ctx, src3, true) : ws_buf;
+    vk_subbuffer bi_buf = src4 ? ggml_vk_tensor_subbuffer(ctx, src4, true) : ws_buf;
+    vk_subbuffer mt_buf = ggml_vk_tensor_subbuffer(ctx, src5, true);
+    vk_subbuffer d_buf  = ggml_vk_tensor_subbuffer(ctx, dst, true);
+
+    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_qconv_i32,
+                              { x_buf, w_buf, ws_buf, wz_buf, bi_buf, d_buf, mt_buf },
+                              p, elements);
 }
 
 static void ggml_vk_leaky_relu(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {

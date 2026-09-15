@@ -1,0 +1,196 @@
+#version 450
+
+// RoiAlign (ONNX opset 10+) — direct Vulkan dispatch.
+//
+// One thread per output element: dst[pw, ph, c, roi] over the full
+// [ow, oh, C, num_rois] grid. Each thread samples its own bin with
+// sampling_ratio^2 bilinear taps and reduces them (avg or max), so there is
+// no cross-thread communication at all — this op is embarrassingly parallel,
+// which is why it is the first of the MaskRCNN custom ops to move to the GPU.
+//
+// ⚠️ This is a line-for-line port of roi_align.c, NOT an independent
+// implementation, and it must stay that way. MaskRCNN-12-int8 matches ONNX
+// Runtime bit for bit (max|d| = 0), and that agreement was reached by copying
+// ORT's arithmetic exactly — including the parts that are merely ITS choices
+// rather than the spec's. Two of them live in here and both are load-bearing:
+//
+//   - a degenerate ROI is forced to 1x1, not to an epsilon ("Force malformed
+//     ROIs to be 1x1"). MaskRCNN's RPN emits 95 such ROIs out of 895, and
+//     clamping to 1e-6 instead makes every channel of every one of them wrong;
+//   - the bilinear tap returns 0 for a sample outside [-1, H] x [-1, W]
+//     BEFORE any clamping, and the low/high index pair collapses on the last
+//     row/column rather than wrapping.
+//
+// The f32 arithmetic is elementary here (no accumulation over a long
+// reduction, no quantisation boundary to land on), so this port carries far
+// less numerical risk than the quantised ops that follow it. Even so, the tap
+// sum is accumulated in the same order as the CPU loop: iy outer, ix inner.
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// X: feature map, ggml layout [W, H, C, N] — x[w + W*(h + H*(c + C*n))].
+layout (binding = 0) readonly buffer X    { float x[]; };
+// rois: ggml [4, num_rois] — roi[coord + 4*idx], coord order x1, y1, x2, y2.
+layout (binding = 1) readonly buffer R    { float rois[]; };
+// batch_indices: ggml [num_rois], F32 cast of an integer index into N.
+layout (binding = 2) readonly buffer B    { float batch_idx[]; };
+// dst: ggml [ow, oh, C, num_rois].
+layout (binding = 3) writeonly buffer D   { float dst[]; };
+
+layout (push_constant) uniform parameter {
+    uint  W;               // feature map width
+    uint  H;               // feature map height
+    uint  C;               // channels
+    uint  num_rois;
+    uint  ow;              // output width
+    uint  oh;              // output height
+    int   sampling_ratio;  // 0 = adaptive (ceil(roi_size / out_size))
+    uint  mode;            // 0 = avg, 1 = max
+    float spatial_scale;
+} p;
+
+// Bilinear tap on X, matching bilinear_sample() in roi_align.c step for step.
+//
+// `take_max` picks how the four corners are reduced, and the two modes are not
+// variations on a theme:
+//   avg: w1*v1 + w2*v2 + w3*v3 + w4*v4, the interpolated value.
+//   max: max(w1*v1, w2*v2, w3*v3, w4*v4) -- the largest of the four WEIGHTED
+//        TERMS separately, with no interpolation at all.
+// The second is what ONNX Runtime does (roialign.cc, RoiAlignForward's max
+// branch). Since the weights sum to one, it is systematically smaller than the
+// interpolated value -- 3.15 where interpolation gives 5.15 -- and the ratio is
+// not constant. Reproduced rather than corrected, for the same reason the
+// quantised shaders reproduce VPMADDUBSW saturation.
+//
+// `precise` keeps the compiler from reassociating the four-term blend or
+// contracting it into FMAs: the CPU reference computes it as written, and a
+// tap that differs in the last bit is a value that differs from ORT.
+precise float bilinear_sample(float sx, float sy, uint c_idx, uint n_idx,
+                              bool take_max) {
+    // Outside the padded box the tap contributes nothing. Tested before the
+    // clamp below, so a sample at -0.5 still interpolates against row 0 while
+    // one at -1.5 is simply absent.
+    if (sy < -1.0 || sy > float(p.H) || sx < -1.0 || sx > float(p.W)) {
+        return 0.0;
+    }
+
+    sy = max(sy, 0.0);
+    sx = max(sx, 0.0);
+
+    int y_low  = int(sy);
+    int x_low  = int(sx);
+    int y_high = y_low + 1;
+    int x_high = x_low + 1;
+
+    // On the last row/column the pair collapses and the fraction goes to zero,
+    // so the blend degenerates to the single edge pixel instead of reading
+    // past the end.
+    if (y_low >= int(p.H) - 1) { y_low = int(p.H) - 1; y_high = y_low; sy = float(y_low); }
+    if (x_low >= int(p.W) - 1) { x_low = int(p.W) - 1; x_high = x_low; sx = float(x_low); }
+
+    const float ly = sy - float(y_low);
+    const float lx = sx - float(x_low);
+    const float hy = 1.0 - ly;
+    const float hx = 1.0 - lx;
+
+    const uint base = p.C * p.H * p.W * n_idx + p.H * p.W * c_idx;
+
+    const float v1 = x[base + uint(x_low)  + p.W * uint(y_low)];
+    const float v2 = x[base + uint(x_high) + p.W * uint(y_low)];
+    const float v3 = x[base + uint(x_low)  + p.W * uint(y_high)];
+    const float v4 = x[base + uint(x_high) + p.W * uint(y_high)];
+
+    precise float t1 = hy * hx * v1;
+    precise float t2 = hy * lx * v2;
+    precise float t3 = ly * hx * v3;
+    precise float t4 = ly * lx * v4;
+
+    if (take_max) {
+        return max(max(max(t1, t2), t3), t4);
+    }
+    return t1 + t2 + t3 + t4;
+}
+
+void main() {
+    const uint gid   = gl_GlobalInvocationID.x;
+    const uint total = p.ow * p.oh * p.C * p.num_rois;
+    if (gid >= total) {
+        return;
+    }
+
+    // Unpack the flat id into dst's ggml layout [ow, oh, C, num_rois]; ow is
+    // the fastest axis, so neighbouring threads write neighbouring floats.
+    const uint pw      = gid % p.ow;
+    const uint ph      = (gid / p.ow) % p.oh;
+    const uint c_idx   = (gid / (p.ow * p.oh)) % p.C;
+    const uint roi_idx = gid / (p.ow * p.oh * p.C);
+
+    const float x1 = rois[0 + 4 * roi_idx] * p.spatial_scale;
+    const float y1 = rois[1 + 4 * roi_idx] * p.spatial_scale;
+    const float x2 = rois[2 + 4 * roi_idx] * p.spatial_scale;
+    const float y2 = rois[3 + 4 * roi_idx] * p.spatial_scale;
+
+    const uint n_idx = uint(batch_idx[roi_idx]);
+
+    // "Force malformed ROIs to be 1x1" — see the header note. A degenerate box
+    // spread over a real pixel, not collapsed onto one.
+    float roi_h = y2 - y1;
+    float roi_w = x2 - x1;
+    if (roi_h < 1.0) { roi_h = 1.0; }
+    if (roi_w < 1.0) { roi_w = 1.0; }
+
+    const float bin_h = roi_h / float(p.oh);
+    const float bin_w = roi_w / float(p.ow);
+
+    // ⚠️ Mirrors the clamp in roi_align.c — read the long note there. The
+    // adaptive branch takes its loop bound from ROI CONTENTS, which nothing
+    // upstream bounds, and an oversized ROI turns this into a dispatch the
+    // driver's watchdog kills: measured on MaskRCNN, that hung the amdgpu
+    // compute ring three times and cost the GPU a MODE1 reset on the third.
+    //
+    // 128 is ROI_ALIGN_MAX_SAMPLES in roi_align.h, repeated as a literal
+    // because GLSL cannot include that header. The three copies must agree.
+    //
+    // Written as !(x <= CAP) rather than (x > CAP) so a non-finite roi_h,
+    // which reaches int(ceil()) as undefined, is caught rather than passed.
+    int sr_h = p.sampling_ratio > 0 ? p.sampling_ratio
+                                    : int(ceil(roi_h / float(p.oh)));
+    int sr_w = p.sampling_ratio > 0 ? p.sampling_ratio
+                                    : int(ceil(roi_w / float(p.ow)));
+    if (!(sr_h <= 128)) { sr_h = 128; }
+    if (!(sr_w <= 128)) { sr_w = 128; }
+
+    // At least one tap: a zero grid would divide by zero rather than simply
+    // contribute nothing.
+    int grid_count = sr_h * sr_w;
+    if (grid_count < 1) { grid_count = 1; }
+
+    float val = (p.mode == 1u) ? -3.402823466e+38 : 0.0;
+
+    // Same traversal order as the CPU loop, iy outer and ix inner, so the avg
+    // accumulation sums its taps in the same sequence.
+    for (int iy = 0; iy < sr_h; ++iy) {
+        const float sy = y1 + bin_h * float(ph)
+                            + bin_h * (float(iy) + 0.5) / float(sr_h);
+        for (int ix = 0; ix < sr_w; ++ix) {
+            const float sx = x1 + bin_w * float(pw)
+                                + bin_w * (float(ix) + 0.5) / float(sr_w);
+            // Not named `sample`: that is a reserved keyword in GLSL.
+            const float tap = bilinear_sample(sx, sy, c_idx, n_idx,
+                                              p.mode == 1u);
+            if (p.mode == 1u) {
+                val = max(val, tap);
+            } else {
+                val += tap;
+            }
+        }
+    }
+
+    if (p.mode == 0u) {
+        val /= float(grid_count);
+    }
+
+    dst[pw + p.ow * (ph + p.oh * (c_idx + p.C * roi_idx))] = val;
+}

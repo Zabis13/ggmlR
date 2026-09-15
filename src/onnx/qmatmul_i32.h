@@ -36,7 +36,24 @@ typedef struct {
     int32_t b_zp[QMATMUL_I32_MAX_COLS];
 
     float   out_lo, out_hi;                   /* saturation, from the zp dtype */
+
+    /* The Vulkan backend when the model was loaded on one, else NULL, so the
+     * kernel can offer its work to the shader.  A backend handle is not graph
+     * state and does not move when buffers are reallocated, so unlike a tensor
+     * it legitimately travels in userdata. */
+    ggml_backend_t gpu_backend;
 } qmatmul_i32_params_t;
+
+/* Is the GPU path allowed for QLinearMatMul?
+ *
+ * ON by default; GGMLR_ONNX_GPU_QMATMUL=0 forces the CPU kernel.
+ *
+ * The gate is per-op so an op still under test cannot hold back one that has
+ * passed, and the variable stays as an escape hatch for a driver whose integer
+ * arithmetic disagrees.  What licenses the default is the test suite: the
+ * shader is a line-for-line port and any drift shows up as a failure rather
+ * than as quietly different MaskRCNN detections. */
+int qmatmul_i32_gpu_enabled(void);
 
 /* ggml_map_custom3 kernel: dst = requantise(a_i32 x b_i32).
  * `a` carries the output shape only; the A matrix is `b` and B is `c`. */

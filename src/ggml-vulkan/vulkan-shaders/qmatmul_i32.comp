@@ -1,0 +1,214 @@
+#version 450
+
+// QLinearMatMul with an exact integer accumulator — direct Vulkan dispatch.
+//
+// A line-for-line port of src/onnx/qmatmul_i32.c. Read that file first: it
+// explains why the op exists at all (dequantising to f32 and multiplying loses
+// the last quantisation step on 25963 of 81000 elements of MaskRCNN's
+// classifier head, which costs a whole detection) and why the arithmetic is
+// shaped the way it is rather than the way the spec reads.
+//
+// ⚠️ FOUR THINGS IN HERE ARE DELIBERATE AND FRAGILE. None of them is an
+// optimisation opportunity; each one is the difference between agreeing with
+// ONNX Runtime and disagreeing with it:
+//
+//   1. VPMADDUBSW saturation. ORT's AVX2 kernel multiplies ADJACENT PAIRS into
+//      int16 and saturates there before widening. That is a property of the
+//      instruction, not of the operator, and reproducing its LOSS of precision
+//      is the only way to match: our exact arithmetic was measurably more
+//      correct and therefore wrong. K = 12544 for the MaskRCNN head, so a pair
+//      reaches 189*127*2 = 48006 against the int16 limit of 32767 and several
+//      saturations per output are normal.
+//   2. Pair order. Saturation makes the sum ORDER-DEPENDENT: k = 0,1 then 2,3
+//      and so on, accumulated in sequence. A parallel reduction over K would
+//      pair different neighbours and give a different -- not merely
+//      differently-rounded -- answer. Hence ONE THREAD PER OUTPUT ELEMENT,
+//      looping K itself, rather than a workgroup cooperating on a dot product.
+//   3. round-half-to-even at the end (roundEven, matching rintf). GLSL's
+//      round() is half-away-from-zero and would reintroduce the off-by-one this
+//      op exists to remove.
+//   4. f32 for the requantisation multiplier, never f64. ORT requantises in
+//      float, and computing it in double measurably moves AWAY from the
+//      reference. `precise` keeps the compiler from contracting or reassociating
+//      the final expression.
+//
+// The inputs are quantised values held in f32 tensors (that is how the ONNX
+// layer carries them), so they are read as float and converted with int(),
+// exactly as the CPU kernel's (int32_t) casts do.
+
+// ⚠️ 2D BLOCK TILING, and exactly how far tiling may go here.
+//
+// The naive form -- one thread per output, each fetching its own row of A and
+// column of B -- moves ~96 GB of global memory for the detector head
+// (M=1000, N=1024, K=12544). That does not finish inside the driver's
+// watchdog: measured on RX 9070 / RADV, the compute ring times out and enough
+// of those cost the whole GPU (MODE1 reset, "VRAM is lost").
+//
+// A 16x16 block of threads computes a 16x16 block of the output. Both operands
+// are staged in shared memory a K-slice at a time, so each value read from
+// global memory is reused 16 times instead of once: ~6 GB instead of ~96 GB.
+// Staging A alone (the previous attempt) only halved it and still hung -- B is
+// the other half, and it is reused along the OTHER axis, which is why the tile
+// has to be two-dimensional.
+//
+// ⚠️ WHAT DOES NOT CHANGE, and must not: each thread still runs the ENTIRE K
+// reduction for its own output element, in order, pairing k = 0,1 then 2,3.
+// The threads cooperate on FETCHING, never on summing. A parallel reduction
+// over K would pair different neighbours and change the answer outright --
+// note 2 above. TILE_K is even so a tile boundary never splits a pair; an odd
+// value would re-pair everything past the first tile. Verified against the
+// untiled sequence for K = 12544, 1500, 1000, 129 and 127.
+#extension GL_EXT_control_flow_attributes : enable
+
+// 16x16 = 256 invocations, the same workgroup size this shader always used.
+// With TILE_K = 128 the two tiles take 16 KB of shared memory, well inside the
+// 32 KB that the least capable target here reports.
+const uint BM     = 16u;
+const uint BN     = 16u;
+const uint TILE_K = 128u;
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// A: [K, M] with K fastest — one row of A contiguous.
+layout (binding = 0) readonly buffer A  { float a[]; };
+// B: [K, N] with K fastest — already transposed by the builder, so a column of
+// B walks contiguously here just as a row of A does.
+layout (binding = 1) readonly buffer Bm { float bmat[]; };
+// Per-output-column requantisation tables. Length 1 when the exporter
+// quantised the weight per tensor rather than per channel; the shader indexes
+// them with the same "n if there are many, else 0" rule as the CPU kernel.
+layout (binding = 2) readonly buffer BS { float b_scale[]; };
+layout (binding = 3) readonly buffer BZ { int   b_zp[]; };
+// dst: [N, M] with N fastest.
+layout (binding = 4) writeonly buffer D { float dst[]; };
+
+layout (push_constant) uniform parameter {
+    uint  M;
+    uint  N;
+    uint  K;
+    float a_scale;
+    float y_scale;
+    int   a_zp;
+    int   y_zp;
+    uint  n_b_scale;   // 1 = one shared value, else N
+    uint  n_b_zp;      // 1 = one shared value, else N
+    uint  b_zp_any;    // 1 if any b_zp is non-zero (host computes it once)
+    float out_lo;      // saturation bounds from the zero-point dtype
+    float out_hi;
+} p;
+
+
+// The two staged tiles: a BM x TILE_K slice of A and a BN x TILE_K slice of B.
+// Held as int because that is what the K loop consumes -- converting once here
+// rather than once per use also keeps the inner loop free of float-to-int.
+shared int sh_a[BM * TILE_K];
+shared int sh_b[BN * TILE_K];
+
+void main() {
+    // Thread (tx, ty) of block (bx, by) owns output element
+    //   n = bx*BN + tx   (column, the fast axis of dst)
+    //   m = by*BM + ty   (row)
+    const uint tx = gl_LocalInvocationID.x;
+    const uint ty = gl_LocalInvocationID.y;
+    const uint n  = gl_WorkGroupID.x * BN + tx;
+    const uint m  = gl_WorkGroupID.y * BM + ty;
+
+    // ⚠️ NOT an early return. Every barrier below is workgroup-wide and a
+    // thread that has left does not arrive at one, which is undefined the
+    // moment a block hangs over the edge of the matrix -- and with M = 1000
+    // against BM = 16 the last block always does. Out-of-range threads run the
+    // whole function, help with the staging, and simply do not store.
+    const bool in_range = (m < p.M) && (n < p.N);
+
+    // Row/column bases, clamped so an out-of-range thread still reads inside
+    // the buffers while it helps stage.
+    const uint arow = (m < p.M ? m : 0u) * p.K;
+    const uint bcol = (n < p.N ? n : 0u) * p.K;
+
+    // sum(aq) over this row, needed only when the weight zero point is
+    // non-zero. The host passes b_zp_any so this test costs nothing per thread.
+    int sum_a = 0;
+    if (p.b_zp_any != 0u) {
+        for (uint k = 0u; k < p.K; ++k) {
+            sum_a += int(a[arow + k]);
+        }
+    }
+
+    const float bs  = b_scale[p.n_b_scale > 1u ? n : 0u];
+    const int   bzp = b_zp[p.n_b_zp > 1u ? n : 0u];
+
+    // ⚠️ Adjacent pairs, saturated to int16, summed in order. See notes 1 and 2:
+    // the tiling below changes only WHERE a[] and bmat[] are read from, never
+    // the order they are combined in. Each thread still owns its whole K sum.
+    int sum_pairs = 0;
+
+    for (uint k0 = 0u; k0 < p.K; k0 += TILE_K) {
+        const uint klen = min(TILE_K, p.K - k0);
+
+        // --- stage one K-slice of both operands -------------------------------
+        //
+        // 256 threads fill BM*TILE_K + BN*TILE_K = 4096 int slots, so each
+        // makes 16 strided writes. The row a thread stages is NOT the row it
+        // later reads: staging is indexed by lane thread id so the writes
+        // coalesce, while the reads below are indexed by ty/tx.
+        barrier();                     // previous slice is finished being read
+        const uint lane = ty * BN + tx;
+        const uint nthr = BM * BN;
+        for (uint i = lane; i < BM * TILE_K; i += nthr) {
+            const uint r  = i / TILE_K;            // which row of the A block
+            const uint kk = i % TILE_K;            // which k inside the slice
+            const uint mm = gl_WorkGroupID.y * BM + r;
+            sh_a[i] = (mm < p.M && kk < klen) ? int(a[mm * p.K + k0 + kk]) : 0;
+        }
+        for (uint i = lane; i < BN * TILE_K; i += nthr) {
+            const uint c  = i / TILE_K;            // which column of the B block
+            const uint kk = i % TILE_K;
+            const uint nn = gl_WorkGroupID.x * BN + c;
+            sh_b[i] = (nn < p.N && kk < klen) ? int(bmat[nn * p.K + k0 + kk]) : 0;
+        }
+        barrier();                     // both tiles are now readable by all
+
+        // --- consume it, in the original order --------------------------------
+        if (in_range) {
+            const uint abase = ty * TILE_K;
+            const uint bbase = tx * TILE_K;
+            for (uint kk = 0u; kk < klen; kk += 2u) {
+                const int a0 = sh_a[abase + kk];
+                const int b0 = sh_b[bbase + kk];
+                // The odd tail: only the very last element of the matrix can
+                // lack a partner, and the zeros staged above would give the
+                // same product anyway -- the test is kept for clarity.
+                const int a1 = (kk + 1u < klen) ? sh_a[abase + kk + 1u] : 0;
+                const int b1 = (kk + 1u < klen) ? sh_b[bbase + kk + 1u] : 0;
+
+                // VPMADDUBSW: multiply, add the adjacent pair, saturate to
+                // int16. This clip is the whole point -- see note 1.
+                int pair = a0 * b0 + a1 * b1;
+                pair = clamp(pair, -32768, 32767);
+                sum_pairs += pair;
+            }
+        }
+    }
+
+    // Zero points fold in at the end, as MLAS does with RowSum and ColumnSum,
+    // rather than being subtracted per term.
+    int sum_b = 0;
+    if (p.a_zp != 0) {
+        for (uint k = 0u; k < p.K; ++k) {
+            sum_b += int(bmat[bcol + k]);
+        }
+    }
+
+    const int acc = sum_pairs - bzp * sum_a - p.a_zp * sum_b
+                  + p.a_zp * bzp * int(p.K);
+
+    // f32 throughout, round-half-to-even, then saturate — notes 3 and 4.
+    precise float mult = p.a_scale * bs / p.y_scale;
+    precise float v = roundEven(float(acc) * mult) + float(p.y_zp);
+    v = clamp(v, p.out_lo, p.out_hi);
+
+    // Predicated, not returned early — see in_range above.
+    if (in_range) {
+        dst[n + p.N * m] = v;
+    }
+}

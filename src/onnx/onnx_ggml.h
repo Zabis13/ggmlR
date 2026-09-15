@@ -35,6 +35,16 @@ extern "C" {
  * int64[GGML_MAX_DIMS] rows apiece. */
 #define ONNX_MAX_CONSTANTS 8192
 
+/* Nodes whose src[] can be snapshotted around one segment's allocation.
+ *
+ * Sized against the graphs themselves rather than guessed: the largest
+ * segment MaskRCNN-12-int8 builds holds 1216 nodes (ONNX_TRACE_SGRAPH=1),
+ * and only nodes of the segment currently being built are ever recorded, so
+ * this bounds one segment, not the model. Overflow is reported and the
+ * snapshot abandoned rather than truncated -- a half-restored graph would
+ * silently keep some scheduler copies and lose others. */
+#define ONNX_MAX_SRC_SNAPSHOT 4096
+
 /* ── Data-dependent shape segmentation ─────────────────────────────
  * Some ONNX ops have an output shape that depends on the VALUES of their
  * input, not just its shape -- NonZero is the canonical case (the count of
@@ -109,6 +119,27 @@ typedef struct {
      * for orphan inputs above. */
     ggml_backend_buffer_t extra_weight_bufs[ONNX_MAX_WEIGHT_BUFS];
     int                   n_extra_weight_bufs;
+
+    /* Small parameter tensors that only a CPU-only kernel ever reads, kept in
+     * their own context so they can be allocated on the HOST while ctx_weight
+     * goes to the GPU.
+     *
+     * ggml_set_input() is not enough to keep such a tensor on the host. The
+     * scheduler does force GGML_TENSOR_FLAG_INPUT tensors to the CPU backend
+     * (ggml-backend.cpp:918), but the check above it wins: a tensor that
+     * already sits in a buffer cannot be moved at all, and everything in
+     * ctx_weight is pre-allocated on the weight backend.
+     *
+     * The cost of getting this wrong is not bandwidth -- these are 16 bytes --
+     * it is SPLIT INPUT SLOTS. Every tensor a CPU split has to fetch from the
+     * GPU occupies one of GGML_SCHED_MAX_SPLIT_INPUTS, and MaskRCNN runs ~42
+     * NonMaxSuppression nodes in one split, each pulling boxes, scores and its
+     * own nms_params across. Measured: 128 inputs, all of them under 256 bytes,
+     * 0.00 MB in total -- the graph aborted on slot exhaustion while moving
+     * essentially no data. Hosting the params alone takes that split from 128
+     * to 86. */
+    struct ggml_context  *ctx_host;
+    ggml_backend_buffer_t host_buf;
 
     /* Host-visible pinned staging buffer for fast CPU→GPU input transfer.
      * Data is memcpy'd here, then ggml_backend_tensor_set detects pinned src
@@ -185,6 +216,48 @@ typedef struct {
     struct ggml_tensor *nonzero_fill_dst[ONNX_MAX_DEFERRED];   /* output tensor [n_dims_input, nnz] in ggml layout */
     int                 nonzero_fill_ndims[ONNX_MAX_DEFERRED]; /* ONNX ndims of input */
     int                 n_nonzero_fills;
+
+    /* Values carried across a cut op's re-map.
+     *
+     * A cut op is rebuilt at its measured size once its own segment has run,
+     * and that replaces the tensor holding the result. Deferred-fill ops do
+     * not care: fill_deferred_tensors() rewrites them after every allocation.
+     * NonMaxSuppression does -- only its PARAMS are deferred, the output is a
+     * computed ggml_custom_4d node that nothing evaluates a second time -- so
+     * its values are saved before the re-map and written back once the
+     * rebuilt tensor has memory.
+     *
+     * ⚠️ GGML_OP_CUSTOM only. Carrying TopK outputs too (they reach tmap
+     * through a RESHAPE, so `op != GGML_OP_NONE` catches them) writes stale
+     * values over a deferred fill and corrupts the run. */
+    struct ggml_tensor *cut_carry_dst[ONNX_MAX_DEFERRED];
+    void               *cut_carry_buf[ONNX_MAX_DEFERRED];
+    size_t              cut_carry_bytes[ONNX_MAX_DEFERRED];
+    int                 n_cut_carry;
+
+    /* Original src[] of every node in a segment's graph, taken before the
+     * scheduler is allowed to rewrite them.
+     *
+     * ggml_backend_sched_split_graph() replaces a src that lives on another
+     * backend with a copy of its own ("Vulkan0#<name>#0"), writing it straight
+     * into the node: `node->src[j] = tensor_id_copy(...)` in ggml-backend.cpp.
+     * A segmented model reuses the SAME tensor objects for the next segment,
+     * so that rewrite is still there when the next graph is built -- and the
+     * copy has no view_src, so ggml_build_forward_expand() stops at it instead
+     * of walking through to the op that produces the data.
+     *
+     * Measured on MaskRCNN-12-int8 (Vulkan): segment 17's '1170 (permuted)
+     * (cont)' had src0 = "Vulkan0#1170 (permuted)#0", the NMS node that feeds
+     * it was therefore absent from the graph, the kernel ran 2 times instead
+     * of 33, and the cont read a buffer that had been handed to something
+     * else. On CPU there is no second backend, no copy is made, and segment 17
+     * holds the NMS node exactly as segment 16 does.
+     *
+     * Restoring the saved pointers before the next graph is built puts the
+     * dependency walk back on the real producer. */
+    struct ggml_tensor *src_snap_node[ONNX_MAX_SRC_SNAPSHOT];
+    struct ggml_tensor *src_snap_src[ONNX_MAX_SRC_SNAPSHOT][GGML_MAX_SRC];
+    int                 n_src_snap;
 
     /* Compile-time known values for shape tensors (Shape, Constant, Slice, Concat outputs).
      * Used by Reshape/Expand/etc. to determine target shape at graph build time. */
@@ -325,6 +398,24 @@ typedef struct {
     void              **qconv_params;
     int                 n_qconv_ops;
     int                 qconv_params_cap;
+
+    /* Per-output-channel requantisation multipliers for GGML_OP_QCONV_I32,
+     * one tensor per node, filled after allocation.
+     *
+     * The values are computed here, on the host, once -- deliberately, not in
+     * the kernels. The C kernel and the Vulkan shader evaluating
+     * x_scale*w_scale[oc]/y_scale independently landed one ulp apart on 976 of
+     * 4096 channels, which moved the rounded output a whole quantisation code
+     * on 584 elements of one node and cost nine of ten detections by the end
+     * of the graph.
+     *
+     * Refilled from fill_deferred_tensors() like every other deferred payload,
+     * because segmented execution reallocates the scheduler's buffers and a
+     * tensor living in one of them is blank again afterwards. */
+    struct ggml_tensor *qconv_mult_tensors[ONNX_MAX_DEFERRED];
+    float              *qconv_mult_values[ONNX_MAX_DEFERRED];
+    int                 qconv_mult_n[ONNX_MAX_DEFERRED];
+    int                 n_qconv_mult;
 
     /* Deferred NMS output sizing (filled after sched alloc) */
     struct ggml_tensor *nms_param_tensors[ONNX_MAX_DEFERRED]; /* param tensors to fill */

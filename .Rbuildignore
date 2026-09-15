@@ -28,7 +28,6 @@
 ^src/.*\.d$
 ^src/Makevars$
 ^benchmark_gpu_cpu\.R$
-^install_vulkan\.sh$
 ^Dockerfile\..*$
 ^docs$
 ^src/ggml-cpu/amx/mmq\.cpp$
