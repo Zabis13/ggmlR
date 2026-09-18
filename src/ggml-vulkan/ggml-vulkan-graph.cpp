@@ -3,6 +3,26 @@
 #include <unistd.h>           /* _exit() for ggml_backend_vk_shutdown(hard=1, status) */
 #endif
 
+// Does this tensor sit in a buffer owned by the Vulkan backend?
+//
+// The only safe precondition for casting buffer->context to
+// ggml_backend_vk_buffer_context. A graph handed to this backend may hold
+// tensors that live on the CPU backend -- the scheduler puts an op it cannot
+// run there and leaves its output where it produced it -- and for those the
+// context is a foreign struct or null, so the cast yields a wild pointer.
+//
+// Same identity test as ggml_backend_buffer_is_vk() below, written separately
+// because that one is defined further down this file and callers appear above
+// it. ggml_backend_vk_buffer_type_name is forward-declared in
+// ggml-vulkan-device.cpp, which precedes this file in the translation unit.
+static inline bool vk_tensor_is_vk_buffer(const ggml_tensor * t) {
+    return t != nullptr
+        && t->buffer != nullptr
+        && t->buffer->buft != nullptr
+        && t->buffer->buft->iface.get_name == ggml_backend_vk_buffer_type_name
+        && t->buffer->context != nullptr;
+}
+
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
 
     if (subctx) {
@@ -109,11 +129,33 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
             if (unsynced_nodes.size() == 0) {
                 return false;
             }
+            // Only a VULKAN buffer may be cast to ggml_backend_vk_buffer_context.
+            // Testing buffer != nullptr is not enough and was the bug here: this
+            // graph holds tensors whose buffer belongs to the CPU backend (a
+            // CPU-only op's output, e.g. the NMS custom op in an ONNX detector),
+            // and for those ->context is either a different struct or null, so
+            // reading ->dev_buffer through the cast lands on address 0. That is
+            // the `address (nil)` crash on MaskRCNN-12-int8.
+            //
+            // A tensor on another backend also cannot overlap Vulkan device
+            // memory, so skipping it is the correct answer, not just a safe one.
+            //
+            // The !node->buffer test at the top of ggml_vk_build_graph() does
+            // not cover this. It guards cgraph->nodes[node_idx] alone, while
+            // the callers below pass cur_node->src[j] (a source, never tested)
+            // and, when ops are fused, nodes[node_idx + i] for i > 0 (also
+            // never tested).
+            if (!vk_tensor_is_vk_buffer(node)) {
+                return false;
+            }
             auto n_base = vk_tensor_offset(node) + node->view_offs;
             auto n_size = ggml_nbytes(node);
             ggml_backend_vk_buffer_context * a_buf_ctx = (ggml_backend_vk_buffer_context *)node->buffer->context;
             vk_buffer a_buf = a_buf_ctx->dev_buffer;
             for (auto &other : unsynced_nodes) {
+                if (other == nullptr || !vk_tensor_is_vk_buffer(other)) {
+                    continue;
+                }
                 ggml_backend_vk_buffer_context * o_buf_ctx = (ggml_backend_vk_buffer_context *)other->buffer->context;
                 vk_buffer o_buf = o_buf_ctx->dev_buffer;
                 if (a_buf == o_buf) {
@@ -168,11 +210,18 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         for (int32_t i = 0; i < ctx->num_additional_fused_ops + 1; ++i) {
             const ggml_tensor *cur_node = cgraph->nodes[node_idx + i];
             // Multiple outputs could be written, e.g. in topk_moe. Add them all to the list.
-            if (ctx->fused_ops_write_mask & (1 << i)) {
+            if ((ctx->fused_ops_write_mask & (1 << i)) && vk_tensor_is_vk_buffer(cur_node)) {
                 ctx->unsynced_nodes_written.push_back(cur_node);
             }
             for (uint32_t j = 0; j < GGML_MAX_SRC; ++j) {
                 if (!cur_node->src[j]) {
+                    continue;
+                }
+                // Keep non-Vulkan tensors out of the lists entirely. These lists
+                // answer "does this overlap in Vulkan device memory", which a
+                // tensor on another backend cannot; storing one only means a
+                // later node reads it back through the vk context cast and dies.
+                if (!vk_tensor_is_vk_buffer(cur_node->src[j])) {
                     continue;
                 }
                 ctx->unsynced_nodes_read.push_back(cur_node->src[j]);

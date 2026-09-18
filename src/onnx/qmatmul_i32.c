@@ -116,6 +116,11 @@ static void qmatmul_i32_cpu_impl(struct ggml_tensor *dst,
         return;
     }
 
+    /* Set when this thread took the GPU branch and the dispatch turned it down:
+     * thread 0 then owns all M rows, not a slice of them.  Declared outside the
+     * Vulkan block because the row split below reads it in every build. */
+    int gpu_attempted = 0;
+
 #ifdef GGML_USE_VULKAN
     /* Offer the whole matmul to the shader before splitting it across threads.
      *
@@ -136,10 +141,6 @@ static void qmatmul_i32_cpu_impl(struct ggml_tensor *dst,
      * absent, only by being incorrect -- which the test suite is there to
      * catch, since a drifting requantisation changes detections rather than
      * merely perturbing numbers. */
-    /* Set when this thread took the GPU branch and the dispatch turned it down:
-     * thread 0 then owns all M rows, not a slice of them. */
-    int gpu_attempted = 0;
-
     if (p->gpu_backend && qmatmul_i32_gpu_enabled()) {
         /* Everyone but thread 0 is done -- thread 0's dispatch covers the
          * whole output, and a second one would race it. */

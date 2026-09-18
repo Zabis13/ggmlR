@@ -1541,6 +1541,11 @@ struct vk_op_qconv_i32_push_constants {
     // instead of the requantised value, so a per-node trace can tell a
     // summation difference from a rounding one.
     uint32_t debug_acc;
+    // Images in the batch (dst->ne[3]). Walked by the shader: a detector's mask
+    // head convolves one feature map PER DETECTION, so this is 51 rather than 1
+    // on MaskRCNN-12-int8. Leaving it out computed image 0 and left the rest of
+    // the output untouched -- masks summed 139.5 against ONNX Runtime's 7088.1.
+    uint32_t N_batch;
 };
 static_assert(sizeof(vk_op_qconv_i32_push_constants) <= 256, "sizeof(vk_op_qconv_i32_push_constants) must be <= 256");
 

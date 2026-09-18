@@ -162,9 +162,10 @@ void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
         return;
     }
 
-    const float *xd = (const float *)b->data;
-    const float *wd = (const float *)c->data;
-    float       *od = (float *)dst->data;
+    /* Batch 0 of each; the per-batch pointers are derived in the loop below. */
+    const float *xd_base = (const float *)b->data;
+    const float *wd      = (const float *)c->data;
+    float       *od_base = (float *)dst->data;
 
     const int64_t W_in  = b->ne[0], H_in  = b->ne[1], C_in = b->ne[2];
 
@@ -189,6 +190,17 @@ void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
         const int w_bad = c->nb[0] != ew ||
                           c->nb[1] != ew * (size_t)c->ne[0] ||
                           c->nb[2] != ew * (size_t)c->ne[0] * (size_t)c->ne[1];
+        /* nb[3] too, now that the batch axis is walked: the per-batch pointers
+         * below step by ne[0]*ne[1]*ne[2] elements, which is only the right
+         * address when the batch really is packed at that stride. */
+        const int xb_bad = b->ne[3] > 1 &&
+                           b->nb[3] != es * (size_t)b->ne[0] * (size_t)b->ne[1]
+                                          * (size_t)b->ne[2];
+        if (xb_bad && ith == 0)
+            fprintf(stderr, "[qconv_i32] '%s': batch stride mismatch -- results "
+                            "are wrong. x nb[3]=%zu expected %zu\n",
+                    dst->name, b->nb[3],
+                    es * (size_t)b->ne[0] * (size_t)b->ne[1] * (size_t)b->ne[2]);
         if ((x_bad || w_bad) && ith == 0)
             fprintf(stderr, "[qconv_i32] '%s': STRIDE MISMATCH -- results are "
                             "wrong. x nb=[%zu,%zu,%zu] expected [%zu,%zu,%zu]; "
@@ -203,15 +215,37 @@ void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
     const int64_t W_out = dst->ne[0], H_out = dst->ne[1], C_out = dst->ne[2];
     const int64_t KW = c->ne[0], KH = c->ne[1];
 
-    /* Rows are split across threads; each output element is independent. */
-    const int64_t total = H_out * C_out;
+    /* The batch axis, which ggml_qconv_i32() sets as ne[3] = x->ne[3].
+     *
+     * ⚠️ It has to be walked here. Leaving it out computed batch 0 only and
+     * left the rest of the output as whatever the buffer held: measured on
+     * MaskRCNN-12-int8's mask head, where the batch IS the detection count
+     * (51), output '6887' summed 139.05 against ONNX Runtime's 7088.13 -- a
+     * factor of 51 -- while its max matched exactly, because the one batch
+     * element that did get computed was correct. Ordinary convolutions in
+     * these models carry ne[3] == 1, which is why nothing else showed it.
+     *
+     * x and dst advance by one image per step; the weights do not depend on
+     * the batch index. */
+    const int64_t N_batch = dst->ne[3];
+    const int64_t x_batch_stride   = W_in * H_in * C_in;
+    const int64_t dst_batch_stride = W_out * H_out * C_out;
+
+    /* Rows are split across threads; each output element is independent. The
+     * batch axis is part of the split, not a loop around it, so threads stay
+     * balanced when H_out*C_out is small and N_batch is large. */
+    const int64_t total = N_batch * H_out * C_out;
     const int64_t per   = (total + nth - 1) / nth;
     const int64_t begin = per * ith;
     const int64_t end   = begin + per < total ? begin + per : total;
 
     for (int64_t idx = begin; idx < end; idx++) {
-        const int64_t oc = idx / H_out;
-        const int64_t oh = idx % H_out;
+        const int64_t in_ = idx / (H_out * C_out);
+        const int64_t rem = idx % (H_out * C_out);
+        const int64_t oc = rem / H_out;
+        const int64_t oh = rem % H_out;
+        const float *xd  = xd_base  + in_ * x_batch_stride;
+        float       *od  = od_base  + in_ * dst_batch_stride;
         /* One multiplier per output channel: w_scale is per-channel.
          *
          * FLOAT, deliberately, and not double.  Computing the multiplier and
@@ -322,11 +356,46 @@ void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
              * remove.  Float, not double: see the note on `mult`. */
             /* Same diagnostic the shader has: write the accumulator instead of
              * the requantised value, so the two backends can be compared at
-             * the step before rounding. */
+             * the step before rounding.
+             *
+             * ⚠️ THIS CHANGES WHAT THE MODEL COMPUTES. The substituted value
+             * flows downstream like any other, so in a model whose shapes are
+             * data-dependent the geometry itself moves: on MaskRCNN-12-int8 the
+             * detection count goes with it and '6836_quantized' comes out
+             * ne=[14,14,256,1] under the probe against ne=[14,14,256,51]
+             * without it. Numbers taken under this env var are therefore NOT
+             * comparable with numbers from an ordinary run, and a per-batch
+             * reading under it means nothing.
+             *
+             * Use it to inspect ONE element's arithmetic (with
+             * GGMLR_QCONV_ELEM), never to measure a tensor. For tensor-level
+             * comparison use ONNX_DUMP_NODES, which copies the output without
+             * touching the computation. The warning below is printed once so a
+             * log cannot be mistaken for a clean run. */
             static int dbg_acc = -1;
             if (dbg_acc < 0) {
                 const char *e = getenv("GGMLR_QCONV_DEBUG_ACC");
                 dbg_acc = (e && *e) ? atoi(e) : 0;
+            }
+            /* Warned separately from the lazy init above, and not gated on
+             * ith == 0: whichever thread reaches the init first is the one that
+             * would print, and it need not be thread 0 -- the warning would
+             * then be silently skipped on most runs. A local `warned` flag is
+             * enough, since the message only has to appear once per process and
+             * a duplicate is harmless. */
+            if (dbg_acc) {
+                static int dbg_warned = 0;
+                if (!dbg_warned) {
+                    dbg_warned = 1;
+                    fprintf(stderr,
+                        "[qconv_i32] GGMLR_QCONV_DEBUG_ACC=%d is ACTIVE: this op "
+                        "writes a diagnostic value instead of its result.\n"
+                        "              Every tensor downstream -- and, in a model "
+                        "with data-dependent shapes, the shapes themselves --\n"
+                        "              differ from an ordinary run. Do not compare "
+                        "these numbers with a normal run or with ONNX Runtime;\n"
+                        "              use ONNX_DUMP_NODES for that.\n", dbg_acc);
+                }
             }
             if (dbg_acc) {
                 float dv = (float)acc;

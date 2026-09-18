@@ -106,21 +106,37 @@ layout (push_constant) uniform parameter {
     // requantised value, so a per-node trace shows what the GPU summed rather
     // than what it rounded. The two are separate suspects and only this tells
     // them apart. Host side: GGMLR_QCONV_DEBUG_ACC=1.
+    //
+    // ⚠️ It substitutes the op's OUTPUT, so everything downstream changes with
+    // it -- in a model with data-dependent shapes the geometry moves too (on
+    // MaskRCNN-12-int8 the detection count, hence ne[3], differs under the
+    // probe). Read one element's arithmetic with it; never measure a tensor.
+    // ONNX_DUMP_NODES is the non-invasive way to compare tensors.
     uint  debug_acc;
+    // Images in the batch. See the host struct for why this has to be walked.
+    uint  N_batch;
 } p;
 
 void main() {
     const uint gid   = gl_GlobalInvocationID.x;
-    const uint total = p.W_out * p.H_out * p.C_out;
+    const uint n_img = max(p.N_batch, 1u);
+    const uint per_img = p.W_out * p.H_out * p.C_out;
+    const uint total = per_img * n_img;
     if (gid >= total) {
         return;
     }
 
-    // dst is [W_out, H_out, C_out] with W fastest, so neighbouring threads
-    // write neighbouring floats.
-    const uint ow = gid % p.W_out;
-    const uint oh = (gid / p.W_out) % p.H_out;
-    const uint oc = gid / (p.W_out * p.H_out);
+    // dst is [W_out, H_out, C_out, N] with W fastest, so neighbouring threads
+    // write neighbouring floats and a whole image is contiguous.
+    const uint in_ = gid / per_img;          // which image
+    const uint rem = gid % per_img;
+    const uint ow = rem % p.W_out;
+    const uint oh = (rem / p.W_out) % p.H_out;
+    const uint oc = rem / (p.W_out * p.H_out);
+
+    // Base offsets for this image. The weights do not depend on it.
+    const uint x_base = in_ * p.W_in * p.H_in * p.C_in;
+    const uint d_base = in_ * per_img;
 
     // Read, never recomputed. Evaluating x_scale*w_scale[oc]/y_scale here
     // landed one ulp away from the C kernel on 976 of 4096 channels, which is
@@ -164,10 +180,10 @@ void main() {
                 // xq*wq with xq = x_zp; the -x_zp*sum(wq) term below cancels
                 // it, which is why skipping the tap gives the same answer.
                 const int xa = pad ? p.x_zp
-                    : int(xd[uint(iw) + p.W_in * uint(ih) + p.W_in * p.H_in * ic]);
+                    : int(xd[x_base + uint(iw) + p.W_in * uint(ih) + p.W_in * p.H_in * ic]);
                 const int xb = (ic + 1u < p.C_in)
                     ? (pad ? p.x_zp
-                           : int(xd[uint(iw) + p.W_in * uint(ih)
+                           : int(xd[x_base + uint(iw) + p.W_in * uint(ih)
                                     + p.W_in * p.H_in * (ic + 1u)]))
                     : 0;
                 const int wa = int(wd[kw + p.KW * kh + p.KW * p.KH * ic
@@ -206,7 +222,7 @@ void main() {
                               || iw < 0 || iw >= int(p.W_in);
                 for (uint ic = 0u; ic < p.C_in; ++ic) {
                     sum_x += pad ? p.x_zp
-                        : int(xd[uint(iw) + p.W_in * uint(ih)
+                        : int(xd[x_base + uint(iw) + p.W_in * uint(ih)
                                  + p.W_in * p.H_in * ic]);
                 }
             }
@@ -238,7 +254,7 @@ void main() {
             if (dr - dx == 0.5 && mod(dr, 2.0) != 0.0) dr -= 1.0;
             dv = dr + float(p.y_zp);
         }
-        dst[ow + p.W_out * oh + p.W_out * p.H_out * oc] = dv;
+        dst[d_base + ow + p.W_out * oh + p.W_out * p.H_out * oc] = dv;
         return;
     }
 
@@ -246,5 +262,5 @@ void main() {
     precise float v = roundEven(float(acc) * mult) + float(p.y_zp);
     v = clamp(v, p.out_lo, p.out_hi);
 
-    dst[ow + p.W_out * oh + p.W_out * p.H_out * oc] = v;
+    dst[d_base + ow + p.W_out * oh + p.W_out * p.H_out * oc] = v;
 }

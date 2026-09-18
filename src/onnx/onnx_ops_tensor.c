@@ -80,8 +80,12 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
 
         /* Collapse >5D ONNX shape into 5D by merging leading ONNX dims. */
         int orig_ndims = ndims; /* save for tmap_put_nd */
+        /* Clamp before the copy: cval_get() can in principle report a negative
+         * count, which would sign-extend into a huge size_t here. */
+        if (orig_ndims < 0) orig_ndims = 0;
+        if (orig_ndims > ONNX_MAX_DIMS) orig_ndims = ONNX_MAX_DIMS;
         int64_t orig_shape[ONNX_MAX_DIMS];
-        memcpy(orig_shape, shape, orig_ndims * sizeof(int64_t));
+        memcpy(orig_shape, shape, (size_t)orig_ndims * sizeof(int64_t));
         if (ndims > GGML_MAX_DIMS) {
             int64_t merged = 1;
             for (int d = 0; d < ndims - (GGML_MAX_DIMS - 1); d++)

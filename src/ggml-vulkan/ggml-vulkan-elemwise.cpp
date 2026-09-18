@@ -2466,6 +2466,11 @@ static void ggml_vk_qconv_i32(ggml_backend_vk_context * ctx, vk_context& subctx,
     p.n_w_zp    = src3 ? (uint32_t)src3->ne[0] : 1u;
     p.has_bias  = src4 ? 1u : 0u;
     p.has_w_zp  = src3 ? 1u : 0u;
+    p.N_batch   = (uint32_t)dst->ne[3];
+    // The shader steps x and dst by one image using the shapes above, which is
+    // only the right address when both are packed at that stride.
+    GGML_ASSERT(src0->ne[3] == dst->ne[3]);
+    GGML_ASSERT(ggml_is_contiguous(src0) && ggml_is_contiguous(dst));
     {
         static int dbg = -1;
         if (dbg < 0) {
@@ -2478,7 +2483,12 @@ static void ggml_vk_qconv_i32(ggml_backend_vk_context * ctx, vk_context& subctx,
     // One thread per output element, the whole reduction inside it: the int16
     // pair saturation this reproduces is order-dependent, so a workgroup
     // cooperating on one output would pair different neighbours and diverge.
-    const uint32_t total = (uint32_t)(dst->ne[0] * dst->ne[1] * dst->ne[2]);
+    //
+    // ne[3] is part of the count, not a loop around the dispatch: every output
+    // element is independent, so one flat grid over batch*C_out*H_out*W_out
+    // keeps the threads busy when H_out*W_out is small and the batch is large --
+    // which is exactly the mask-head shape (28x28 over 51 images).
+    const uint32_t total = (uint32_t)(dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3]);
     const std::array<uint32_t, 3> elements = { total, 1, 1 };
 
     ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_qconv_i32, 1);

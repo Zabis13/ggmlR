@@ -206,8 +206,11 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             } else {
                 /* General grouped conv: split, conv each group, concat.
                  * Split input along dim2 (C_in), kernel along dim3 (C_out). */
-                struct ggml_tensor *group_outs[512];
-                if (groups > 512) { fprintf(stderr, "[onnx] Conv groups=%lld > 512\n", (long long)groups); return -1; }
+                /* {NULL} so the compiler can see group_outs[0] is defined even
+                 * where it cannot prove groups >= 1; the guard below makes an
+                 * empty loop impossible in practice. */
+                struct ggml_tensor *group_outs[512] = {NULL};
+                if (groups < 1 || groups > 512) { fprintf(stderr, "[onnx] Conv groups=%lld out of range\n", (long long)groups); return -1; }
 
                 for (int64_t g = 0; g < groups; g++) {
                     /* View of input: [W, H, C_in_g, N] starting at channel g*C_in_g */

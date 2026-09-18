@@ -512,8 +512,9 @@ int map_node_quant(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                                       (int)pads[1], (int)pads[0],
                                       (int)dilations[1], (int)dilations[0]);
             } else {
-                struct ggml_tensor *group_outs[512];
-                if (groups > 512) { fprintf(stderr, "[onnx] QLinearConv groups=%lld > 512\n", (long long)groups); return -1; }
+                /* {NULL}: see the same spot in onnx_ops_nn.c. */
+                struct ggml_tensor *group_outs[512] = {NULL};
+                if (groups < 1 || groups > 512) { fprintf(stderr, "[onnx] QLinearConv groups=%lld out of range\n", (long long)groups); return -1; }
                 for (int64_t g = 0; g < groups; g++) {
                     size_t off_a = g * C_in_g * dx->nb[2];
                     struct ggml_tensor *a_g = ggml_view_4d(c->ctx, dx,

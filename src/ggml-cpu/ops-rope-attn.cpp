@@ -1352,7 +1352,30 @@ void ggml_compute_forward_conv_transpose_2d(
 
     GGML_ASSERT(nb00 == sizeof(ggml_fp16_t));
     GGML_ASSERT(nb10 == sizeof(float));
+    // The batch loop below indexes dst by the SOURCE's batch count, which
+    // ggml_conv_transpose_2d_p0() guarantees by building ne[3] = src1->ne[3].
+    // Stated here so the kernel does not depend silently on the builder.
+    GGML_ASSERT(ne3 == ne13);
 
+    // ggmlR DIVERGENCE from upstream: the batch axis (src1->ne[3]) is walked.
+    //
+    // Upstream stages and computes one image only -- there is no i13 anywhere --
+    // so with ne13 > 1 it fills batch 0 and leaves the rest as the memset left
+    // them. Every model that reaches this op with batch 1 is unaffected, which
+    // is why it goes unnoticed; a detector's mask head is not one of those, its
+    // batch IS the detection count. Measured on MaskRCNN-12-int8, node '6852'
+    // (ne=[28,28,256,51]): batch 0 matched ONNX Runtime to 0.99986, batches
+    // 1..50 held 9986.9 against the reference's 36303.6, and the masks that
+    // came out summed 139.5 against 7088.1.
+    //
+    // The batch loop is OUTSIDE the staging, not inside it: the work buffer is
+    // sized for a single image (see GGML_OP_CONV_TRANSPOSE_2D in
+    // ggml_graph_plan -- ne10*ne11*ne12, no ne13), so all batches cannot be
+    // staged at once without growing it. One image is staged, all threads
+    // consume it, and the barriers keep the two phases apart.
+    const int32_t stride = ggml_get_op_params_i32(dst, 0);
+
+    // The kernel permutation does not depend on the batch, so it is done once.
     if (ith == 0) {
         memset(params->wdata, 0, params->wsize);
 
@@ -1373,25 +1396,9 @@ void ggml_compute_forward_conv_transpose_2d(
             }
         }
 
-        // permute source data (src1) from (Sw x Sh x Cin) to (Cin x Sw x Sh)
-        {
-            ggml_fp16_t * const wdata = (ggml_fp16_t *) params->wdata + nk;
-            for (int i12 = 0; i12 < ne12; i12++) {
-                for (int i11 = 0; i11 < ne11; i11++) {
-                    const float * const src = (float *)((char *) src1->data + i12*nb12 + i11*nb11);
-                    ggml_fp16_t * dst_data = wdata + i11*ne10*ne12;
-                    for (int i10 = 0; i10 < ne10; i10++) {
-                        dst_data[i10*ne12 + i12] = GGML_CPU_FP32_TO_FP16(src[i10]);
-                    }
-                }
-            }
-        }
-
         memset(dst->data, 0, ggml_nbytes(dst));
     }
     ggml_barrier(params->threadpool);
-
-    const int32_t stride = ggml_get_op_params_i32(dst, 0);
 
     // total patches in dst
     const int np = ne2;
@@ -1406,22 +1413,45 @@ void ggml_compute_forward_conv_transpose_2d(
     ggml_fp16_t * const wdata = (ggml_fp16_t *) params->wdata + 0;
     ggml_fp16_t * const wdata_src = wdata + nk;
 
-    for (int i2 = ip0; i2 < ip1; i2++) { // Cout
-        float * dst_data = (float *)((char *) dst->data + i2*nb2);
-        ggml_fp16_t * wdata_kernel = wdata + i2*ne01*ne00*ne03;
-        for (int i11 = 0; i11 < ne11; i11++) {
-            for (int i10 = 0; i10 < ne10; i10++) {
-                const int i1n = i11*ne10*ne12 + i10*ne12;
-                for (int i01 = 0; i01 < ne01; i01++) {
-                    for (int i00 = 0; i00 < ne00; i00++) {
-                        float v = 0;
-                        ggml_vec_dot_f16(ne03, &v, 0,
-                                wdata_src + i1n, 0,
-                                wdata_kernel + i01*ne00*ne03 + i00*ne03, 0, 1);
-                        dst_data[(i11*stride + i01)*ne0 + i10*stride + i00] += v;
+    for (int64_t i13 = 0; i13 < ne13; i13++) {
+        // permute source data (src1) from (Sw x Sh x Cin) to (Cin x Sw x Sh),
+        // for THIS image
+        if (ith == 0) {
+            ggml_fp16_t * const wdata_s = (ggml_fp16_t *) params->wdata + nk;
+            for (int i12 = 0; i12 < ne12; i12++) {
+                for (int i11 = 0; i11 < ne11; i11++) {
+                    const float * const src = (float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
+                    ggml_fp16_t * dst_data = wdata_s + i11*ne10*ne12;
+                    for (int i10 = 0; i10 < ne10; i10++) {
+                        dst_data[i10*ne12 + i12] = GGML_CPU_FP32_TO_FP16(src[i10]);
                     }
                 }
             }
+        }
+        ggml_barrier(params->threadpool);
+
+        for (int i2 = ip0; i2 < ip1; i2++) { // Cout
+            float * dst_data = (float *)((char *) dst->data + i13*nb3 + i2*nb2);
+            ggml_fp16_t * wdata_kernel = wdata + i2*ne01*ne00*ne03;
+            for (int i11 = 0; i11 < ne11; i11++) {
+                for (int i10 = 0; i10 < ne10; i10++) {
+                    const int i1n = i11*ne10*ne12 + i10*ne12;
+                    for (int i01 = 0; i01 < ne01; i01++) {
+                        for (int i00 = 0; i00 < ne00; i00++) {
+                            float v = 0;
+                            ggml_vec_dot_f16(ne03, &v, 0,
+                                    wdata_src + i1n, 0,
+                                    wdata_kernel + i01*ne00*ne03 + i00*ne03, 0, 1);
+                            dst_data[(i11*stride + i01)*ne0 + i10*stride + i00] += v;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Before thread 0 overwrites the staging buffer with the next image.
+        if (i13 + 1 < ne13) {
+            ggml_barrier(params->threadpool);
         }
     }
 }

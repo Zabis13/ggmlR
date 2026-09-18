@@ -982,23 +982,28 @@ static int map_node(onnx_ggml_ctx_t *c, const onnx_node_t *n) {
         r = map_node_basic  (c, n, a, b, &out, &out_nd);
         if (r != 0 && onnx_trace_nodes())
             fprintf(stderr, "[dispatch] %s op=%s -> basic r=%d\n", n->outputs[0], op, r);
-        if (r < 0) return -1; if (r > 0) goto reg_output;
+        if (r < 0) return -1;
+        if (r > 0) goto reg_output;
         r = map_node_tensor (c, n, a, b, &out, &out_nd);
         if (r != 0 && onnx_trace_nodes())
             fprintf(stderr, "[dispatch] %s op=%s -> tensor r=%d\n", n->outputs[0], op, r);
-        if (r < 0) return -1; if (r > 0) goto reg_output;
+        if (r < 0) return -1;
+        if (r > 0) goto reg_output;
         r = map_node_nn     (c, n, a, b, &out, &out_nd);
         if (r != 0 && onnx_trace_nodes())
             fprintf(stderr, "[dispatch] %s op=%s -> nn r=%d\n", n->outputs[0], op, r);
-        if (r < 0) return -1; if (r > 0) goto reg_output;
+        if (r < 0) return -1;
+        if (r > 0) goto reg_output;
         r = map_node_quant  (c, n, a, b, &out, &out_nd);
         if (r != 0 && onnx_trace_nodes())
             fprintf(stderr, "[dispatch] %s op=%s -> quant r=%d\n", n->outputs[0], op, r);
-        if (r < 0) return -1; if (r > 0) goto reg_output;
+        if (r < 0) return -1;
+        if (r > 0) goto reg_output;
         r = map_node_special(c, n, a, b, &out, &out_nd);
         if (r != 0 && onnx_trace_nodes())
             fprintf(stderr, "[dispatch] %s op=%s -> special r=%d\n", n->outputs[0], op, r);
-        if (r < 0) return -1; if (r > 0) goto reg_output;
+        if (r < 0) return -1;
+        if (r > 0) goto reg_output;
         onnx_warn_unsupported_op(op);
         return -1;
     }
@@ -1441,6 +1446,35 @@ static int tensor_crosses_boundary(onnx_ggml_ctx_t *c, int seg, const char *nm) 
     return 0;
 }
 
+/* Is this name one the caller reads when the whole run is over?
+ *
+ * Deliberately NOT folded into tensor_crosses_boundary(). That one answers
+ * "does a later segment's GRAPH read this", and build_segment_graph() asks it
+ * to decide what to expand the graph towards; a model output answered yes
+ * there would be pulled into every segment's graph rather than the last one's,
+ * which is the case the `seg == n_segments - 1` branch already handles.
+ *
+ * The reader here is R, after the final compute, through tmap -- so the test
+ * belongs only where the question is "must this survive the pool", which is
+ * copy_segment_boundaries().
+ *
+ * Measured on MaskRCNN-12-int8 (CPU): '6568', '6570' and '6572' are built
+ * during segment 20 of 23, and nothing downstream takes them as an input --
+ * they are results, not intermediates. copy_segment_boundaries() therefore
+ * skipped all three, segment 20's pool release dropped their tmap entries, and
+ * onnx_ggml_run reported "3 of 4 model outputs were never built ... every path
+ * to them was cut by an op that could not be mapped" -- a misleading message,
+ * since first_failed_node was empty and every one of them had mapped fine
+ * (r=1, shapes [4,51], [51], [51], matching ONNX Runtime). The fourth output,
+ * '6887', is built in segment 23 and survived for no better reason than that
+ * nothing releases a pool after it. */
+static int tensor_is_model_output(onnx_ggml_ctx_t *c, const char *nm) {
+    for (int i = 0; i < c->onnx->n_outputs; i++)
+        if (strcmp(c->onnx->outputs[i].name, nm) == 0)
+            return 1;
+    return 0;
+}
+
 /* Expand a segment's graph to everything it must actually produce.
  *
  * Two kinds of result matter: the inputs of its cut ops (needed to resolve
@@ -1507,6 +1541,45 @@ static void trace_segment_graph(onnx_ggml_ctx_t *c, int seg) {
 static struct ggml_tensor *storage_owner(struct ggml_tensor *t) {
     while (t && t->view_src) t = t->view_src;
     return t;
+}
+
+/* Does this tensor's METADATA live in the segment pool about to be released?
+ *
+ * The same address test segment_ctx_release() uses to decide which tmap
+ * entries to drop, exposed so the two cannot disagree -- and they did. A view
+ * (ggml_reshape and friends) allocates its struct from the current context
+ * while inheriting ->buffer and ->data from whatever it looks at, so a reshape
+ * of a persistent tensor built during a segment has persistent STORAGE and
+ * pool-resident METADATA.
+ *
+ * copy_segment_boundaries() judged those by ->buffer alone and skipped them as
+ * "already survives", then segment_ctx_release() dropped them by address.
+ * Measured on MaskRCNN-12-int8: '1919' (Reshape over '1912') was reported
+ * "is persistent -- not copied", the pool release took its tmap entry 7 lines
+ * later, and Gather '1920' got inputs=[1919(NULL)] -- which killed the RPN
+ * branch feeding 2157/2169, left all four outputs unbuilt on CPU, and on
+ * Vulkan reached GGML_ASSERT(buffer != nullptr) in ggml_vk_tensor_subbuffer.
+ *
+ * Storage outlasting metadata is not a case tmap can represent: the entry has
+ * to point at a struct that still exists, so such a tensor needs copying like
+ * any other boundary crosser. */
+static int tensor_in_one_pool(struct ggml_context *pool,
+                              const struct ggml_tensor *t) {
+    if (!pool) return 0;
+    const char *base = (const char *)ggml_get_mem_buffer(pool);
+    const size_t span = ggml_get_mem_size(pool);
+    const char *p = (const char *)t;
+    return base && p >= base && p < base + span;
+}
+
+/* Both live pools, because segment_ctx_release() is called for both: ctx_seg
+ * and ctx_prev. Testing only ctx_seg would agree with it today -- the main
+ * loop leaves ctx_prev unused -- and stop agreeing the moment it is put to
+ * work, which is the kind of divergence this helper exists to prevent. */
+static int tensor_in_pool(onnx_ggml_ctx_t *c, const struct ggml_tensor *t) {
+    if (!t) return 0;
+    return tensor_in_one_pool(c->ctx_seg,  t) ||
+           tensor_in_one_pool(c->ctx_prev, t);
 }
 
 /* Keep alive anything the graph reads more than once.
@@ -1640,20 +1713,45 @@ static void snapshot_graph_srcs(onnx_ggml_ctx_t *c) {
  * Only pointers the snapshot actually holds are written, and only where they
  * differ, so a node the scheduler left alone is not touched at all. */
 static void restore_graph_srcs(onnx_ggml_ctx_t *c) {
-    int n_restored = 0;
+    int n_restored = 0, n_kept = 0;
     for (int i = 0; i < c->n_src_snap; i++) {
         struct ggml_tensor *node = c->src_snap_node[i];
         if (!node) continue;
         for (int j = 0; j < GGML_MAX_SRC; j++) {
-            if (node->src[j] != c->src_snap_src[i][j]) {
-                node->src[j] = c->src_snap_src[i][j];
-                n_restored++;
+            struct ggml_tensor *orig = c->src_snap_src[i][j];
+            if (node->src[j] == orig) continue;
+
+            /* ⚠️ Do NOT put back a source the GPU cannot read.
+             *
+             * The scheduler replaces src[j] with a copy on the consumer's
+             * backend exactly when the producer sits on a different one -- a
+             * CPU-only op such as the NMS custom op feeding a Vulkan CONT.
+             * That copy is the only version of the data the Vulkan op can
+             * address: restoring the original leaves a Vulkan op pointing at a
+             * CPU tensor, and ggml_vk_tensor_subbuffer() then dereferences a
+             * buffer that is not a Vulkan one (measured on MaskRCNN-12-int8,
+             * node '2169 (permuted) (cont)': the input matches ORT exactly and
+             * the run dies producing the output).
+             *
+             * So the snapshot's job is narrowed to what it was for -- undoing
+             * rewrites WITHIN one backend -- and cross-backend copies are left
+             * alone. A source with no buffer yet is not a scheduler copy and is
+             * restored as before. */
+            if (c->backend_gpu && orig && orig->buffer &&
+                !ggml_backend_supports_buft(c->backend_gpu,
+                                            ggml_backend_buffer_get_type(orig->buffer))) {
+                n_kept++;
+                continue;
             }
+
+            node->src[j] = orig;
+            n_restored++;
         }
     }
-    if (n_restored > 0 && onnx_trace_nodes())
-        fprintf(stderr, "[src-restore] %d source pointer(s) put back after "
-                        "segment %d\n", n_restored, c->cur_segment);
+    if ((n_restored > 0 || n_kept > 0) && onnx_trace_nodes())
+        fprintf(stderr, "[src-restore] %d source pointer(s) put back, %d "
+                        "cross-backend copy(ies) kept after segment %d\n",
+                n_restored, n_kept, c->cur_segment);
     c->n_src_snap = 0;
 }
 
@@ -1737,6 +1835,164 @@ static void segment_ctx_release(onnx_ggml_ctx_t *c, struct ggml_context *pool) {
         fprintf(stderr, "[segctx] segment %d: released pool, dropped %d tmap "
                         "entr%s, %d kept\n",
                 c->cur_segment, dropped, dropped == 1 ? "y" : "ies", kept);
+
+    /* The deferred-fill lists hold raw tensor pointers into the same pool, and
+     * nothing above reaches them: tmap is compacted by address, they are not.
+     * After ggml_free() the pool's memory is handed out again and those
+     * pointers name whatever was built over them.
+     *
+     * Measured on MaskRCNN-12-int8 (CPU, first run) by printing
+     * ggml_get_name() for a FIXED slot index across successive
+     * fill_deferred_tensors() passes -- the pointer is written once, so a name
+     * that changes is the memory underneath changing, not the list. Slot 42
+     * (NonZero '3043') read 3042, then '6081 (cast_numeric)', then '3111',
+     * then nothing at all; 202 of 220 slots moved this way, 567 changes in
+     * total, and NOT ONE of them before the first pool release. The fill loop
+     * skips a NULL src silently, so '3043' kept whatever its allocation held
+     * -- 9.7e+21, which casts to INT_MIN -- and get_rows aborted with
+     * GGML_ASSERT(i01 >= 0 && i01 < ne01).
+     *
+     * Dropped rather than skipped at fill time: a stale entry that happens to
+     * point at a live tensor of the right size would be filled from the wrong
+     * source and never look wrong. The op that owns the fill re-registers it
+     * on the next map_node, which is what makes dropping safe -- these are
+     * per-run registrations, not ownership records.
+     *
+     * ⚠️ Only lists whose entries own nothing. Deliberately excluded:
+     *   - qconv_mult_values: malloc'd, and freed in teardown by COUNT, so
+     *     compacting the list leaks the tail unless the free moves here too;
+     *   - cut_carry_buf: malloc'd with its own free a few lines from where it
+     *     is taken, inside one iteration of the segment loop;
+     *   - src_snap_*: written back into nodes before the next graph is built,
+     *     a protocol this function is not part of;
+     *   - roi_aligns / nms_ops / qconv_ops: parameter blocks whose ADDRESSES
+     *     were handed to kernels as userdata (see reset_deferred_fills). */
+    {
+        const int n_nz0 = c->n_nonzero_fills;
+        const int n_sl0 = c->n_slice_fills;
+        const int n_ey0 = c->n_eye_fills;
+        const int n_sh0 = c->n_shape_tensors;
+        const int n_cf0 = c->n_const_fills;
+        const int n_ci0 = c->n_cinit_fills;
+        const int n_nm0 = c->n_nms_deferred;
+        int k;
+
+        /* NonZero: two tensors per entry, either one enough to condemn it. */
+        k = 0;
+        for (int i = 0; i < n_nz0; i++) {
+            if (tensor_in_one_pool(pool, c->nonzero_fill_dst[i]) ||
+                tensor_in_one_pool(pool, c->nonzero_fill_src[i])) continue;
+            if (k != i) {
+                c->nonzero_fill_dst[k]   = c->nonzero_fill_dst[i];
+                c->nonzero_fill_src[k]   = c->nonzero_fill_src[i];
+                c->nonzero_fill_ndims[k] = c->nonzero_fill_ndims[i];
+            }
+            k++;
+        }
+        c->n_nonzero_fills = k;
+
+        /* Strided Slice: same shape of entry, same test. */
+        k = 0;
+        for (int i = 0; i < n_sl0; i++) {
+            if (tensor_in_one_pool(pool, c->slice_fill_dst[i]) ||
+                tensor_in_one_pool(pool, c->slice_fill_src[i])) continue;
+            if (k != i) {
+                c->slice_fill_dst[k]   = c->slice_fill_dst[i];
+                c->slice_fill_src[k]   = c->slice_fill_src[i];
+                c->slice_fill_ndims[k] = c->slice_fill_ndims[i];
+                memcpy(c->slice_fill_starts[k], c->slice_fill_starts[i],
+                       sizeof(c->slice_fill_starts[0]));
+                memcpy(c->slice_fill_steps[k], c->slice_fill_steps[i],
+                       sizeof(c->slice_fill_steps[0]));
+                memcpy(c->slice_fill_out_ne[k], c->slice_fill_out_ne[i],
+                       sizeof(c->slice_fill_out_ne[0]));
+            }
+            k++;
+        }
+        c->n_slice_fills = k;
+
+        /* EyeLike: one tensor, three scalars beside it. */
+        k = 0;
+        for (int i = 0; i < n_ey0; i++) {
+            if (tensor_in_one_pool(pool, c->eye_fill_ptrs[i])) continue;
+            if (k != i) {
+                c->eye_fill_ptrs[k] = c->eye_fill_ptrs[i];
+                c->eye_fill_rows[k] = c->eye_fill_rows[i];
+                c->eye_fill_cols[k] = c->eye_fill_cols[i];
+                c->eye_fill_k[k]    = c->eye_fill_k[i];
+            }
+            k++;
+        }
+        c->n_eye_fills = k;
+
+        /* Shape outputs: the dims travel in the row beside the pointer. */
+        k = 0;
+        for (int i = 0; i < n_sh0; i++) {
+            if (tensor_in_one_pool(pool, c->shape_tensor_ptrs[i])) continue;
+            if (k != i) {
+                c->shape_tensor_ptrs[k] = c->shape_tensor_ptrs[i];
+                memcpy(c->shape_tensors_ne[k], c->shape_tensors_ne[i],
+                       sizeof(c->shape_tensors_ne[0]));
+            }
+            k++;
+        }
+        c->n_shape_tensors = k;
+
+        /* ConstantOfShape: pointer plus the scalar it is filled with. */
+        k = 0;
+        for (int i = 0; i < n_cf0; i++) {
+            if (tensor_in_one_pool(pool, c->const_fill_ptrs[i])) continue;
+            if (k != i) {
+                c->const_fill_ptrs[k] = c->const_fill_ptrs[i];
+                c->const_fill_vals[k] = c->const_fill_vals[i];
+            }
+            k++;
+        }
+        c->n_const_fills = k;
+
+        /* Constant-node payloads: the second pointer is into the ONNX model,
+         * which outlives every pool, so only the tensor decides. */
+        k = 0;
+        for (int i = 0; i < n_ci0; i++) {
+            if (tensor_in_one_pool(pool, c->cinit_fill_ptrs[i])) continue;
+            if (k != i) {
+                c->cinit_fill_ptrs[k] = c->cinit_fill_ptrs[i];
+                c->cinit_fill_srcs[k] = c->cinit_fill_srcs[i];
+            }
+            k++;
+        }
+        c->n_cinit_fills = k;
+
+        /* NMS parameter tensors: the params themselves are scalars here; the
+         * malloc'd blocks handed to the kernel are n_nms_ops, left alone. */
+        k = 0;
+        for (int i = 0; i < n_nm0; i++) {
+            if (tensor_in_one_pool(pool, c->nms_param_tensors[i])) continue;
+            if (k != i) {
+                c->nms_param_tensors[k]     = c->nms_param_tensors[i];
+                c->nms_max_boxes[k]         = c->nms_max_boxes[i];
+                c->nms_iou_thresh[k]        = c->nms_iou_thresh[i];
+                c->nms_score_thresh[k]      = c->nms_score_thresh[i];
+                c->nms_have_score_thresh[k] = c->nms_have_score_thresh[i];
+            }
+            k++;
+        }
+        c->n_nms_deferred = k;
+
+        const int nz = n_nz0 - c->n_nonzero_fills;
+        const int sl = n_sl0 - c->n_slice_fills;
+        const int ey = n_ey0 - c->n_eye_fills;
+        const int sh = n_sh0 - c->n_shape_tensors;
+        const int cf = n_cf0 - c->n_const_fills;
+        const int ci = n_ci0 - c->n_cinit_fills;
+        const int nm = n_nm0 - c->n_nms_deferred;
+
+        if ((nz | sl | ey | sh | cf | ci | nm) && onnx_trace_nodes())
+            fprintf(stderr, "[segctx] segment %d: dropped deferred fills into "
+                            "the pool: nonzero=%d slice=%d eye=%d shape=%d "
+                            "const=%d cinit=%d nms=%d\n",
+                    c->cur_segment, nz, sl, ey, sh, cf, ci, nm);
+    }
 }
 
 /* Close both live pools and put c->ctx back on the model context.
@@ -1792,7 +2048,21 @@ static void build_segment_graph(onnx_ggml_ctx_t *c, int seg) {
         for (int o = 0; o < onnx->nodes[i].n_outputs; o++) {
             const char *nm = onnx->nodes[i].outputs[o];
             if (nm[0] == '\0') continue;
-            if (!tensor_crosses_boundary(c, seg, nm)) continue;
+            /* A model output produced HERE counts as well, and the boundary
+             * test cannot see it: that test looks for a later node taking the
+             * name as an input, and a result has no consumer inside the graph
+             * at all. The branch below covers only outputs that survive to the
+             * last segment, which on a segmented detector is not where most of
+             * them are built.
+             *
+             * ⚠️ Pairs with the same predicate in copy_segment_boundaries().
+             * Either half alone does nothing: not expanding the graph here
+             * leaves the tensor uncomputed, so the copy there finds "no buffer"
+             * and skips it; copying without expanding preserves a tensor that
+             * was never filled. Measured on MaskRCNN-12-int8 -- '6568', '6570'
+             * and '6572' are nodes 2815..2817, inside segment 21 of 23. */
+            if (!tensor_crosses_boundary(c, seg, nm) &&
+                !tensor_is_model_output(c, nm)) continue;
             struct ggml_tensor *t = tmap_get(c, nm);
             if (t) { ggml_set_output(t); ggml_build_forward_expand(c->graph, t); }
         }
@@ -2527,7 +2797,6 @@ static int map_node_range(onnx_ggml_ctx_t *c, int node_lo, int node_hi) {
             if (bi >= 0) {
                 /* Last node of block — emit fused RelPosBias2D op */
                 rel_pos_bias_params_t *p = &c->pos_embed_blocks[bi].params;
-                int HW = p->H * p->W;
 
                 /* Get input tensors */
                 struct ggml_tensor *x_t  = tmap_get(c, c->pos_embed_blocks[bi].x_input_name);
@@ -2586,8 +2855,13 @@ static int map_node_range(onnx_ggml_ctx_t *c, int node_lo, int node_hi) {
              * can only say "look for r=-1 yourself". */
             const onnx_node_t *fn = &onnx->nodes[i];
             if (c->first_failed_node[0] == '\0' && fn->n_outputs > 0) {
-                strncpy(c->first_failed_node, fn->outputs[0], ONNX_MAX_NAME - 1);
-                strncpy(c->first_failed_op, fn->op_type, sizeof(c->first_failed_op) - 1);
+                /* snprintf rather than strncpy: it always terminates, and a
+                 * name longer than the field is truncated on purpose here --
+                 * strncpy makes the compiler warn about exactly that. */
+                snprintf(c->first_failed_node, sizeof(c->first_failed_node),
+                         "%s", fn->outputs[0]);
+                snprintf(c->first_failed_op, sizeof(c->first_failed_op),
+                         "%s", fn->op_type);
             }
             /* Non-fatal: skip unsupported/invalid ops silently */
             (void)0;
@@ -2632,6 +2906,44 @@ static void reset_deferred_fills(onnx_ggml_ctx_t *c) {
     c->n_cinit_fills   = 0;
     c->n_nonzero_fills = 0;
     c->n_eye_fills     = 0;
+    /* NMS too: it is a deferred fill like the rest (nms_param_tensors holds a
+     * params block written before each compute), and leaving it out made this
+     * the one list that only ever grew.
+     *
+     * Measured on MaskRCNN-12-int8 with ONNX_TRACE_NODES, the [fill] counters
+     * across one run: nonzero rose and fell with each segment, as a reset list
+     * does, while nms went 0,2,4,5,6,7,8,9,10 and never came back. Run 2 then
+     * re-registered every NMS on top of run 1's entries, and '2169' started
+     * from the [3,1] the previous run's re-map had left instead of its
+     * [3,147] -- one box in where 147 belong. The detection branch collapsed
+     * behind it (TopK '6565' over 1 candidate, six NonZero measuring 0) and
+     * the run died in get_rows with "index 3 out of range [0,1)".
+     *
+     * Truncating tmap to its post-load baseline does not cover this: these
+     * pointers live in their own array and are read by fill_deferred_tensors
+     * without consulting tmap at all. */
+    c->n_nms_deferred  = 0;
+    /* Strided Slice for the same reason: slice_fill_src/dst are registered per
+     * map_node and consumed by fill_strided_slices(), so a rebuild that is not
+     * cleared first leaves the previous run's source and destination pointers
+     * in the list ahead of this run's. Found by listing every n_* counter in
+     * the header rather than by hitting it -- the same audit that turned up
+     * the NMS one, and the reason to do it as a list instead of one at a
+     * time. */
+    c->n_slice_fills   = 0;
+    /* QConv requant multipliers: its own comment calls it "refilled from
+     * fill_deferred_tensors() like every other deferred payload", so it
+     * belongs with them here too. */
+    c->n_qconv_mult    = 0;
+
+    /* ⚠️ NOT reset here, though they look alike: n_roi_aligns, n_nms_ops and
+     * n_qconv_ops count malloc'd parameter blocks whose ADDRESSES were handed
+     * to kernels as userdata. Those have to stay valid for the life of the
+     * graph, and the pointers are the only record of the allocation -- zeroing
+     * the count leaks every block and lets the next registration hand a kernel
+     * a record that is being overwritten. They are per-op ownership, not
+     * per-run registration; the distinction is what separates this list from
+     * that one. */
 }
 
 static void fill_deferred_tensors(onnx_ggml_ctx_t *c) {
@@ -2847,15 +3159,38 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
             mem_size += (size_t)(n_seg_estimate + 1) * ggml_graph_overhead();
     }
 
+    /* What one tensor costs in a no_alloc context: the ggml_tensor struct plus
+     * the ggml_object header ggml charges for every allocation. Used to size
+     * the metadata-only contexts below in whole allocations. */
+    const size_t tensor_cost = ggml_tensor_overhead();
+
     /* ctx_weight: separate context for weight tensors (initializers).
      * These get a dedicated GPU buffer that the scheduler never aliases. */
     {
         /* Weight context needs space for tensor metadata only (no_alloc=true).
          * Includes initializers + Constant/Shape/ConstantOfShape/EyeLike/scalar
          * tensors that are also placed here during map_node.
-         * Estimate ~512 bytes per ggml_tensor struct. */
-        size_t n_weight_tensors = (size_t)onnx->n_initializers + (size_t)onnx->n_nodes;
-        size_t weight_meta = n_weight_tensors * 512 + 64 * 1024;
+         *
+         * Sized from ggml_tensor_overhead() rather than a 512-byte guess, and
+         * with room for more than one tensor per node.
+         *
+         * ⚠️ The old formula was (n_init + n_nodes) * 512 + 64 KiB, and it came
+         * up ONE OBJECT short on RoBERTa-SeqClass: "not enough space in the
+         * context's memory pool (needed 816704, available 816640)" -- a 64-byte
+         * shortfall, exactly sizeof(struct ggml_object), which aborted the model
+         * on both backends. One tensor per node is not the real bound either:
+         * ctx_weight is written from onnx_ops_nn.c, onnx_ops_special.c,
+         * onnx_ops_tensor.c and onnx_ops_quant.c as well as from the initializer
+         * pass, and a single node can place several tensors there (a quantised
+         * conv contributes its requantisation multiplier on top of its weights).
+         *
+         * ggml also charges GGML_OBJECT_SIZE for the object header of EVERY
+         * allocation and refuses one that would not fit whole, so the reserve
+         * has to be a multiple of the per-tensor cost, not a round number of
+         * kilobytes. */
+        size_t n_weight_tensors = (size_t)onnx->n_initializers
+                                + (size_t)onnx->n_nodes * 4;
+        size_t weight_meta = (n_weight_tensors + 1024) * tensor_cost;
         struct ggml_init_params wp = {
             .mem_size   = weight_meta,
             .mem_buffer = NULL,
@@ -2868,9 +3203,14 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
          * backend so the tensors in it stay on the host.  Only small parameter
          * blocks that a CPU-only kernel reads belong here -- see the note on
          * ctx_host in onnx_ggml.h for why ggml_set_input() cannot do this job.
-         * One tensor per node is a generous bound; these are rare. */
+         *
+         * Two tensors per node, not one: NMS places both its parameter block
+         * and its output here, and a re-mapped cut op builds a fresh pair on
+         * every run. Sized in units of ggml_tensor_overhead() for the same
+         * reason as ctx_weight above -- a reserve that is not a whole number of
+         * allocations can leave the pool one 64-byte object header short. */
         struct ggml_init_params hp = {
-            .mem_size   = (size_t)onnx->n_nodes * 512 + 64 * 1024,
+            .mem_size   = ((size_t)onnx->n_nodes * 2 + 1024) * tensor_cost,
             .mem_buffer = NULL,
             .no_alloc   = true,
         };
@@ -2896,10 +3236,20 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
     c->seg_ctx_size = mem_size;
 
     /* ctx_boundary: copies of tensors that outlive their segment.  Metadata
-     * only (no_alloc), like ctx_weight -- the data buffer comes later. */
+     * only (no_alloc), like ctx_weight -- the data buffer comes later.
+     *
+     * ⚠️ These ACCUMULATE: a context frees nothing until it is destroyed, so
+     * every segment's boundary copies stay for the life of the model, and a
+     * re-mapped cut op adds a fresh device mirror per run on top (see the
+     * substitution in the segment loop). Budget per segment, not one queue's
+     * worth, and in units of ggml_tensor_overhead() so the reserve is a whole
+     * number of allocations -- a 64-byte shortfall is enough to abort a model,
+     * as the old ctx_weight estimate did on RoBERTa-SeqClass. */
     {
         struct ggml_init_params bp = {
-            .mem_size   = (size_t)ONNX_MAX_BOUNDARY * 2 * 512 + 64 * 1024,
+            .mem_size   = ((size_t)ONNX_MAX_BOUNDARY * 2
+                           + (size_t)ONNX_MAX_SEGMENTS * 8
+                           + 1024) * tensor_cost,
             .mem_buffer = NULL,
             .no_alloc   = true,
         };
@@ -2937,6 +3287,7 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
     } else {
         if (map_node_range(c, 0, onnx->n_nodes - 1) != 0) goto fail;
     }
+
 
     /* Boundary sizes.  The pre-pass counts boundaries but cannot size them --
      * intermediate tensors have no value_info and do not exist yet.  Now that
@@ -4146,6 +4497,39 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
      * still letting the outputs survive the call that produced them. */
     segment_ctx_end(ctx);
 
+    /* Forget the sizes measured by the previous run.
+     *
+     * These are measurements of THIS input, not properties of the model: how
+     * many boxes NMS kept, how many elements NonZero found, how many
+     * candidates a TopK had to rank. Carried into the next run they stop being
+     * measurements and become predictions -- and a shape-dependent op builds
+     * its output from them before anything has been measured again.
+     *
+     * Measured on MaskRCNN-12-int8 with ONNX_TRACE_NODES. NMS '2169' has
+     * capacity 147 in both runs, so its inputs are identical; the trace reads
+     *   run 1:  [NMS] 2169: capacity 147 -> measured 1 selected   (at the re-map,
+     *           after the op ran and one box survived)
+     *   run 2:  [NMS] 2169: capacity 147 -> measured 1 selected   (at the FIRST
+     *           mapping of segment 9, before this run has measured anything)
+     * so run 2 built a [3,1] output where 147 belong. Everything downstream
+     * collapsed with it -- TopK '6565' ranking a single candidate, six NonZero
+     * measuring 0 -- while the indices reaching them were computed at the real
+     * sizes, and get_rows aborted with "index 3 out of range [0,1)". On Vulkan
+     * the same mismatch is not checked: it read past the buffer and took the
+     * device down with a GPUVM fault.
+     *
+     * Only the sizes are dropped, and they cost nothing to rediscover:
+     * resolve_segment_sizes() takes them again after each segment computes.
+     * Until it does, a cut op builds at its spec-derived capacity, which is
+     * exactly what the first run does. */
+    if (ctx->n_resolved > 0) {
+        if (onnx_trace_nodes())
+            fprintf(stderr, "[resolve] run start: forgetting %d measured "
+                            "size%s from the previous run\n",
+                    ctx->n_resolved, ctx->n_resolved == 1 ? "" : "s");
+        ctx->n_resolved = 0;
+    }
+
     if (ctx->seg0_graph && ctx->graph != ctx->seg0_graph) {
         /* Segment 0 owns ctx->sched, and its placement there is untouched:
          * the later segments now allocate on schedulers of their own, so
@@ -4312,8 +4696,16 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
                  *
                  * map_node_range() below rebuilds this cut op at the measured
                  * size and shadows the old tensor in tmap. NonZero, TopK,
-                 * Shape and EyeLike do not need anything more: their outputs
-                 * are deferred fills, rewritten after every allocation.
+                 * Shape and EyeLike need no VALUES carried across it: their
+                 * outputs are deferred fills, rewritten after every
+                 * allocation.
+                 *
+                 * ⚠️ "Rewritten after every allocation" holds only while the
+                 * registration naming them survives, and for a cut op at a
+                 * segment boundary it did not: see the ctx_weight switch and
+                 * the input hold below, both of which exist to keep the entry
+                 * valid past the pool release. Read this paragraph as "no
+                 * value carry needed", not as "nothing needed".
                  * NonMaxSuppression is the exception -- only its PARAMS are
                  * deferred; the output is an ordinary ggml_custom_4d node that
                  * nms_cpu evaluated when its own segment ran, and nothing
@@ -4345,10 +4737,255 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
                         ggml_backend_tensor_get(old_out, carry_buf, 0, carry_bytes);
                 }
 
-                if (map_node_range(ctx, ni, ni) != 0) { free(carry_buf); return -1; }
+                /* Hold a rebuilt TopK's INPUT before rebuilding over it.
+                 *
+                 * TopK is the one cut op that has to be recomputed after the
+                 * re-map (see the leaf note below), so it is the only one whose
+                 * rebuilt chain -- argsort_top_k, the cont it needs because
+                 * argsort_top_k returns a view, the cast/arange/get_rows the
+                 * value gather gathers with -- is evaluated by a LATER
+                 * segment's graph. Those nodes read this segment's input
+                 * tensor, and this segment's pool is released a few lines down.
+                 *
+                 * Measured on MaskRCNN-12-int8. Holding the OUTPUT instead (the
+                 * rebuilt node in ctx_weight) was tried first: '1908' did stay
+                 * in tmap past the boundary, and the run still died -- CPU at
+                 * ops-elemwise.cpp:351, GGML_ASSERT(ggml_nelements(dst) ==
+                 * ggml_nelements(src0)), Vulkan with SIGSEGV inside
+                 * ggml_vk_cpy -> ggml_vk_op_f32. Both land on the CPY that
+                 * ggml_cont emits, the first node of the chain to touch the
+                 * input, and the assert says it plainly: dst is sized at the
+                 * new k while src0 points into memory that has been handed out
+                 * again. The output was never the part that had to survive.
+                 *
+                 * The copy goes in ctx_weight (allocated on backend_gpu when
+                 * there is one, so the chain stays on the backend that will
+                 * compute it) and is substituted in tmap only for the duration
+                 * of map_node_range, then put back.
+                 *
+                 * ⚠️ The restore is not optional. copy_segment_boundaries()
+                 * carries a warning from an earlier attempt to hold cut-op
+                 * inputs by copying them there: a copy REPLACES its original in
+                 * tmap, so everything built afterwards is repointed at it, and
+                 * MaskRCNN went from 68 detections to 134 with "TopK 6565:
+                 * K=100 exceeds the 51 elements on the ranked axis". Here the
+                 * substitution is visible to exactly one map_node_range call
+                 * and to nothing else, which is what keeps that from happening.
+                 *
+                 * A failed copy is not fatal: it leaves the old behaviour (the
+                 * rebuild over a pool tensor), which is no worse than not
+                 * trying. */
+                struct ggml_tensor *topk_in_saved = NULL;
+                const char *topk_in_name = NULL;
+                int topk_in_nd = 0;
+                if ((strcmp(ctx->onnx->nodes[ni].op_type, "TopK")    == 0 ||
+                     strcmp(ctx->onnx->nodes[ni].op_type, "NonZero") == 0) &&
+                    ctx->ctx_weight && ctx->onnx->nodes[ni].n_inputs > 0) {
+                    const char *inm = ctx->onnx->nodes[ni].inputs[0];
+                    struct ggml_tensor *in = tmap_get(ctx, inm);
+                    if (in && in->buffer) {
+                        struct ggml_tensor *hold =
+                            ggml_new_tensor(ctx->ctx_weight, in->type,
+                                            GGML_MAX_DIMS, in->ne);
+                        if (hold) {
+                            ggml_set_input(hold);
+                            ggml_set_name(hold, inm);
+                            ggml_backend_t bk = ctx->backend_gpu
+                                              ? ctx->backend_gpu : ctx->backend_cpu;
+                            ggml_backend_buffer_t hb =
+                                ggml_backend_alloc_ctx_tensors(ctx->ctx_weight, bk);
+                            if (hb) {
+                                if (ctx->n_extra_weight_bufs >= ONNX_MAX_WEIGHT_BUFS) {
+                                    fprintf(stderr, "[onnx] too many weight buffers "
+                                                    "(>%d)\n", ONNX_MAX_WEIGHT_BUFS);
+                                    ggml_backend_buffer_free(hb);
+                                    free(carry_buf);
+                                    return -1;
+                                }
+                                ctx->extra_weight_bufs[ctx->n_extra_weight_bufs++] = hb;
+                            }
+                            if (hold->buffer) {
+                                size_t nb = ggml_nbytes(in);
+                                void *tmp = malloc(nb);
+                                if (tmp) {
+                                    ggml_backend_tensor_get(in, tmp, 0, nb);
+                                    ggml_backend_tensor_set(hold, tmp, 0, nb);
+                                    free(tmp);
+                                    /* Read the rank before the put: tmap_get_ndims
+                                     * searches backwards and would find the new
+                                     * entry instead of the original's. */
+                                    topk_in_nd    = tmap_get_ndims(ctx, inm);
+                                    topk_in_saved = in;
+                                    topk_in_name  = inm;
+                                    tmap_put_nd(ctx, inm, hold, topk_in_nd);
+                                    if (getenv("ONNX_TRACE_REMAP"))
+                                        fprintf(stderr, "[remap]   held input '%s' "
+                                                "(%zu bytes) in ctx_weight\n", inm, nb);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                /* Build the rebuilt chain in ctx_weight too, not just over a
+                 * held input.
+                 *
+                 * Holding the input alone was measured and is not enough: the
+                 * rebuilt TopK still lands in c->ctx, which is the outgoing
+                 * segment's pool while this loop runs, and segment_ctx_release()
+                 * drops every tmap entry whose tensor lives inside it. '1908'
+                 * therefore vanished from the map exactly as before the input
+                 * was held, and segment 3's Gather '2099' got a NULL input --
+                 * dets=NA, all four outputs unbuilt, on both backends.
+                 *
+                 * The two halves close different failures and neither is
+                 * sufficient alone, which is why both are here:
+                 *   - the held input above keeps the chain's src[] off memory
+                 *     the pool is about to hand out (measured: CPU assert at
+                 *     ops-elemwise.cpp:351, Vulkan SIGSEGV in ggml_vk_cpy);
+                 *   - this switch keeps the chain's own nodes, and the tmap
+                 *     entries naming them, out of the pool in the first place.
+                 *
+                 * ctx_weight rather than ctx_host: the next segment's graph
+                 * computes these nodes like any others, so they belong on the
+                 * backend that graph runs on. alloc_new_weight_tensors() runs
+                 * once per segment and sizes exactly the tensors added since
+                 * the last call, so the buffer arrives without new machinery.
+                 *
+                 * ⚠️ NonZero needs this switch too, and for a reason TopK's
+                 * account does not cover -- it is not "recomputed later", it
+                 * is never computed at all. Its output is a LEAF
+                 * (ggml_set_input, op == GGML_OP_NONE) whose only source of
+                 * values is fill_deferred_tensors(), so losing the fill loses
+                 * the tensor; a rebuilt TopK merely gets evaluated again by
+                 * the next graph, which is why the pool never hurt it.
+                 *
+                 * Measured on MaskRCNN-12-int8 (CPU, first run), NonZero
+                 * '2157' cut at segment 8, with the re-map left in c->ctx:
+                 *   [nzfill] 16/18 dst=2157 src=2156          <- the ORIGINAL,
+                 *                                                filled fine
+                 *   [resolve] 2157: 147 elems -> nnz=147
+                 *   [node] 2157 op=NonZero                    <- re-map builds
+                 *                                                a NEW tensor
+                 *   boundary '2157' has no buffer -- not copied
+                 *   released pool; dropped deferred fills: nonzero=4
+                 * Three sources of values, all shut: no boundary copy (the
+                 * rebuilt tensor has no buffer yet when the copy runs), no
+                 * live fill (both the old entry and the new one point into
+                 * the pool, so segment_ctx_release drops them), and nothing
+                 * to recompute. Segment 9 then read '2157' as whatever the
+                 * allocation held -- a float that casts to INT_MIN -- and
+                 * get_rows aborted with index -2147483648 out of range
+                 * [0,147).
+                 *
+                 * ⚠️ The INPUT hold above covers NonZero as well, and leaving
+                 * it TopK-only makes this switch useless -- which is what a
+                 * first attempt did. A NonZero entry names TWO tensors, its
+                 * output AND its input, and fill_deferred_tensors() reads the
+                 * input every time it runs, one segment LATER. Moving only the
+                 * output to ctx_weight leaves nonzero_fill_src pointing into
+                 * the pool, segment_ctx_release() drops the entry on that
+                 * pointer alone, and the rescued output goes unfilled exactly
+                 * as before.
+                 *
+                 * TopK's hold exists for a different read -- its rebuilt chain
+                 * takes the input through src[] when a later graph computes it
+                 * -- and NonZero's for the deferred fill. Same copy, same
+                 * place, two reasons; either one alone is enough to need it. */
+                struct ggml_context *saved_ctx = ctx->ctx;
+                const char *remap_op = ctx->onnx->nodes[ni].op_type;
+                const int weight_remap =
+                    (strcmp(remap_op, "TopK")    == 0 ||
+                     strcmp(remap_op, "NonZero") == 0) &&
+                    ctx->ctx_weight != NULL;
+                if (weight_remap) ctx->ctx = ctx->ctx_weight;
+                const int map_rc = map_node_range(ctx, ni, ni);
+                if (weight_remap) ctx->ctx = saved_ctx;
+
+                /* Put the original back, so the substitution cannot outlive the
+                 * rebuild. The rebuilt chain keeps the copy through its src[]
+                 * pointers, which is the whole point; tmap goes back to naming
+                 * whatever it named before. */
+                if (topk_in_saved)
+                    tmap_put_nd(ctx, topk_in_name, topk_in_saved, topk_in_nd);
+
+                if (map_rc != 0) { free(carry_buf); return -1; }
 
                 if (carry_buf) {
                     struct ggml_tensor *new_out = tmap_get(ctx, onm);
+
+                    /* If the rebuilt output lives on a backend the compute
+                     * cannot read, substitute a device-side tensor NOW, before
+                     * this segment's own nodes are mapped.
+                     *
+                     * ⚠️ It has to happen here, not after cut_carry further
+                     * down. map_node_range() for THIS segment runs between the
+                     * two, and it builds the consumers -- '2169 (permuted)' is a
+                     * view whose view_src is fixed at construction. Repointing
+                     * tmap afterwards leaves that view addressing the host
+                     * tensor, and Vulkan aborts in ggml_vk_tensor_subbuffer():
+                     * measured on MaskRCNN-12-int8, where the mirror was made
+                     * and the view still pointed at the CPU copy.
+                     *
+                     * NMS is the case: its output must be built in ctx_host
+                     * (nms_cpu reads host memory only), which is allocated on
+                     * the CPU backend, while its consumers run on the GPU. The
+                     * scheduler inserts no copy of its own here, because the
+                     * producer is not a node of the consuming segment's graph.
+                     *
+                     * The tensor has no buffer yet -- ctx_boundary is allocated
+                     * on the line below, and the DATA arrives via cut_carry,
+                     * which is pointed at the mirror instead of the original. */
+                    if (new_out && ctx->backend_gpu && ctx->ctx_boundary &&
+                        new_out->buffer == NULL) {
+                        struct ggml_tensor *dev =
+                            ggml_new_tensor(ctx->ctx_boundary, new_out->type,
+                                            GGML_MAX_DIMS, new_out->ne);
+                        if (dev) {
+                            ggml_set_input(dev);
+                            ggml_set_name(dev, onm);
+                            memcpy(dev->op_params, new_out->op_params,
+                                   sizeof(dev->op_params));
+                            ggml_backend_buffer_t dbuf =
+                                ggml_backend_alloc_ctx_tensors(ctx->ctx_boundary,
+                                                               ctx->backend_gpu);
+                            if (dbuf) {
+                                if (ctx->n_extra_weight_bufs < ONNX_MAX_WEIGHT_BUFS)
+                                    ctx->extra_weight_bufs[ctx->n_extra_weight_bufs++] = dbuf;
+                                else
+                                    ggml_backend_buffer_free(dbuf);
+                            }
+                            if (dev->buffer) {
+                                int64_t osh[ONNX_MAX_DIMS];
+                                const int ond = tmap_get_shape(ctx, onm, osh,
+                                                               ONNX_MAX_DIMS);
+                                /* ⚠️ Read the empty flag BEFORE the put and set
+                                 * it again after: tmap_put_nd() appends a fresh
+                                 * entry with tensor_map_empty = 0, and
+                                 * tmap_is_empty() reads the LAST entry for a
+                                 * name. Mirroring a logically-empty NMS output
+                                 * without carrying the flag therefore un-marks
+                                 * it, the Gather/Squeeze chain below stops
+                                 * inheriting emptiness, and Concat keeps the 79
+                                 * phantom per-class branches it is supposed to
+                                 * drop -- measured on MaskRCNN-12-int8: 130
+                                 * detections against ORT's 51, with 0 skipped
+                                 * inputs where the CPU path skipped 79. */
+                                const int was_empty = tmap_is_empty(ctx, onm);
+                                if (ond > 0) tmap_put_shape(ctx, onm, dev, osh, ond);
+                                else         tmap_put_nd(ctx, onm, dev,
+                                                        (int)ggml_n_dims(dev));
+                                if (was_empty) tmap_mark_empty(ctx, onm);
+                                if (onnx_trace_nodes())
+                                    fprintf(stderr, "[segment] cut output '%s' is on a "
+                                            "backend the compute cannot read -- "
+                                            "substituted a device tensor before "
+                                            "mapping\n", onm);
+                                new_out = dev;
+                            }
+                        }
+                    }
+
                     if (new_out && new_out != old_out &&
                         new_out->type == old_out->type &&
                         ctx->n_cut_carry < ONNX_MAX_DEFERRED) {
@@ -4413,17 +5050,30 @@ int onnx_ggml_run(onnx_ggml_ctx_t *ctx,
                  *     number 48 times -- 1 box selected where ONNX Runtime
                  *     keeps 11.
                  *
-                 * ⚠️ Keying this on carry_op -- freeze only what was carried,
-                 * leave TopK computable -- is the rule as stated above, and it
-                 * was measured: TopK then keeps live src[] into the segment
-                 * pool, the pool is released at the end of that iteration, and
-                 * the recomputation lands on freed memory. Three tensors came
-                 * back filled with 1, then segfaults at several addresses. It
-                 * needs the inputs held first; until then every rebuilt cut op
-                 * is frozen, which at least fails predictably. */
+                 * Keyed on carry_op: freeze what was carried, leave TopK
+                 * computable.
+                 *
+                 * ⚠️ This rule was tried once before and reverted, because TopK
+                 * then kept live src[] into the segment pool: the pool was
+                 * released at the end of the iteration and the recomputation
+                 * landed on freed memory -- three tensors filled with 1, then
+                 * segfaults at several addresses. The note left behind said it
+                 * "needs the inputs held first", and freezing everything was
+                 * the stand-in until then.
+                 *
+                 * Three things now make this test safe, and each was measured
+                 * failing without the others: the input is copied into
+                 * ctx_weight, the rebuilt chain is BUILT in ctx_weight, and
+                 * TopK is left computable here. Holding only the input left
+                 * '1908' out of tmap after the pool release (dets=NA, outputs
+                 * unbuilt); building only in ctx_weight left the chain reading
+                 * a freed input (CPU assert at ops-elemwise.cpp:351, Vulkan
+                 * SIGSEGV in ggml_vk_cpy); freezing TopK as well leaves it
+                 * holding whatever its buffer had, which is the empty-output
+                 * failure described just above. */
                 {
                     struct ggml_tensor *leaf = tmap_get(ctx, onm);
-                    if (leaf && leaf->op != GGML_OP_NONE) {
+                    if (carry_op && leaf && leaf->op != GGML_OP_NONE) {
                         leaf->op = GGML_OP_NONE;
                         for (int q = 0; q < GGML_MAX_SRC; q++)
                             leaf->src[q] = NULL;
@@ -4718,8 +5368,18 @@ static int copy_segment_boundaries(onnx_ggml_ctx_t *c, int seg) {
              * went from 68 detections to 134 on run 2, with "TopK 6565: K=100
              * exceeds the 51 elements on the ranked axis". The measurement is
              * taken right after the segment computes instead -- it needs one
-             * integer, not the bytes. */
-            if (!tensor_crosses_boundary(c, seg, nm)) continue;
+             * integer, not the bytes.
+             *
+             * A model output is the one safe widening, and for the reason the
+             * warning above turns on: the danger is that a copy REPLACES the
+             * original in tmap and repoints everything built over it, and
+             * nothing is ever built over a model output -- it is terminal by
+             * definition. It also has a reader the other test cannot see,
+             * since tensor_crosses_boundary() looks for a later NODE taking it
+             * as an input, and this one is read by R after the last compute.
+             * See tensor_is_model_output() for the measurement. */
+            if (!tensor_crosses_boundary(c, seg, nm) &&
+                !tensor_is_model_output(c, nm)) continue;
 
             struct ggml_tensor *src = tmap_get(c, nm);
             if (!src) continue;
@@ -4743,7 +5403,11 @@ static int copy_segment_boundaries(onnx_ggml_ctx_t *c, int seg) {
              * tmap, while the deferred-fill lists still point at the original,
              * so a NonZero output (built in ctx_weight) would be filled in the
              * tensor nobody reads and read from the tensor nobody fills. */
-            if (src->buffer == c->weight_buf || src->buffer == c->boundary_buf) {
+            /* ...but only when the tensor STRUCT is out of the pool too: see
+             * tensor_in_pool() for the view case, where persistent storage sits
+             * behind metadata the release is about to free. */
+            if ((src->buffer == c->weight_buf || src->buffer == c->boundary_buf)
+                && !tensor_in_pool(c, src)) {
                 if (onnx_trace_nodes())
                     fprintf(stderr, "[segment] %d: boundary '%s' is persistent "
                                     "-- not copied\n", seg, nm);
@@ -4753,7 +5417,7 @@ static int copy_segment_boundaries(onnx_ggml_ctx_t *c, int seg) {
                 int persistent = 0;
                 for (int k = 0; k < c->n_extra_weight_bufs; k++)
                     if (src->buffer == c->extra_weight_bufs[k]) { persistent = 1; break; }
-                if (persistent) {
+                if (persistent && !tensor_in_pool(c, src)) {
                     if (onnx_trace_nodes())
                         fprintf(stderr, "[segment] %d: boundary '%s' is persistent "
                                         "-- not copied\n", seg, nm);
