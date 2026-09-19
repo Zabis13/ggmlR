@@ -384,6 +384,11 @@ Tensors are **column-major**: shape is `[features, batch]`.
 ### 4.1 Prepare data (iris, col-major)
 
 ```{r}
+# ag_device()/ag_dtype() are package-level state, so a section that relies on a
+# particular device has to say so rather than inherit whatever ran before it.
+ag_device("cpu")
+ag_dtype("f32")
+
 # transpose: rows = features, cols = samples
 x_tr_ag  <- t(x_tr)    # [4, 120]
 y_tr_ag  <- t(y_tr)    # [3, 120]
@@ -431,7 +436,7 @@ for (ep in seq_len(150L)) {
   }
 
   if (ep %% 50L == 0L)
-    cat(sprintf("epoch %d  loss %.4f\n", ep, loss$data[1]))
+    cat(sprintf("epoch %d  loss %.4f\n", ep, as.matrix(loss)[1]))
 }
 ```
 
@@ -443,10 +448,10 @@ ag_eval(ag_mod)
 # forward in chunks, apply softmax manually
 ag_predict_cm <- function(model, x_cm, chunk = 64L) {
   n   <- ncol(x_cm)
-  out <- matrix(0.0, nrow(model$forward(ag_tensor(x_cm[,1,drop=FALSE]))$data), n)
+  out <- matrix(0.0, nrow(as.matrix(model$forward(ag_tensor(x_cm[,1,drop=FALSE])))), n)
   for (s in seq(1L, n, by = chunk)) {
     e  <- min(s + chunk - 1L, n)
-    lg <- model$forward(ag_tensor(x_cm[, s:e, drop = FALSE]))$data
+    lg <- as.matrix(model$forward(ag_tensor(x_cm[, s:e, drop = FALSE])))
     ev <- exp(lg - apply(lg, 2, max))
     out[, s:e] <- ev / colSums(ev)
   }

@@ -154,6 +154,24 @@ ag_param <- function(data, device = .ag_device_state$device,
 #' @keywords internal
 is_ag_tensor <- function(x) inherits(x, "ag_tensor")
 
+#' Extract the value of an ag_tensor as an R matrix
+#'
+#' The value of an \code{ag_tensor} lives in \code{$data} only on the CPU.  On
+#' the GPU it lives in a backend buffer and \code{$data} stays \code{NULL} until
+#' something materialises it, so reading \code{$data} directly works on one
+#' device and returns \code{NULL} on the other.  This method downloads the value
+#' when it has to and returns the same matrix either way -- use it rather than
+#' \code{$data} in code that may run on a GPU.
+#'
+#' @param x An \code{ag_tensor}
+#' @param ... Ignored
+#' @return A numeric matrix holding the tensor's current value.
+#' @export
+#' @examples
+#' t <- ag_tensor(matrix(1:6, nrow = 2))
+#' as.matrix(t)
+as.matrix.ag_tensor <- function(x, ...) .ag_data(x)
+
 #' Print method for ag_tensor
 #'
 #' @param x An \code{ag_tensor}

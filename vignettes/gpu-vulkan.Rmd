@@ -216,3 +216,17 @@ cat(ggml_version(), "\n")
 ggml_vulkan_status()   # shows "Vulkan not available" if not compiled in
 ggml_vulkan_hard_exit_available()   # TRUE only with --enable-hard-exit
 ```
+
+---
+
+## Restoring the default device
+
+`ag_device()` and `ag_dtype()` set package-level state that outlives this
+document: anything running later in the same R session keeps the GPU and the
+f16 default unless it is put back. Restore it once the GPU section is done.
+
+```{r}
+ag_device("cpu")
+ag_dtype("f32")
+cat("Restored:", ag_default_dtype(), "on cpu\n")
+```

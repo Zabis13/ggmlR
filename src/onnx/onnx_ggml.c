@@ -2855,9 +2855,10 @@ static int map_node_range(onnx_ggml_ctx_t *c, int node_lo, int node_hi) {
              * can only say "look for r=-1 yourself". */
             const onnx_node_t *fn = &onnx->nodes[i];
             if (c->first_failed_node[0] == '\0' && fn->n_outputs > 0) {
-                /* snprintf rather than strncpy: it always terminates, and a
-                 * name longer than the field is truncated on purpose here --
-                 * strncpy makes the compiler warn about exactly that. */
+                /* snprintf rather than strncpy: it always terminates.  Both
+                 * fields are sized to their source (ONNX_MAX_NAME, op_type[128])
+                 * so nothing is truncated -- a field smaller than the source
+                 * makes GCC warn about the truncation it would then do. */
                 snprintf(c->first_failed_node, sizeof(c->first_failed_node),
                          "%s", fn->outputs[0]);
                 snprintf(c->first_failed_op, sizeof(c->first_failed_op),

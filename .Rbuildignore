@@ -57,3 +57,5 @@
 ^src/Makevars\.win$
 ^inst/scripts/ref_data$
 ^inst/scripts/ref_depth$
+^inst/scripts$
+^inst/scripts/

@@ -422,7 +422,7 @@ typedef struct {
      * output unregistered, so everything downstream of it goes unbuilt too --
      * the later failures are consequences and the first one is the cause. */
     char                first_failed_node[ONNX_MAX_NAME];
-    char                first_failed_op[64];
+    char                first_failed_op[128];
 
     /* Orphan-input CPU buffers allocated in sched_alloc_and_fill (one per
      * unbuffered real input). Freed and reset on each re-alloc and at ctx free. */
