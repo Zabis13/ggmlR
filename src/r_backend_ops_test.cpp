@@ -755,6 +755,48 @@ static struct ggml_tensor * bo_flash_attn(struct ggml_context * ctx) {
     return ggml_flash_attn_ext(ctx, q, k, v, NULL, 1.0f / 8.0f, 0.0f, 0.0f);
 }
 
+// 2D relative position bias (BoTNet pos_embed), in three shapes.
+//
+// This op was uncovered here while its Vulkan shader disagreed with the CPU
+// kernel by 1.55 on BoTNet26t, and the shape of that bug dictates the shapes
+// of these cases:
+//
+//  - H != W is mandatory. The shader had W_h and W_w swapped against the H and
+//    W offsets of the packed weight table, and on a square input both halves
+//    have the same length, so the swap stays inside the buffer and the case
+//    passes while computing the wrong thing. rel_pos_bias_rect is the one that
+//    actually pins the axis/weight pairing down.
+//  - The relative index is k-q, and a wrong sign mirrors the bias about the
+//    diagonal. Asymmetric H and W make that visible too.
+//  - rel_pos_bias_botnet carries the real failing geometry (H=W=16, B=4 heads,
+//    C=64), which is also the only case here big enough to span more than one
+//    workgroup on the {8,8,4} dispatch.
+//
+// wcat packs W_h then W_w along axis 0, so its ne[0] is (2H-1) + (2W-1).
+static struct ggml_tensor * bo_rel_pos_bias(struct ggml_context * ctx) {
+    const int H = 4, W = 4, B = 2, C = 8;
+    struct ggml_tensor * x    = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, C, H * W, B);
+    struct ggml_tensor * wcat = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                                                   (2 * H - 1) + (2 * W - 1), C);
+    return ggml_rel_pos_bias(ctx, x, wcat, H, W);
+}
+
+static struct ggml_tensor * bo_rel_pos_bias_rect(struct ggml_context * ctx) {
+    const int H = 3, W = 5, B = 2, C = 6;
+    struct ggml_tensor * x    = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, C, H * W, B);
+    struct ggml_tensor * wcat = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                                                   (2 * H - 1) + (2 * W - 1), C);
+    return ggml_rel_pos_bias(ctx, x, wcat, H, W);
+}
+
+static struct ggml_tensor * bo_rel_pos_bias_botnet(struct ggml_context * ctx) {
+    const int H = 16, W = 16, B = 4, C = 64;
+    struct ggml_tensor * x    = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, C, H * W, B);
+    struct ggml_tensor * wcat = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,
+                                                   (2 * H - 1) + (2 * W - 1), C);
+    return ggml_rel_pos_bias(ctx, x, wcat, H, W);
+}
+
 static const test_case g_cases[] = {
     // --- ops ggmlR's layers build ---
     { "mul_mat",            bo_mul_mat            },
@@ -858,6 +900,9 @@ static const test_case g_cases[] = {
     { "geglu",              bo_geglu              },
     { "reglu",              bo_reglu              },
     { "timestep_embedding", bo_timestep_embedding },
+    { "rel_pos_bias",       bo_rel_pos_bias       },
+    { "rel_pos_bias_rect",  bo_rel_pos_bias_rect  },
+    { "rel_pos_bias_botnet", bo_rel_pos_bias_botnet },
 };
 
 static const int g_n_cases = (int) (sizeof(g_cases) / sizeof(g_cases[0]));

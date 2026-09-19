@@ -30,7 +30,14 @@ bod_core_ops <- c("mul_mat", "mul_mat_batched", "mul_mat_f16", "mul_mat_large",
                   "mul_mat_vec_p021", "mul_mat_vec_nc",
                   "add", "mul_broadcast", "relu", "soft_max",
                   "permute_cont", "im2col_1d", "conv_2d",
-                  "batch_norm_infer", "batch_norm_train")
+                  "batch_norm_infer", "batch_norm_train",
+                  # In the default set, not just under GGMLR_TEST_ALL_OPS: the
+                  # Vulkan shader for this one disagreed with the CPU kernel by
+                  # 1.55 on BoTNet26t, and nothing here noticed because the op
+                  # was not covered at all. rel_pos_bias_rect is the load-bearing
+                  # one -- H != W is what pins down which weight half goes with
+                  # which axis, and a square case passes with them swapped.
+                  "rel_pos_bias", "rel_pos_bias_rect", "rel_pos_bias_botnet")
 
 # An op that genuinely diverges shows an NMSE far above this; f32 arithmetic
 # reordering on a GPU stays well below it.

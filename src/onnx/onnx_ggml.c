@@ -1246,35 +1246,13 @@ static void fill_strided_slices(onnx_ggml_ctx_t *c) {
 
 /* ── Pre-pass: detect RelPosBias2D (pos_embed) subgraphs ────────── */
 
-/* Build CPU-side copy of concat(W_h, W_w) weights for rel_pos_bias kernel.
- * W_h ONNX shape: [C, rel_h], W_w ONNX shape: [C, rel_w].
- * Output layout (col-major, stride = rel_h+rel_w):
- *   w_cpu[r + c * stride]  r in [0, rel_h) → W_h
- *                           r in [rel_h, rel_h+rel_w) → W_w */
-static float *build_w_cpu(const onnx_initializer_t *wh_init,
-                           const onnx_initializer_t *ww_init,
-                           int C, int rel_h, int rel_w) {
-    int stride = rel_h + rel_w;
-    float *buf = (float *)malloc((size_t)C * stride * sizeof(float));
-    if (!buf) return NULL;
-
-    /* Get raw float pointers for W_h and W_w */
-    const float *wh = wh_init->decoded_data ? (const float *)wh_init->decoded_data
-                                            : (const float *)wh_init->raw_data;
-    const float *ww = ww_init->decoded_data ? (const float *)ww_init->decoded_data
-                                            : (const float *)ww_init->raw_data;
-    if (!wh || !ww) { free(buf); return NULL; }
-
-    /* ONNX layout: W_h[c, r] stored row-major → W_h[c * rel_h + r]
-     * ggml kernel expects col-major: w_cpu[r + c * stride] */
-    for (int c = 0; c < C; c++) {
-        for (int r = 0; r < rel_h; r++)
-            buf[r + c * stride] = wh[c * rel_h + r];
-        for (int r = 0; r < rel_w; r++)
-            buf[rel_h + r + c * stride] = ww[c * rel_w + r];
-    }
-    return buf;
-}
+/* build_w_cpu() lived here: it packed a CPU-side copy of concat(W_h, W_w) for
+ * the ggml_map_custom3 kernel that REL_POS_BIAS used to be.  That op is now a
+ * real ggml op whose both backends read the graph tensor `wcat` built by
+ * ggml_concat at the emission site, so nothing read the packed copy any more
+ * -- it was allocated per block and freed at teardown, feeding only dead code.
+ * The F32 check that stood next to its call is NOT dead and stayed: it is what
+ * gates a block being accepted at all. */
 
 /* Each pos_embed block in BoTNet consists of ~60-80 nodes with output names
  * containing "/pos_embed/".  Structure:
@@ -1797,6 +1775,15 @@ static int segment_ctx_begin(onnx_ggml_ctx_t *c, size_t mem_size) {
  * copy_segment_boundaries() -- the copies read from these tensors. */
 static void segment_ctx_release(onnx_ggml_ctx_t *c, struct ggml_context *pool) {
     if (!pool) return;
+
+    /* The peak this pool actually reached, read while it is still alive. The
+     * pool is sized from the same heuristic as the main context, and a
+     * segmented model is the case that heuristic has to cover: one segment
+     * rebuilds a large part of the graph. */
+    if (onnx_trace_nodes())
+        fprintf(stderr, "[ctxmem] segment %d pool: %.2f / %.1f MB\n",
+                c->cur_segment, ggml_used_mem(pool) / 1048576.0,
+                ggml_get_mem_size(pool) / 1048576.0);
 
     /* Drop the tmap entries that point INTO this pool, and only those.
      *
@@ -2412,7 +2399,6 @@ static int detect_pos_embed_blocks(onnx_ggml_ctx_t *c) {
                     c->pos_embed_blocks[bi].params.C     = C;
                     c->pos_embed_blocks[bi].params.rel_h = rel_h;
                     c->pos_embed_blocks[bi].params.rel_w = rel_w;
-                    c->pos_embed_blocks[bi].params.w_cpu_stride = rel_h + rel_w;
 
                     /* Verify W_h, W_w are F32 */
                     if (wh_init->data_type != 1 /* ONNX_DTYPE_FLOAT */ ||
@@ -2424,16 +2410,13 @@ static int detect_pos_embed_blocks(onnx_ggml_ctx_t *c) {
                         continue;
                     }
 
-                    c->pos_embed_blocks[bi].params.w_cpu =
-                        build_w_cpu(wh_init, ww_init, C, rel_h, rel_w);
                     c->n_pos_embed_blocks++;
 
                     if (onnx_trace_nodes())
                         fprintf(stderr, "[posembed] block %d accepted: nodes %d..%d "
-                                "H=%d W=%d B=%d C=%d rel=(%d,%d) w_cpu=%s\n"
+                                "H=%d W=%d B=%d C=%d rel=(%d,%d)\n"
                                 "           wh='%s' ww='%s'\n",
                                 bi, block_start, block_end, H, W, B, C, rel_h, rel_w,
-                                c->pos_embed_blocks[bi].params.w_cpu ? "ok" : "NULL",
                                 wh_name, ww_name);
                 } else if (onnx_trace_nodes()) {
                     /* The block's node range was already written into the slot
@@ -2481,13 +2464,11 @@ static int detect_pos_embed_blocks(onnx_ggml_ctx_t *c) {
             if (xt) B = (int)xt->ne[2];
 
             c->pos_embed_blocks[bi].params = (rel_pos_bias_params_t){
-                H, W, B, C, rel_h, rel_w, NULL, rel_h + rel_w};
+                H, W, B, C, rel_h, rel_w};
 
             if (wh_init->data_type != 1 || ww_init->data_type != 1) {
                 fprintf(stderr, "[onnx] pos_embed block %d: W_h/W_w not F32 — skipping\n", bi);
             } else {
-                c->pos_embed_blocks[bi].params.w_cpu =
-                    build_w_cpu(wh_init, ww_init, C, rel_h, rel_w);
                 c->n_pos_embed_blocks++;
             }
         }
@@ -3144,8 +3125,32 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
         fprintf(stderr, "[value_info] parsed %d declarations\n", onnx->n_value_info);
     c->model_dtype = (model_dtype == GGML_TYPE_F16) ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
-    /* Estimate memory: rough heuristic based on file size */
-    size_t mem_size = onnx->mmap_size * 2 + 256 * 1024 * 1024;
+    /* Size the graph context from the graph, not from the file.
+     *
+     * This context is no_alloc: it holds tensor METADATA only, and every
+     * tensor's data lives in a backend buffer the scheduler owns. The file's
+     * size therefore says nothing about what goes in here -- measured across
+     * the 15 reference models, the correlation between used bytes and
+     * mmap_size is -0.02, while the largest graph of all (MaskRCNN, 3001
+     * nodes) used 0.7 MB against the 354 MB it was handed.
+     *
+     * The old formula was `mmap_size * 2 + 256 MB`, which reserved between
+     * 256 MB and 1.2 GB per loaded model: RoBERTa's 475 MB file bought it
+     * 1207 MB of address space to hold 0.3 MB of metadata. Nothing touched
+     * those pages -- 20 tiny models measured 24 GB of VmSize against 91 MB
+     * of RSS -- but the reservation is real, and on a CI runner with strict
+     * overcommit the allocation simply fails: seven ONNX tests died in
+     * ggml_init with GGML_ASSERT(ctx->mem_buffer != NULL).
+     *
+     * 16x the per-node tensor cost, over an 8 MB floor for the fixed
+     * overhead a small graph still pays. Measured headroom over what the 15
+     * models actually use is 12x at the tightest (CaiT), and this same
+     * figure sizes the per-segment pool below, whose measured peak is 0.91 MB
+     * (MaskRCNN segment 20, of 24). Undersizing does not degrade gracefully
+     * -- ggml hands back NULL tensors that only fail when something reads
+     * them -- which is why the margin is in multiples rather than percent. */
+    size_t mem_size = 8 * 1024 * 1024
+                    + (size_t)onnx->n_nodes * 16 * ggml_tensor_overhead();
 
     /* Segmented models build one graph per segment in this context and ggml
      * never reclaims within a context, so the graphs accumulate.  Room for
@@ -3488,6 +3493,25 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
             true    /* op_offload — let sched pick best backend per op */
         );
         if (!c->sched) goto fail;
+    }
+
+    /* What each context was given against what it actually holds.  The main
+     * context's size is a heuristic (file size plus a fixed floor), so the
+     * only way to tell whether that floor is anywhere near right is to print
+     * both and look at real models: a tiny test graph and a 400 MB one are
+     * currently handed the same 256 MB. */
+    if (onnx_trace_nodes()) {
+        fprintf(stderr,
+            "[ctxmem] nodes=%d init=%d mmap=%.1f MB | "
+            "ctx %.1f/%.1f MB  weight %.2f/%.2f MB  host %.2f/%.2f MB  "
+            "boundary %.2f/%.2f MB  seg_pool %.1f MB x%d\n",
+            onnx->n_nodes, onnx->n_initializers, onnx->mmap_size / 1048576.0,
+            ggml_used_mem(c->ctx)         / 1048576.0, ggml_get_mem_size(c->ctx)         / 1048576.0,
+            ggml_used_mem(c->ctx_weight)  / 1048576.0, ggml_get_mem_size(c->ctx_weight)  / 1048576.0,
+            ggml_used_mem(c->ctx_host)    / 1048576.0, ggml_get_mem_size(c->ctx_host)    / 1048576.0,
+            c->ctx_boundary ? ggml_used_mem(c->ctx_boundary)     / 1048576.0 : 0.0,
+            c->ctx_boundary ? ggml_get_mem_size(c->ctx_boundary) / 1048576.0 : 0.0,
+            c->seg_ctx_size / 1048576.0, c->n_segments);
     }
 
     return c;
@@ -5569,8 +5593,6 @@ void onnx_ggml_free(onnx_ggml_ctx_t *ctx) {
     free(ctx->cval_keys);
     free(ctx->cval_data);
     free(ctx->cval_lens);
-    for (int i = 0; i < ctx->n_pos_embed_blocks; i++)
-        free(ctx->pos_embed_blocks[i].params.w_cpu);
     free(ctx->pos_embed_params);
     for (int i = 0; i < ctx->n_roi_aligns; i++) free(ctx->roi_align_params[i]);
     free(ctx->roi_align_params);

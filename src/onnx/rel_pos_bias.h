@@ -16,7 +16,9 @@
 extern "C" {
 #endif
 
-/* Parameters stored in userdata (must have static lifetime during graph compute) */
+/* Shape of one detected pos_embed block, carried from the pre-pass to the
+ * emission site.  No weights: both backends of the REL_POS_BIAS op read the
+ * graph tensor built there by ggml_concat. */
 typedef struct {
     int H;          /* spatial height */
     int W;          /* spatial width */
@@ -24,22 +26,18 @@ typedef struct {
     int C;          /* channel dim */
     int rel_h;      /* 2*H-1 */
     int rel_w;      /* 2*W-1 */
-    /* CPU-side copies of W_h and W_w weights (needed when weights live on GPU) */
-    float *w_cpu;   /* concat(W_h, W_w): [(rel_h+rel_w) * C] floats, col-major */
-    int    w_cpu_stride; /* rel_h + rel_w */
 } rel_pos_bias_params_t;
 
-/* CPU callback for ggml_map_custom3.
- * dst: output [W, H, W, B*H] in ggml order = ONNX [B,H,H,W,W] collapsed
- * a:   dummy (same shape as dst, not used for data)
- * b:   x input [C, H*W, B] in ggml = ONNX [B, H*W, C]
- * c:   W_h and W_w concatenated [rel_h+rel_w, C] in ggml = ONNX [C, rel_h+rel_w]
- */
-void rel_pos_bias_2d_cpu(struct ggml_tensor *dst,
-                         const struct ggml_tensor *a,
-                         const struct ggml_tensor *b,
-                         const struct ggml_tensor *c,
-                         int ith, int nth, void *userdata);
+/* rel_pos_bias_2d_cpu() was declared here, the ggml_map_custom3 callback from
+ * when this was a custom op.  REL_POS_BIAS is a real ggml op now: the CPU side
+ * is ggml_compute_forward_rel_pos_bias (ggml-cpu/ops-misc.cpp) and the GPU side
+ * is vulkan-shaders/rel_pos_bias.comp.
+ *
+ * ⚠️Keeping the old kernel compiled alongside them cost a day: its formula was
+ * the pre-ORT one, and when the live CPU kernel was corrected against ONNX
+ * Runtime the shader was left matching this dead one instead -- BoTNet26t read
+ * 1.55 off the reference on Vulkan while CPU read 1.43e-06.  One op, one
+ * reference per backend. */
 
 #ifdef __cplusplus
 }

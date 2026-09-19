@@ -40,21 +40,32 @@ void main() {
     const uint hq    = q_idx / p.W;
     const uint wq    = q_idx % p.W;
 
-    /* x[b, hq*W+wq, c]  for H-axis dot  — ggml offset: c + q_idx*C + b*C*HW */
-    /* x[b, wq*H+hq, c]  for W-axis dot  — ggml offset: c + (wq*H+hq)*C + b*C*HW */
-    const uint x_base_hw = b * p.C * HW + q_idx * p.C;
-    const uint x_base_wh = b * p.C * HW + (wq * p.H + hq) * p.C;
+    /* Both halves read the query's own feature vector: x[b, q_idx, c]
+     * — ggml offset: c + q_idx*C + b*C*HW.
+     *
+     * The reference graph does transpose the queries between its two
+     * matmuls, and its second one is indexed by the transposed position —
+     * but the two transposes cancel, so what the H half needs is row q
+     * after all.  This shader used to read a second vector at
+     * (wq*H + hq)*C for the W half, which is that transposed row WITHOUT
+     * the matching transposed index, i.e. half of a cancellation.
+     * See ggml_compute_forward_rel_pos_bias in ggml-cpu/ops-misc.cpp,
+     * which was solved against ONNX Runtime's own intermediates. */
+    const uint x_base = b * p.C * HW + q_idx * p.C;
 
-    const uint r_h = hq - hk + p.H - 1;   /* relative height index */
-    const uint r_w = wq - wk + p.W - 1;   /* relative width  index */
+    /* k minus q, not q minus k. */
+    const uint r_h = hk - hq + p.H - 1;   /* relative height index */
+    const uint r_w = wk - wq + p.W - 1;   /* relative width  index */
 
-    /* dot(x_hw, W_h[:, r_h]):  W_h is first rel_h columns of wcat
+    /* Which weight goes with which axis is the part that is NOT symmetric,
+     * and was wrong here: W_h (first in the packed buffer) belongs to the W
+     * offset, W_w (at rel_h) to the H offset.
      * wcat layout: w[c * Wstride + r] */
     float dot_h = 0.0;
     float dot_w = 0.0;
     for (uint ci = 0; ci < p.C; ci++) {
-        dot_h += data_x[x_base_hw + ci] * data_w[ci * Wstride + r_h];
-        dot_w += data_x[x_base_wh + ci] * data_w[ci * Wstride + p.rel_h + r_w];
+        dot_h += data_x[x_base + ci] * data_w[ci * Wstride + p.rel_h + r_h];
+        dot_w += data_x[x_base + ci] * data_w[ci * Wstride + r_w];
     }
 
     const uint k_idx = hk * p.W + wk;
