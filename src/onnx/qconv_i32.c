@@ -80,6 +80,264 @@
 #include <stdio.h>
 #include <math.h>
 
+#if defined(__AVX2__)
+#include <immintrin.h>
+#define QCONV_I32_HAVE_AVX2 1
+#endif
+
+/* ---- im2col path ---------------------------------------------------------
+ *
+ * The direct loop below reads x at a stride of W_in*H_in per input channel --
+ * a cache miss on nearly every read, since the pairing forces ic innermost.
+ * The im2col path gathers, for one output row (n, oh), every patch into a
+ * contiguous int16 row of length Kv, and repacks the weights once per call
+ * into the same order, so the inner loop is a dot product of two contiguous
+ * vectors.
+ *
+ * Layout of one patch / one filter, both int16:
+ *   [(kh*KW + kw)*Cp + ic]   kernel position outer, input channel inner
+ *   Cp = C_in rounded up to even; slot C_in (odd C_in only) holds 0
+ *   Kv = KH*KW*Cp rounded up to 16; the tail holds 0
+ * That is exactly the pairing of the direct loop: pairs (ic, ic+1) at one tap,
+ * the odd channel paired with 0*0, and a padded tap reading x_zp for every
+ * real channel. Zero pairs add zero, so the tail changes nothing.
+ *
+ * Saturation is unchanged. _mm256_madd_epi16 forms the pair sum exactly in
+ * int32 (|x| <= 255, |w| <= 128, so a pair is at most 65280), and clamping
+ * that to [-32768, 32767] is precisely what VPMADDUBSW does to the same pair
+ * -- the scalar loop below does the same clamp, so the two paths, and the
+ * direct loop, agree bit for bit. Pairs are summed in int32 in a different
+ * ORDER, which integer addition does not notice.
+ *
+ * int16 rather than F32 halves the traffic and removes the cvttps/packs that
+ * qmatmul_i32's AVX2 loop pays per step; rather than u8/i8 + maddubs because
+ * x may be signed (quant_bounds admits int8 activations) and maddubs is u8*i8
+ * only.
+ *
+ * Work buffer (from the CPU plan, see qconv_i32_work_size):
+ *   [packed weights C_out*Kv i16][sum_w C_out i32][nth rows of W_out*Kv i16]
+ * each section 64-byte aligned so threads do not share cache lines.
+ * Weights are split across threads by output channel, then one barrier, then
+ * rows (n, oh) are split -- neither the repack nor im2col is done twice. */
+
+#define QCONV_I32_ALIGN 64
+#define QCONV_I32_ALIGN_UP(n) (((n) + QCONV_I32_ALIGN - 1) & ~(size_t)(QCONV_I32_ALIGN - 1))
+
+typedef struct {
+    int64_t Cp, K, Kv;
+    size_t  w_off, sw_off, row_off, row_bytes, total;
+} qconv_i32_layout_t;
+
+static void qconv_i32_layout(int64_t KW, int64_t KH, int64_t C_in,
+                             int64_t C_out, int64_t W_out, int nth,
+                             qconv_i32_layout_t *L) {
+    L->Cp = (C_in + 1) & ~(int64_t)1;
+    L->K  = KW * KH * L->Cp;
+    L->Kv = (L->K + 15) & ~(int64_t)15;
+    L->w_off     = 0;
+    L->sw_off    = QCONV_I32_ALIGN_UP((size_t)C_out * (size_t)L->Kv * sizeof(int16_t));
+    L->row_off   = L->sw_off + QCONV_I32_ALIGN_UP((size_t)C_out * sizeof(int32_t));
+    L->row_bytes = QCONV_I32_ALIGN_UP((size_t)W_out * (size_t)L->Kv * sizeof(int16_t));
+    /* + one alignment unit: the plan's buffer is not promised to be aligned,
+     * and the kernel rounds its base up before laying sections out. */
+    L->total     = L->row_off + (size_t)nth * L->row_bytes + QCONV_I32_ALIGN;
+}
+
+size_t qconv_i32_work_size(const struct ggml_tensor *dst, int n_threads) {
+    const struct ggml_tensor *w = dst ? dst->src[1] : NULL;
+    if (!w || n_threads < 1) return 0;
+    qconv_i32_layout_t L;
+    qconv_i32_layout(w->ne[0], w->ne[1], w->ne[2], w->ne[3], dst->ne[0],
+                     n_threads, &L);
+    return L.total;
+}
+
+/* One output: sum of int16-saturated pairs over Kv (even). */
+static int32_t qconv_i32_dot_scalar(const int16_t *w, const int16_t *x,
+                                    int64_t Kv) {
+    int32_t s = 0;
+    for (int64_t k = 0; k < Kv; k += 2) {
+        int32_t pair = (int32_t)x[k] * w[k] + (int32_t)x[k + 1] * w[k + 1];
+        if (pair >  32767) pair =  32767;
+        if (pair < -32768) pair = -32768;
+        s += pair;
+    }
+    return s;
+}
+
+#if defined(QCONV_I32_HAVE_AVX2)
+static inline int32_t qconv_i32_hsum(__m256i v) {
+    __m128i s = _mm_add_epi32(_mm256_castsi256_si128(v),
+                              _mm256_extracti128_si256(v, 1));
+    s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0x4E));
+    s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0xB1));
+    return _mm_cvtsi128_si32(s);
+}
+
+/* madd then clamp: the pair sum, saturated as VPMADDUBSW saturates it. */
+#define QCONV_I32_SAT_PAIRS(xv, wv) \
+    _mm256_max_epi32(_mm256_min_epi32(_mm256_madd_epi16((xv), (wv)), hi), lo)
+
+static int32_t qconv_i32_dot_avx2(const int16_t *w, const int16_t *x,
+                                  int64_t Kv) {
+    const __m256i hi = _mm256_set1_epi32(32767);
+    const __m256i lo = _mm256_set1_epi32(-32768);
+    __m256i acc = _mm256_setzero_si256();
+    for (int64_t k = 0; k < Kv; k += 16) {
+        const __m256i wv = _mm256_loadu_si256((const __m256i *)(w + k));
+        const __m256i xv = _mm256_loadu_si256((const __m256i *)(x + k));
+        acc = _mm256_add_epi32(acc, QCONV_I32_SAT_PAIRS(xv, wv));
+    }
+    return qconv_i32_hsum(acc);
+}
+
+/* Four output positions against one filter: the weight vector is loaded
+ * once per step instead of four times. */
+static void qconv_i32_dot4_avx2(const int16_t *w, const int16_t *x,
+                                int64_t Kv, int32_t out[4]) {
+    const __m256i hi = _mm256_set1_epi32(32767);
+    const __m256i lo = _mm256_set1_epi32(-32768);
+    const int16_t *x0 = x, *x1 = x + Kv, *x2 = x + 2 * Kv, *x3 = x + 3 * Kv;
+    __m256i a0 = _mm256_setzero_si256(), a1 = a0, a2 = a0, a3 = a0;
+    for (int64_t k = 0; k < Kv; k += 16) {
+        const __m256i wv = _mm256_loadu_si256((const __m256i *)(w + k));
+        a0 = _mm256_add_epi32(a0, QCONV_I32_SAT_PAIRS(
+                 _mm256_loadu_si256((const __m256i *)(x0 + k)), wv));
+        a1 = _mm256_add_epi32(a1, QCONV_I32_SAT_PAIRS(
+                 _mm256_loadu_si256((const __m256i *)(x1 + k)), wv));
+        a2 = _mm256_add_epi32(a2, QCONV_I32_SAT_PAIRS(
+                 _mm256_loadu_si256((const __m256i *)(x2 + k)), wv));
+        a3 = _mm256_add_epi32(a3, QCONV_I32_SAT_PAIRS(
+                 _mm256_loadu_si256((const __m256i *)(x3 + k)), wv));
+    }
+    out[0] = qconv_i32_hsum(a0);
+    out[1] = qconv_i32_hsum(a1);
+    out[2] = qconv_i32_hsum(a2);
+    out[3] = qconv_i32_hsum(a3);
+}
+#undef QCONV_I32_SAT_PAIRS
+#endif
+
+static inline int32_t qconv_i32_dot(const int16_t *w, const int16_t *x,
+                                    int64_t Kv) {
+#if defined(QCONV_I32_HAVE_AVX2)
+    return qconv_i32_dot_avx2(w, x, Kv);
+#else
+    return qconv_i32_dot_scalar(w, x, Kv);
+#endif
+}
+
+/* Everything after the pair sum, shared by both paths so they cannot drift:
+ * zero-point terms, requantisation, the diagnostic env vars, the store. */
+static void qconv_i32_finish(const struct ggml_tensor *dst, float *od,
+                             int64_t W_out, int64_t H_out,
+                             int64_t oc, int64_t oh, int64_t ow,
+                             int32_t sum_pairs, int32_t bias, int32_t x_zp,
+                             int32_t sum_w_oc, int32_t wzp, int32_t sum_x,
+                             int32_t n_taps, float mult, int32_t y_zp,
+                             float out_lo, float out_hi) {
+    /* Zero points come out of the packed sums, exactly as
+     * qlinearconv.cc:215 builds column_sums_ and the kernel folds in
+     * RowSum: acc = sum(xq*wq) - x_zp*sum(wq) - w_zp*sum(xq) + bias.
+     * w_zp is zero on every symmetric path, and MlasConvSymPackWSize
+     * refuses the path otherwise, so only the x_zp term is present. */
+    int32_t acc = sum_pairs + bias - x_zp * sum_w_oc;
+    if (wzp != 0) {
+        /* Not reachable on the symmetric path; kept so a non-zero
+         * weight zero point is still arithmetically correct. sum_x
+         * counts padded taps as x_zp, as the padding rows hold. */
+        acc -= wzp * sum_x;
+        acc += wzp * x_zp * n_taps;
+    }
+
+    /* rintf is round-half-to-even, which is what the spec asks for
+     * ("it rounds to the nearest even").  roundf would send ties away
+     * from zero and reintroduce the very off-by-one this exists to
+     * remove.  Float, not double: see the note on `mult`. */
+    /* Same diagnostic the shader has: write the accumulator instead of
+     * the requantised value, so the two backends can be compared at
+     * the step before rounding.
+     *
+     * ⚠️ THIS CHANGES WHAT THE MODEL COMPUTES. The substituted value
+     * flows downstream like any other, so in a model whose shapes are
+     * data-dependent the geometry itself moves: on MaskRCNN-12-int8 the
+     * detection count goes with it and '6836_quantized' comes out
+     * ne=[14,14,256,1] under the probe against ne=[14,14,256,51]
+     * without it. Numbers taken under this env var are therefore NOT
+     * comparable with numbers from an ordinary run, and a per-batch
+     * reading under it means nothing.
+     *
+     * Use it to inspect ONE element's arithmetic (with
+     * GGMLR_QCONV_ELEM), never to measure a tensor. For tensor-level
+     * comparison use ONNX_DUMP_NODES, which copies the output without
+     * touching the computation. The warning below is printed once so a
+     * log cannot be mistaken for a clean run. */
+    static int dbg_acc = -1;
+    if (dbg_acc < 0) {
+        const char *e = getenv("GGMLR_QCONV_DEBUG_ACC");
+        dbg_acc = (e && *e) ? atoi(e) : 0;
+    }
+    /* Warned separately from the lazy init above, and not gated on
+     * ith == 0: whichever thread reaches the init first is the one that
+     * would print, and it need not be thread 0 -- the warning would
+     * then be silently skipped on most runs. A local `warned` flag is
+     * enough, since the message only has to appear once per process and
+     * a duplicate is harmless. */
+    if (dbg_acc) {
+        static int dbg_warned = 0;
+        if (!dbg_warned) {
+            dbg_warned = 1;
+            fprintf(stderr,
+                "[qconv_i32] GGMLR_QCONV_DEBUG_ACC=%d is ACTIVE: this op "
+                "writes a diagnostic value instead of its result.\n"
+                "              Every tensor downstream -- and, in a model "
+                "with data-dependent shapes, the shapes themselves --\n"
+                "              differ from an ordinary run. Do not compare "
+                "these numbers with a normal run or with ONNX Runtime;\n"
+                "              use ONNX_DUMP_NODES for that.\n", dbg_acc);
+        }
+    }
+    if (dbg_acc) {
+        float dv = (float)acc;
+        if (dbg_acc == 2) dv = mult;
+        if (dbg_acc == 3) dv = (float)oc;
+        if (dbg_acc == 4) dv = (float)y_zp;
+        if (dbg_acc == 5) dv = out_hi;
+        if (dbg_acc == 6) dv = rintf((float)acc * mult) + (float)y_zp;
+        od[ow + W_out * oh + W_out * H_out * oc] = dv;
+        return;
+    }
+
+    float v = rintf((float)acc * mult) + (float)y_zp;
+    if (v < out_lo) v = out_lo;
+    if (v > out_hi) v = out_hi;
+    od[ow + W_out * oh + W_out * H_out * oc] = v;
+
+    /* One element, both backends, printed identically so the two logs
+     * can be diffed: the integer accumulator and the requantisation
+     * are separate suspects, and only their bit patterns tell which
+     * one moved. GGMLR_QCONV_ELEM=oc,oh,ow selects the element. */
+    {
+        static int want = -1, w_oc, w_oh, w_ow;
+        if (want < 0) {
+            const char *e = getenv("GGMLR_QCONV_ELEM");
+            want = (e && sscanf(e, "%d,%d,%d", &w_oc, &w_oh, &w_ow) == 3);
+        }
+        if (want && oc == w_oc && oh == w_oh && ow == w_ow) {
+            uint32_t mb, pb;
+            const float prod = (float)acc * mult;
+            memcpy(&mb, &mult, 4);
+            memcpy(&pb, &prod, 4);
+            fprintf(stderr,
+                "[qelem] %s oc=%lld oh=%lld ow=%lld acc=%d wzp=%d "
+                "bias=%d sum_w=%d mult=%.9g(0x%08x) prod=%.9g(0x%08x) "
+                "v=%g\n",
+                dst->name, (long long)oc, (long long)oh, (long long)ow,
+                acc, wzp, bias, sum_w_oc, mult, mb, prod, pb, v);
+        }
+    }
+}
+
 /* GGML_OP_QCONV_I32 on the host.
  *
  * Reads everything from the tensor it is handed: scalars out of op_params, the
@@ -90,7 +348,9 @@
  *
  * src[4] (bias) is NULL when the convolution has none.
  */
-void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
+void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth,
+                       void *wdata, size_t wsize,
+                       void (*barrier)(void *), void *barrier_ctx) {
     const struct ggml_tensor *b  = dst ? dst->src[0] : NULL;  /* x */
     const struct ggml_tensor *c  = dst ? dst->src[1] : NULL;  /* w */
     const struct ggml_tensor *ts = dst ? dst->src[2] : NULL;  /* w_scale */
@@ -230,6 +490,149 @@ void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
     const int64_t N_batch = dst->ne[3];
     const int64_t x_batch_stride   = W_in * H_in * C_in;
     const int64_t dst_batch_stride = W_out * H_out * C_out;
+    const int32_t n_taps = (int32_t)(KW * KH * C_in);
+
+    /* im2col unless the buffer is short (a caller that did not plan for it)
+     * or GGMLR_QCONV_DIRECT is set -- the direct loop stays as the reference
+     * the im2col path is A/B'd against on one build. The choice depends only
+     * on values every thread sees identically, so either all threads reach
+     * the barrier or none does. */
+    static int force_direct = -1;
+    if (force_direct < 0) {
+        const char *e = getenv("GGMLR_QCONV_DIRECT");
+        force_direct = (e && *e && *e != '0');
+    }
+    qconv_i32_layout_t L;
+    qconv_i32_layout(KW, KH, C_in, C_out, W_out, nth, &L);
+    if (!force_direct && wdata && wsize >= L.total &&
+        (nth == 1 || barrier)) {
+        uint8_t *base = (uint8_t *)QCONV_I32_ALIGN_UP((uintptr_t)wdata);
+        int16_t *wp   = (int16_t *)(base + L.w_off);
+        int32_t *sw   = (int32_t *)(base + L.sw_off);
+        int16_t *row  = (int16_t *)(base + L.row_off + (size_t)ith * L.row_bytes);
+        const int64_t Cp = L.Cp, K = L.K, Kv = L.Kv;
+
+        /* 1. Repack this thread's slice of output channels. sum_w is the
+         * direct loop's sum_w_oc, taken over the real channels only. */
+        {
+            const int64_t per = (C_out + nth - 1) / nth;
+            const int64_t o0  = per * ith;
+            const int64_t o1  = o0 + per < C_out ? o0 + per : C_out;
+            for (int64_t oc = o0; oc < o1; oc++) {
+                int16_t *d = wp + oc * Kv;
+                int32_t  s = 0;
+                for (int64_t kh = 0; kh < KH; kh++)
+                    for (int64_t kw = 0; kw < KW; kw++) {
+                        int16_t *t = d + (kh * KW + kw) * Cp;
+                        for (int64_t ic = 0; ic < C_in; ic++) {
+                            const int16_t v = (int16_t)wd[kw + KW * kh + KW * KH * ic
+                                                          + KW * KH * C_in * oc];
+                            t[ic] = v;
+                            s += v;
+                        }
+                        if (Cp != C_in) t[C_in] = 0;
+                    }
+                for (int64_t k = K; k < Kv; k++) d[k] = 0;
+                sw[oc] = s;
+            }
+        }
+        /* Every thread, rows or not: a thread that skipped this would leave
+         * the rest waiting forever. */
+        if (nth > 1) barrier(barrier_ctx);
+
+        /* Filters per block: enough to keep the block near 128 KB, so it stays
+         * in L2 while the row streams past it. */
+        int64_t ocb = (int64_t)(128 * 1024) / (Kv * (int64_t)sizeof(int16_t));
+        if (ocb < 1) ocb = 1;
+
+        /* 2. Rows (n, oh), split across threads. */
+        const int64_t rows  = N_batch * H_out;
+        const int64_t rper  = (rows + nth - 1) / nth;
+        const int64_t r0    = rper * ith;
+        const int64_t r1    = r0 + rper < rows ? r0 + rper : rows;
+        for (int64_t r = r0; r < r1; r++) {
+            const int64_t in_ = r / H_out;
+            const int64_t oh  = r % H_out;
+            const float *xd   = xd_base + in_ * x_batch_stride;
+            float       *od   = od_base + in_ * dst_batch_stride;
+
+            /* im2col of row oh. Read along iw (contiguous in x), write at
+             * stride Kv -- the write side is the cheap one to scatter. A
+             * padded tap holds x_zp for each real channel; see the note on
+             * padding rows in the direct loop. */
+            for (int64_t kh = 0; kh < KH; kh++) {
+                const int64_t ih = oh * stride_h - pad_h + kh * dil_h;
+                const int h_pad = (ih < 0 || ih >= H_in);
+                for (int64_t kw = 0; kw < KW; kw++) {
+                    const int64_t tap = (kh * KW + kw) * Cp;
+                    for (int64_t ic = 0; ic < C_in; ic++) {
+                        int16_t *dcol = row + tap + ic;
+                        if (h_pad) {
+                            for (int64_t ow = 0; ow < W_out; ow++)
+                                dcol[ow * Kv] = (int16_t)x_zp;
+                            continue;
+                        }
+                        const float *xr = xd + W_in * ih + W_in * H_in * ic;
+                        for (int64_t ow = 0; ow < W_out; ow++) {
+                            const int64_t iw = ow * stride_w - pad_w + kw * dil_w;
+                            dcol[ow * Kv] = (iw < 0 || iw >= W_in)
+                                ? (int16_t)x_zp : (int16_t)xr[iw];
+                        }
+                    }
+                    if (Cp != C_in)
+                        for (int64_t ow = 0; ow < W_out; ow++)
+                            row[ow * Kv + tap + C_in] = 0;
+                }
+            }
+            if (Kv != K)
+                for (int64_t ow = 0; ow < W_out; ow++)
+                    memset(row + ow * Kv + K, 0,
+                           (size_t)(Kv - K) * sizeof(int16_t));
+
+            for (int64_t oc0 = 0; oc0 < C_out; oc0 += ocb) {
+                const int64_t oc1 = oc0 + ocb < C_out ? oc0 + ocb : C_out;
+                int64_t ow = 0;
+#if defined(QCONV_I32_HAVE_AVX2)
+                for (; ow + 4 <= W_out; ow += 4) {
+                    for (int64_t oc = oc0; oc < oc1; oc++) {
+                        int32_t s4[4];
+                        qconv_i32_dot4_avx2(wp + oc * Kv, row + ow * Kv, Kv, s4);
+                        const int32_t wzp  = w_zp_raw ? QCONV_WZP(n_w_zp > 1 ? oc : 0) : 0;
+                        const int32_t bias = bias_raw ? QCONV_BIAS(oc) : 0;
+                        const int32_t sumw = x_zp != 0 ? sw[oc] : 0;
+                        for (int j = 0; j < 4; j++) {
+                            int32_t sx = 0;
+                            if (wzp != 0)
+                                for (int64_t k = 0; k < Kv; k++)
+                                    sx += row[(ow + j) * Kv + k];
+                            qconv_i32_finish(dst, od, W_out, H_out, oc, oh,
+                                             ow + j, s4[j], bias, x_zp, sumw,
+                                             wzp, sx, n_taps, mult_t[oc],
+                                             y_zp, out_lo, out_hi);
+                        }
+                    }
+                }
+#endif
+                for (; ow < W_out; ow++) {
+                    for (int64_t oc = oc0; oc < oc1; oc++) {
+                        const int32_t sp   = qconv_i32_dot(wp + oc * Kv, row + ow * Kv, Kv);
+                        const int32_t wzp  = w_zp_raw ? QCONV_WZP(n_w_zp > 1 ? oc : 0) : 0;
+                        const int32_t bias = bias_raw ? QCONV_BIAS(oc) : 0;
+                        const int32_t sumw = x_zp != 0 ? sw[oc] : 0;
+                        int32_t sx = 0;
+                        if (wzp != 0)
+                            for (int64_t k = 0; k < Kv; k++)
+                                sx += row[ow * Kv + k];
+                        qconv_i32_finish(dst, od, W_out, H_out, oc, oh, ow,
+                                         sp, bias, x_zp, sumw, wzp, sx,
+                                         n_taps, mult_t[oc], y_zp,
+                                         out_lo, out_hi);
+                    }
+                }
+            }
+        }
+        return;
+    }
 
     /* Rows are split across threads; each output element is independent. The
      * batch axis is part of the split, not a loop around it, so threads stay
@@ -326,16 +729,10 @@ void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
                 }
             }
 
-            /* Zero points come out of the packed sums, exactly as
-             * qlinearconv.cc:215 builds column_sums_ and the kernel folds in
-             * RowSum: acc = sum(xq*wq) - x_zp*sum(wq) - w_zp*sum(xq) + bias.
-             * w_zp is zero on every symmetric path, and MlasConvSymPackWSize
-             * refuses the path otherwise, so only the x_zp term is present. */
-            int32_t acc = sum_pairs + bias - x_zp * sum_w_oc;
+            /* Zero-point terms, requantisation and the diagnostics live in
+             * qconv_i32_finish, shared with the im2col path. */
+            int32_t sum_x = 0;
             if (wzp != 0) {
-                /* Not reachable on the symmetric path; kept so a non-zero
-                 * weight zero point is still arithmetically correct. */
-                int32_t sum_x = 0;
                 for (int64_t kh = 0; kh < KH; kh++) {
                     const int64_t ih = oh * stride_h - pad_h + kh * dil_h;
                     for (int64_t kw = 0; kw < KW; kw++) {
@@ -346,96 +743,10 @@ void qconv_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
                                 (int32_t)xd[iw + W_in * ih + W_in * H_in * ic];
                     }
                 }
-                acc -= wzp * sum_x;
-                acc += wzp * x_zp * (int32_t)(KW * KH * C_in);
             }
-
-            /* rintf is round-half-to-even, which is what the spec asks for
-             * ("it rounds to the nearest even").  roundf would send ties away
-             * from zero and reintroduce the very off-by-one this exists to
-             * remove.  Float, not double: see the note on `mult`. */
-            /* Same diagnostic the shader has: write the accumulator instead of
-             * the requantised value, so the two backends can be compared at
-             * the step before rounding.
-             *
-             * ⚠️ THIS CHANGES WHAT THE MODEL COMPUTES. The substituted value
-             * flows downstream like any other, so in a model whose shapes are
-             * data-dependent the geometry itself moves: on MaskRCNN-12-int8 the
-             * detection count goes with it and '6836_quantized' comes out
-             * ne=[14,14,256,1] under the probe against ne=[14,14,256,51]
-             * without it. Numbers taken under this env var are therefore NOT
-             * comparable with numbers from an ordinary run, and a per-batch
-             * reading under it means nothing.
-             *
-             * Use it to inspect ONE element's arithmetic (with
-             * GGMLR_QCONV_ELEM), never to measure a tensor. For tensor-level
-             * comparison use ONNX_DUMP_NODES, which copies the output without
-             * touching the computation. The warning below is printed once so a
-             * log cannot be mistaken for a clean run. */
-            static int dbg_acc = -1;
-            if (dbg_acc < 0) {
-                const char *e = getenv("GGMLR_QCONV_DEBUG_ACC");
-                dbg_acc = (e && *e) ? atoi(e) : 0;
-            }
-            /* Warned separately from the lazy init above, and not gated on
-             * ith == 0: whichever thread reaches the init first is the one that
-             * would print, and it need not be thread 0 -- the warning would
-             * then be silently skipped on most runs. A local `warned` flag is
-             * enough, since the message only has to appear once per process and
-             * a duplicate is harmless. */
-            if (dbg_acc) {
-                static int dbg_warned = 0;
-                if (!dbg_warned) {
-                    dbg_warned = 1;
-                    fprintf(stderr,
-                        "[qconv_i32] GGMLR_QCONV_DEBUG_ACC=%d is ACTIVE: this op "
-                        "writes a diagnostic value instead of its result.\n"
-                        "              Every tensor downstream -- and, in a model "
-                        "with data-dependent shapes, the shapes themselves --\n"
-                        "              differ from an ordinary run. Do not compare "
-                        "these numbers with a normal run or with ONNX Runtime;\n"
-                        "              use ONNX_DUMP_NODES for that.\n", dbg_acc);
-                }
-            }
-            if (dbg_acc) {
-                float dv = (float)acc;
-                if (dbg_acc == 2) dv = mult;
-                if (dbg_acc == 3) dv = (float)oc;
-                if (dbg_acc == 4) dv = (float)y_zp;
-                if (dbg_acc == 5) dv = out_hi;
-                if (dbg_acc == 6) dv = rintf((float)acc * mult) + (float)y_zp;
-                od[ow + W_out * oh + W_out * H_out * oc] = dv;
-                continue;
-            }
-
-            float v = rintf((float)acc * mult) + (float)y_zp;
-            if (v < out_lo) v = out_lo;
-            if (v > out_hi) v = out_hi;
-            od[ow + W_out * oh + W_out * H_out * oc] = v;
-
-            /* One element, both backends, printed identically so the two logs
-             * can be diffed: the integer accumulator and the requantisation
-             * are separate suspects, and only their bit patterns tell which
-             * one moved. GGMLR_QCONV_ELEM=oc,oh,ow selects the element. */
-            {
-                static int want = -1, w_oc, w_oh, w_ow;
-                if (want < 0) {
-                    const char *e = getenv("GGMLR_QCONV_ELEM");
-                    want = (e && sscanf(e, "%d,%d,%d", &w_oc, &w_oh, &w_ow) == 3);
-                }
-                if (want && oc == w_oc && oh == w_oh && ow == w_ow) {
-                    uint32_t mb, pb;
-                    const float prod = (float)acc * mult;
-                    memcpy(&mb, &mult, 4);
-                    memcpy(&pb, &prod, 4);
-                    fprintf(stderr,
-                        "[qelem] %s oc=%lld oh=%lld ow=%lld acc=%d wzp=%d "
-                        "bias=%d sum_w=%d mult=%.9g(0x%08x) prod=%.9g(0x%08x) "
-                        "v=%g\n",
-                        dst->name, (long long)oc, (long long)oh, (long long)ow,
-                        acc, wzp, bias, sum_w_oc, mult, mb, prod, pb, v);
-                }
-            }
+            qconv_i32_finish(dst, od, W_out, H_out, oc, oh, ow, sum_pairs,
+                             bias, x_zp, sum_w_oc, wzp, sum_x, n_taps, mult,
+                             y_zp, out_lo, out_hi);
         }
     }
 

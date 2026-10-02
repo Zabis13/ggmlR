@@ -1224,6 +1224,7 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             if (c->n_const_fills < ONNX_MAX_DEFERRED) {
                 c->const_fill_vals[c->n_const_fills] = fill_val;
                 c->const_fill_ptrs[c->n_const_fills] = out;
+                c->const_fill_done[c->n_const_fills] = NULL;
                 c->n_const_fills++;
             }
             /* cval propagation: all elements = fill_val (cast to int64) */

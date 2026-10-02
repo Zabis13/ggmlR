@@ -1869,6 +1869,62 @@ static vk_device ggml_vk_get_device(size_t idx) {
         const char* GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM = getenv("GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM");
         device->disable_host_visible_vidmem = GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM != nullptr;
 
+        // ggmlR: decide for ourselves whether host-visible VRAM is real ReBAR.
+        //
+        // ggml_vk_create_buffer_device() asks first for DEVICE_LOCAL |
+        // HOST_VISIBLE ("use rebar if available") and never checks that ReBAR
+        // is on. Without it that type is only the legacy BAR window -- 256 MiB
+        // on RX 9070 / RADV -- and buffers that do not fit there end up in
+        // memory the GPU reaches over PCIe. Measured on that machine:
+        // ScatterElements(add) 107 ms -> 2-3 ms, SAGEConv 127 -> 10 ms,
+        // MaskRCNN-12-int8 ~910 -> ~820 ms once the window is avoided.
+        //
+        // Decided from heap SIZES only, never from the driver's name or
+        // version: the largest heap behind a DEVICE_LOCAL|HOST_VISIBLE type
+        // must hold at least GGML_VK_REBAR_MIN_HEAP_FRACTION of the largest
+        // DEVICE_LOCAL heap. A 256 MiB window against 16 GiB of VRAM fails by
+        // a wide margin; a resized BAR, which spans the VRAM, passes.
+        //
+        // Overrides: GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM forces the window off
+        // (as before); GGML_VK_FORCE_HOST_VISIBLE_VIDMEM keeps it on regardless.
+        {
+            constexpr double GGML_VK_REBAR_MIN_HEAP_FRACTION = 0.5;
+            const bool force_hv = getenv("GGML_VK_FORCE_HOST_VISIBLE_VIDMEM") != nullptr;
+            if (!device->disable_host_visible_vidmem && !force_hv) {
+                const vk::PhysicalDeviceMemoryProperties mp =
+                    device->physical_device.getMemoryProperties();
+                const vk::MemoryPropertyFlags hv_vram =
+                    vk::MemoryPropertyFlagBits::eDeviceLocal |
+                    vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent;
+                vk::DeviceSize max_vram = 0, max_hv = 0;
+                for (uint32_t h = 0; h < mp.memoryHeapCount; h++) {
+                    if (mp.memoryHeaps[h].flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
+                        max_vram = std::max(max_vram, mp.memoryHeaps[h].size);
+                    }
+                }
+                for (uint32_t t = 0; t < mp.memoryTypeCount; t++) {
+                    if ((mp.memoryTypes[t].propertyFlags & hv_vram) == hv_vram) {
+                        max_hv = std::max(max_hv, mp.memoryHeaps[mp.memoryTypes[t].heapIndex].size);
+                    }
+                }
+                if (max_hv > 0 && max_vram > 0 &&
+                    (double)max_hv < GGML_VK_REBAR_MIN_HEAP_FRACTION * (double)max_vram) {
+                    device->disable_host_visible_vidmem = true;
+                    // Printed only under GGMLR_LOG_DEVICE, like the other device
+                    // telemetry: the decision itself is unconditional, but tests
+                    // create many contexts and the line would repeat for each.
+                    const char * log_dev = getenv("GGMLR_LOG_DEVICE");
+                    if (log_dev != nullptr && log_dev[0] != '\0' && log_dev[0] != '0') {
+                        GGML_LOG_INFO("ggml_vulkan: no Resizable BAR (host-visible VRAM heap "
+                                      "%.0f MiB of %.0f MiB) -- device buffers use device-local "
+                                      "memory only; GGML_VK_FORCE_HOST_VISIBLE_VIDMEM=1 overrides\n",
+                                      (double)max_hv / 1048576.0, (double)max_vram / 1048576.0);
+                    }
+                }
+            }
+        }
+
         const char* GGML_VK_ALLOW_SYSMEM_FALLBACK = getenv("GGML_VK_ALLOW_SYSMEM_FALLBACK");
         device->allow_sysmem_fallback = GGML_VK_ALLOW_SYSMEM_FALLBACK != nullptr;
 

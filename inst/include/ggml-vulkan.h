@@ -121,26 +121,6 @@ GGML_BACKEND_API bool ggml_vk_roi_align_run(
     unsigned int num_rois, unsigned int ow, unsigned int oh,
     int sampling_ratio, unsigned int mode, float spatial_scale);
 
-// QLinearMatMul with an exact i32 accumulator (ONNX), dispatched directly.
-// A is [K, M] and b_mat is [K, N], both quantised values held as f32, K fastest
-// in each; dst receives [N, M]. b_scale / b_zp are per output column when
-// n_b_scale / n_b_zp exceed 1, otherwise one shared value. b_zp_any tells the
-// shader whether any zero point is non-zero, so it can skip a row sum.
-// Returns false if the backend is not Vulkan.
-//
-// This is a bit-exact port of src/onnx/qmatmul_i32.c, including ORT's
-// VPMADDUBSW int16 pair saturation -- reproducing that LOSS of precision is
-// what makes the numbers match; exact arithmetic here disagrees.
-GGML_BACKEND_API bool ggml_vk_qmatmul_i32_run(
-    ggml_backend_t backend,
-    const float * a, const float * b_mat,
-    const float * b_scale, const int * b_zp,
-    float * dst,
-    unsigned int M, unsigned int N, unsigned int K,
-    float a_scale, float y_scale, int a_zp, int y_zp,
-    unsigned int n_b_scale, unsigned int n_b_zp, unsigned int b_zp_any,
-    float out_lo, float out_hi);
-
 // NonMaxSuppression (ONNX), dispatched directly. boxes is ggml [4, num_boxes,
 // N] and scores ggml [num_boxes, num_classes, N]. One workgroup per
 // (batch, class) pair filters, sorts and selects that pair independently and

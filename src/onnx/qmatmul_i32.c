@@ -28,43 +28,182 @@
  */
 
 #include "qmatmul_i32.h"
-#ifdef GGML_USE_VULKAN
-#include "../ggml-vulkan.h"    /* ggml_vk_qmatmul_i32_run: the GPU fast path */
-#endif
+#include "../ggml-impl.h"      /* ggml_get_op_params_* */
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 
-/* On unless GGMLR_ONNX_QMATMUL_GPU=0 -- see the note in qmatmul_i32.h.
- * Cached: this runs per node per inference and getenv walks the environment. */
-int qmatmul_i32_gpu_enabled(void) {
-    static int cached = -1;
-    if (cached < 0) {
-        const char *e = getenv("GGMLR_ONNX_GPU_QMATMUL");
-        cached = (e && e[0] == '0' && e[1] == '\0') ? 0 : 1;
+/* AVX2 is compiled in only when configure was given --with-simd, which is what
+ * puts -mavx2 in SIMD_CFLAGS; CRAN forbids that flag by default, so the scalar
+ * loop below has to stay and stay correct. __AVX2__ is the compiler's own
+ * answer to "may I emit these instructions", which is exactly the question. */
+#if defined(__AVX2__)
+#include <immintrin.h>
+#define QMATMUL_I32_HAVE_AVX2 1
+#endif
+
+#if defined(QMATMUL_I32_HAVE_AVX2)
+/* The pair-saturating dot product, on the instruction it was emulating.
+ *
+ * The scalar loop below this exists to reproduce ONNX Runtime's AVX2 kernel
+ * bit for bit, saturation and all -- see the long note at the top of
+ * qconv_i32.c. That makes this the unusual case where the vector form is the
+ * DEFINITION and the scalar form the emulation of it: vpmaddubsw multiplies
+ * uint8 by int8, adds adjacent pairs and saturates each pair to int16, which
+ * is precisely the three steps the scalar code spells out.
+ *
+ * So the concern is not "is the vector version accurate enough" but "does it
+ * pair the same elements". It does: the pairing is positional (k, k+1) in both,
+ * and vpmaddubsw pairs adjacent bytes within each lane, which for a contiguous
+ * load is the same adjacency.
+ *
+ * Returns the number of elements consumed, always even and a multiple of 32,
+ * leaving any tail to the scalar loop. Writes the pair sums into *acc.
+ *
+ * The values live in floats but are quantised integers: A in [0,255] and B in
+ * [-128,127] for the u8 x i8 form this instruction implements. Anything
+ * outside that is not this kernel's case, so the caller checks first and this
+ * is never reached for it -- a silent wrap here would be a wrong answer, not a
+ * slow one.
+ *
+ * vpmaddubsw's int16 pair sums are widened to int32 before accumulating:
+ * summing 6272 saturated pairs (K = 12544 on MaskRCNN's head) in int16 would
+ * overflow the accumulator itself, which the scalar code never does because
+ * its sum_pairs is int32. */
+static int64_t qmatmul_i32_dot_avx2(const float *arow, const float *bcol,
+                                    int64_t K, int32_t *acc) {
+    const int64_t n32 = (K / 32) * 32;
+    if (n32 == 0) return 0;
+
+    __m256i sum = _mm256_setzero_si256();
+
+    for (int64_t k = 0; k < n32; k += 32) {
+        /* Convert 32 floats per operand to bytes. cvttps is truncation
+         * toward zero, matching the scalar (int32_t) cast. */
+        __m128i ab[4], bb[4];
+        for (int j = 0; j < 4; j++) {
+            const __m256i ai = _mm256_cvttps_epi32(_mm256_loadu_ps(arow + k + 8 * j));
+            const __m256i bi = _mm256_cvttps_epi32(_mm256_loadu_ps(bcol + k + 8 * j));
+            /* Pack 8x int32 -> 8x int16, keeping lane order by permuting the
+             * two halves back after the in-lane pack. */
+            const __m256i a16 = _mm256_permute4x64_epi64(
+                _mm256_packs_epi32(ai, ai), 0xD8);
+            const __m256i b16 = _mm256_permute4x64_epi64(
+                _mm256_packs_epi32(bi, bi), 0xD8);
+            ab[j] = _mm256_castsi256_si128(a16);
+            bb[j] = _mm256_castsi256_si128(b16);
+        }
+        /* 16 int16 -> 16 bytes per register. A is unsigned, B is signed. */
+        const __m256i a16lo = _mm256_set_m128i(ab[1], ab[0]);
+        const __m256i a16hi = _mm256_set_m128i(ab[3], ab[2]);
+        const __m256i b16lo = _mm256_set_m128i(bb[1], bb[0]);
+        const __m256i b16hi = _mm256_set_m128i(bb[3], bb[2]);
+
+        const __m256i au = _mm256_permute4x64_epi64(
+            _mm256_packus_epi16(a16lo, a16hi), 0xD8);
+        const __m256i bs = _mm256_permute4x64_epi64(
+            _mm256_packs_epi16(b16lo, b16hi), 0xD8);
+
+        /* The instruction this whole kernel is a mirror of. */
+        const __m256i pairs = _mm256_maddubs_epi16(au, bs);
+
+        /* Widen to int32 before accumulating: see the note above. */
+        const __m256i lo = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(pairs));
+        const __m256i hi = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(pairs, 1));
+        sum = _mm256_add_epi32(sum, _mm256_add_epi32(lo, hi));
     }
-    return cached;
+
+    /* Horizontal sum of the 8 int32 lanes. Order does not matter: integer
+     * addition is associative, so this cannot drift the way a float sum would. */
+    __m128i s = _mm_add_epi32(_mm256_castsi256_si128(sum),
+                              _mm256_extracti128_si256(sum, 1));
+    s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0x4E));
+    s = _mm_add_epi32(s, _mm_shuffle_epi32(s, 0xB1));
+    *acc += _mm_cvtsi128_si32(s);
+
+    return n32;
 }
 
-static void qmatmul_i32_cpu_impl(struct ggml_tensor *dst,
-                     const struct ggml_tensor *a,   /* dummy: shape only */
-                     const struct ggml_tensor *b,   /* A, quantised, F32-stored */
-                     const struct ggml_tensor *c,   /* B, quantised, F32-stored */
-                     int ith, int nth, void *userdata) {
-    (void)a;
-    const qmatmul_i32_params_t *p = (const qmatmul_i32_params_t *)userdata;
+/* Do the operands fit the u8 x i8 form vpmaddubsw implements?
+ *
+ * Checked on the data rather than assumed from the model's declared zero-point
+ * dtype: QLinearMatMul allows int8 activations too, and this kernel is handed
+ * floats that merely hold quantised values. One pass over the column, once per
+ * column, against the M passes it saves. */
+static int qmatmul_i32_range_ok(const float *v, int64_t n, float lo, float hi) {
+    for (int64_t i = 0; i < n; i++)
+        if (v[i] < lo || v[i] > hi) return 0;
+    return 1;
+}
+#endif /* QMATMUL_I32_HAVE_AVX2 */
+
+/* What the kernel reads from the node, gathered once: scalars from op_params
+ * in the order ggml_qmatmul_i32() wrote them, tables from src[2] / src[3].
+ * It used to be a qmatmul_i32_params_t passed as userdata -- 33 KB per node,
+ * malloc'd at build, owned by the model and freed by count -- holding copies
+ * of values the graph already carries. */
+typedef struct {
+    float        a_scale, y_scale;
+    int32_t      a_zp, y_zp;
+    float        out_lo, out_hi;
+    int          b_zp_any;
+    int64_t      n_b_scale, n_b_zp;
+    const float *b_scale;
+    const void  *b_zp;       /* NULL: every weight zero point is zero */
+    int          b_zp_f32;   /* F32 (widened INT8 initializer) or I32 */
+} qmatmul_i32_args_t;
+
+/* A zero point is read at the type it actually carries: casting the pointer
+ * instead would reinterpret a float's bit pattern as an integer -- not a
+ * wrong number but a wild one. */
+static inline int32_t qmatmul_i32_bzp(const qmatmul_i32_args_t *p, int64_t i) {
+    if (!p->b_zp) return 0;
+    return p->b_zp_f32 ? (int32_t)((const float   *)p->b_zp)[i]
+                       :          ((const int32_t *)p->b_zp)[i];
+}
+
+static void qmatmul_i32_compute_impl(struct ggml_tensor *dst, int ith, int nth) {
+    const struct ggml_tensor *b  = dst ? dst->src[0] : NULL;  /* A,  [K, M] */
+    const struct ggml_tensor *c  = dst ? dst->src[1] : NULL;  /* Bt, [K, N] */
+    const struct ggml_tensor *ts = dst ? dst->src[2] : NULL;  /* b_scale */
+    const struct ggml_tensor *tz = dst ? dst->src[3] : NULL;  /* b_zp, may be NULL */
 
     /* Every pointer is checked before it is followed: under segmented
      * execution a tensor that existed at build time may have no data now, and
      * reading it then is a bare segfault in a worker thread with no message,
      * because it never reaches GGML_ABORT. */
-    if (!p || !b || !c || !dst || !b->data || !c->data || !dst->data) {
+    if (!b || !c || !ts || !dst || !b->data || !c->data || !ts->data ||
+        !dst->data || (tz && !tz->data)) {
         if (ith == 0)
-            fprintf(stderr, "[qmatmul_i32] missing tensor (p=%p a=%p b=%p dst=%p)"
+            fprintf(stderr, "[qmatmul_i32] missing tensor (a=%p b=%p bs=%p dst=%p)"
                             " -- output left untouched\n",
-                    (const void *)p, (const void *)b, (const void *)c,
+                    (const void *)b, (const void *)c, (const void *)ts,
                     (const void *)dst);
+        return;
+    }
+
+    qmatmul_i32_args_t args;
+    args.a_scale   = ggml_get_op_params_f32(dst, 0);
+    args.y_scale   = ggml_get_op_params_f32(dst, 1);
+    args.a_zp      = ggml_get_op_params_i32(dst, 2);
+    args.y_zp      = ggml_get_op_params_i32(dst, 3);
+    args.out_lo    = ggml_get_op_params_f32(dst, 4);
+    args.out_hi    = ggml_get_op_params_f32(dst, 5);
+    args.b_zp_any  = ggml_get_op_params_i32(dst, 6);
+    args.n_b_scale = ts->ne[0];
+    args.b_scale   = (const float *)ts->data;
+    args.n_b_zp    = tz ? tz->ne[0] : 1;
+    args.b_zp      = tz ? tz->data : NULL;
+    args.b_zp_f32  = tz && tz->type == GGML_TYPE_F32;
+    const qmatmul_i32_args_t *p = &args;
+
+    /* The tables are read on the host too, like the operands. */
+    if ((ts->buffer && !ggml_backend_buffer_is_host(ts->buffer)) ||
+        (tz && tz->buffer && !ggml_backend_buffer_is_host(tz->buffer))) {
+        if (ith == 0)
+            fprintf(stderr, "[qmatmul_i32] '%s': tables are not on the host -- "
+                            "this kernel is CPU-only\n", dst->name);
         return;
     }
 
@@ -116,82 +255,85 @@ static void qmatmul_i32_cpu_impl(struct ggml_tensor *dst,
         return;
     }
 
-    /* Set when this thread took the GPU branch and the dispatch turned it down:
-     * thread 0 then owns all M rows, not a slice of them.  Declared outside the
-     * Vulkan block because the row split below reads it in every build. */
-    int gpu_attempted = 0;
+    /* Rows are split across threads; each output element is independent.
+     * The GPU no longer comes through here: GGML_OP_QMATMUL_I32 runs on the
+     * Vulkan backend as a node of its own, and this kernel only sees the
+     * nodes the CPU backend was given. */
+    const int64_t per   = (M + nth - 1) / nth;
+    const int64_t begin = per * ith;
+    const int64_t end   = begin + per < M ? begin + per : M;
 
-#ifdef GGML_USE_VULKAN
-    /* Offer the whole matmul to the shader before splitting it across threads.
+    /* sum(bq) down each weight column, hoisted out of the row loop.
      *
-     * Single-threaded only. The dispatch covers the ENTIRE output, so with
-     * several workers each would submit its own identical dispatch and they
-     * would race writing the same dst. The op is created with n_tasks = 1
-     * (onnx_ops_quant.c:659).  That reasoning was wrong: n_tasks caps the work
-     * items, nth is the size of the backend thread pool -- whatever n_threads
-     * the model was loaded with, 12 by default -- so `nth == 1` was false on
-     * every real inference and the GPU path never ran.  The warning below sits
-     * inside this same block, so it never printed either: the shader was dead
-     * code that cost nothing and did nothing.  Thread 0 now makes the single
-     * dispatch and the rest return; see the note in qconv_i32.c.
+     * This is a function of `n` alone -- it sums bcol = bd + n*K, which does
+     * not depend on `m` -- but it used to be computed inside the `n` loop and
+     * therefore recomputed for every (m, n) pair.  That put a second full pass
+     * over the K-long column next to the one that does the actual multiply, so
+     * whenever a_zp != 0 the kernel did twice the memory traffic it needed:
+     * measured at 31.3% of a MaskRCNN int8 CPU run, where the fully connected
+     * head has K = 12544.
      *
-     * Declining is normal (no Vulkan backend, or a grid above the driver's
-     * workgroup limit) and simply leaves the CPU loop below to do the work, so
-     * this is a pure fast path: it cannot make a working model wrong by being
-     * absent, only by being incorrect -- which the test suite is there to
-     * catch, since a drifting requantisation changes detections rather than
-     * merely perturbing numbers. */
-    if (p->gpu_backend && qmatmul_i32_gpu_enabled()) {
-        /* Everyone but thread 0 is done -- thread 0's dispatch covers the
-         * whole output, and a second one would race it. */
-        if (ith != 0) return;
-        gpu_attempted = 1;
-        int b_zp_any = 0;
-        for (int i = 0; i < p->n_b_zp; i++)
-            if (p->b_zp[i] != 0) { b_zp_any = 1; break; }
+     * Each thread builds its own copy.  The threads split rows, not columns, so
+     * every one of them walks all N columns and would otherwise need locking or
+     * a barrier to share this; N is small next to M*N*K, so the duplicated
+     * O(N*K) setup is paid once per thread against M*N*K saved.
+     *
+     * Only when a_zp != 0: with a zero point of zero the term drops out of acc
+     * entirely and computing it is pure waste -- which is also why the original
+     * guarded the inner loop the same way.
+     *
+     * If the allocation fails the loop below falls back to computing the sum
+     * inline, exactly as before, so a failed malloc costs speed and not
+     * correctness. */
+    const int b_zp_any_cached = p->b_zp_any;
 
-        if (ggml_vk_qmatmul_i32_run(
-                p->gpu_backend, ad, bd, p->b_scale, p->b_zp, od,
-                (unsigned)M, (unsigned)N, (unsigned)K,
-                p->a_scale, p->y_scale, p->a_zp, p->y_zp,
-                (unsigned)p->n_b_scale, (unsigned)p->n_b_zp,
-                (unsigned)b_zp_any, p->out_lo, p->out_hi)) {
-            return;
-        }
-        {
-            static int warned = 0;
-            if (!warned) {
-                warned = 1;
-                fprintf(stderr,
-                    "[qmatmul_i32] '%s': the Vulkan dispatch declined (output "
-                    "grid above the driver's workgroup limit) -- using the CPU "
-                    "kernel.\n              Results are unaffected; only this "
-                    "op runs on the host.  Further occurrences are not "
-                    "reported.\n", dst->name);
-            }
-        }
+#if defined(QMATMUL_I32_HAVE_AVX2)
+    /* Which columns of B fit the int8 form, decided once for the whole call.
+     *
+     * Done here and not inside the loops because the check is O(K) per column:
+     * inside the (m, n) nest it would be re-run M times per column and cost
+     * more than the vector path saves. One byte per column, so even N in the
+     * thousands is nothing; a failed allocation just leaves the scalar path,
+     * like every other optional buffer here. */
+    unsigned char *b_ok = NULL;
+    if (N > 0) {
+        b_ok = (unsigned char *)malloc((size_t)N);
+        if (b_ok)
+            for (int64_t n = 0; n < N; n++)
+                b_ok[n] = (unsigned char)qmatmul_i32_range_ok(bd + n * K, K,
+                                                              -128.0f, 127.0f);
     }
 #endif
 
-    /* Rows are split across threads; each output element is independent. */
-    /* Unless the GPU branch was taken and declined: the other threads returned
-     * at that branch, so thread 0 is alone here and takes every row. */
-    const int64_t per   = gpu_attempted ? M : (M + nth - 1) / nth;
-    const int64_t begin = gpu_attempted ? 0 : per * ith;
-    const int64_t end   = begin + per < M ? begin + per : M;
+    int32_t * sum_b_col = NULL;
+    if (p->a_zp != 0 && N > 0) {
+        sum_b_col = (int32_t *) malloc((size_t) N * sizeof(int32_t));
+        if (sum_b_col) {
+            for (int64_t n = 0; n < N; n++) {
+                const float *bcol = bd + n * K;
+                int32_t s = 0;
+                for (int64_t k = 0; k < K; k++) s += (int32_t)bcol[k];
+                sum_b_col[n] = s;
+            }
+        }
+    }
 
     for (int64_t m = begin; m < end; m++) {
         const float *arow = ad + m * K;
 
         /* sum(aq) over this row: needed only when the weight zero point is
-         * non-zero, and constant across the row's outputs either way. */
+         * non-zero, and constant across the row's outputs either way.
+         * The b_zp scan itself is loop-invariant and now sits above the row
+         * loop -- it used to be re-run for every row. */
         int32_t sum_a = 0;
-        {
-            int b_any = 0;
-            for (int i = 0; i < p->n_b_zp; i++) if (p->b_zp[i] != 0) { b_any = 1; break; }
-            if (b_any)
-                for (int64_t k = 0; k < K; k++) sum_a += (int32_t)arow[k];
-        }
+        if (b_zp_any_cached)
+            for (int64_t k = 0; k < K; k++) sum_a += (int32_t)arow[k];
+
+#if defined(QMATMUL_I32_HAVE_AVX2)
+        /* Once per row, not once per (row, column): the A row is the same for
+         * every output column. */
+        const int a_range_ok = qmatmul_i32_range_ok(arow, K, 0.0f, 255.0f);
+#endif
 
         for (int64_t n = 0; n < N; n++) {
             /* One multiplier per output column: b_scale may be per column.
@@ -200,7 +342,7 @@ static void qmatmul_i32_cpu_impl(struct ggml_tensor *dst,
              * measurably moves AWAY from the reference. */
             const float mult = p->a_scale * p->b_scale[p->n_b_scale > 1 ? n : 0]
                              / p->y_scale;
-            const int32_t bzp = p->b_zp[p->n_b_zp > 1 ? n : 0];
+            const int32_t bzp = qmatmul_i32_bzp(p, p->n_b_zp > 1 ? n : 0);
             const float *bcol = bd + n * K;
 
             /* Same VPMADDUBSW saturation as qconv_i32.c -- see the long note
@@ -212,7 +354,15 @@ static void qmatmul_i32_cpu_impl(struct ggml_tensor *dst,
              * the disagreement here showed up as deltas of 2 to 5 rather than
              * the single code seen in the convolutions. */
             int32_t sum_pairs = 0;
-            for (int64_t k = 0; k < K; k += 2) {
+            int64_t k0 = 0;
+#if defined(QMATMUL_I32_HAVE_AVX2)
+            /* Vector prologue, scalar tail. Only when both operands are in the
+             * u8 x i8 range the instruction implements -- a_range_ok is hoisted
+             * out of the n loop, b_range_ok is per column. */
+            if (a_range_ok && b_ok && b_ok[n])
+                k0 = qmatmul_i32_dot_avx2(arow, bcol, K, &sum_pairs);
+#endif
+            for (int64_t k = k0; k < K; k += 2) {
                 const int32_t a0 = (int32_t)arow[k];
                 const int32_t b0 = (int32_t)bcol[k];
                 const int32_t a1 = (k + 1 < K) ? (int32_t)arow[k + 1] : 0;
@@ -225,10 +375,17 @@ static void qmatmul_i32_cpu_impl(struct ggml_tensor *dst,
             }
 
             /* Zero points come out of the packed sums, as MLAS folds RowSum
-             * and ColumnSum in at the end rather than subtracting per term. */
+             * and ColumnSum in at the end rather than subtracting per term.
+             * Precomputed per column above; the inline branch is the fallback
+             * for a failed allocation. */
             int32_t sum_b = 0;
-            if (p->a_zp != 0)
-                for (int64_t k = 0; k < K; k++) sum_b += (int32_t)bcol[k];
+            if (p->a_zp != 0) {
+                if (sum_b_col) {
+                    sum_b = sum_b_col[n];
+                } else {
+                    for (int64_t k = 0; k < K; k++) sum_b += (int32_t)bcol[k];
+                }
+            }
 
             int32_t acc = sum_pairs - bzp * sum_a - p->a_zp * sum_b
                         + p->a_zp * bzp * (int32_t)K;
@@ -243,50 +400,56 @@ static void qmatmul_i32_cpu_impl(struct ggml_tensor *dst,
             od[n + N * m] = v;
         }
     }
+
+    free(sum_b_col);
+#if defined(QMATMUL_I32_HAVE_AVX2)
+    free(b_ok);
+#endif
 }
 
-/* Timing wrapper, the qconv_i32.c one shaped for this operator
- * (GGMLR_QCONV_PROFILE=1 drives both, since the question they answer -- where
- * the host-side time in a quantised model goes -- spans the two).
+/* GGML_OP_QMATMUL_I32 on the host, with the GGMLR_QCONV_PROFILE timing line
+ * (one variable drives both int8 kernels, since the question they answer --
+ * where the host-side time in a quantised model goes -- spans the two).
  *
- * ggml_map_custom runs on the host, so these nodes are invisible to the Vulkan
- * perf logger, which on MaskRCNN accounts for 136 ms of a ~1066 ms run.
+ * The line prints only for nodes the CPU backend runs: on a Vulkan model the
+ * op is a GPU node and its time is in the Vulkan perf logger instead.
  *
  * A wrapper rather than timers in the body because that body returns early on
  * a missing tensor, and an inline stop would eventually be missed on one of
- * those paths.
- */
-void qmatmul_i32_cpu(struct ggml_tensor *dst,
-                     const struct ggml_tensor *a,
-                     const struct ggml_tensor *b,
-                     const struct ggml_tensor *c,
-                     int ith, int nth, void *userdata) {
+ * those paths. */
+void qmatmul_i32_compute(struct ggml_tensor *dst, int ith, int nth) {
     static int  prof = -1;
     static long calls = 0;
 
     if (prof < 0) prof = (getenv("GGMLR_QCONV_PROFILE") != NULL);
     if (!prof) {
-        qmatmul_i32_cpu_impl(dst, a, b, c, ith, nth, userdata);
+        qmatmul_i32_compute_impl(dst, ith, nth);
         return;
     }
 
-    const qmatmul_i32_params_t *p = (const qmatmul_i32_params_t *)userdata;
-
     const int64_t t0 = ggml_time_us();
-    qmatmul_i32_cpu_impl(dst, a, b, c, ith, nth, userdata);
+    qmatmul_i32_compute_impl(dst, ith, nth);
     const long us = (long)(ggml_time_us() - t0);
 
     if (ith == 0) {
         calls++;
+        /* a_zp and K are here because they decide whether the hoisted
+         * per-column sum_b does any work at all: the term drops out of acc
+         * when a_zp == 0. n_b_scale says how many distinct requantisation
+         * multipliers the node has -- the quantity a backend disagreement in
+         * the multiplier would depend on. */
+        const struct ggml_tensor *a  = dst ? dst->src[0] : NULL;
+        const struct ggml_tensor *bs = dst ? dst->src[2] : NULL;
         fprintf(stderr,
-                "[qmatmul-prof] %3ld %-24s %8.2f ms  out(%lld,%lld,%lld,%lld)"
-                "  gpu=%d\n",
+                "[qmatmul-prof] %3ld %-24s %8.2f ms  out(%lld,%lld)"
+                "  K=%lld a_zp=%d b_zp_any=%d n_b_scale=%lld\n",
                 calls, dst && dst->name[0] ? dst->name : "(unnamed)",
                 us / 1000.0,
                 (long long)(dst ? dst->ne[0] : 0),
                 (long long)(dst ? dst->ne[1] : 0),
-                (long long)(dst ? dst->ne[2] : 0),
-                (long long)(dst ? dst->ne[3] : 0),
-                (p && p->gpu_backend && qmatmul_i32_gpu_enabled()) ? 1 : 0);
+                (long long)(a ? a->ne[0] : 0),
+                dst ? ggml_get_op_params_i32(dst, 2) : 0,
+                dst ? ggml_get_op_params_i32(dst, 6) : 0,
+                (long long)(bs ? bs->ne[0] : 0));
     }
 }

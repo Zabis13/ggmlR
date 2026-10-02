@@ -168,7 +168,20 @@ Vulkan telemetry logging. Two messages are emitted:
    changes only the speed, never the result, so it is otherwise invisible.
    `inst/examples/backward_gpu_demo.R` checks the backward ops one at a time.
 
-Both are **off by default** so they do not clutter output (notably during
+3. Where device buffers are placed, when Resizable BAR is off:
+
+   ```
+   ggml_vulkan: no Resizable BAR (host-visible VRAM heap 256 MiB of 16128 MiB) -- device buffers use device-local memory only; GGML_VK_FORCE_HOST_VISIBLE_VIDMEM=1 overrides
+   ```
+
+   The choice is made from the device's memory heap sizes, not from the driver
+   name or version. Without Resizable BAR the host-visible VRAM window is small,
+   and placing device buffers there sent part of them over PCIe (measured:
+   SAGEConv 127 ms instead of 10). Two variables override the automatic choice:
+   `GGML_VK_FORCE_HOST_VISIBLE_VIDMEM=1` keeps the window (the previous
+   behaviour), `GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1` never uses it.
+
+All three are **off by default** so they do not clutter output (notably during
 tests, where many contexts and training graphs are created). Enable them to
 diagnose which GPU was picked, which acceleration paths (fp16 / bf16 / coopmat)
 are active, and which ops are silently running on CPU:
@@ -1571,7 +1584,7 @@ probs <- exp(scores) / sum(exp(scores))
 
 ### Repeated inference
 
-Models can be run multiple times with zero overhead — weights live on GPU permanently and are never re-transferred:
+A loaded model can be run any number of times; weights stay on the GPU and are never re-transferred. Models whose shapes depend on data (NonZero, NonMaxSuppression, TopK — MaskRCNN, RoBERTa) are run in segments, and the segments after the first are rebuilt on every call at the sizes that call measures; the rebuild costs about 4 ms per run on RoBERTa and about 80 ms on MaskRCNN, and memory does not grow from one run to the next:
 
 ```r
 model <- onnx_load("classifier.onnx")
@@ -1584,10 +1597,14 @@ for (batch in data_batches) {
 
 ### Tested models
 
-All 15 ONNX Model Zoo models below load, run, and match ONNX Runtime bit for bit —
-including the quantised detector MaskRCNN-12-int8 (`max|d| = 0`). The reference
-check is `inst/scripts/ref_check_vs_onnxruntime.sh`, which runs each model through
-both implementations and diffs the values, rather than checking output length.
+All 15 ONNX Model Zoo models below load, run, and are checked value by value
+against ONNX Runtime with `inst/scripts/ref_check_vs_onnxruntime.sh`, which runs
+each model through both implementations and diffs the outputs rather than their
+length. On the CPU all 15 agree within 1e-3 (worst `max|d|` about 2e-5), and the
+quantised detector MaskRCNN-12-int8 matches bit for bit (`max|d| = 0`) on both
+CPU and Vulkan. On Vulkan five transformer models (XCiT, CaiT, BERT, RoBERTa,
+GPT-NeoX) land between 1e-3 and 7e-3: float sums over long reductions taken in a
+different order, not a wrong operator.
 
 | Model | Nodes | Key ops |
 |---|---|---|
@@ -1606,20 +1623,21 @@ both implementations and diffs the values, rather than checking output length.
 | xcit_tiny | 436 | MatMul, LayerNorm, Softmax, Concat, Transpose |
 | cait_xs24_384 (Opset 16) | 1748 | MatMul, LayerNorm, Softmax, Transpose, Gather |
 
-### Supported ONNX ops (50+)
+### Supported ONNX ops (90+)
 
-Arithmetic: Add, Sub, Mul, Div, Pow, Sqrt, Exp, Log, Abs, Neg, Floor, Ceil, Clip, Erf, Equal.
-Linear: MatMul (batched), Gemm.
+Arithmetic: Add, Sub, Mul, Div, Pow, Mod, Sqrt, Exp, Log, Abs, Neg, Floor, Ceil, Clip, Erf, Sin, Cos, Max, Min.
+Comparison / logic: Equal, Greater, GreaterOrEqual, Less, LessOrEqual, And, Or, Not, Xor, Where.
+Linear: MatMul (batched), Gemm, Einsum (limited set of patterns).
 Convolution: Conv (1D/2D, grouped, depthwise), ConvTranspose (1D/2D), with `auto_pad` (SAME_UPPER, SAME_LOWER).
-Pooling: MaxPool, AveragePool, GlobalAveragePool, Resize/Upsample (nearest, bilinear).
-Normalization: BatchNorm, LayerNorm, GroupNorm, RMSNorm.
-Activations: Relu, Sigmoid, Tanh, GELU, SiLU, Softmax, LeakyRelu, Elu.
-Shape: Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Expand, Slice, Split, Gather, Pad, Shape, Cast, Identity, EyeLike.
+Pooling / resize: MaxPool, AveragePool, GlobalAveragePool, Resize/Upsample (nearest, bilinear).
+Normalization: BatchNormalization, LayerNormalization, GroupNormalization, InstanceNormalization, RMSNormalization.
+Activations: Relu, Sigmoid, Tanh, Gelu, SiLU, Softmax, LeakyRelu, Elu, PRelu, HardSigmoid, HardSwish.
+Shape: Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Expand, Slice, Split, Tile, Pad, Shape, Cast, Identity, EyeLike, Range, CumSum.
 Constants: Constant (TensorProto + scalar), ConstantOfShape (INT64/INT32/DOUBLE/FLOAT value).
-Scatter/Gather: ScatterElements (axis=0, reduction=none/add, Vulkan atomicAdd), Gather (axis=0 on rank>2 via reshape).
-Logic: Where, Equal.
-Reduction: ReduceMean, ReduceSum.
-Quantization: DequantizeLinear, QuantizeLinear, QLinearConv, QLinearAdd, QLinearMatMul, QLinearSigmoid, QLinearConcat.
+Indexing: Gather, GatherND, ScatterElements (reduction none/add), ScatterND, TopK (any axis), NonZero.
+Reduction: ReduceMean, ReduceSum, ReduceMax, ReduceMin.
+Detection: NonMaxSuppression, RoiAlign.
+Quantization: DequantizeLinear, QuantizeLinear, QLinearConv, QLinearMatMul, QLinearAdd, QLinearSigmoid, QLinearConcat — QLinearConv and QLinearMatMul with an exact integer accumulator that reproduces ONNX Runtime's int16 pair saturation.
 Fused custom ops: RelPosBias2D (BoTNet-style 2D relative position bias).
 Pass-through: Dropout.
 
@@ -1797,19 +1815,29 @@ model <- ggml_load_model("my_model.rds")
 
 ## ONNX Benchmark: GPU (Vulkan) vs CPU
 
-Measured on AMD Ryzen 5 5600 + AMD RX 9070, single-image inference:
+Measured on AMD Ryzen 5 5600 + AMD RX 9070 (Resizable BAR off), single-image inference, mean of 3 runs:
 
 | Model | CPU (ms) | GPU (ms) | Speedup | CPU FPS | GPU FPS |
 |---|---:|---:|---:|---:|---:|
-| Inception V3 | 265.3 | 9.7 | 27.5x | 3.8 | 103.4 |
-| MNIST | 0.0 | 0.0 | — | Inf | Inf |
-| SqueezeNet 1.0 | 22.3 | 1.7 | 13.4x | 44.8 | 600.0 |
-| SuperResolution | 100.0 | 3.3 | 30.0x | 10.0 | 300.0 |
-| EmotionFerPlus | 31.3 | 2.3 | 13.4x | 31.9 | 428.6 |
-| Inception V3 Op18 | 204.7 | 8.3 | 24.6x | 4.9 | 120.0 |
-| BAT-ResNeXt26ts | 116.0 | 7.3 | 15.8x | 8.6 | 136.4 |
-| BERT (Opset17) | 243.7 | 9.0 | 27.1x | 4.1 | 111.1 |
-| GPT-NeoX | 1.3 | 3.3 | 0.4x | 750.0 | 300.0 |
+| Inception V3 | 205.0 | 8.7 | 23.6x | 4.9 | 115.4 |
+| MNIST | 0.0 | 0.3 | — | — | 3000.0 |
+| SqueezeNet 1.0 | 21.7 | 2.0 | 10.8x | 46.2 | 500.0 |
+| SuperResolution | 83.7 | 3.0 | 27.9x | 12.0 | 333.3 |
+| EmotionFerPlus | 27.0 | 2.0 | 13.5x | 37.0 | 500.0 |
+| Inception V3 Op18 | 200.3 | 11.3 | 17.7x | 5.0 | 88.2 |
+| BAT-ResNeXt26ts | 91.7 | 6.3 | 14.5x | 10.9 | 157.9 |
+| BERT (Opset17) | 222.0 | 12.0 | 18.5x | 4.5 | 83.3 |
+| GPT-NeoX | 1.7 | 3.7 | 0.45x | 600.0 | 272.7 |
+| RoBERTa SeqClass | 230.7 | 22.0 | 10.5x | 4.3 | 45.5 |
+| CaiT XS24 | 624.0 | 39.7 | 15.7x | 1.6 | 25.2 |
+| XCiT Tiny12 P8 | 128.7 | 17.7 | 7.3x | 7.8 | 56.6 |
+| BoTNet26t | 122.0 | 4.3 | 28.2x | 8.2 | 230.8 |
+| SAGEConv | 110.7 | 12.7 | 8.7x | 9.0 | 78.9 |
+| MaskRCNN int8 | 1820.0 | 734.7 | 2.5x | 0.5 | 1.4 |
+
+- MNIST runs below the timer's resolution on the CPU, so no speedup is given.
+- GPT-NeoX here is a tiny test model (1.7 MB, ~2 ms on the CPU): the GPU's fixed per-run cost (submission, synchronisation, input upload) exceeds the work itself.
+- GPU memory placement follows the device's memory map, not the driver name or version: without Resizable BAR, device buffers are kept in plain VRAM (see [Diagnostics](#diagnostics) for the check and its overrides).
 
 Benchmark scripts: `inst/examples/benchmark_onnx.R`, `inst/examples/profile_onnx_superres_gpu.R`
 
@@ -1836,7 +1864,7 @@ Measured on AMD Ryzen 5 5600 + AMD RX 9070, via [sd2R](https://github.com/Zabis1
 
 ## GPU Acceleration
 
-ggmlR is designed GPU-first: Vulkan is auto-detected at build time and, when available, 90%+ of operations run on GPU with up to 78x speedup over CPU. On machines without a Vulkan-capable GPU the package falls back to CPU transparently — no code changes required.
+ggmlR is designed GPU-first: Vulkan is auto-detected at build time and, when available, used automatically — on the ONNX benchmark above, 7–28x over the CPU for models large enough to keep the GPU busy (see that section for the exceptions). On machines without a Vulkan-capable GPU the package falls back to CPU transparently — no code changes required.
 
 ```r
 ggml_vulkan_available()   # TRUE if a Vulkan GPU was detected

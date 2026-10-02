@@ -602,6 +602,11 @@ extern "C" {
         // unsupported, which pinned every quantised conv to the CPU and split
         // the graph at each of them.
         GGML_OP_QCONV_I32,
+        // ggmlR extension: ONNX QLinearMatMul with the same int16 pair saturation,
+        // see ggml_qmatmul_i32(). A real op for the same scheduling reason as
+        // QCONV_I32: as a ggml_map_custom3 it was a host node, so the GPU run
+        // downloaded A and B, re-uploaded them to a private dispatch, and waited.
+        GGML_OP_QMATMUL_I32,
 
         GGML_OP_COUNT,
     };
@@ -2257,6 +2262,35 @@ extern "C" {
             float                 y_scale,
             int                   x_zp,
             int                   y_zp,
+            float                 out_lo,
+            float                 out_hi);
+
+    // ggmlR extension: ONNX QLinearMatMul, dst[N, M] = requantise(a x b).
+    //
+    // Same arithmetic as ggml_qconv_i32(): adjacent pairs along K are summed
+    // and saturated to int16 exactly as ONNX Runtime's VPMADDUBSW kernel does,
+    // the accumulator is exact int32 otherwise, and requantisation is in float.
+    //
+    // `b` arrives TRANSPOSED, [K, N], so both operands walk K contiguously --
+    // the layout the CPU kernel and the shader both index.
+    //
+    // b_scale and b_zp are per output column (length N) or shared (length 1);
+    // b_zp may be NULL (symmetric export). b_zp_any says whether any b_zp is
+    // non-zero, decided by the caller from the initializer, so neither backend
+    // scans the table to learn whether the sum(a) term is needed.
+    //
+    // 2-D only: a and b must have ne[2] == ne[3] == 1.
+    GGML_API struct ggml_tensor * ggml_qmatmul_i32(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,        // [K, M], F32 holding integers
+            struct ggml_tensor  * b,        // [K, N], F32 holding integers
+            struct ggml_tensor  * b_scale,  // [1 or N], F32
+            struct ggml_tensor  * b_zp,     // [1 or N], F32 or I32, or NULL
+            float                 a_scale,
+            float                 y_scale,
+            int                   a_zp,
+            int                   y_zp,
+            int                   b_zp_any,
             float                 out_lo,
             float                 out_hi);
 

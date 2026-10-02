@@ -176,6 +176,24 @@ typedef struct {
     /* Deferred data for ConstantOfShape + scalar constants (filled after sched alloc) */
     struct ggml_tensor *const_fill_ptrs[ONNX_MAX_DEFERRED];
     float               const_fill_vals[ONNX_MAX_DEFERRED];
+    /* The persistent buffer each entry was last written into, or NULL. An entry
+     * whose tensor still sits in that buffer is not written again: the value
+     * is a constant and a dedicated buffer is never reused by the scheduler.
+     * fill_deferred_tensors() runs after every segment, and rewriting every
+     * scalar each time was ~177 ms of a MaskRCNN Vulkan run (682 one-element
+     * uploads at ~0.26 ms each, almost all of them repeats). */
+    ggml_backend_buffer_t const_fill_done[ONNX_MAX_DEFERRED];
+
+    /* Batched uploads for fill_deferred_tensors() (see fill_set()). A pinned
+     * host arena: each small write is copied in at its own offset and queued
+     * with ggml_backend_tensor_set_async, then one synchronize sends them all.
+     * Pinned because ggml-vulkan batches only from pinned memory -- any other
+     * source goes through one shared staging buffer and syncs per call. */
+    ggml_backend_buffer_t fill_pin_buf;
+    uint8_t              *fill_pin_ptr;
+    size_t                fill_pin_cap;
+    size_t                fill_pin_used;
+    int                   fill_pending;
     int                 n_const_fills;
 
     /* Deferred payload for Constant nodes whose data lives in the node's
@@ -417,6 +435,36 @@ typedef struct {
     float               nms_score_thresh[ONNX_MAX_DEFERRED];
     int                 nms_have_score_thresh[ONNX_MAX_DEFERRED]; /* input present? */
     int                 n_nms_deferred;
+
+    /* What the model held when onnx_ggml_build() returned: the state every
+     * run of a segmented model is rewound to before it starts (see
+     * run_state_rewind), and the baseline ONNX_TRACE_GROWTH prints against.
+     *
+     * Segments 1..N are rebuilt on every run, and before this existed part of
+     * what that built went into storage living as long as the model and was
+     * never given back. Measured on MaskRCNN-12-int8 per run: ctx_boundary
+     * +434 objects (CPU) / +519 (Vulkan), ctx_weight +757, ctx_host +340, tmap
+     * +1258..1343, cval +630, extra buffers +174..259 holding ~86 MB (RAM on
+     * CPU, VRAM on Vulkan), NMS/qmatmul/RoIAlign blocks +170/+4/+8. Both
+     * backends died on run 7-8 with ctx_boundary full. */
+    struct {
+        int    taken;
+        size_t used_main, used_weight, used_host, used_boundary;
+        int    tmap, cval, extra_bufs;
+        int    nms_ops, qconv_ops, roi_aligns;
+        int    runs;
+        /* tensor_map_empty[0 .. tmap): a run can re-mark an entry it did not
+         * add, and the rewind puts the load-time flags back. */
+        unsigned char *tmap_empty;
+    } growth0;
+
+    /* The load-time ctx_weight / ctx_host of a segmented model. When the
+     * build finishes, c->ctx_weight and c->ctx_host are pointed at fresh,
+     * empty contexts instead, so every tensor a run adds lands somewhere that
+     * ggml_reset() can clear without touching the weights. NULL for a model
+     * that is not segmented: nothing is rebuilt per run there. */
+    struct ggml_context  *ctx_weight_model;
+    struct ggml_context  *ctx_host_model;
 
     /* First node map_node declined, and its op.  A declined node leaves its
      * output unregistered, so everything downstream of it goes unbuilt too --

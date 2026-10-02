@@ -2510,6 +2510,59 @@ static void ggml_vk_qconv_i32(ggml_backend_vk_context * ctx, vk_context& subctx,
                               p, elements);
 }
 
+// ggmlR extension: GGML_OP_QMATMUL_I32 (ONNX QLinearMatMul).
+//
+// Same shape as ggml_vk_qconv_i32 above and for the same reason: it reads
+// every operand where the scheduler put it. The direct dispatch this replaces
+// created five device buffers, uploaded A and B (~114 MB on MaskRCNN's box
+// head), waited on a fence and read the result back on every call -- about
+// 10% of the node's time, the other 90% being the shader, which is unchanged.
+static void ggml_vk_qmatmul_i32(ggml_backend_vk_context * ctx, vk_context& subctx,
+                                const ggml_tensor * src0, const ggml_tensor * src1,
+                                const ggml_tensor * src2, const ggml_tensor * src3,
+                                ggml_tensor * dst) {
+    GGML_ASSERT(src0 != nullptr && src1 != nullptr && src2 != nullptr);
+    GGML_ASSERT(dst->buffer != nullptr);
+    // 2-D only (the builder asserts the same), and packed: the shader indexes
+    // a[m*K + k] and bmat[n*K + k].
+    GGML_ASSERT(ggml_is_contiguous(src0) && ggml_is_contiguous(src1) &&
+                ggml_is_contiguous(dst));
+
+    vk_op_qmatmul_i32_push_constants p{};
+    p.M         = (uint32_t)src0->ne[1];
+    p.N         = (uint32_t)src1->ne[1];
+    p.K         = (uint32_t)src0->ne[0];
+    p.a_scale   = ggml_get_op_params_f32(dst, 0);
+    p.y_scale   = ggml_get_op_params_f32(dst, 1);
+    p.a_zp      = ggml_get_op_params_i32(dst, 2);
+    p.y_zp      = ggml_get_op_params_i32(dst, 3);
+    p.out_lo    = ggml_get_op_params_f32(dst, 4);
+    p.out_hi    = ggml_get_op_params_f32(dst, 5);
+    p.b_zp_any  = (uint32_t)ggml_get_op_params_i32(dst, 6);
+    p.n_b_scale = (uint32_t)src2->ne[0];
+    p.n_b_zp    = src3 ? (uint32_t)src3->ne[0] : 1u;
+
+    // 2D: N across, M down, matching the shader's 16x16 block tile and the
+    // pipeline's {16,16,1} wg_denoms. A flat element count would hand the
+    // shader one long row of blocks and every m would come out zero.
+    const std::array<uint32_t, 3> elements = { p.N, p.M, 1 };
+
+    ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_qmatmul_i32, 1);
+
+    vk_subbuffer a_buf  = ggml_vk_tensor_subbuffer(ctx, src0, true);
+    vk_subbuffer b_buf  = ggml_vk_tensor_subbuffer(ctx, src1, true);
+    vk_subbuffer bs_buf = ggml_vk_tensor_subbuffer(ctx, src2, true);
+    // Binding 3 must be filled even with no zero-point tensor: an unwritten
+    // descriptor is not a legal source. b_scale stands in; the builder sets
+    // b_zp_any = 0 in that case, and the shader reads b_zp only when it is set.
+    vk_subbuffer bz_buf = src3 ? ggml_vk_tensor_subbuffer(ctx, src3, true) : bs_buf;
+    vk_subbuffer d_buf  = ggml_vk_tensor_subbuffer(ctx, dst, true);
+
+    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_qmatmul_i32,
+                              { a_buf, b_buf, bs_buf, bz_buf, d_buf },
+                              p, elements);
+}
+
 static void ggml_vk_leaky_relu(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     const float * op_params = (const float *)dst->op_params;
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_LEAKY_RELU, { (uint32_t)ggml_nelements(src0), 0, op_params[0], 0.0f, 0.0f, 0.0f });

@@ -138,9 +138,10 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
     do {                                                            \
         vk::Result err_ = (err);                                    \
         if (err_ != vk::Result::eSuccess) {                         \
-            fprintf(stderr, "ggml_vulkan: %s error %s at %s:%d\n",  \
-                #err, to_string(err_).c_str(), __FILE__, __LINE__); \
-            exit(1);                                                \
+            /* GGML_ABORT, not exit(1): both reach R as an error, but  \
+             * this one carries the Vulkan result into the message. */ \
+            GGML_ABORT("ggml_vulkan: %s error %s",                  \
+                #err, to_string(err_).c_str());                     \
         }                                                           \
     } while (0)
 
@@ -2487,8 +2488,10 @@ static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
     vk::Result result;
     while ((result = ctx->device->device.getFenceStatus(ctx->fence)) != vk::Result::eSuccess) {
         if (result != vk::Result::eNotReady) {
-            fprintf(stderr, "ggml_vulkan: error %s at %s:%d\n", to_string(result).c_str(), __FILE__, __LINE__);
-            exit(1);
+            /* GGML_ABORT, not exit(1): both reach R as an error (exit is
+             * redirected to r_ggml_exit above), but only this one carries the
+             * fence status into the message and runs r_ggml_abort_hook. */
+            GGML_ABORT("ggml_vulkan: fence status %s", to_string(result).c_str());
         }
         for (uint32_t i = 0; i < 100; ++i) {
             YIELD();

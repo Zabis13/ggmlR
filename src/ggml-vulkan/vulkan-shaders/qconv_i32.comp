@@ -148,19 +148,13 @@ void main() {
                        ? int(w_zp[p.n_w_zp > 1u ? oc : 0u]) : 0;
     const int   bs   = (p.has_bias != 0u) ? bias[oc] : 0;
 
-    // sum(wq) over the whole filter for this output channel. Depends on oc
-    // alone; ORT folds the same quantity into column_sums_ at pre-pack time.
+    // sum(wq) over the whole filter for this output channel; ORT folds the same
+    // quantity into column_sums_ at pre-pack time. Accumulated in the main loop
+    // below from the wa/wb it loads anyway, instead of by a separate walk of the
+    // whole filter: that walk was a second pass over the weights per output
+    // whenever x_zp != 0. The main loop loads every tap, padded ones included,
+    // and wb is 0 for the odd channel, so the sum is the same, exactly.
     int sum_w_oc = 0;
-    if (p.x_zp != 0) {
-        for (uint kh = 0u; kh < p.KH; ++kh) {
-            for (uint kw = 0u; kw < p.KW; ++kw) {
-                for (uint ic = 0u; ic < p.C_in; ++ic) {
-                    sum_w_oc += int(wd[kw + p.KW * kh + p.KW * p.KH * ic
-                                       + p.KW * p.KH * p.C_in * oc]);
-                }
-            }
-        }
-    }
 
     // ⚠️ Kernel position outer, input channels inner, pairs of channels — see
     // notes 1 and 2. None of this nest may be reordered or flattened.
@@ -198,6 +192,7 @@ void main() {
                 int pair = xa * wa + xb * wb;
                 pair = clamp(pair, -32768, 32767);
                 sum_pairs += pair;
+                sum_w_oc  += wa + wb;
             }
         }
     }

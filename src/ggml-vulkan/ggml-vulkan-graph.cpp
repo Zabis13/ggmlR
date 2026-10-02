@@ -554,6 +554,12 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
                           node->src[5], node);
 
         break;
+    case GGML_OP_QMATMUL_I32:
+        // Four sources, the zero point optional -- read from node, as above.
+        ggml_vk_qmatmul_i32(ctx, compute_ctx, node->src[0], node->src[1],
+                            node->src[2], node->src[3], node);
+
+        break;
     case GGML_OP_LEAKY_RELU:
         ggml_vk_leaky_relu(ctx, compute_ctx, src0, node);
 
@@ -3597,8 +3603,13 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                     ggml_backend_vk_device_context * dev_ctx =
                         (ggml_backend_vk_device_context *)dev->context;
                     vk_device vkdev = ggml_vk_get_device(dev_ctx->device);
+                    // ne[3] included: ggml_vk_qconv_i32 dispatches one flat
+                    // grid over batch*C_out*H_out*W_out, so a guard without
+                    // the batch undercounted by that factor -- 51x on
+                    // MaskRCNN's mask head, which is the shape most likely
+                    // to approach the limit.
                     const uint64_t total  = (uint64_t)op->ne[0] * (uint64_t)op->ne[1] *
-                                            (uint64_t)op->ne[2];
+                                            (uint64_t)op->ne[2] * (uint64_t)op->ne[3];
                     const uint64_t groups = (total + 255u) / 256u;   // local_size_x
                     if (groups > (uint64_t)vkdev->properties.limits.maxComputeWorkGroupCount[0]) {
                         QC_NO("output grid above the workgroup limit");
@@ -3611,6 +3622,99 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                 // accepted from one that was never asked about.
                 if (trace) {
                     GGML_LOG_INFO("[qconv-supports] '%s': YES\n", op->name);
+                }
+                return true;
+            }
+        // ggmlR extension: ONNX QLinearMatMul, see vulkan-shaders/qmatmul_i32.comp.
+        // Declining is always safe: the host kernel computes the same bits.
+        case GGML_OP_QMATMUL_I32:
+            {
+                static int trace = -1;
+                if (trace < 0) {
+                    const char * e = getenv("ONNX_TRACE_NODES");
+                    trace = (e && *e && *e != '0') ? 1 : 0;
+                }
+                // Same reasoning and channel as QC_NO above.
+                #define QM_NO(reason) do {                                     \
+                    if (trace) GGML_LOG_INFO(                                  \
+                        "[qmatmul-supports] '%s': NO (%s)\n", op->name, reason); \
+                    return false;                                              \
+                } while (0)
+
+                // The escape hatch the direct dispatch had, kept: =0 sends every
+                // QLinearMatMul to the host kernel, for a driver whose integer
+                // arithmetic disagrees.
+                {
+                    static int off = -1;
+                    if (off < 0) {
+                        const char * e = getenv("GGMLR_ONNX_GPU_QMATMUL");
+                        off = (e && e[0] == '0' && e[1] == '\0') ? 1 : 0;
+                    }
+                    if (off) QM_NO("GGMLR_ONNX_GPU_QMATMUL=0");
+                }
+
+                const ggml_tensor * a  = op->src[0];
+                const ggml_tensor * b  = op->src[1];
+                const ggml_tensor * bs = op->src[2];
+                const ggml_tensor * bz = op->src[3];
+                if (!a || !b || !bs)                     QM_NO("missing source");
+                if (op->type != GGML_TYPE_F32 || a->type != GGML_TYPE_F32 ||
+                    b->type != GGML_TYPE_F32)            QM_NO("not f32");
+                if (bs->type != GGML_TYPE_F32)           QM_NO("b_scale not f32");
+                // The shader binds the zero point as float; an I32 table would
+                // be read as bit patterns. The host kernel takes either.
+                if (bz && bz->type != GGML_TYPE_F32)     QM_NO("b_zp not f32");
+                if (!ggml_is_contiguous(op) || !ggml_is_contiguous(a) ||
+                    !ggml_is_contiguous(b))              QM_NO("not contiguous");
+                // The batch axes, checked rather than assumed: the shader has
+                // no stride for them, so anything but 1 would be computed as
+                // the first slice only. Decided here from the start rather
+                // than copied from QCONV_I32, whose guard left ne[3] out.
+                if (a->ne[2] != 1 || a->ne[3] != 1 || b->ne[2] != 1 || b->ne[3] != 1 ||
+                    op->ne[2] != 1 || op->ne[3] != 1)    QM_NO("batched");
+
+                const uint64_t M = (uint64_t)a->ne[1];
+                const uint64_t N = (uint64_t)b->ne[1];
+                const uint64_t K = (uint64_t)a->ne[0];
+                {
+                    ggml_backend_vk_device_context * dev_ctx =
+                        (ggml_backend_vk_device_context *)dev->context;
+                    vk_device vkdev = ggml_vk_get_device(dev_ctx->device);
+                    // 2D grid of 16x16 blocks: N across, M down. Each axis
+                    // against its own limit -- overshooting aborts inside the
+                    // dispatch on NVIDIA (65535) with nothing printed.
+                    if ((N + 15u) / 16u > (uint64_t)vkdev->properties.limits.maxComputeWorkGroupCount[0] ||
+                        (M + 15u) / 16u > (uint64_t)vkdev->properties.limits.maxComputeWorkGroupCount[1])
+                        QM_NO("output grid above the workgroup limit");
+                }
+
+                // ⚠️ The workgroup test bounds the number of THREADS, not the
+                // WORK. Each thread walks K end to end, so one dispatch costs
+                // M*N*K and that is unbounded whatever the grid. Untiled, the
+                // box head of MaskRCNN (M=1000, N=1024, K=12544, ~96 GB of
+                // traffic) did not finish inside the driver's watchdog on
+                // RX 9070 / RADV: the compute ring timed out and took the
+                // session with it (MODE1 reset, VRAM lost, only
+                // vk::DeviceLostError reaching the process). The 2D tile
+                // (A and B staged, ~6 GB) brought it to ~285 ms.
+                //
+                // A guard, not a verdict on a shape: 5e10 is ~4x that node,
+                // roughly a second of dispatch, well inside the watchdog.
+                // GGMLR_QI32_MAX_WORK overrides it (0 lifts it); a shape over
+                // the cap runs on the host kernel, slower but unable to hang
+                // the device.
+                {
+                    static double max_work = -1.0;
+                    if (max_work < 0.0) {
+                        const char * e = getenv("GGMLR_QI32_MAX_WORK");
+                        max_work = e ? atof(e) : 5e10;
+                    }
+                    if (max_work > 0.0 && (double)M * (double)N * (double)K > max_work)
+                        QM_NO("M*N*K above GGMLR_QI32_MAX_WORK");
+                }
+                #undef QM_NO
+                if (trace) {
+                    GGML_LOG_INFO("[qmatmul-supports] '%s': YES\n", op->name);
                 }
                 return true;
             }

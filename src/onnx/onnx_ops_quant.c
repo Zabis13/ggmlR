@@ -678,52 +678,44 @@ int map_node_quant(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                 Nq <= QMATMUL_I32_MAX_COLS &&
                 (n_bs == 1 || n_bs == (int)Nq)) {
 
-                if (c->n_qconv_ops >= c->qconv_params_cap) {
-                    int newcap = c->qconv_params_cap ? c->qconv_params_cap * 2 : 16;
-                    void **np = (void **)realloc(c->qconv_params,
-                                                 (size_t)newcap * sizeof(void *));
-                    if (!np) return -1;
-                    c->qconv_params = np;
-                    c->qconv_params_cap = newcap;
-                }
-                qmatmul_i32_params_t *qp =
-                    (qmatmul_i32_params_t *)malloc(sizeof(*qp));
-                if (qp) {
-                    c->qconv_params[c->n_qconv_ops++] = qp;
-                    memset(qp, 0, sizeof(*qp));
-                    qp->a_scale = as[0];
-                    qp->y_scale = ys[0];
-                    qp->a_zp = (int32_t)azp[0];
-                    qp->y_zp = (int32_t)yzp[0];
-                    qp->n_b_scale = n_bs;
-                    for (int i = 0; i < n_bs; i++) qp->b_scale[i] = bsv[i];
-                    /* Per column only when the read covered every column;
-                     * otherwise entry 0 is shared, which is correct whenever
-                     * the zero points are equal and never reads past what was
-                     * actually read. */
-                    qp->n_b_zp = (n_bz == (int)Nq) ? n_bz : 1;
-                    for (int i = 0; i < qp->n_b_zp; i++)
-                        qp->b_zp[i] = (int32_t)bzv[i];
-                    /* NULL for a CPU-loaded model; the kernel then never
-                     * offers the matmul to the shader. */
-                    qp->gpu_backend = c->backend_gpu;
+                /* The tables go in as the initializer TENSORS, the way the conv
+                 * passes w_scale / w_zp, so the op reads exactly what the graph
+                 * holds and nothing is copied into a per-node block. Their
+                 * lengths are checked here rather than left to the asserts in
+                 * ggml_qmatmul_i32(): a table that is neither shared nor one
+                 * per column falls back to the f32 path instead of aborting. */
+                const int bs_ok = b_scale->type == GGML_TYPE_F32 &&
+                                  ggml_nelements(b_scale) == b_scale->ne[0] &&
+                                  (b_scale->ne[0] == 1 || b_scale->ne[0] == Nq);
+                const int bz_ok = !b_zp ||
+                                  ((b_zp->type == GGML_TYPE_F32 ||
+                                    b_zp->type == GGML_TYPE_I32) &&
+                                   ggml_nelements(b_zp) == b_zp->ne[0] &&
+                                   (b_zp->ne[0] == 1 || b_zp->ne[0] == Nq));
+                if (bs_ok && bz_ok) {
+                    /* Decided once, from the values read above, so neither
+                     * backend scans the table to learn whether the sum(a) term
+                     * is needed. */
+                    int b_zp_any = 0;
+                    for (int i = 0; i < n_bz; i++)
+                        if ((int32_t)bzv[i] != 0) { b_zp_any = 1; break; }
+                    float out_lo, out_hi;
                     quant_bounds(c, n->n_inputs > 7 ? n->inputs[7] : NULL,
-                                 &qp->out_lo, &qp->out_hi);
+                                 &out_lo, &out_hi);
 
-                    /* B arrives as [N, K]; the kernel walks K contiguously on
-                     * both operands, so it is handed [K, N]. */
+                    /* B arrives as [N, K]; both kernels walk K contiguously on
+                     * both operands, so the op is handed [K, N]. Contiguous
+                     * for the same reason the conv path does it: the kernels
+                     * address both operands by ne[0]-stride arithmetic, which
+                     * a view silently breaks. */
                     struct ggml_tensor *bt_i32 =
                         ggml_cont(c->ctx, ggml_transpose(c->ctx, xb));
-                    struct ggml_tensor *shape =
-                        ggml_new_tensor_2d(c->ctx, GGML_TYPE_F32, Nq, Mq);
-                    /* xa and bt_i32 go in as SRCS, not as remembered pointers:
-                     * the scheduler then brings them back to the host for this
-                     * CPU-only op.  Made contiguous for the same reason the
-                     * conv path does it: the kernel addresses both operands by
-                     * ne[0]-stride arithmetic, which a view silently breaks. */
-                    out = ggml_map_custom3(c->ctx, shape,
-                                           ggml_cont(c->ctx, xa), bt_i32,
-                                           qmatmul_i32_cpu, 1, qp);
+                    out = ggml_qmatmul_i32(c->ctx, ggml_cont(c->ctx, xa), bt_i32,
+                                           b_scale, b_zp,
+                                           as[0], ys[0],
+                                           (int)azp[0], (int)yzp[0],
+                                           b_zp_any, out_lo, out_hi);
+                    (void)Mq;
                     *out_p = out;
                     *out_nd_p = 2;
                     return 1;

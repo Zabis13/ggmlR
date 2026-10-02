@@ -61,11 +61,18 @@
 #extension GL_EXT_control_flow_attributes : enable
 
 // 16x16 = 256 invocations, the same workgroup size this shader always used.
-// With TILE_K = 128 the two tiles take 16 KB of shared memory, well inside the
+// With TILE_K = 128 (pitch 129) the two tiles take ~16.1 KB of shared memory, well inside the
 // 32 KB that the least capable target here reports.
 const uint BM     = 16u;
 const uint BN     = 16u;
 const uint TILE_K = 128u;
+// Row pitch of the shared tiles: TILE_K + 1. With a pitch of exactly 128 ints
+// every row starts in the same shared-memory bank, so the 16 threads of a row
+// reading sh_b[tx * pitch + kk] all hit one bank -- a 16-way conflict on every
+// read of B (and the same, 4-way, for A across the rows of a 64-wide wave).
+// One int of padding staggers the rows across banks. Only the ADDRESS moves;
+// the values and the order they are combined in do not.
+const uint TILE_KP = TILE_K + 1u;
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -78,7 +85,12 @@ layout (binding = 1) readonly buffer Bm { float bmat[]; };
 // quantised the weight per tensor rather than per channel; the shader indexes
 // them with the same "n if there are many, else 0" rule as the CPU kernel.
 layout (binding = 2) readonly buffer BS { float b_scale[]; };
-layout (binding = 3) readonly buffer BZ { int   b_zp[]; };
+// b_zp is FLOAT: a zero point is INT8 in the file and the ONNX loader widens
+// it to F32, which is the tensor the op is handed (the same as qconv_i32.comp
+// does for w_zp). It is read only when b_zp_any is set -- with no zero-point
+// tensor the host binds b_scale here as a stand-in, and reading that as a
+// zero point would be silently wrong.
+layout (binding = 3) readonly buffer BZ { float b_zp[]; };
 // dst: [N, M] with N fastest.
 layout (binding = 4) writeonly buffer D { float dst[]; };
 
@@ -101,8 +113,8 @@ layout (push_constant) uniform parameter {
 // The two staged tiles: a BM x TILE_K slice of A and a BN x TILE_K slice of B.
 // Held as int because that is what the K loop consumes -- converting once here
 // rather than once per use also keeps the inner loop free of float-to-int.
-shared int sh_a[BM * TILE_K];
-shared int sh_b[BN * TILE_K];
+shared int sh_a[BM * TILE_KP];
+shared int sh_b[BN * TILE_KP];
 
 void main() {
     // Thread (tx, ty) of block (bx, by) owns output element
@@ -120,22 +132,18 @@ void main() {
     // whole function, help with the staging, and simply do not store.
     const bool in_range = (m < p.M) && (n < p.N);
 
-    // Row/column bases, clamped so an out-of-range thread still reads inside
-    // the buffers while it helps stage.
-    const uint arow = (m < p.M ? m : 0u) * p.K;
-    const uint bcol = (n < p.N ? n : 0u) * p.K;
 
-    // sum(aq) over this row, needed only when the weight zero point is
-    // non-zero. The host passes b_zp_any so this test costs nothing per thread.
+    // sum(aq) over this row and sum(bq) down this column, for the zero-point
+    // terms. Gathered from the staged tiles inside the K loop below rather
+    // than by a second walk of global memory: that walk was a full extra pass
+    // over B per thread whenever a_zp != 0 -- on MaskRCNN's box head
+    // (a_zp = 130, K = 12544) as much traffic as the multiply itself, and none
+    // of it tiled. Integer sums, so where they are taken from changes nothing.
     int sum_a = 0;
-    if (p.b_zp_any != 0u) {
-        for (uint k = 0u; k < p.K; ++k) {
-            sum_a += int(a[arow + k]);
-        }
-    }
+    int sum_b = 0;
 
     const float bs  = b_scale[p.n_b_scale > 1u ? n : 0u];
-    const int   bzp = b_zp[p.n_b_zp > 1u ? n : 0u];
+    const int   bzp = (p.b_zp_any != 0u) ? int(b_zp[p.n_b_zp > 1u ? n : 0u]) : 0;
 
     // ⚠️ Adjacent pairs, saturated to int16, summed in order. See notes 1 and 2:
     // the tiling below changes only WHERE a[] and bmat[] are read from, never
@@ -158,20 +166,20 @@ void main() {
             const uint r  = i / TILE_K;            // which row of the A block
             const uint kk = i % TILE_K;            // which k inside the slice
             const uint mm = gl_WorkGroupID.y * BM + r;
-            sh_a[i] = (mm < p.M && kk < klen) ? int(a[mm * p.K + k0 + kk]) : 0;
+            sh_a[r * TILE_KP + kk] = (mm < p.M && kk < klen) ? int(a[mm * p.K + k0 + kk]) : 0;
         }
         for (uint i = lane; i < BN * TILE_K; i += nthr) {
             const uint c  = i / TILE_K;            // which column of the B block
             const uint kk = i % TILE_K;
             const uint nn = gl_WorkGroupID.x * BN + c;
-            sh_b[i] = (nn < p.N && kk < klen) ? int(bmat[nn * p.K + k0 + kk]) : 0;
+            sh_b[c * TILE_KP + kk] = (nn < p.N && kk < klen) ? int(bmat[nn * p.K + k0 + kk]) : 0;
         }
         barrier();                     // both tiles are now readable by all
 
         // --- consume it, in the original order --------------------------------
         if (in_range) {
-            const uint abase = ty * TILE_K;
-            const uint bbase = tx * TILE_K;
+            const uint abase = ty * TILE_KP;
+            const uint bbase = tx * TILE_KP;
             for (uint kk = 0u; kk < klen; kk += 2u) {
                 const int a0 = sh_a[abase + kk];
                 const int b0 = sh_b[bbase + kk];
@@ -186,19 +194,18 @@ void main() {
                 int pair = a0 * b0 + a1 * b1;
                 pair = clamp(pair, -32768, 32767);
                 sum_pairs += pair;
+
+                // Unconditional: two adds against a branch, and each term is
+                // simply unused when its zero point is zero. Bounded by
+                // 255 * K and 128 * K, far inside int for any K here.
+                sum_a += a0 + a1;
+                sum_b += b0 + b1;
             }
         }
     }
 
     // Zero points fold in at the end, as MLAS does with RowSum and ColumnSum,
     // rather than being subtracted per term.
-    int sum_b = 0;
-    if (p.a_zp != 0) {
-        for (uint k = 0u; k < p.K; ++k) {
-            sum_b += int(bmat[bcol + k]);
-        }
-    }
-
     const int acc = sum_pairs - bzp * sum_a - p.a_zp * sum_b
                   + p.a_zp * bzp * int(p.K);
 

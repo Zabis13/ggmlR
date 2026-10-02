@@ -1094,9 +1094,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "NORM_BACK",
     // DIVERGENCE from upstream: ONNX QLinearConv, see ggml_qconv_i32().
     "QCONV_I32",
+    // DIVERGENCE from upstream: ONNX QLinearMatMul, see ggml_qmatmul_i32().
+    "QMATMUL_I32",
 };
 
-static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
+static_assert(GGML_OP_COUNT == 108, "GGML_OP_COUNT != 108");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1220,9 +1222,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "norm_back(x)",
     // DIVERGENCE from upstream: ONNX QLinearConv, see ggml_qconv_i32().
     "qconv_i32(x, w)",
+    // DIVERGENCE from upstream: ONNX QLinearMatMul, see ggml_qmatmul_i32().
+    "qmatmul_i32(a, b)",
 };
 
-static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
+static_assert(GGML_OP_COUNT == 108, "GGML_OP_COUNT != 108");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 

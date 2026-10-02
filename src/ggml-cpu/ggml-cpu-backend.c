@@ -18,6 +18,14 @@
  * code it was written for, rather than in ops.c, because it reproduces ONNX
  * Runtime's arithmetic and is only meaningful next to that reasoning. */
 #include "../onnx/qconv_i32.h"
+#include "../onnx/qmatmul_i32.h"
+
+/* The kernel takes its barrier as a callback so qconv_i32.c need not include
+ * the threadpool internals; a wrapper rather than a cast of ggml_barrier,
+ * whose parameter type differs from void *. */
+static void qconv_i32_barrier(void * tp) {
+    ggml_barrier((struct ggml_threadpool *) tp);
+}
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -1928,7 +1936,13 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_QCONV_I32:
             {
-                qconv_i32_compute(tensor, params->ith, params->nth);
+                qconv_i32_compute(tensor, params->ith, params->nth,
+                                  params->wdata, params->wsize,
+                                  qconv_i32_barrier, params->threadpool);
+            } break;
+        case GGML_OP_QMATMUL_I32:
+            {
+                qmatmul_i32_compute(tensor, params->ith, params->nth);
             } break;
         case GGML_OP_CONV_3D:
             {
@@ -2394,6 +2408,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_CONV_TRANSPOSE_2D:
+        case GGML_OP_QMATMUL_I32:
         case GGML_OP_QCONV_I32:
             {
                 n_tasks = n_threads;
@@ -2957,6 +2972,12 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_CONV_3D:
                     {
                         cur = GGML_IM2COL_WORK_SIZE;
+                    } break;
+                case GGML_OP_QCONV_I32:
+                    {
+                        // ggmlR extension: packed weights + per-thread
+                        // im2col rows, see qconv_i32.c.
+                        cur = qconv_i32_work_size(node, n_tasks);
                     } break;
                 case GGML_OP_CONV_TRANSPOSE_2D:
                     {

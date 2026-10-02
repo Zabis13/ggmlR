@@ -127,6 +127,13 @@ extern const onnx_node_t *g_current_node;
 /* onnx_trace_nodes() — nonzero when ONNX_TRACE_NODES=1; gates graph tracing */
 int onnx_trace_nodes(void);
 
+/* onnx_profile_phases() — nonzero when ONNX_PROFILE_PHASES=1. Splits a run's
+ * wall clock across the per-segment phases (map/build/alloc/compute), which is
+ * what the Vulkan perf logger cannot see: it accounts for kernel time only. */
+int onnx_profile_phases(void);
+void onnx_phase_reset(void);
+void onnx_phase_report(void);
+
 /* onnx_trace_ring() — nonzero when ONNX_TRACE_RING=1; keeps the last few graph
  * nodes with their edge values so they can be printed when a run dies. */
 int onnx_trace_ring(void);

@@ -52,7 +52,12 @@ models <- list(
   list(name = "CaiT XS24",       file = "cait_xs24_384_Opset16.onnx",
        shapes = list(x = c(1L, 3L, 384L, 384L))),
   list(name = "BoTNet26t",       file = "botnet26t_256_Opset16.onnx",
-       shapes = list(x = c(1L, 3L, 256L, 256L)))
+       shapes = list(x = c(1L, 3L, 256L, 256L))),
+  # int_max: an index input, drawn from 0..int_max-1. runif() would cast to
+  # all zeros -- every edge into one node, a different (degenerate) workload.
+  list(name = "SAGEConv",        file = "sageconv_Opset16.onnx",
+       shapes = list(x = c(2708L, 1433L), edge_index = c(2L, 10556L)),
+       int_max = list(edge_index = 2708L))
 )
 
 # ── obtain a log ────────────────────────────────────────────────────
@@ -75,7 +80,13 @@ if (nzchar(existing)) {
   Sys.setenv(GGML_VK_PERF_LOGGER = "1")
 
   set.seed(42)
-  inputs <- lapply(m$shapes, function(s) runif(prod(s)))
+  inputs <- lapply(names(m$shapes), function(nm) {
+    n <- prod(m$shapes[[nm]])
+    if (!is.null(m$int_max[[nm]]))
+      as.numeric(sample.int(m$int_max[[nm]], n, replace = TRUE) - 1L)
+    else runif(n)
+  })
+  names(inputs) <- names(m$shapes)
   model  <- onnx_load(path, device = "vulkan", input_shapes = m$shapes)
 
   # The logger writes through ggml's own printf, so the output has to be

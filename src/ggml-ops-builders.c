@@ -3154,6 +3154,70 @@ struct ggml_tensor * ggml_qconv_i32(
     return result;
 }
 
+// ggml_qmatmul_i32
+//
+// ggmlR extension: ONNX QLinearMatMul, absent upstream. See ggml.h for the
+// arithmetic and ggml_qconv_i32() above for why it is a real op: as a
+// ggml_map_custom3 it was a host node on every backend, so a Vulkan run
+// downloaded A and B for it, and the kernel then uploaded them again into a
+// private dispatch and waited on a fence.
+//
+// The tables arrive as SOURCES, as for the conv: the scheduler places them
+// with the op, and nothing is copied into a userdata block that the run would
+// then have to own and free.
+
+struct ggml_tensor * ggml_qmatmul_i32(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,        // [K, M]
+        struct ggml_tensor  * b,        // [K, N]  (B transposed)
+        struct ggml_tensor  * b_scale,  // [1 or N], F32
+        struct ggml_tensor  * b_zp,     // [1 or N], F32 or I32, or NULL
+        float                 a_scale,
+        float                 y_scale,
+        int                   a_zp,
+        int                   y_zp,
+        int                   b_zp_any,
+        float                 out_lo,
+        float                 out_hi) {
+
+    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
+    GGML_ASSERT(a->ne[0] == b->ne[0]);   // K agrees
+    // 2-D only, which is all the ONNX builder produces; a batch axis here
+    // would need its own stride arithmetic in both kernels.
+    GGML_ASSERT(a->ne[2] == 1 && a->ne[3] == 1);
+    GGML_ASSERT(b->ne[2] == 1 && b->ne[3] == 1);
+
+    const int64_t N = b->ne[1];
+    // Per column or shared -- anything else means the caller read the wrong
+    // initializer, and indexing it would mis-scale whole columns silently.
+    GGML_ASSERT(b_scale != NULL && b_scale->type == GGML_TYPE_F32);
+    GGML_ASSERT(b_scale->ne[0] == 1 || b_scale->ne[0] == N);
+    // A zero point is INT8 in the file and widened to F32 on load; I32 is
+    // accepted too, and each kernel reads it at the type it carries.
+    GGML_ASSERT(b_zp == NULL || b_zp->type == GGML_TYPE_F32 ||
+                                b_zp->type == GGML_TYPE_I32);
+    GGML_ASSERT(b_zp == NULL || b_zp->ne[0] == 1 || b_zp->ne[0] == N);
+
+    struct ggml_tensor * result =
+        ggml_new_tensor_2d(ctx, GGML_TYPE_F32, N, a->ne[1]);
+
+    ggml_set_op_params_f32(result, 0, a_scale);
+    ggml_set_op_params_f32(result, 1, y_scale);
+    ggml_set_op_params_i32(result, 2, a_zp);
+    ggml_set_op_params_i32(result, 3, y_zp);
+    ggml_set_op_params_f32(result, 4, out_lo);
+    ggml_set_op_params_f32(result, 5, out_hi);
+    ggml_set_op_params_i32(result, 6, b_zp_any ? 1 : 0);
+
+    result->op     = GGML_OP_QMATMUL_I32;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = b_scale;
+    result->src[3] = b_zp;   // NULL is legal: every zero point is then zero
+
+    return result;
+}
+
 // ggml_conv_3d_direct
 
 struct ggml_tensor * ggml_conv_3d_direct(
