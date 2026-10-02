@@ -96,15 +96,18 @@ GGML_OBJECTS = \
   ggml-cpu/ops-private.o ggml-cpu/vec.o \
   ggml-cpu/binary-ops.o ggml-cpu/unary-ops.o ggml-cpu/repack.o \
   ggml-cpu/quants.o ggml-cpu/hbm.o \
+  onnx/qconv_i32.o onnx/qmatmul_i32.o \
   @X86_OBJECTS@
 
 # ONNX loader objects
+# Note: onnx/qconv_i32.o and onnx/qmatmul_i32.o are NOT here but in
+# GGML_OBJECTS -- ggml-cpu-backend.c calls their kernels, so they must ship in
+# libggml.a or llamaR/sd2R fail to load (undefined symbol: qconv_i32_compute).
 ONNX_OBJECTS = \
   onnx/onnx_loader.o onnx/onnx_ggml.o \
   onnx/onnx_ops_basic.o onnx/onnx_ops_tensor.o onnx/onnx_ops_nn.o \
   onnx/onnx_ops_quant.o onnx/onnx_ops_special.o \
-  onnx/r_onnx.o onnx/roi_align.o onnx/nms.o onnx/qconv_i32.o \
-  onnx/qmatmul_i32.o
+  onnx/r_onnx.o onnx/roi_align.o onnx/nms.o
 
 # R interface objects
 # Note: r_backend_ops_test.o belongs here and NOT in GGML_OBJECTS -- the static
