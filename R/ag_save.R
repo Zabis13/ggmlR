@@ -113,20 +113,16 @@ ag_save_model <- function(model, path, model_fn = NULL) {
     stop("ag_save_model(): `model_fn` must be a function or NULL.")
   }
 
-  params_raw <- model$parameters()
-  # Pull each parameter's value to a plain CPU matrix (works on GPU too).
-  parameters <- lapply(params_raw, .ag_data)
-  # Record dtypes alongside (forward-compat metadata; not used on load yet).
-  dtypes <- vapply(params_raw, function(p) {
-    if (is_ag_tensor(p) && !is.null(p$dtype)) p$dtype else "f32"
-  }, character(1L))
+  # Same content as the in-memory state dict (plain CPU matrices, works on GPU
+  # too); the file format itself is unchanged.
+  sd <- ag_state_dict(model)
 
   container <- list(
     format        = AG_SAVE_FORMAT,
     version       = AG_SAVE_VERSION,
-    parameters    = parameters,
-    param_dtypes  = dtypes,
-    buffers       = .ag_collect_buffers(model),
+    parameters    = sd$parameters,
+    param_dtypes  = sd$param_dtypes,
+    buffers       = sd$buffers,
     model_fn      = model_fn,
     ggmlR_version = utils::packageVersion("ggmlR"),
     R_version     = getRversion(),
@@ -261,4 +257,107 @@ print.ggmlR_ag_state <- function(x, ...) {
   cat("  ggmlR version: ", format(x$ggmlR_version), "\n", sep = "")
   cat("  created:       ", format(x$created), "\n", sep = "")
   invisible(x)
+}
+
+# ============================================================================
+# In-memory state dicts: the same content ag_save_model() writes, without a file.
+# ============================================================================
+
+AG_STATE_DICT_FORMAT  <- "ggmlR.ag_state_dict"
+AG_STATE_DICT_VERSION <- 1L
+
+.ag_model_params <- function(model, caller) {
+  if (is.function(model$parameters)) return(model$parameters())
+  if (is.function(model$params))     return(model$params())
+  stop(caller, ": `model` has no parameters() / params() method", call. = FALSE)
+}
+
+#' Model weights as plain R data
+#'
+#' A copy of every parameter and persistent buffer (\code{ag_batch_norm}
+#' running statistics) as host matrices, keyed like \code{model$parameters()}.
+#' Values are R doubles whatever the device or \code{ag_dtype()}: an f32 value
+#' is represented exactly, so a state taken on the GPU in f32 restores on the
+#' CPU (or back) to the same numbers. f16/bf16 weights carry only their own
+#' precision; continuing exactly across f16 and f32 is not possible.
+#'
+#' Use it for checkpoints, for copying weights between models (target networks:
+#' \code{ag_load_state_dict(target, ag_state_dict(online))}), or with
+#' \code{saveRDS}. As with any \code{.rds}, only read files you trust.
+#'
+#' @param model An \code{ag_sequential}, an \code{ag_*} layer, or anything with a
+#'   \code{parameters()} or \code{params()} method.
+#' @return A list with \code{parameters}, \code{buffers} and
+#'   \code{param_dtypes}, plus \code{format}/\code{version}.
+#' @seealso \code{\link{ag_load_state_dict}}, \code{\link{ag_save_model}}
+#' @export
+ag_state_dict <- function(model) {
+  params <- .ag_model_params(model, "ag_state_dict()")
+  list(
+    format       = AG_STATE_DICT_FORMAT,
+    version      = AG_STATE_DICT_VERSION,
+    parameters   = lapply(params, function(p) .ag_as_matrix(.ag_data(p))),
+    param_dtypes = vapply(params, function(p)
+      if (is_ag_tensor(p) && !is.null(p$dtype)) p$dtype else "f32", character(1L)),
+    buffers      = .ag_collect_buffers(model)
+  )
+}
+
+#' Load weights into an existing model
+#'
+#' Writes a state from \code{\link{ag_state_dict}} (or the container of an
+#' \code{\link{ag_save_model}} file read with \code{readRDS}) into \code{model}
+#' in place. Device-resident weights are overwritten in their own buffers, so
+#' an optimizer built on the model stays valid and keeps its residency. Values
+#' are converted to the model's dtype on upload.
+#'
+#' Everything is checked before anything is written: an error leaves the model
+#' untouched.
+#'
+#' @param model Target model (see \code{\link{ag_state_dict}}).
+#' @param state A state dict.
+#' @param strict \code{TRUE} (default): the parameter and buffer names must match
+#'   exactly. \code{FALSE}: names present on only one side are skipped (partial
+#'   loading, transfer learning); names present on both sides are still
+#'   shape-checked, always.
+#' @return \code{model}, invisibly.
+#' @export
+ag_load_state_dict <- function(model, state, strict = TRUE) {
+  caller <- "ag_load_state_dict()"
+  if (!is.list(state) || !is.list(state$parameters))
+    stop(caller, ": `state` is not a state dict (no $parameters)", call. = FALSE)
+  params <- .ag_model_params(model, caller)
+  bufs   <- .ag_collect_buffers(model)
+  sbufs  <- state$buffers %||% list()
+
+  match_names <- function(have, saved, what) {
+    missing <- setdiff(names(have), names(saved))
+    extra   <- setdiff(names(saved), names(have))
+    if (strict && (length(missing) || length(extra)))
+      stop(caller, ": ", what, " names differ (strict = TRUE)",
+           "\n  missing in state: ", paste(missing, collapse = ", "),
+           "\n  not in model: ",     paste(extra,   collapse = ", "), call. = FALSE)
+    intersect(names(have), names(saved))
+  }
+  p_names <- match_names(params, state$parameters, "parameter")
+  b_names <- match_names(bufs, sbufs, "buffer")
+
+  check <- function(cur_dim, val, nm) {
+    if (!is.numeric(val) || !identical(as.integer(dim(val)), as.integer(cur_dim)))
+      stop(caller, ": shape mismatch for '", nm, "': model ",
+           paste(cur_dim, collapse = "x"), ", state ",
+           paste(dim(val) %||% length(val), collapse = "x"), call. = FALSE)
+    if (!all(is.finite(val)))
+      stop(caller, ": '", nm, "' contains NA, NaN or Inf", call. = FALSE)
+  }
+  for (nm in p_names) check(.ag_sel_dim(params[[nm]]), state$parameters[[nm]], nm)
+  for (nm in b_names) check(dim(bufs[[nm]]), sbufs[[nm]], nm)
+
+  # All checks passed -- now write.
+  for (nm in p_names) {
+    v <- state$parameters[[nm]]
+    .ag_opt_store_weight(params[[nm]], matrix(as.numeric(v), nrow(v), ncol(v)))
+  }
+  if (length(b_names)) .ag_restore_buffers(model, sbufs[b_names])
+  invisible(model)
 }

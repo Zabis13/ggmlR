@@ -134,3 +134,40 @@ ag_xfer_report <- function(n = 40L) {
   cat(sprintf("%-6s %8d %10.2f  TOTAL\n", "", sum(df$n), sum(df$mb)))
   invisible(df)
 }
+
+# ---------------------------------------------------------------------------
+# Graph launches on the ag_* path -- always counted.
+#
+# On a small network the cost of a step is the NUMBER of graphs run (each one is
+# a submit and a wait on the device, around a millisecond), not their size, so
+# this is the figure that says whether graph mode is doing its job. Unlike the
+# transfer counter above it is always on: one integer add per launch.
+# ---------------------------------------------------------------------------
+
+.ag_launch <- new.env(parent = emptyenv())
+.ag_launch$by_site <- list()
+
+# Every ag_* graph compute goes through here. `site` names the caller.
+.ag_graph_compute <- function(backend, graph, site) {
+  n <- .ag_launch$by_site[[site]]
+  .ag_launch$by_site[[site]] <- if (is.null(n)) 1 else n + 1
+  ggml_backend_graph_compute(backend, graph)
+}
+
+#' Graph launches on the ag_* path
+#'
+#' Number of ggml graphs computed by \code{ag_*} operations since the last reset,
+#' by call site (per-operation forward, deferred graph, graph backward, flash
+#' attention). Diagnostic: with \code{\link{ag_graph_mode}} on, a training step
+#' of a small network should take a handful of launches, not hundreds.
+#'
+#' @param reset \code{TRUE} to zero the counters after reading them.
+#' @return A named numeric vector of launches per site (total in \code{"total"}).
+#' @keywords internal
+ag_launch_count <- function(reset = FALSE) {
+  v <- unlist(.ag_launch$by_site)
+  if (is.null(v)) v <- numeric(0)
+  v <- c(v, total = as.numeric(sum(v)))
+  if (isTRUE(reset)) .ag_launch$by_site <- list()
+  v
+}

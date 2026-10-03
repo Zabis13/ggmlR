@@ -13,7 +13,8 @@ optimizer_sgd(
 )
 }
 \arguments{
-\item{params}{Named list of ag_param tensors}
+\item{params}{List of ag_param tensors, named or not (names are used only
+for display). The same tensor listed twice is kept once, with a warning.}
 
 \item{lr}{Learning rate (default 0.01)}
 
@@ -32,7 +33,16 @@ for an averaging loss such as \code{\link{ag_mse_loss}}; set it to
 \code{FALSE} for a summing loss, where the plain sum is already right.}
 }
 \value{
-An optimizer environment
+An optimizer environment with \code{step(grads)}, \code{zero_grad()},
+  \code{state()} and \code{load_state(state)}. \code{state()} returns a
+  versioned list (moments as host double matrices, \code{t},
+  \code{accum_count}); \code{load_state()} checks the type, parameter
+  count, names (when both sides have them) and shapes before writing
+  anything, restores \code{t} and \code{accum_count}, and does NOT restore
+  hyperparameters (it warns when they differ). Exact continuation holds on
+  the same device and dtype; CPU <-> GPU in f32 continues within float
+  tolerance; across f16 and f32 it cannot be exact. Only read saved states
+  you trust (\code{readRDS}).
 }
 \description{
 Create an SGD optimizer

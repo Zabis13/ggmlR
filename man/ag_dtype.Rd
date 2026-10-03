@@ -15,5 +15,8 @@ Invisibly the previous dtype string
 \description{
 Controls the dtype used when uploading tensors to the ggml backend.
 \code{"bf16"} halves memory usage vs \code{"f32"} with minimal accuracy loss.
-Backward pass always uses f32 R matrices regardless of this setting.
+Gradients are never computed in f16: the GPU graph backward runs in f32 only,
+so with \code{"f16"} or \code{"bf16"} \code{backward()} takes the closure path,
+which computes them in double -- correct, but slower (the reason is counted
+by \code{ggmlR:::ag_backward_fallbacks()}). Training in f32 keeps the graph path.
 }

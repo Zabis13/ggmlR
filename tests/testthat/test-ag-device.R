@@ -372,6 +372,21 @@ test_that("ag_sum GPU dim=2 (colSums) equals CPU", {
   reset_to_cpu()
 })
 
+test_that("ag_mean GPU dim=NULL (all elements) equals CPU", {
+  skip_if_no_gpu()
+  set.seed(32)
+  x_mat <- matrix(runif(12), 3, 4)
+  ag_device("gpu")
+  x <- ag_param(x_mat)
+  with_grad_tape({ out <- ag_mean(x) })
+  expect_equal(as.numeric(ggmlR:::.ag_data(out)), mean(x_mat), tolerance = 1e-5)
+  grads <- backward(out)
+  g <- get0(as.character(x$id), envir = grads)
+  expect_equal(as.numeric(ggmlR:::.ag_as_matrix(g)),
+               rep(1 / 12, 12), tolerance = 1e-5)
+  reset_to_cpu()
+})
+
 test_that("ag_mean GPU dim=1 (rowMeans) equals CPU", {
   skip_if_no_gpu()
   set.seed(33)

@@ -758,6 +758,12 @@ struct vk_device_struct {
     vk::DescriptorSetLayout dsl;
 
     vk_matmul_pipeline pipeline_matmul_f32 {};
+    // ggmlR: f32 x f32 with exact (f32) shared-memory tiles, used when the node
+    // asks for GGML_PREC_F32. On fp16/coopmat devices pipeline_matmul_f32 keeps
+    // its tiles in f16 (~4e-4 relative error for n > 8); this one is built from
+    // the _fp32 SPIR-V. Aliases pipeline_matmul_f32 on devices that are already
+    // fp32; null when no tile size fits in shared memory.
+    vk_matmul_pipeline pipeline_matmul_f32_prec32 {};
     vk_matmul_pipeline pipeline_matmul_f32_f16 {};
     vk_matmul_pipeline pipeline_matmul_bf16 {};
     vk_matmul_pipeline2 pipeline_matmul_f16;
@@ -3502,7 +3508,10 @@ static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const
     return vk_fa_pipeline_state{hsk, hsv, params.block_rows, params.block_cols, params.d_split, params.row_split, params.shmem_staging, params.path, params.workgroup_size, subgroup_size, aligned, f32acc, flags, params.limit_occupancy_shmem, k_type, v_type};
 }
 
-static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
+// scalar_f32: size for the _fp32 SPIR-V variant (f32 tiles, no coopmat staging)
+// instead of the variant the device loads by default. Element size depends on
+// the shader variant, not on the device -- ggmlR, for pipeline_matmul_f32_prec32.
+static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type, bool scalar_f32 = false) {
 
     uint32_t lut_size = 0;
     switch (src0_type) {
@@ -3535,13 +3544,14 @@ static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vec
     }
 
     // Needs to be kept up to date on shader changes
-    const uint32_t bank_conflict_offset = device->coopmat_support ? 8 : 1;
-    const uint32_t type_size = device->fp16 ? sizeof(ggml_fp16_t) : sizeof(float);
+    const bool coopmat_variant = device->coopmat_support && !scalar_f32;
+    const uint32_t bank_conflict_offset = coopmat_variant ? 8 : 1;
+    const uint32_t type_size = (device->fp16 && !scalar_f32) ? sizeof(ggml_fp16_t) : sizeof(float);
     const uint32_t warps = warptile[0] / warptile[10];
 
     const uint32_t load_bufs = (warptile[1] + warptile[2]) * (warptile[3] + bank_conflict_offset) * type_size;
     const uint32_t mmid_row_ids = mul_mat_id ? (warptile[2] * 2 * sizeof(uint16_t)) : 0;
-    const uint32_t coopmat_stage = device->coopmat_support ? warptile[7] * warptile[8] / warps * sizeof(float) : 0;
+    const uint32_t coopmat_stage = coopmat_variant ? warptile[7] * warptile[8] / warps * sizeof(float) : 0;
     const uint32_t ballots_sh = mul_mat_id ? (warps * 4 * sizeof(uint32_t)) : 0;
 
     const uint32_t total_size = load_bufs + mmid_row_ids + coopmat_stage + lut_size + ballots_sh;

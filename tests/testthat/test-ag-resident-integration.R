@@ -295,7 +295,8 @@ test_that("switching residency mid-session does not corrupt state", {
 
 test_that("the closure path is untouched by the residency flag", {
   # A tape the graph path declines must behave identically whatever the flag
-  # says -- ag_sum is not in .AG_BWD_GRAPH_OPS, so this exercises the fallback.
+  # says -- ag_pow is not in .AG_BWD_GRAPH_OPS (this used ag_sum until the PPO
+  # wave covered it), so this exercises the fallback.
   skip_if_no_gpu()
   ag_device("gpu"); on.exit(ag_device("cpu"), add = TRUE)
 
@@ -304,7 +305,7 @@ test_that("the closure path is untouched by the residency flag", {
     d <- 4L
     W <- ag_param(matrix(rnorm(d * d) * 0.3, d, d))
     X <- ag_tensor(matrix(rnorm(d * d) * 0.3, d, d))
-    with_grad_tape({ l <- ag_sum(ag_matmul(W, X)) })
+    with_grad_tape({ l <- ag_mse_loss(ag_pow(ag_matmul(W, X), 2), matrix(0, d, d)) })
     backward(l)
     list(grad = as_mat(W$grad), path = bwd_path())
   }

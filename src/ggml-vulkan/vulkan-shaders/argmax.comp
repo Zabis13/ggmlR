@@ -25,14 +25,17 @@ void main() {
         return;
     }
 
-    A_TYPE amax = -FLT_MAX;
+    // ggmlR: ties go to the FIRST index, matching the CPU kernel and R's
+    // which.max. Each thread keeps the first maximum of its strided slice
+    // (strict >), and the reduction breaks equal values by index -- comparing
+    // thread numbers instead was wrong once KX > BLOCK_SIZE, since thread 0
+    // may hold index 64 while thread 1 holds index 1. Starting from -inf with
+    // strict > means NaN is never selected and an all-NaN / all--inf row
+    // gives 0, as on the CPU.
+    A_TYPE amax = A_TYPE(uintBitsToFloat(0xff800000u));
     uint acol = col;
 
-    if (col < p.KX) {
-        amax = data_a[row*p.KX + col];
-    }
-
-    for (uint i = col + BLOCK_SIZE; i < p.KX; i += BLOCK_SIZE) {
+    for (uint i = col; i < p.KX; i += BLOCK_SIZE) {
         A_TYPE val = data_a[row*p.KX + i];
         if (val > amax) {
             amax = val;
@@ -46,7 +49,8 @@ void main() {
     barrier();
     [[unroll]] for (int s = int(BLOCK_SIZE) / 2; s > 0; s >>= 1) {
         if (col < s && col + s < p.KX) {
-            if (tmpmax[col] < tmpmax[col + s]) {
+            if (tmpmax[col] < tmpmax[col + s] ||
+                (tmpmax[col] == tmpmax[col + s] && tmp[col + s] < tmp[col])) {
                 tmpmax[col] = tmpmax[col + s];
                 tmp[col] = tmp[col + s];
             }

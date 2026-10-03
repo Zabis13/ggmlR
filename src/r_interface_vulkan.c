@@ -30,6 +30,20 @@ SEXP R_ggml_vulkan_is_available(void) {
 // session, so the CRAN tarball must not link _exit(). Self-builds opt in with
 // `--configure-args="--enable-hard-exit"`. ggml_vulkan_shutdown() consults this
 // to warn instead of silently ignoring hard = TRUE.
+// Number of Vulkan mat-mat dispatches that took the GGML_PREC_F32 f32-tile path
+// (ggml-vulkan-matmul.cpp). Test hook: lets a test tell that the flag chose a
+// different pipeline. 0 without Vulkan.
+#ifdef GGML_USE_VULKAN
+extern uint64_t ggml_vk_prec32_dispatch_count(void);
+#endif
+SEXP R_ggml_vk_prec32_count(void) {
+#ifdef GGML_USE_VULKAN
+    return ScalarReal((double) ggml_vk_prec32_dispatch_count());
+#else
+    return ScalarReal(0.0);
+#endif
+}
+
 SEXP R_ggml_vk_hard_exit_available(void) {
 #if defined(GGML_USE_VULKAN) && defined(GGML_VK_HARD_EXIT)
     return ScalarLogical(TRUE);

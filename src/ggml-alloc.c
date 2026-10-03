@@ -808,6 +808,17 @@ static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
                 if (ggml_impl_is_view(parent)) {
                     struct ggml_tensor * view_src = parent->view_src;
                     struct hash_node * view_src_hn = ggml_gallocr_hash_get(galloc, view_src);
+                    // ggmlR divergence from upstream (0.11.0 has the same bug):
+                    // an OUTPUT view keeps its view_src alive. The output flag
+                    // sits on the view (e.g. ggml_clamp, which is a view written
+                    // in place), while ggml_gallocr_free_node only checks the
+                    // view_src's own flag -- so once the view's consumers were
+                    // done its memory was handed to a later node and the output
+                    // was overwritten. Never releasing this view's reference
+                    // keeps n_views > 0 until the end of the graph.
+                    if (parent->flags & GGML_TENSOR_FLAG_OUTPUT) {
+                        continue;
+                    }
                     view_src_hn->n_views -= 1;
                     AT_PRINTF("view_src %s: %d children, %d views\n",
                         view_src->name, view_src_hn->n_children, view_src_hn->n_views);

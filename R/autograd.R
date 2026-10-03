@@ -217,6 +217,29 @@ ag_record <- function(output, grad_fn, inputs, op = NULL, ...) {
   invisible(NULL)
 }
 
+#' Gradient of a tensor as an R matrix
+#'
+#' After \code{backward()}, \code{x$grad} holds the gradient -- as an R matrix
+#' on the closure path, but as a device handle when the graph backward kept it
+#' on the GPU (the default there). \code{ag_grad()} returns the value as a
+#' matrix either way, so code that reads gradients does not depend on where
+#' they live. In graph mode it is a synchronisation point.
+#'
+#' @param x An ag_tensor (usually a parameter).
+#' @return A numeric matrix, or \code{NULL} when \code{x} has no gradient.
+#' @export
+#' @examples
+#' w <- ag_param(matrix(1:4 + 0, 2, 2))
+#' with_grad_tape({ loss <- ag_sum(ag_mul(w, w)) })
+#' backward(loss)
+#' ag_grad(w)            # 2 * w
+ag_grad <- function(x) {
+  if (!is_ag_tensor(x)) stop("ag_grad(): `x` must be an ag_tensor", call. = FALSE)
+  g <- x$grad
+  if (is.null(g)) return(NULL)
+  .ag_as_matrix(g)
+}
+
 #' Run code with gradient tape enabled
 #'
 #' Records all ag_* operations inside \code{expr} for later \code{backward()}.
@@ -431,28 +454,31 @@ ag_add <- function(A, B) {
 #' @return ag_tensor
 #' @export
 ag_sub <- function(A, B) {
-  a_data <- .ag_data(A)
-  b_data <- .ag_data(B)
   device <- .ag_result_device(A, B)
 
-  b_orig <- b_data
-
-  # Broadcasting: expand b to match a shape for GPU/elementwise computation
-  needs_broadcast <- !is.null(dim(b_data)) && !is.null(dim(a_data)) &&
-    ((ncol(b_data) == 1L && ncol(a_data) > 1L) ||
-     (nrow(b_data) == 1L && nrow(a_data) > 1L))
-
-  if (needs_broadcast && device != "gpu") {
-    if (ncol(b_data) == 1L && ncol(a_data) > 1L) {
-      b_data <- matrix(b_data[, 1L], nrow = nrow(b_data), ncol = ncol(a_data))
-    } else {
-      b_data <- matrix(b_data[1L, ], nrow = nrow(a_data), ncol = ncol(b_data), byrow = TRUE)
-    }
-  }
-
   if (device == "gpu") {
-    out <- ag_tensor(.ag_gpu_sub(a_data, b_orig), device = "gpu", dtype = .ag_device_state$dtype)
+    # Operands stay on the device (a pending node in graph mode); ggml_sub
+    # broadcasts b over a itself, so b goes in unexpanded.
+    a_data <- .ag_operand(A)
+    b_data <- .ag_operand(B)
+    b_orig <- b_data
+    out    <- .ag_wrap_result(.ag_gpu_sub(a_data, b_data), device)
   } else {
+    a_data <- .ag_data(A)
+    b_data <- .ag_data(B)
+    b_orig <- b_data
+
+    # Broadcasting: expand b to match a shape for elementwise computation
+    needs_broadcast <- !is.null(dim(b_data)) && !is.null(dim(a_data)) &&
+      ((ncol(b_data) == 1L && ncol(a_data) > 1L) ||
+       (nrow(b_data) == 1L && nrow(a_data) > 1L))
+    if (needs_broadcast) {
+      if (ncol(b_data) == 1L && ncol(a_data) > 1L) {
+        b_data <- matrix(b_data[, 1L], nrow = nrow(b_data), ncol = ncol(a_data))
+      } else {
+        b_data <- matrix(b_data[1L, ], nrow = nrow(a_data), ncol = ncol(b_data), byrow = TRUE)
+      }
+    }
     out <- ag_tensor(a_data - b_data, device = device)
   }
   out$requires_grad <- (is_ag_tensor(A) && A$requires_grad) ||
@@ -460,29 +486,33 @@ ag_sub <- function(A, B) {
 
   if (out$requires_grad) {
     A_ref <- A; B_ref <- B
+    # Shapes, not values: on the device the operands are handles, and dim() of
+    # one is NULL.
+    a_dim <- .ag_dim(a_data); b_dim <- .ag_dim(b_orig)
     grad_fn <- function(grad_out) {
       ga <- if (is_ag_tensor(A_ref) && A_ref$requires_grad) {
         # reduce if A was broadcast-expanded (unlikely but handle symmetrically)
         g <- grad_out
-        if (!is.null(dim(a_data)) && nrow(a_data) == 1L && nrow(g) > 1L)
+        if (!is.null(a_dim) && a_dim[1L] == 1L && nrow(g) > 1L)
           g <- matrix(colSums(g), 1L)
-        if (!is.null(dim(a_data)) && ncol(a_data) == 1L && ncol(g) > 1L)
+        if (!is.null(a_dim) && a_dim[2L] == 1L && ncol(g) > 1L)
           g <- matrix(rowSums(g), ncol = 1L)
         g
       } else NULL
       gb <- if (is_ag_tensor(B_ref) && B_ref$requires_grad) {
         g <- -grad_out
         # reduce along broadcast dims
-        if (!is.null(dim(b_orig)) && nrow(b_orig) == 1L && nrow(g) > 1L)
+        if (!is.null(b_dim) && b_dim[1L] == 1L && nrow(g) > 1L)
           g <- matrix(colSums(g), 1L)
-        if (!is.null(dim(b_orig)) && ncol(b_orig) == 1L && ncol(g) > 1L)
+        if (!is.null(b_dim) && b_dim[2L] == 1L && ncol(g) > 1L)
           g <- matrix(rowSums(g), ncol = 1L)
         g
       } else NULL
       list(A = ga, B = gb)
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(A = A, B = B))
+    ag_record(out, grad_fn, list(A = A, B = B), op = "sub",
+              a_orig = a_data, b_orig = b_orig)
   }
   out
 }
@@ -494,17 +524,21 @@ ag_sub <- function(A, B) {
 #' @return ag_tensor
 #' @export
 ag_mul <- function(A, B) {
-  a_data <- .ag_data(A)
-  b_data <- .ag_data(B)
   device <- .ag_result_device(A, B)
 
-  # Save original shapes before any broadcast expansion (needed for backward reduce).
-  a_orig <- a_data
-  b_orig <- b_data
-
-  # CPU broadcast: expand smaller tensor to match larger before element-wise multiply.
-  # R does not broadcast matrices automatically ([d,s] * [1,s] fails or recycles wrong).
-  if (device != "gpu") {
+  if (device == "gpu") {
+    # Operands stay on the device; ggml_mul broadcasts the smaller one
+    # (.ag_gpu_mul puts it second). The snapshots for the backward are the
+    # same handles -- nothing is downloaded unless the closure path runs.
+    a_data <- .ag_operand(A)
+    b_data <- .ag_operand(B)
+    a_orig <- a_data; b_orig <- b_data
+    out    <- .ag_wrap_result(.ag_gpu_mul(a_data, b_data), device)
+  } else {
+    a_data <- .ag_data(A)
+    b_data <- .ag_data(B)
+    a_orig <- a_data
+    b_orig <- b_data
     nr_a <- nrow(a_data); nc_a <- ncol(a_data)
     nr_b <- nrow(b_data); nc_b <- ncol(b_data)
     nr   <- max(nr_a, nr_b)
@@ -513,39 +547,34 @@ ag_mul <- function(A, B) {
     if (nc_a < nc) a_data <- a_data[, rep(seq_len(nc_a), length.out = nc), drop = FALSE]
     if (nr_b < nr) b_data <- b_data[rep(seq_len(nr_b), length.out = nr), , drop = FALSE]
     if (nc_b < nc) b_data <- b_data[, rep(seq_len(nc_b), length.out = nc), drop = FALSE]
-  }
-
-  if (device == "gpu") {
-    out <- ag_tensor(.ag_gpu_mul(a_data, b_data), device = "gpu", dtype = .ag_device_state$dtype)
-  } else {
     out <- ag_tensor(a_data * b_data, device = device)
   }
   out$requires_grad <- (is_ag_tensor(A) && A$requires_grad) ||
                        (is_ag_tensor(B) && B$requires_grad)
 
   if (out$requires_grad) {
-    # Snapshots of expanded data (for grad_out * other computation).
     a_snap <- a_data; b_snap <- b_data
     A_ref  <- A;     B_ref  <- B
+    a_dim  <- .ag_dim(a_orig); b_dim <- .ag_dim(b_orig)
     grad_fn <- function(grad_out) {
       nr_g <- nrow(grad_out); nc_g <- ncol(grad_out)
-      # Expand snap via rep-indexing to match grad_out shape, then reduce back.
-      .mul_grad <- function(snap_self_orig, snap_other) {
+      .mul_grad <- function(self_dim, snap_other) {
+        snap_other <- .ag_as_matrix(snap_other)      # a handle on the device path
         other_exp <- snap_other[
           rep(seq_len(nrow(snap_other)), length.out = nr_g),
           rep(seq_len(ncol(snap_other)), length.out = nc_g),
           drop = FALSE
         ]
         g <- grad_out * other_exp
-        if (nrow(snap_self_orig) == 1L && nr_g > 1L)
+        if (self_dim[1L] == 1L && nr_g > 1L)
           g <- matrix(colSums(g), 1L, nc_g)
-        if (ncol(snap_self_orig) == 1L && nc_g > 1L)
+        if (self_dim[2L] == 1L && nc_g > 1L)
           g <- matrix(rowSums(g), nrow(g), 1L)
         g
       }
       list(
-        A = if (is_ag_tensor(A_ref) && A_ref$requires_grad) .mul_grad(a_orig, b_snap) else NULL,
-        B = if (is_ag_tensor(B_ref) && B_ref$requires_grad) .mul_grad(b_orig, a_snap) else NULL
+        A = if (is_ag_tensor(A_ref) && A_ref$requires_grad) .mul_grad(a_dim, b_snap) else NULL,
+        B = if (is_ag_tensor(B_ref) && B_ref$requires_grad) .mul_grad(b_dim, a_snap) else NULL
       )
     }
     out$grad_fn <- grad_fn
@@ -566,11 +595,11 @@ ag_mul <- function(A, B) {
 #' @return ag_tensor
 #' @export
 ag_scale <- function(x, scalar) {
-  x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
   if (device == "gpu") {
-    out <- ag_tensor(.ag_gpu_scale(x_data, scalar), device = "gpu", dtype = .ag_device_state$dtype)
+    out <- .ag_wrap_result(.ag_gpu_scale(.ag_operand(x), scalar), device)
   } else {
+    x_data <- .ag_data(x)
     out <- ag_tensor(x_data * scalar, device = device)
   }
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
@@ -919,9 +948,16 @@ backward <- function(loss) {
     graph_grads <- tryCatch(
       .ag_bwd_run_graph(loss, .ag_tape$nodes),
       error = function(e) {
+        # An ERROR in the graph path is not a refusal: it is a bug the closures
+        # would hide (a test passed for months that way). Strict mode -- for
+        # tests and debugging -- turns it into an error instead.
+        if (.ag_bwd_strict())
+          stop("ggmlR: the graph backward failed (strict mode, no fallback): ",
+               conditionMessage(e), call. = FALSE)
         .ag_bwd$last_path <- paste0("closures (error: ", conditionMessage(e), ")")
         NULL
       })
+    if (is.null(graph_grads)) .ag_bwd_note_fallback(.ag_bwd$last_path)
     if (!is.null(graph_grads)) {
       if (!is.null(prof_t0)) { tw <- Sys.time() }
       .ag_bwd_write_leaf_grads(graph_grads)
@@ -1123,6 +1159,10 @@ backward <- function(loss) {
 # When the parameter is resident the value goes into the buffer it already owns
 # instead; when it is not, this is plain .ag_data_set().
 .ag_opt_store_weight <- function(p, value) {
+  # Graph mode: a queued node may still READ this weight (a forward nobody has
+  # read yet). Writing first would make it compute with the new value. Writing
+  # a parameter is therefore a synchronisation point (see ag_graph_mode).
+  if (.ag_defer_len()) .ag_defer_drain()
   if (!is.null(p$ptr) && .ag_ptr_is_live(p))
     .ag_data_write_resident(p, value)
   else
@@ -1140,9 +1180,137 @@ backward <- function(loss) {
   if (isTRUE(env$average)) env$accumulate_steps else 1L
 }
 
+# ---------------------------------------------------------------------------
+# Optimizer state: opt$state() / opt$load_state(), shared by Adam and SGD.
+#
+# Keyed by POSITION in the (deduplicated) parameter list, like the step itself;
+# names, when both sides have them, are a check on top. Slot matrices are R
+# doubles on the host whatever the device: resident moments are downloaded, and
+# an f32 value is exact in a double. Hyperparameters are recorded for
+# diagnostics and NOT restored (the constructor / a scheduler owns them); t and
+# accum_count ARE restored -- Adam's bias correction depends on t.
+# ---------------------------------------------------------------------------
+
+AG_OPT_STATE_FORMAT  <- "ggmlR.ag_opt_state"
+AG_OPT_STATE_VERSION <- 1L
+
+.ag_opt_state <- function(env, type, slot_names, hyper) {
+  if (env$accum_count > 0L)
+    warning("optimizer state(): taken mid-accumulation (", env$accum_count, " of ",
+            env$accumulate_steps, " backward passes); the accumulated gradients ",
+            "live in the parameters' $grad and are not part of the state",
+            call. = FALSE)
+  grab <- function(x) {
+    if (!.ag_is_handle(x)) return(x)
+    if (!.ag_handle_live(x))
+      stop("optimizer state(): a moment lives in a freed device buffer ",
+           "(the device was released since the last step)", call. = FALSE)
+    .ag_as_matrix(x)
+  }
+  list(format      = AG_OPT_STATE_FORMAT,
+       version     = AG_OPT_STATE_VERSION,
+       type        = type,
+       t           = env$t %||% 0L,
+       accum_count = env$accum_count,
+       names       = names(env$params),
+       slots       = stats::setNames(lapply(slot_names, function(s) lapply(env[[s]], grab)),
+                                     slot_names),
+       hyper       = hyper)
+}
+
+.ag_opt_load_state <- function(env, state, type, slot_names, hyper) {
+  fail <- function(...) stop("optimizer load_state(): ", ..., call. = FALSE)
+  if (!is.list(state) || !identical(state$format, AG_OPT_STATE_FORMAT))
+    fail("not an optimizer state (from opt$state())")
+  if (!identical(state$version, AG_OPT_STATE_VERSION))
+    fail("unsupported state version ", format(state$version),
+         " (this ggmlR reads version ", AG_OPT_STATE_VERSION, ")")
+  if (!identical(state$type, type))
+    fail("state is for a '", format(state$type), "' optimizer, this one is '", type, "'")
+
+  n <- length(env$params)
+  for (s in slot_names) {
+    if (length(state$slots[[s]]) != n)
+      fail("state has ", length(state$slots[[s]]), " parameters, optimizer has ", n)
+  }
+  nm_env <- names(env$params); nm_st <- state$names
+  if (!is.null(nm_env) && !is.null(nm_st) && !identical(nm_env, nm_st))
+    fail("parameter names differ from the state's (position is the key, names ",
+         "are the check)\n  optimizer: ", paste(nm_env, collapse = ", "),
+         "\n  state:     ", paste(nm_st, collapse = ", "))
+  for (i in seq_len(n)) {
+    d <- as.integer(.ag_sel_dim(env$params[[i]]))
+    for (s in slot_names) {
+      v <- state$slots[[s]][[i]]
+      if (!is.numeric(v) || !identical(as.integer(dim(v)), d))
+        fail("slot '", s, "' of parameter ", i, " has shape ",
+             paste(dim(v) %||% length(v), collapse = "x"), ", expected ",
+             paste(d, collapse = "x"))
+      if (!all(is.finite(v))) fail("slot '", s, "' of parameter ", i, " is not finite")
+    }
+  }
+  int_ok <- function(x) is.numeric(x) && length(x) == 1L && !is.na(x) && x >= 0 && x == round(x)
+  if (!int_ok(state$t) || !int_ok(state$accum_count)) fail("t / accum_count are not counts")
+
+  differ <- Filter(function(h) !isTRUE(all.equal(state$hyper[[h]], hyper[[h]])), names(hyper))
+  if (length(differ)) {
+    # A classed condition so callers that report hyperparameter changes on their
+    # own level can drop exactly this one (withCallingHandlers on the class);
+    # it is still an ordinary warning for everyone else. $changed carries the
+    # data: name, current value, value in the state.
+    changed <- lapply(stats::setNames(differ, differ), function(h)
+      list(current = hyper[[h]], state = state$hyper[[h]]))
+    msg <- paste0("optimizer load_state(): hyperparameters differ from the state's ",
+                  "and are NOT restored: ",
+                  paste(sprintf("%s = %s (state %s)", differ,
+                                vapply(differ, function(h) format(hyper[[h]]), ""),
+                                vapply(differ, function(h) format(state$hyper[[h]]), "")),
+                        collapse = ", "))
+    warning(structure(class = c("ggmlR_opt_hyper_warning", "warning", "condition"),
+                      list(message = msg, call = NULL, changed = changed)))
+  }
+
+  # All checks passed -- now write. A live device moment is overwritten in its
+  # own persistent buffer; otherwise the slot becomes a host matrix.
+  for (s in slot_names) {
+    for (i in seq_len(n)) {
+      v   <- state$slots[[s]][[i]]
+      cur <- env[[s]][[i]]
+      if (.ag_is_handle(cur) && .ag_handle_live(cur)) {
+        .ag_xfer_up(cur$ptr, as.numeric(v), "opt load_state")
+      } else {
+        env[[s]][[i]] <- matrix(as.numeric(v), nrow(v), ncol(v))
+      }
+    }
+  }
+  if (!is.null(env$t)) env$t <- as.integer(state$t)
+  env$accum_count <- as.integer(state$accum_count)
+  invisible(TRUE)
+}
+
+# Optimizers walk params by POSITION, never by name: an unnamed list has no
+# names to loop over (nothing was ever updated) and a duplicated name resolves
+# to its first match (that parameter stepped twice, the other never). Position
+# is unambiguous; the names are kept only for display and opt$m$<name>.
+#
+# The one thing position cannot fix is the same tensor listed twice -- it would
+# take two steps per call. Dropped here, once, with a warning.
+.ag_opt_unique_params <- function(params) {
+  ids <- vapply(params, function(p)
+    if (is_ag_tensor(p)) as.character(p$id) else NA_character_, character(1))
+  dup <- duplicated(ids) & !is.na(ids)
+  if (any(dup)) {
+    warning(sprintf("optimizer: %d parameter(s) listed more than once (same tensor); ",
+                    sum(dup)), "keeping the first occurrence of each.", call. = FALSE)
+    params <- params[!dup]
+  }
+  params
+}
+
 #' Create an SGD optimizer
 #'
-#' @param params Named list of ag_param tensors
+#' @param params List of ag_param tensors, named or not (names are used only
+#'   for display). The same tensor listed twice is kept once, with a warning.
 #' @param lr Learning rate (default 0.01)
 #' @param momentum Momentum factor (default 0)
 #' @param accumulate_steps Number of \code{backward()} passes to accumulate
@@ -1155,7 +1323,16 @@ backward <- function(loss) {
 #'   \code{k} micro-batches equivalent to one batch of \code{k} times the size
 #'   for an averaging loss such as \code{\link{ag_mse_loss}}; set it to
 #'   \code{FALSE} for a summing loss, where the plain sum is already right.
-#' @return An optimizer environment
+#' @return An optimizer environment with \code{step(grads)}, \code{zero_grad()},
+#'   \code{state()} and \code{load_state(state)}. \code{state()} returns a
+#'   versioned list (moments as host double matrices, \code{t},
+#'   \code{accum_count}); \code{load_state()} checks the type, parameter
+#'   count, names (when both sides have them) and shapes before writing
+#'   anything, restores \code{t} and \code{accum_count}, and does NOT restore
+#'   hyperparameters (it warns when they differ). Exact continuation holds on
+#'   the same device and dtype; CPU <-> GPU in f32 continues within float
+#'   tolerance; across f16 and f32 it cannot be exact. Only read saved states
+#'   you trust (\code{readRDS}).
 #' @export
 #' @examples
 #' \donttest{
@@ -1173,6 +1350,7 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
     stop("accumulate_steps must be a positive integer")
   }
   env <- new.env(parent = emptyenv())
+  params <- .ag_opt_unique_params(params)
   env$params   <- params
   env$lr       <- lr
   env$momentum <- momentum
@@ -1195,14 +1373,14 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
   env$step <- function(grads = NULL) {
     n <- .ag_opt_accum_tick(env)
     if (is.null(n)) return(invisible(FALSE))   # still filling the accumulation
-    for (nm in names(env$params)) {
-      p <- env$params[[nm]]
+    for (i in seq_along(env$params)) {
+      p <- env$params[[i]]
       g <- .ag_opt_grad_for(p, grads, n)
       if (is.null(g)) next
       w <- .ag_data_mut(p)
       if (env$momentum > 0) {
-        env$velocity[[nm]] <- env$momentum * env$velocity[[nm]] + g
-        .ag_opt_store_weight(p, w - env$lr * env$velocity[[nm]])
+        env$velocity[[i]] <- env$momentum * env$velocity[[i]] + g
+        .ag_opt_store_weight(p, w - env$lr * env$velocity[[i]])
       } else {
         .ag_opt_store_weight(p, w - env$lr * g)
       }
@@ -1211,8 +1389,8 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
   }
 
   env$zero_grad <- function() {
-    for (nm in names(env$params)) {
-      env$params[[nm]]$grad <- NULL
+    for (i in seq_along(env$params)) {
+      env$params[[i]]$grad <- NULL
     }
     # Resident gradients just went away, so the register that would rescue
     # them at the next tape reset has nothing left worth saving. Clearing it
@@ -1221,13 +1399,20 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
     .ag_tape$nodes <- list()
   }
 
+  # Checkpoint support (see .ag_opt_state): velocity and accum_count.
+  env$state <- function() .ag_opt_state(env, "sgd", "velocity",
+    list(lr = env$lr, momentum = env$momentum))
+  env$load_state <- function(state) .ag_opt_load_state(env, state, "sgd", "velocity",
+    list(lr = env$lr, momentum = env$momentum))
+
   class(env) <- "ag_optimizer_sgd"
   env
 }
 
 #' Create an Adam optimizer
 #'
-#' @param params Named list of ag_param tensors
+#' @param params List of ag_param tensors, named or not (names are used only
+#'   for display). The same tensor listed twice is kept once, with a warning.
 #' @param lr Learning rate (default 1e-3)
 #' @param beta1 First moment decay (default 0.9)
 #' @param beta2 Second moment decay (default 0.999)
@@ -1240,7 +1425,16 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
 #' @param average When accumulating, divide the accumulated gradient by
 #'   \code{accumulate_steps} (default \code{TRUE}).  See
 #'   \code{\link{optimizer_sgd}}.
-#' @return An optimizer environment
+#' @return An optimizer environment with \code{step(grads)}, \code{zero_grad()},
+#'   \code{state()} and \code{load_state(state)}. \code{state()} returns a
+#'   versioned list (moments as host double matrices, \code{t},
+#'   \code{accum_count}); \code{load_state()} checks the type, parameter
+#'   count, names (when both sides have them) and shapes before writing
+#'   anything, restores \code{t} and \code{accum_count}, and does NOT restore
+#'   hyperparameters (it warns when they differ). Exact continuation holds on
+#'   the same device and dtype; CPU <-> GPU in f32 continues within float
+#'   tolerance; across f16 and f32 it cannot be exact. Only read saved states
+#'   you trust (\code{readRDS}).
 #' @export
 #' @examples
 #' \donttest{
@@ -1255,6 +1449,7 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
     stop("accumulate_steps must be a positive integer")
   }
   env <- new.env(parent = emptyenv())
+  params <- .ag_opt_unique_params(params)
   env$params <- params
   env$lr     <- lr
   env$beta1  <- beta1
@@ -1279,7 +1474,7 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
   # Per-parameter landing buffer for the incoming gradient, allocated lazily on
   # the first resident step. It exists so the gradient is copied out of the pass
   # pool once instead of being re-uploaded into each of the step's graphs.
-  env$gbuf <- list()
+  env$gbuf <- vector("list", length(params))
 
   # `grads` is optional -- see the SGD step and .ag_opt_grad_for.
   env$step <- function(grads = NULL) {
@@ -1289,8 +1484,8 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
     # Only a real update advances t. Counting the skipped calls would make the
     # bias correction think k times as many steps had happened.
     env$t <- env$t + 1L
-    for (nm in names(env$params)) {
-      p <- env$params[[nm]]
+    for (i in seq_along(env$params)) {
+      p <- env$params[[i]]
       # A resident step wants the gradient as a handle, not as numbers: that is
       # the download this stage removes. .ag_opt_grad_for keeps returning a
       # matrix for the host path (and for SGD, which has not been converted).
@@ -1301,7 +1496,7 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
       # to the CPU frees the persistent pool, and a moment handle from before
       # that is a pointer into released memory. Checking here costs one integer
       # comparison and turns a use-after-free into an ordinary host step.
-      if (env$resident && .ag_handle_live(env$m[[nm]]) &&
+      if (env$resident && .ag_handle_live(env$m[[i]]) &&
           !is.null(.ag_handle_of(p))) {
         # The gradient may still arrive as a matrix: only ag_backward_resident()
         # keeps it on the device, and the ordinary backward() writes host
@@ -1311,7 +1506,7 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
         # now that all three live on the device.
         gh <- if (.ag_is_handle(g)) g else
                 .ag_handle(.ag_r_to_gpu(g, scope = "pass"), dim(g), scope = "pass")
-        .ag_adam_step_device(env, nm, p, gh)
+        .ag_adam_step_device(env, i, p, gh)
         next
       }
 
@@ -1320,18 +1515,18 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
       # later step -- works on host matrices. A dead handle cannot be read, and
       # its running average is gone with the buffer; zeros are the honest
       # restart, and Adam recovers from them the way it does at step 1.
-      if (.ag_is_handle(env$m[[nm]])) {
-        env$m[[nm]] <- tryCatch(.ag_as_matrix(env$m[[nm]]),
+      if (.ag_is_handle(env$m[[i]])) {
+        env$m[[i]] <- tryCatch(.ag_as_matrix(env$m[[i]]),
                                 error = function(e) g * 0)
-        env$v[[nm]] <- tryCatch(.ag_as_matrix(env$v[[nm]]),
+        env$v[[i]] <- tryCatch(.ag_as_matrix(env$v[[i]]),
                                 error = function(e) g * 0)
       }
 
-      env$m[[nm]] <- env$beta1 * env$m[[nm]] + (1 - env$beta1) * g
-      env$v[[nm]] <- env$beta2 * env$v[[nm]] + (1 - env$beta2) * g^2
+      env$m[[i]] <- env$beta1 * env$m[[i]] + (1 - env$beta1) * g
+      env$v[[i]] <- env$beta2 * env$v[[i]] + (1 - env$beta2) * g^2
 
-      m_hat <- env$m[[nm]] / (1 - env$beta1^env$t)
-      v_hat <- env$v[[nm]] / (1 - env$beta2^env$t)
+      m_hat <- env$m[[i]] / (1 - env$beta1^env$t)
+      v_hat <- env$v[[i]] / (1 - env$beta2^env$t)
 
       # Read-modify-write on the parameter: see the SGD step above and
       # inst/docs/ag_data_contract.md.
@@ -1342,8 +1537,8 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
   }
 
   env$zero_grad <- function() {
-    for (nm in names(env$params)) {
-      env$params[[nm]]$grad <- NULL
+    for (i in seq_along(env$params)) {
+      env$params[[i]]$grad <- NULL
     }
     # Resident gradients just went away, so the register that would rescue
     # them at the next tape reset has nothing left worth saving. Clearing it
@@ -1351,6 +1546,12 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
     .ag_forget_pending_grads()
     .ag_tape$nodes <- list()
   }
+
+  # Checkpoint support (see .ag_opt_state): m, v, t and accum_count.
+  env$state <- function() .ag_opt_state(env, "adam", c("m", "v"),
+    list(lr = env$lr, beta1 = env$beta1, beta2 = env$beta2, eps = env$eps))
+  env$load_state <- function(state) .ag_opt_load_state(env, state, "adam", c("m", "v"),
+    list(lr = env$lr, beta1 = env$beta1, beta2 = env$beta2, eps = env$eps))
 
   class(env) <- "ag_optimizer_adam"
   env
@@ -1385,6 +1586,23 @@ print.ag_optimizer_adam <- function(x, ...) {
 #' @param in_features Input dimension
 #' @param out_features Output dimension
 #' @param activation "relu", "sigmoid", "tanh", "softmax", or NULL
+#' @param init Weight initialisation, \code{[out_features, in_features]}:
+#'   \describe{
+#'     \item{\code{"glorot_uniform"}}{(default) uniform on
+#'       \eqn{\pm\sqrt{6/(in+out)}}; unchanged from earlier versions, same
+#'       random stream for the same seed.}
+#'     \item{\code{"orthogonal"}}{orthogonal rows (out <= in) or columns
+#'       (out > in), uniform over orthogonal matrices (QR of a Gaussian matrix
+#'       with the sign of R's diagonal folded into Q). Draws from R's RNG
+#'       (\code{rnorm}), so \code{set.seed} reproduces it.}
+#'     \item{a function}{\code{function(out, in)} returning the matrix.}
+#'     \item{a matrix}{used as is; no random numbers are drawn.}
+#'   }
+#'   The bias always starts at zero. \code{init} only shapes a new layer:
+#'   \code{\link{ag_load_model}} overwrites every weight from the file.
+#' @param gain Multiplier for the string initialisations (e.g. \code{sqrt(2)}
+#'   for tanh/ReLU layers, \code{0.01} for a policy head). A function or matrix
+#'   \code{init} carries its own scale, so \code{gain} must stay 1 with them.
 #' @return List with \code{W}, \code{b}, \code{forward(x)}, \code{params()}
 #' @export
 #' @examples
@@ -1392,11 +1610,11 @@ print.ag_optimizer_adam <- function(x, ...) {
 #' layer <- ag_linear(4L, 8L, activation = "relu")
 #' x     <- ag_tensor(matrix(runif(4 * 16), 4, 16))
 #' out   <- layer$forward(x)
+#' head  <- ag_linear(8L, 2L, init = "orthogonal", gain = 0.01)
 #' }
-ag_linear <- function(in_features, out_features, activation = NULL) {
-  limit <- sqrt(6.0 / (in_features + out_features))
-  W <- ag_param(matrix(runif(out_features * in_features, -limit, limit),
-                        out_features, in_features))
+ag_linear <- function(in_features, out_features, activation = NULL,
+                      init = "glorot_uniform", gain = 1) {
+  W <- ag_param(.ag_linear_init(init, gain, out_features, in_features))
   b <- ag_param(matrix(0.0, out_features, 1L))
 
   forward <- function(x) {
@@ -1415,6 +1633,53 @@ ag_linear <- function(in_features, out_features, activation = NULL) {
        params = function() list(W = W, b = b))
 }
 
+# Initial weight matrix [out, in] for ag_linear(). Validation first, so a bad
+# argument never consumes random numbers.
+.ag_linear_init <- function(init, gain, out, inp) {
+  if (!is.numeric(gain) || length(gain) != 1L || !is.finite(gain))
+    stop("ag_linear: gain must be a single finite number", call. = FALSE)
+
+  if (is.character(init)) {
+    init <- match.arg(init, c("glorot_uniform", "orthogonal"))
+    W <- switch(init,
+      glorot_uniform = {
+        limit <- sqrt(6.0 / (inp + out))
+        matrix(runif(out * inp, -limit, limit), out, inp)
+      },
+      orthogonal = .ag_orthogonal(out, inp))
+    return(if (gain == 1) W else gain * W)
+  }
+
+  if (gain != 1)
+    stop("ag_linear: gain applies to string inits only; scale a function or ",
+         "matrix init yourself", call. = FALSE)
+  W <- if (is.function(init)) init(out, inp) else init
+  if (!is.matrix(W) || !is.numeric(W))
+    stop("ag_linear: init must be \"glorot_uniform\", \"orthogonal\", a ",
+         "function(out, in) or a numeric matrix", call. = FALSE)
+  if (!identical(dim(W), as.integer(c(out, inp))))
+    stop(sprintf("ag_linear: init matrix is %dx%d, expected %dx%d (out x in)",
+                 nrow(W), ncol(W), out, inp), call. = FALSE)
+  if (!all(is.finite(W)))
+    stop("ag_linear: init matrix contains NA, NaN or Inf", call. = FALSE)
+  storage.mode(W) <- "double"
+  W
+}
+
+# Haar-uniform orthogonal [rows, cols]: QR of a Gaussian matrix taken on the
+# tall orientation (QR needs rows >= cols), Q's columns multiplied by the sign
+# of R's diagonal -- without that the distribution is not uniform. A zero on
+# the diagonal (probability 0, but sign() would zero a column) counts as +1.
+.ag_orthogonal <- function(rows, cols) {
+  tall <- rows >= cols
+  n <- max(rows, cols); k <- min(rows, cols)
+  q <- qr(matrix(stats::rnorm(n * k), n, k))
+  s <- sign(diag(qr.R(q)))
+  s[s == 0] <- 1
+  Q <- qr.Q(q) * rep(s, each = n)
+  if (tall) Q else t(Q)
+}
+
 # Null-coalescing helper (internal)
 `%||%` <- function(a, b) if (!is.null(a)) a else b
 
@@ -1431,8 +1696,9 @@ ag_linear <- function(in_features, out_features, activation = NULL) {
 #' @return scalar (or reduced) ag_tensor
 #' @export
 ag_sum <- function(x, dim = NULL, keepdim = FALSE) {
-  x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
+  # on the device the input stays there (a handle; pending in graph mode)
+  x_data <- if (device == "gpu") .ag_operand(x) else .ag_data(x)
   if (device == "gpu") {
     if (is.null(dim)) {
       out_data <- .ag_gpu_sum_all(x_data)
@@ -1450,10 +1716,10 @@ ag_sum <- function(x, dim = NULL, keepdim = FALSE) {
     # dim=2: reduce cols → [1,ncol]; keepdim keeps shape [1,ncol]
     out_data <- matrix(colSums(x_data), 1L, ncol(x_data))
   }
-  out <- ag_tensor(out_data, device = device, dtype = .ag_device_state$dtype)
+  out <- .ag_wrap_result(out_data, device)
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
-    orig_shape <- dim(x_data)
+    orig_shape <- .ag_dim(x_data)
     dim_arg    <- dim
     grad_fn <- function(grad_out) {
       if (is.null(dim_arg)) {
@@ -1469,7 +1735,8 @@ ag_sum <- function(x, dim = NULL, keepdim = FALSE) {
       }
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "sum", in_shape = orig_shape,
+              scale = 1)
   }
   out
 }
@@ -1482,19 +1749,20 @@ ag_sum <- function(x, dim = NULL, keepdim = FALSE) {
 #' @return ag_tensor
 #' @export
 ag_mean <- function(x, dim = NULL, keepdim = FALSE) {
-  x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
-  n_all  <- length(x_data)
+  # on the device the input stays there (a handle; pending in graph mode)
+  x_data <- if (device == "gpu") .ag_operand(x) else .ag_data(x)
+  n_all  <- if (.ag_is_handle(x_data)) prod(.ag_dim(x_data)) else length(x_data)
   if (device == "gpu") {
     if (is.null(dim)) {
       out_data <- .ag_gpu_mean_all(x_data)
       n_div    <- n_all
     } else if (dim == 1L) {
       out_data <- .ag_gpu_mean_rows(x_data)   # [nrow,1]
-      n_div    <- ncol(x_data)
+      n_div    <- .ag_ncol(x_data)
     } else {
       out_data <- .ag_gpu_mean_cols(x_data)   # [1,ncol]
-      n_div    <- nrow(x_data)
+      n_div    <- .ag_nrow(x_data)
     }
   } else if (is.null(dim)) {
     out_data <- matrix(mean(x_data))
@@ -1508,10 +1776,10 @@ ag_mean <- function(x, dim = NULL, keepdim = FALSE) {
     out_data <- matrix(colMeans(x_data), 1L, ncol(x_data))
     n_div    <- nrow(x_data)
   }
-  out <- ag_tensor(out_data, device = device)
+  out <- .ag_wrap_result(out_data, device)
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
-    orig_shape <- dim(x_data)
+    orig_shape <- .ag_dim(x_data)
     dim_arg    <- dim
     grad_fn <- function(grad_out) {
       if (is.null(dim_arg)) {
@@ -1528,7 +1796,8 @@ ag_mean <- function(x, dim = NULL, keepdim = FALSE) {
       }
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "sum", in_shape = orig_shape,
+              scale = 1 / n_div)
   }
   out
 }
@@ -1552,7 +1821,7 @@ ag_log <- function(x) {
     x_snap <- x_data
     grad_fn <- function(grad_out) list(x = grad_out / .ag_as_matrix(x_snap))
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "log", x_snap = x_snap)
   }
   out
 }
@@ -1563,20 +1832,21 @@ ag_log <- function(x) {
 #' @return ag_tensor
 #' @export
 ag_exp <- function(x) {
-  x_data  <- .ag_data(x)
   device  <- if (is_ag_tensor(x)) x$device else "cpu"
   if (device == "gpu") {
-    e_val <- .ag_gpu_exp(x_data)
+    e_val <- .ag_gpu_exp(.ag_operand(x))     # a handle: stays on the device
+    out   <- .ag_wrap_result(e_val, device)
   } else {
-    e_val <- exp(x_data)
+    e_val <- exp(.ag_data(x))
+    out   <- ag_tensor(e_val, device = device, dtype = .ag_device_state$dtype)
   }
-  out <- ag_tensor(e_val, device = device, dtype = .ag_device_state$dtype)
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
+    # d exp(x) = exp(x): the output itself is the multiplier
     e_snap <- e_val
-    grad_fn <- function(grad_out) list(x = grad_out * e_snap)
+    grad_fn <- function(grad_out) list(x = grad_out * .ag_as_matrix(e_snap))
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "elemwise_mul", mult = e_snap)
   }
   out
 }
@@ -1643,21 +1913,25 @@ ag_transpose <- function(x) {
 #' @return ag_tensor
 #' @export
 ag_clamp <- function(x, lo = -Inf, hi = Inf) {
-  x_data <- .ag_data(x)
   device <- if (is_ag_tensor(x)) x$device else "cpu"
   lo_fin <- if (is.finite(lo)) lo else -3.402823e+38
   hi_fin <- if (is.finite(hi)) hi else  3.402823e+38
   if (device == "gpu") {
-    out <- ag_tensor(.ag_gpu_clamp(x_data, lo_fin, hi_fin), device = "gpu", dtype = .ag_device_state$dtype)
+    x_data <- .ag_operand(x)
+    out    <- .ag_wrap_result(.ag_gpu_clamp(x_data, lo_fin, hi_fin), device)
   } else {
-    out <- ag_tensor(pmin(pmax(x_data, lo), hi), device = device)
+    x_data <- .ag_data(x)
+    out    <- ag_tensor(pmin(pmax(x_data, lo), hi), device = device)
   }
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
-    mask <- (x_data > lo & x_data < hi) * 1.0
-    grad_fn <- function(grad_out) list(x = grad_out * mask)
+    # 1 strictly inside (lo, hi), 0 on and outside -- built on the device when
+    # x is there (.ag_gpu_clamp_mask has the same boundary rule)
+    mask <- if (.ag_is_handle(x_data)) .ag_gpu_clamp_mask(x_data, lo_fin, hi_fin)
+            else (x_data > lo & x_data < hi) * 1.0
+    grad_fn <- function(grad_out) list(x = grad_out * .ag_as_matrix(mask))
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "elemwise_mul", mult = mask)
   }
   out
 }

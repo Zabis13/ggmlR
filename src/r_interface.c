@@ -15,6 +15,7 @@ extern void ggmlR_register_builtin_custom_ops(void);
 // Vulkan functions (defined in r_interface_vulkan.c)
 extern SEXP R_ggml_vulkan_is_available(void);
 extern SEXP R_ggml_vulkan_device_count(void);
+extern SEXP R_ggml_vk_prec32_count(void);
 extern SEXP R_ggml_vulkan_device_description(SEXP device_idx);
 extern SEXP R_ggml_vulkan_device_memory(SEXP device_idx);
 extern SEXP R_ggml_vulkan_device_groups(void);  // ggmlR TP (P2P), not upstream
@@ -1656,6 +1657,7 @@ static const R_CallMethodDef CallEntries[] = {
     // Vulkan backend functions
     {"R_ggml_vulkan_is_available",      (DL_FUNC) &R_ggml_vulkan_is_available,      0},
     {"R_ggml_vulkan_device_count",      (DL_FUNC) &R_ggml_vulkan_device_count,      0},
+    {"R_ggml_vk_prec32_count",          (DL_FUNC) &R_ggml_vk_prec32_count,          0},
     {"R_ggml_vulkan_device_description",(DL_FUNC) &R_ggml_vulkan_device_description,1},
     {"R_ggml_vulkan_device_memory",     (DL_FUNC) &R_ggml_vulkan_device_memory,     1},
     {"R_ggml_vulkan_device_groups",     (DL_FUNC) &R_ggml_vulkan_device_groups,     0},

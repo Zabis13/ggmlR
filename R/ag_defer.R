@@ -47,6 +47,8 @@
 .ag_defer$uploads  <- list()   # list(ptr=, val=) filled after the flush
 .ag_defer$enabled  <- NULL     # NULL = consult the environment variable
 .ag_defer$depth    <- 0L       # >0 while draining; blocks re-entry
+.ag_defer$labels   <- character()  # one per queued root: the ag_* call that queued it
+.ag_defer$check    <- NULL     # NULL = consult GGMLR_AG_GRAPH_CHECK; TRUE = run each op as queued
 
 #' Defer forward operations into one graph
 #'
@@ -68,6 +70,113 @@ ag_defer_forward <- function(on = TRUE) {
   old <- .ag_defer_enabled()
   if (!is.na(on)) .ag_defer$enabled <- isTRUE(on)
   invisible(old)
+}
+
+#' Graph mode for ag_* operations on the GPU
+#'
+#' With graph mode on, a GPU \code{ag_*} operation that has a device-resident
+#' path does not run at once: it adds its node to a queue and returns a pending
+#' value. The queue runs as ONE ggml graph when a value is read on the host
+#' (\code{as.matrix()}, a printed loss, an action index) or when
+#' \code{backward()} needs it -- the graph backward then joins the same graph.
+#' Each separate launch costs on the order of a millisecond on the device, so a
+#' small network (an RL policy, a few layers) is dominated by launches, and
+#' fusing them is where the speed comes from.
+#'
+#' Results are the same as without it. Operations that have no resident path
+#' yet still run one by one; they first run whatever is queued, so the order of
+#' computation is always the data order.
+#'
+#' \strong{When the queue runs} (synchronisation points):
+#' \itemize{
+#'   \item reading a value that is still queued: \code{as.matrix()}, printing,
+#'     a loss value, \code{ag_argmax()};
+#'   \item an operation without a resident path (it runs the queue first);
+#'   \item writing a parameter: an optimizer step, \code{ag_load_state_dict()};
+#'   \item the device optimizer step (it never joins the queue);
+#'   \item turning graph mode off.
+#' }
+#' \code{backward()} does NOT force it: the graph backward appends to the
+#' queue, so forward and backward run as one graph at the next point above.
+#'
+#' Off by default; turn it on around the code that wants it, restoring the
+#' previous value on every exit -- \code{\link{ag_local_mode}} does that. The one
+#' thing it can break is code that orders graphs BY HAND rather than through
+#' data -- reading a buffer in one graph and overwriting it in a later one with
+#' nothing linking the two. The package's own optimizer step does this and is
+#' protected; code of your own that does it must run with graph mode off.
+#' On the CPU it has no effect.
+#'
+#' \strong{Errors.} A failure inside a queued operation surfaces where the queue
+#' runs, not where the operation was called. The error names the queued
+#' operations; \code{check = TRUE} (or \code{GGMLR_AG_GRAPH_CHECK=1}) runs each
+#' operation as soon as it is queued, so the error appears at its own call --
+#' for debugging, since it gives up the fusion.
+#'
+#' @param on \code{TRUE} or \code{FALSE}. Missing: return the current setting.
+#' @param check \code{TRUE}/\code{FALSE} to switch the per-operation check on or
+#'   off; \code{NULL} (default) leaves it as it is.
+#' @return The current setting when \code{on} is missing; otherwise the previous
+#'   setting, invisibly. Turning it off runs anything still queued.
+#' @seealso \code{\link{ag_local_mode}}, \code{\link{ag_matmul_precision}}
+#' @export
+#' @examples
+#' old <- ag_graph_mode(TRUE)
+#' ag_graph_mode()
+#' ag_graph_mode(old)
+ag_graph_mode <- function(on, check = NULL) {
+  prev <- .ag_defer_enabled()
+  if (!is.null(check)) {
+    if (!is.logical(check) || length(check) != 1L || is.na(check))
+      stop("ag_graph_mode(): `check` must be TRUE, FALSE or NULL", call. = FALSE)
+    .ag_defer$check <- check
+  }
+  if (missing(on)) return(prev)
+  if (!is.logical(on) || length(on) != 1L || is.na(on))
+    stop("ag_graph_mode(): `on` must be TRUE or FALSE", call. = FALSE)
+  if (!on && .ag_defer_len()) .ag_defer_drain()
+  .ag_defer$enabled <- on
+  invisible(prev)
+}
+
+#' Set ag_* GPU modes for the rest of the calling function
+#'
+#' Sets graph mode (\code{\link{ag_graph_mode}}) and/or matrix-multiply
+#' precision (\code{\link{ag_matmul_precision}}) and restores the previous
+#' values when the calling function exits -- normally or by an error. One place
+#' for both, instead of a pair of \code{on.exit} calls per setting.
+#'
+#' @param graph \code{TRUE}/\code{FALSE}, or \code{NULL} to leave it.
+#' @param matmul_precision \code{"default"}/\code{"f32"}, or \code{NULL} to
+#'   leave it.
+#' @param envir The frame whose exit restores the settings (the caller's).
+#' @return The previous values, invisibly.
+#' @export
+#' @examples
+#' f <- function() {
+#'   ag_local_mode(graph = TRUE, matmul_precision = "f32")
+#'   c(ag_graph_mode(), ag_matmul_precision())
+#' }
+#' f()                      # TRUE "f32"
+#' ag_graph_mode()          # back to the previous value
+ag_local_mode <- function(graph = NULL, matmul_precision = NULL, envir = parent.frame()) {
+  prev <- list()
+  # Validate both before changing either, so a bad argument changes nothing.
+  if (!is.null(matmul_precision))
+    matmul_precision <- match.arg(matmul_precision, c("default", "f32"))
+  if (!is.null(graph) && (!is.logical(graph) || length(graph) != 1L || is.na(graph)))
+    stop("ag_local_mode(): `graph` must be TRUE, FALSE or NULL", call. = FALSE)
+  if (!is.null(matmul_precision)) prev$matmul_precision <- ag_matmul_precision(matmul_precision)
+  if (!is.null(graph))            prev$graph            <- ag_graph_mode(graph)
+  do.call(base::on.exit, list(as.call(list(.ag_restore_mode, prev)), add = TRUE, after = FALSE),
+          envir = envir)
+  invisible(prev)
+}
+
+.ag_restore_mode <- function(prev) {
+  if (!is.null(prev$graph))            ag_graph_mode(prev$graph)
+  if (!is.null(prev$matmul_precision)) ag_matmul_precision(prev$matmul_precision)
+  invisible(NULL)
 }
 
 # OFF by default -- the inverse of the resident-gradients gate, and for a
@@ -103,9 +212,32 @@ ag_defer_forward <- function(on = TRUE) {
 # only it knows the output shape.
 .ag_defer_push <- function(node, uploads) {
   .ag_defer$nodes <- c(.ag_defer$nodes, list(node))
+  .ag_defer$labels <- c(.ag_defer$labels, .ag_defer_label())
   if (length(uploads))
     .ag_defer$uploads <- c(.ag_defer$uploads, uploads)
+  # Check mode: run at once, so a failure surfaces at the call that caused it
+  # instead of at the next read (debugging only -- it gives up the fusion).
+  if (.ag_defer_check_enabled()) .ag_defer_drain()
   invisible(NULL)
+}
+
+# Name of the ag_* function whose call queued the current node, for error
+# messages. The innermost exported-looking frame wins (ag_gather over the
+# ag_mul it is built from would be the outer one; the op that built the node is
+# what helps).
+.ag_defer_label <- function() {
+  calls <- sys.calls()
+  for (i in rev(seq_along(calls))) {
+    fn <- calls[[i]][[1L]]
+    nm <- if (is.name(fn)) as.character(fn) else if (is.call(fn) && length(fn) == 3L) as.character(fn[[3L]]) else ""
+    if (length(nm) == 1L && grepl("^ag_[a-z]", nm)) return(nm)
+  }
+  "?"
+}
+
+.ag_defer_check_enabled <- function() {
+  if (!is.null(.ag_defer$check)) return(isTRUE(.ag_defer$check))
+  identical(Sys.getenv("GGMLR_AG_GRAPH_CHECK"), "1")
 }
 
 # Queue several roots at once, with the uploads they collectively need.
@@ -117,6 +249,7 @@ ag_defer_forward <- function(on = TRUE) {
 .ag_defer_push_many <- function(nodes, uploads = list()) {
   if (!length(nodes)) return(invisible(NULL))
   .ag_defer$nodes <- c(.ag_defer$nodes, nodes)
+  .ag_defer$labels <- c(.ag_defer$labels, rep("backward()", length(nodes)))
   if (length(uploads))
     .ag_defer$uploads <- c(.ag_defer$uploads, uploads)
   invisible(NULL)
@@ -161,6 +294,7 @@ ag_defer_forward <- function(on = TRUE) {
 .ag_defer_discard <- function() {
   .ag_defer$nodes   <- list()
   .ag_defer$uploads <- list()
+  .ag_defer$labels  <- character()
   invisible(NULL)
 }
 
@@ -186,6 +320,7 @@ ag_defer_forward <- function(on = TRUE) {
 
   nodes   <- .ag_defer$nodes
   uploads <- .ag_defer$uploads
+  labels  <- .ag_defer$labels
   # Cleared BEFORE the work, not after: if the compute below fails, the queue
   # must not be retried against a context that is now in an unknown state. The
   # pending handles then error on read (their buffer holds nothing), which is
@@ -229,9 +364,21 @@ ag_defer_forward <- function(on = TRUE) {
          call. = FALSE)
   on.exit(ggml_free(ctx_graph), add = TRUE)
 
-  graph <- ggml_build_forward_expand(ctx_graph, nodes[[1L]])
-  for (i in seq_along(nodes)[-1L]) ggml_graph_expand(graph, nodes[[i]])
-
-  ggml_backend_graph_compute(backend, graph)
+  # A failure here belongs to one of the queued operations, but surfaces at
+  # whatever read triggered the drain -- name what was queued, and how to get
+  # the error at its own call site.
+  tryCatch({
+    graph <- ggml_build_forward_expand(ctx_graph, nodes[[1L]])
+    for (i in seq_along(nodes)[-1L]) ggml_graph_expand(graph, nodes[[i]])
+    .ag_graph_compute(backend, graph, "deferred graph")
+  }, error = function(e) {
+    tab <- table(factor(labels, levels = unique(labels)))
+    stop("ggmlR graph mode: the deferred graph failed (", length(nodes),
+         " queued ops: ", paste(sprintf("%s x%d", names(tab), tab), collapse = ", "),
+         "): ", conditionMessage(e),
+         "\nRun with ag_graph_mode(TRUE, check = TRUE) or GGMLR_AG_GRAPH_CHECK=1 ",
+         "to compute each op as it is queued and get the error at its call.",
+         call. = FALSE)
+  })
   invisible(TRUE)
 }

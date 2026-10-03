@@ -70,6 +70,51 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
 
 static void ggml_vk_compute_forward(ggml_backend_vk_context* ctx, ggml_cgraph * cgraph, ggml_tensor* tensor, int tensor_idx, bool almost_ready);
 
+// GGML_VK_TRACE_ORDER=1: diagnostics for graph_optimize reordering + barrier
+// placement. Printed through GGML_LOG_INFO -- std::cerr is a null stream in
+// this build (ggml-vulkan-device.cpp), so GGML_VK_SYNC_LOGGER prints nothing.
+static bool ggml_vk_trace_order() {
+    static const bool on = getenv("GGML_VK_TRACE_ORDER") != nullptr;
+    return on;
+}
+
+// "[buf:base+size)" for a Vulkan-resident tensor, "-" otherwise.
+static std::string ggml_vk_trace_range(const ggml_tensor * t) {
+    if (t == nullptr || !vk_tensor_is_vk_buffer(t)) {
+        return "-";
+    }
+    ggml_backend_vk_buffer_context * bc = (ggml_backend_vk_buffer_context *)t->buffer->context;
+    char s[96];
+    snprintf(s, sizeof(s), "[%p:%zu+%zu)", (void *)bc->dev_buffer.get(),
+             (size_t)(vk_tensor_offset(t) + t->view_offs), ggml_nbytes(t));
+    return s;
+}
+
+// After reordering: every source (and the view_src it aliases) that is itself
+// a node of this graph must come earlier. Prints the order and each violation.
+static void ggml_vk_trace_check_order(const ggml_cgraph * graph) {
+    std::map<const ggml_tensor *, int> pos;
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        pos[graph->nodes[i]] = i;
+    }
+    int bad = 0;
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        const ggml_tensor * n = graph->nodes[i];
+        GGML_LOG_INFO("[vk-order] %3d %-12s %s\n", i, ggml_op_name(n->op), n->name);
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            for (const ggml_tensor * p = n->src[s]; p != nullptr; p = p->view_src) {
+                auto it = pos.find(p);
+                if (it != pos.end() && it->second >= i) {
+                    GGML_LOG_INFO("[vk-order] VIOLATION: node %d '%s' reads '%s' produced at %d\n",
+                                  i, n->name, p->name, it->second);
+                    bad++;
+                }
+            }
+        }
+    }
+    GGML_LOG_INFO("[vk-order] %d nodes, %d violation(s)\n", graph->n_nodes, bad);
+}
+
 // Returns true if node has enqueued work into the queue, false otherwise
 // If submit is true the current all operations queued so far are being submitted to Vulkan to overlap cmdlist creation and GPU execution.
 static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int node_idx, ggml_tensor *node_begin, int node_idx_begin, bool last_node, bool almost_ready, bool submit){
@@ -191,6 +236,22 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
                     break;
                 }
             }
+        }
+
+        if (ggml_vk_trace_order()) {
+            const ggml_tensor * n = cgraph->nodes[node_idx];
+            std::string srcs;
+            for (uint32_t j = 0; j < GGML_MAX_SRC; ++j) {
+                if (n->src[j]) {
+                    srcs += " ";
+                    srcs += ggml_vk_trace_range(n->src[j]);
+                }
+            }
+            GGML_LOG_INFO("[vk-sync] %3d %-12s %-20s fused+%d dst %s src%s %s\n",
+                          node_idx, ggml_op_name(n->op), n->name,
+                          ctx->num_additional_fused_ops,
+                          ggml_vk_trace_range(n).c_str(), srcs.c_str(),
+                          need_sync ? "SYNC" : "");
         }
 
         if (need_sync) {
@@ -2371,6 +2432,9 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
     // Replace the graph with the new order.
     for (int i = 0; i < graph->n_nodes; ++i) {
         graph->nodes[i] = new_order[i];
+    }
+    if (ggml_vk_trace_order()) {
+        ggml_vk_trace_check_order(graph);
     }
 }
 

@@ -25,7 +25,7 @@ tiny_grad_case <- function() {
     loss <- ag_mse_loss(ag_matmul(W, x), matrix(0.0, 2, 1))
   })
   backward(loss)
-  W$grad
+  ag_grad(W)        # a matrix whether $grad is one or a device handle
 }
 
 test_that("gradients below the f16 denormal minimum survive on CPU", {
@@ -55,6 +55,11 @@ test_that("f16 on the GPU does not flush small gradients to zero", {
   withr::defer(ag_dtype(prev))
 
   g <- tiny_grad_case()
+  # The property holds BECAUSE of the path: the graph backward is f32-only and
+  # refuses an f16 tape by name, so the closures compute in double. Checking the
+  # path keeps a future change of path from silently changing what this tests
+  # (it used to pass through an error fallback nobody saw).
+  expect_match(ggmlR:::ag_backward_path(), "^closures \\(compute dtype f16")
   expect_false(any(g == 0))
   # loose tolerance: the operands do round-trip through f16, so the value is
   # approximate -- the point is that it is not zero.

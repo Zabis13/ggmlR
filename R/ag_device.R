@@ -25,6 +25,7 @@
 .ag_device_state <- new.env(parent = emptyenv())
 .ag_device_state$device  <- "cpu"   # "cpu" | "gpu"
 .ag_device_state$dtype   <- "f32"   # "f32" | "f16" | "bf16"
+.ag_device_state$matmul_precision <- "default"  # "default" | "f32" (ag_matmul_precision)
 .ag_device_state$backend <- NULL    # ggml backend (ext ptr)
 .ag_device_state$ctx     <- NULL    # current ggml context for resident tensors
 .ag_device_state$buffer  <- NULL    # last buffer allocated (legacy slot)
@@ -157,11 +158,46 @@ ag_default_device <- function() {
   .ag_device_state$device
 }
 
+#' Matrix-multiply precision for ag_* operations on the GPU
+#'
+#' On a Vulkan device with fp16 or cooperative-matrix support, an f32 x f32
+#' matrix multiply with more than 8 columns runs a kernel that keeps its tiles in
+#' f16: relative error around \code{4e-4}, while up to 8 columns (and the CPU)
+#' give f32 accuracy (~\code{1e-7}). \code{"f32"} asks every \code{ag_matmul}
+#' (forward, and the input gradient of the graph backward) for the f32-tile
+#' kernel, so the result no longer depends on the batch size or the device.
+#'
+#' Cost: none measurable on small layers (RL policies, tens to hundreds of
+#' units); 2-4x slower on large ones (1024 x 1024 and up). That is why the default
+#' stays \code{"default"}: set it around the code that needs it and restore the
+#' previous value, e.g.
+#' \code{old <- ag_matmul_precision("f32"); on.exit(ag_matmul_precision(old))}.
+#' Has no effect on the CPU or with \code{ag_dtype("f16")} / \code{"bf16"}.
+#'
+#' @param precision \code{"default"} or \code{"f32"}. Missing: return the current
+#'   setting.
+#' @return The current setting when \code{precision} is missing; otherwise the
+#'   previous setting, invisibly.
+#' @export
+#' @examples
+#' old <- ag_matmul_precision("f32")
+#' ag_matmul_precision()
+#' ag_matmul_precision(old)
+ag_matmul_precision <- function(precision) {
+  prev <- .ag_device_state$matmul_precision
+  if (missing(precision)) return(prev)
+  .ag_device_state$matmul_precision <- match.arg(precision, c("default", "f32"))
+  invisible(prev)
+}
+
 #' Set the default floating-point precision for ag_* GPU operations
 #'
 #' Controls the dtype used when uploading tensors to the ggml backend.
 #' \code{"bf16"} halves memory usage vs \code{"f32"} with minimal accuracy loss.
-#' Backward pass always uses f32 R matrices regardless of this setting.
+#' Gradients are never computed in f16: the GPU graph backward runs in f32 only,
+#' so with \code{"f16"} or \code{"bf16"} \code{backward()} takes the closure path,
+#' which computes them in double -- correct, but slower (the reason is counted
+#' by \code{ggmlR:::ag_backward_fallbacks()}). Training in f32 keeps the graph path.
 #'
 #' @param dtype \code{"f32"} (default), \code{"f16"}, or \code{"bf16"}
 #' @return Invisibly the previous dtype string
@@ -736,7 +772,7 @@ ag_to_device <- function(tensor, device) {
 
   graph <- ggml_build_forward_expand(ctx_graph, root)
   fstage("graph")
-  ggml_backend_graph_compute(backend, graph)
+  .ag_graph_compute(backend, graph, "per-op")
   fstage("compute")
 
   # The destination already holds the result; handing back the caller's own
@@ -803,8 +839,8 @@ ag_to_device <- function(tensor, device) {
   if (.ag_is_handle(a_data)) {
     return(.ag_run_op(
       op_fn = function(ctx, ptrs)
-                ggml_mul_mat(ctx, ggml_cont(ctx, ggml_transpose(ctx, ptrs[[1L]])),
-                             ptrs[[2L]]),
+                .ag_mul_mat(ctx, ggml_cont(ctx, ggml_transpose(ctx, ptrs[[1L]])),
+                            ptrs[[2L]]),
       inputs    = list(a_data, b_data),
       out_shape = c(nr_a, nc_b),
       resident  = .ag_is_handle(b_data) || .ag_is_handle(a_data)))
@@ -812,7 +848,7 @@ ag_to_device <- function(tensor, device) {
 
   at_data <- t(a_data)                          # [k, m]
   .ag_run_op(
-    op_fn    = function(ctx, ptrs) ggml_mul_mat(ctx, ptrs[[1L]], ptrs[[2L]]),
+    op_fn    = function(ctx, ptrs) .ag_mul_mat(ctx, ptrs[[1L]], ptrs[[2L]]),
     inputs   = list(at_data, b_data),
     out_shape = c(nr_a, nc_b),
     resident = .ag_is_handle(b_data)
@@ -825,6 +861,20 @@ ag_to_device <- function(tensor, device) {
 # a Gram matrix whose ||x_i||^2 + ||x_j||^2 - 2 G[i,j] distances feed kNN, where
 # the f16 noise reorders nearest neighbours. GGML_PREC_F32 selects the f32 kernel.
 GGML_PREC_F32 <- 10L
+
+# ggml_mul_mat for the ag_* forward and the graph backward's input gradient.
+# ag_matmul_precision("f32") marks the node GGML_PREC_F32, which on an
+# fp16/coopmat Vulkan device selects the f32-tile kernel (the default one keeps
+# its tiles in f16: ~4e-4 relative error once the batch exceeds 8 columns).
+# With "default" the node is exactly what ggml_mul_mat builds (verified bit for
+# bit against a PPO run from before this helper existed).
+.ag_mul_mat <- function(ctx, a, b) {
+  r <- ggml_mul_mat(ctx, a, b)
+  if (identical(.ag_device_state$matmul_precision, "f32"))
+    .Call("R_ggml_mul_mat_set_prec", r, GGML_PREC_F32, PACKAGE = "ggmlR")
+  r
+}
+
 .ag_gpu_matmul_f32 <- function(a_data, b_data) {
   nr_a <- .ag_nrow(a_data); nc_b <- .ag_ncol(b_data)
   # Transpose in R -- see .ag_gpu_matmul above for why the graph version was
@@ -851,19 +901,30 @@ GGML_PREC_F32 <- 10L
   )
 }
 
+# Resident (graph-mode) when an operand is already a device handle, exactly like
+# .ag_gpu_add; host matrices (sc_contracts.R) keep the old compute-and-return.
 .ag_gpu_sub <- function(a_data, b_data) {
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_sub(ctx, ptrs[[1L]], ptrs[[2L]]),
     inputs   = list(a_data, b_data),
-    out_shape = .ag_dim(a_data)
+    out_shape = .ag_dim(a_data),
+    resident  = .ag_is_handle(a_data) || .ag_is_handle(b_data)
   )
 }
 
+# ggml_mul broadcasts its SECOND operand over the first. Multiplication
+# commutes, so when the first is the smaller one ([1,n] or [m,1] times [m,n])
+# the operands are swapped -- the output takes the larger shape either way.
 .ag_gpu_mul <- function(a_data, b_data) {
+  da <- .ag_dim(a_data); db <- .ag_dim(b_data)
+  if (!is.null(da) && !is.null(db) && prod(da) < prod(db)) {
+    tmp <- a_data; a_data <- b_data; b_data <- tmp
+  }
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_mul(ctx, ptrs[[1L]], ptrs[[2L]]),
     inputs   = list(a_data, b_data),
-    out_shape = .ag_dim(a_data)
+    out_shape = .ag_dim(a_data),
+    resident  = .ag_is_handle(a_data) || .ag_is_handle(b_data)
   )
 }
 
@@ -872,7 +933,8 @@ GGML_PREC_F32 <- 10L
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_scale(ctx, ptrs[[1L]], s),
     inputs   = list(x_data),
-    out_shape = .ag_dim(x_data)
+    out_shape = .ag_dim(x_data),
+    resident  = .ag_is_handle(x_data)
   )
 }
 
@@ -926,16 +988,39 @@ GGML_PREC_F32 <- 10L
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_exp(ctx, ptrs[[1L]]),
     inputs   = list(x_data),
-    out_shape = .ag_dim(x_data)
+    out_shape = .ag_dim(x_data),
+    resident  = .ag_is_handle(x_data)
   )
 }
 
+# ggml_clamp is a VIEW of its input written in place. Inside one fused graph
+# that would overwrite the input for every other consumer (PPO uses ratio both
+# clamped and unclamped), so it clamps a copy.
 .ag_gpu_clamp <- function(x_data, lo, hi) {
   lo <- as.double(lo); hi <- as.double(hi)
   .ag_run_op(
-    op_fn    = function(ctx, ptrs) ggml_clamp(ctx, ptrs[[1L]], lo, hi),
+    op_fn    = function(ctx, ptrs) ggml_clamp(ctx, ggml_dup(ctx, ptrs[[1L]]), lo, hi),
     inputs   = list(x_data),
-    out_shape = .ag_dim(x_data)
+    out_shape = .ag_dim(x_data),
+    resident  = .ag_is_handle(x_data)
+  )
+}
+
+# d clamp(x, lo, hi) / dx = 1 strictly inside (lo, hi), 0 on and outside the
+# limits -- the closure's (x > lo & x < hi). ggml_step is x > 0 ? 1 : 0, so
+# step(x - lo) * step(hi - x) has exactly that boundary. Built on the device so
+# the backward snapshot never leaves it.
+.ag_gpu_clamp_mask <- function(x_data, lo, hi) {
+  lo <- as.double(lo); hi <- as.double(hi)
+  .ag_run_op(
+    op_fn = function(ctx, ptrs) {
+      x <- ptrs[[1L]]
+      ggml_mul(ctx, ggml_step(ctx, ggml_scale_bias(ctx, x,  1, -lo)),
+                    ggml_step(ctx, ggml_scale_bias(ctx, x, -1,  hi)))
+    },
+    inputs    = list(x_data),
+    out_shape = .ag_dim(x_data),
+    resident  = TRUE
   )
 }
 
@@ -944,15 +1029,21 @@ GGML_PREC_F32 <- 10L
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_sum(ctx, ptrs[[1L]]),
     inputs   = list(x_data),
-    out_shape = c(1L, 1L)
+    out_shape = c(1L, 1L),
+    resident  = .ag_is_handle(x_data)
   )
 }
 
+# Not ggml_mean: it reduces along ne0 only and returns [1, ne1, ...] -- the
+# column means of an R matrix -- so the [1,1] read kept just the first column.
+# n from the shape: length() of a handle is the length of the list.
 .ag_gpu_mean_all <- function(x_data) {
+  n <- prod(.ag_dim(x_data))
   .ag_run_op(
-    op_fn    = function(ctx, ptrs) ggml_mean(ctx, ptrs[[1L]]),
+    op_fn    = function(ctx, ptrs) ggml_scale(ctx, ggml_sum(ctx, ptrs[[1L]]), 1.0 / n),
     inputs   = list(x_data),
-    out_shape = c(1L, 1L)
+    out_shape = c(1L, 1L),
+    resident  = .ag_is_handle(x_data)
   )
 }
 
@@ -962,13 +1053,28 @@ GGML_PREC_F32 <- 10L
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_sum_rows(ctx, ptrs[[1L]]),
     inputs   = list(x_data),
-    out_shape = c(1L, .ag_ncol(x_data))
+    out_shape = c(1L, .ag_ncol(x_data)),
+    resident  = .ag_is_handle(x_data)
   )
 }
 
-# ag_sum(dim=1) = rowSums: CPU fallback (Vulkan transpose+sum_rows not supported).
+# ag_sum(dim=1) = rowSums [m,1]. sum_rows reduces ne0 (R's rows), so transpose
+# to [n,m] first -- as a contiguous copy, sum_rows over a transposed VIEW walks
+# the wrong memory -- then reshape [1,m] to [m,1]. Same construction as the
+# graph backward's add rule, verified on this backend. A host matrix (no device
+# operand) keeps the plain R computation.
+.ag_gpu_rowsum_node <- function(ctx, x, m) {
+  ggml_reshape_2d(ctx, ggml_sum_rows(ctx, ggml_cont(ctx, ggml_transpose(ctx, x))), m, 1L)
+}
 .ag_gpu_sum_rows <- function(x_data) {
-  matrix(rowSums(x_data), nrow = nrow(x_data), ncol = 1L)
+  if (!.ag_is_handle(x_data)) return(matrix(rowSums(x_data), nrow = nrow(x_data), ncol = 1L))
+  m <- .ag_nrow(x_data)
+  .ag_run_op(
+    op_fn    = function(ctx, ptrs) .ag_gpu_rowsum_node(ctx, ptrs[[1L]], m),
+    inputs   = list(x_data),
+    out_shape = c(m, 1L),
+    resident  = TRUE
+  )
 }
 
 # ag_mean(dim=2) = colMeans = colSums / nrow
@@ -980,13 +1086,21 @@ GGML_PREC_F32 <- 10L
       ggml_scale(ctx, ggml_sum_rows(ctx, ptrs[[1L]]), 1.0 / nr)
     },
     inputs   = list(x_data),
-    out_shape = c(1L, .ag_ncol(x_data))
+    out_shape = c(1L, .ag_ncol(x_data)),
+    resident  = .ag_is_handle(x_data)
   )
 }
 
-# ag_mean(dim=1) = rowMeans: CPU fallback.
+# ag_mean(dim=1) = rowMeans [m,1], on the device like .ag_gpu_sum_rows.
 .ag_gpu_mean_rows <- function(x_data) {
-  matrix(rowMeans(x_data), nrow = nrow(x_data), ncol = 1L)
+  if (!.ag_is_handle(x_data)) return(matrix(rowMeans(x_data), nrow = nrow(x_data), ncol = 1L))
+  m <- .ag_nrow(x_data); nc <- .ag_ncol(x_data)
+  .ag_run_op(
+    op_fn    = function(ctx, ptrs) ggml_scale(ctx, .ag_gpu_rowsum_node(ctx, ptrs[[1L]], m), 1.0 / nc),
+    inputs   = list(x_data),
+    out_shape = c(m, 1L),
+    resident  = TRUE
+  )
 }
 
 # ag_pow(x, p) = x^p
@@ -1049,18 +1163,18 @@ GGML_PREC_F32 <- 10L
 # Bias correction is two scalars (1 - beta^t). They are computed in R and folded
 # into ggml_scale, rather than uploaded as tensors: a scalar in a push constant
 # costs nothing, a 1x1 tensor costs an allocation and a crossing.
-.ag_adam_step_device <- function(env, nm, p, g) {
+.ag_adam_step_device <- function(env, i, p, g) {
   # ⚠️ Never deferred. Every graph below is ordered by hand relative to the
   # copies at the end -- read m, v and w first, write them afterwards -- and a
   # queue that postpones the reads until the first write folds the two into one
   # graph. Symptom when this wrapper was missing: the loss sat at 0.212 for four
   # steps and the weight never moved at all. See .ag_defer_suspend.
-  .ag_defer_suspend(.ag_adam_step_device_impl(env, nm, p, g))
+  .ag_defer_suspend(.ag_adam_step_device_impl(env, i, p, g))
 }
 
-.ag_adam_step_device_impl <- function(env, nm, p, g) {
-  m  <- env$m[[nm]]
-  v  <- env$v[[nm]]
+.ag_adam_step_device_impl <- function(env, i, p, g) {
+  m  <- env$m[[i]]
+  v  <- env$v[[i]]
   wh <- .ag_handle_of(p)
   sh <- .ag_dim(m)
 
@@ -1083,12 +1197,12 @@ GGML_PREC_F32 <- 10L
   # is uploaded once and then simply referenced, and nothing this step allocates
   # can disturb it, since every allocation here goes to the pass pool.
   if (.ag_is_handle(g)) {
-    gbuf <- env$gbuf[[nm]]
+    gbuf <- env$gbuf[[i]]
     if (is.null(gbuf) || !.ag_handle_live(gbuf)) {
       gbuf <- .ag_handle(.ag_r_to_gpu(matrix(0, sh[1L], sh[2L]),
                                       scope = "persistent"),
                          sh, scope = "persistent")
-      env$gbuf[[nm]] <- gbuf
+      env$gbuf[[i]] <- gbuf
     }
     .ag_run_op(function(ctx, ptrs) ggml_dup(ctx, ptrs[[1L]]),
                inputs = list(g), out_shape = sh, scope = "pass", out = gbuf)

@@ -4,7 +4,13 @@
 \alias{ag_linear}
 \title{Create a dense layer with learnable parameters}
 \usage{
-ag_linear(in_features, out_features, activation = NULL)
+ag_linear(
+  in_features,
+  out_features,
+  activation = NULL,
+  init = "glorot_uniform",
+  gain = 1
+)
 }
 \arguments{
 \item{in_features}{Input dimension}
@@ -12,6 +18,25 @@ ag_linear(in_features, out_features, activation = NULL)
 \item{out_features}{Output dimension}
 
 \item{activation}{"relu", "sigmoid", "tanh", "softmax", or NULL}
+
+\item{init}{Weight initialisation, \code{[out_features, in_features]}:
+\describe{
+  \item{\code{"glorot_uniform"}}{(default) uniform on
+    \eqn{\pm\sqrt{6/(in+out)}}; unchanged from earlier versions, same
+    random stream for the same seed.}
+  \item{\code{"orthogonal"}}{orthogonal rows (out <= in) or columns
+    (out > in), uniform over orthogonal matrices (QR of a Gaussian matrix
+    with the sign of R's diagonal folded into Q). Draws from R's RNG
+    (\code{rnorm}), so \code{set.seed} reproduces it.}
+  \item{a function}{\code{function(out, in)} returning the matrix.}
+  \item{a matrix}{used as is; no random numbers are drawn.}
+}
+The bias always starts at zero. \code{init} only shapes a new layer:
+\code{\link{ag_load_model}} overwrites every weight from the file.}
+
+\item{gain}{Multiplier for the string initialisations (e.g. \code{sqrt(2)}
+for tanh/ReLU layers, \code{0.01} for a policy head). A function or matrix
+\code{init} carries its own scale, so \code{gain} must stay 1 with them.}
 }
 \value{
 List with \code{W}, \code{b}, \code{forward(x)}, \code{params()}
@@ -26,5 +51,6 @@ weights.
 layer <- ag_linear(4L, 8L, activation = "relu")
 x     <- ag_tensor(matrix(runif(4 * 16), 4, 16))
 out   <- layer$forward(x)
+head  <- ag_linear(8L, 2L, init = "orthogonal", gain = 0.01)
 }
 }

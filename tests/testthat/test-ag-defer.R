@@ -208,9 +208,26 @@ test_that("a reset with a live queue does not fabricate values", {
 
 test_that("deferral is off unless asked for", {
   # A gate that quietly defaulted to on would change every path in the package
-  # at once. No GPU needed: this is about the gate, not the device.
-  old <- defer_on(NA)
-  expect_false(isTRUE(old))
+  # at once. No GPU needed: this is about the gate, not the device. The run may
+  # itself force the mode (GGMLR_AG_DEFER=1 for the whole suite), and an earlier
+  # test may have set it explicitly -- clear both, so this checks the DEFAULT.
+  st <- get(".ag_defer", envir = ns)
+  old_explicit <- st$enabled
+  on.exit(st$enabled <- old_explicit, add = TRUE)
+  st$enabled <- NULL
+  withr::local_envvar(GGMLR_AG_DEFER = "")
+  expect_false(isTRUE(defer_on(NA)))
+})
+
+test_that("GGMLR_AG_DEFER=1 turns deferral on when nothing set it explicitly", {
+  st <- get(".ag_defer", envir = ns)
+  old_explicit <- st$enabled
+  on.exit(st$enabled <- old_explicit, add = TRUE)
+  st$enabled <- NULL
+  withr::local_envvar(GGMLR_AG_DEFER = "1")
+  expect_true(isTRUE(defer_on(NA)))
+  withr::local_envvar(GGMLR_AG_DEFER = "TRUE")
+  expect_true(isTRUE(defer_on(NA)))
 })
 
 # ---------------------------------------------------------------------------

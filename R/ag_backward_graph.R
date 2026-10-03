@@ -52,7 +52,8 @@
 # WHAT IS COVERED SO FAR
 # ----------------------
 # matmul, add (both broadcasts), the three losses, the elementwise activations
-# (relu/sigmoid/tanh), transpose, softmax, scale and elementwise mul -- enough
+# (relu/sigmoid/tanh, plus exp and clamp through the same multiplier rule),
+# sub, log, sum/mean, transpose, softmax, scale and elementwise mul -- enough
 # for ag_linear stacks, classifiers, ag_dropout, and ag_multihead_attention,
 # which is itself built from those primitives (its head slicing and
 # concatenation go through selector matrices, i.e. ag_matmul).
@@ -135,6 +136,48 @@ ag_backward_graph <- function(on = TRUE) {
 #' @rdname ag_backward_graph
 #' @keywords internal
 ag_backward_path <- function() .ag_bwd$last_path
+
+# ---------------------------------------------------------------------------
+# Fallbacks to the closure path, counted per session.
+#
+# A fallback is correct but slow, and silent: the gradients are right, only the
+# speed is gone. Counting the reasons makes that visible; strict mode makes the
+# worst kind -- an ERROR inside the graph path, which is a bug -- fail loudly.
+# ---------------------------------------------------------------------------
+.ag_bwd$fallbacks <- list()
+
+.ag_bwd_note_fallback <- function(reason) {
+  if (is.null(reason)) return(invisible(NULL))
+  n <- .ag_bwd$fallbacks[[reason]]
+  .ag_bwd$fallbacks[[reason]] <- if (is.null(n)) 1 else n + 1
+  invisible(NULL)
+}
+
+# Strict mode: an error in the graph backward is raised instead of falling back.
+# GGMLR_AG_BWD_STRICT=1 or options(ggmlR.ag_backward_strict = TRUE). Refusals
+# (an unsupported op, f16) still fall back -- they are not bugs.
+.ag_bwd_strict <- function() {
+  isTRUE(getOption("ggmlR.ag_backward_strict")) ||
+    identical(Sys.getenv("GGMLR_AG_BWD_STRICT"), "1")
+}
+
+#' Why backward() used the closure path, counted
+#'
+#' Each time \code{backward()} could have run as one graph but fell back to the
+#' R closures, the reason is counted here: an unsupported op on the tape, a
+#' compute dtype other than f32, or an error inside the graph path (which strict
+#' mode, \code{GGMLR_AG_BWD_STRICT=1}, raises instead). Gradients are correct
+#' either way; a fallback costs speed.
+#'
+#' @param reset \code{TRUE} to clear the counts after reading them.
+#' @return A named numeric vector: reason -> number of backward() calls.
+#' @keywords internal
+ag_backward_fallbacks <- function(reset = FALSE) {
+  v <- unlist(.ag_bwd$fallbacks)
+  if (is.null(v)) v <- numeric(0)
+  if (isTRUE(reset)) .ag_bwd$fallbacks <- list()
+  v
+}
 
 # ON by default since the residency work; NULL means "nobody has set it".
 #
@@ -227,7 +270,8 @@ ag_backward_resident <- function(on = TRUE) {
 # splitting one backward between a graph and closures would mean moving
 # gradients across the bus mid-pass, which is the per-op round trip again.
 .AG_BWD_GRAPH_OPS <- c("matmul", "add", "loss_const", "elemwise_mul",
-                       "transpose", "softmax", "scale", "mul", "flash_attn")
+                       "transpose", "softmax", "scale", "mul", "flash_attn",
+                       "sub", "log", "sum", "log_softmax")
 
 # Can this tape run as one graph?
 #
@@ -238,21 +282,25 @@ ag_backward_resident <- function(on = TRUE) {
   if (!length(nodes)) return("empty tape")
   if (!identical(.ag_device_state$device, "gpu")) return("device is not gpu")
   if (is.null(.ag_device_state$backend))          return("no backend")
+  # The graph's constants are built in the compute dtype, and not every rule
+  # has an f16/bf16 kernel on Vulkan (out_prod is f32-only), so an f16 tape used
+  # to abort inside the graph and fall back through the error handler -- hidden.
+  # Refuse it up front, by name: the closures compute the gradient in double.
+  cd <- .ag_compute_dtype()
+  if (!identical(cd, "f32"))
+    return(paste0("compute dtype ", cd, ": the graph backward runs in f32 only"))
 
   for (nd in nodes) {
     if (is.null(nd$op)) return("tape node has no op record")
     if (!nd$op %in% .AG_BWD_GRAPH_OPS) return(paste0("unsupported op: ", nd$op))
   }
 
-  # The loss_const rule folds the incoming gradient, which is only correct while
-  # that gradient is the 1x1 seed -- i.e. while the loss node IS the tape's root.
-  # A loss consumed by something else (two losses summed, a loss scaled) would
-  # get a gradient of its own, and folding it would silently drop that factor.
-  # Cheaper and safer to refuse the tape than to emit a wrong number.
-  for (nd in nodes) {
-    if (identical(nd$op, "loss_const") && !identical(nd$output_id, loss$id))
-      return("loss is not the tape root")
-  }
+  # The seed below is a 1x1 ones tensor, so the graph is only correct for a
+  # scalar loss. A loss_const node that is NOT the root is fine now (its rule
+  # multiplies by its own incoming 1x1 gradient), so this is the one shape
+  # restriction left -- refused by name rather than by a ggml assert.
+  ld <- .ag_dim(.ag_operand(loss))
+  if (!is.null(ld) && prod(ld) != 1) return("loss is not a scalar")
   NULL
 }
 
@@ -428,6 +476,31 @@ ag_backward_profile_report <- function() {
            envir = gnodes)
   }
 
+  # Gradient of a broadcast operand (add's and sub's B). ggml_sum_rows reduces
+  # ne[0]: [a,b,c,d] -> [1,b,c,d]. An R matrix [r,c] uploads as ne0=r, ne1=c,
+  # so sum_rows collapses R's ROWS, giving colSums. That is exactly the
+  # row-broadcast case; the column one needs the other axis and goes through a
+  # transpose. Shapes via the accessors: b_orig is a device handle whenever the
+  # forward kept it resident, and dim() on one is NULL.
+  reduce_b <- function(g, bo, out_nr, out_nc) {
+    bdim <- .ag_dim(bo)
+    if (!is.null(bdim) && bdim[2L] == 1L && out_nc > 1L) {
+      # b was [m,1] broadcast across columns -> db = rowSums(g), [m,1].
+      # Reducing ne[1] is not something sum_rows does, so transpose to
+      # [n,m] and reduce ne[0] instead, then reshape [1,m] back to [m,1].
+      # ggml_cont before the reduction: sum_rows over a transposed VIEW is
+      # a different (and here wrong) memory walk.
+      gt <- ggml_cont(ctx, ggml_transpose(ctx, g))
+      ggml_reshape_2d(ctx, ggml_sum_rows(ctx, gt), bdim[1L], 1L)
+    } else if (!is.null(bdim) && bdim[1L] == 1L && out_nr > 1L) {
+      # b was [1,n] broadcast down rows -> db = colSums(g), [1,n], which
+      # is sum_rows' native shape.
+      ggml_sum_rows(ctx, g)
+    } else {
+      g
+    }
+  }
+
   # Seed: dL/dL = 1. A 1x1 tensor, so the scalar rules below can multiply by it
   # in the graph rather than reading it back.
   assign(as.character(loss$id), const(matrix(1.0)), envir = gnodes)
@@ -454,7 +527,7 @@ ag_backward_profile_report <- function() {
       # ne[0] of both A[m,k] and g[m,n], so this one IS mul_mat -- and needs no
       # transpose node, since mul_mat already reads its first argument that way.
       if (is_ag_tensor(B) && isTRUE(B$requires_grad))
-        accumulate(as.character(B$id), ggml_mul_mat(ctx, const(nd$a_snap), g))
+        accumulate(as.character(B$id), .ag_mul_mat(ctx, const(nd$a_snap), g))
 
     } else if (identical(nd$op, "add")) {
       A <- inp$A; B <- inp$B
@@ -464,33 +537,61 @@ ag_backward_profile_report <- function() {
         # B may have been broadcast over A in the forward pass -- the bias case
         # of ag_linear -- and then its gradient is g summed over the axis that
         # was broadcast. Both directions are emitted here; neither needs a
-        # download.
-        #
-        # ggml_sum_rows reduces ne[0]: [a,b,c,d] -> [1,b,c,d]. An R matrix [r,c]
-        # uploads as ne0=r, ne1=c, so sum_rows collapses R's ROWS, giving
-        # colSums. That is exactly the row-broadcast case; the column one needs
-        # the other axis and goes through a transpose.
-        # Shapes via the accessors: b_orig is a device handle whenever the
-        # forward kept it resident, and dim() on one is NULL.
-        bo   <- nd$b_orig
-        bdim <- .ag_dim(bo)
-        gb <-
-          if (!is.null(bdim) && bdim[2L] == 1L && nd$out_nc > 1L) {
-            # b was [m,1] broadcast across columns -> db = rowSums(g), [m,1].
-            # Reducing ne[1] is not something sum_rows does, so transpose to
-            # [n,m] and reduce ne[0] instead, then reshape [1,m] back to [m,1].
-            # ggml_cont before the reduction: sum_rows over a transposed VIEW is
-            # a different (and here wrong) memory walk.
-            gt <- ggml_cont(ctx, ggml_transpose(ctx, g))
-            ggml_reshape_2d(ctx, ggml_sum_rows(ctx, gt), bdim[1L], 1L)
-          } else if (!is.null(bdim) && bdim[1L] == 1L && nd$out_nr > 1L) {
-            # b was [1,n] broadcast down rows -> db = colSums(g), [1,n], which
-            # is sum_rows' native shape.
-            ggml_sum_rows(ctx, g)
-          } else {
-            g
-          }
-        accumulate(as.character(B$id), gb)
+        # download (reduce_b above).
+        accumulate(as.character(B$id),
+                   reduce_b(g, nd$b_orig, nd$out_nr, nd$out_nc))
+      }
+
+    } else if (identical(nd$op, "sub")) {
+      # dA = g, dB = -g, B's broadcast reduced exactly as in add (reduce_b),
+      # then negated. A broadcast over B is legal in ag_sub's closure but has no
+      # caller; refuse it by name rather than emit an unreduced gradient.
+      A <- inp$A; B <- inp$B
+      adim <- .ag_dim(nd$a_orig)
+      bdim <- .ag_dim(nd$b_orig)
+      if (!is.null(adim) && !is.null(bdim) &&
+          ((adim[1L] == 1L && bdim[1L] > 1L) || (adim[2L] == 1L && bdim[2L] > 1L))) {
+        .ag_bwd$last_path <- "closures (sub: A broadcast)"
+        return(NULL)
+      }
+      if (is_ag_tensor(A) && isTRUE(A$requires_grad))
+        accumulate(as.character(A$id), g)
+      if (is_ag_tensor(B) && isTRUE(B$requires_grad))
+        accumulate(as.character(B$id),
+                   ggml_scale(ctx, reduce_b(g, nd$b_orig, adim[1L], adim[2L]), -1))
+
+    } else if (identical(nd$op, "log")) {
+      # dx = g / x. Divided in the graph rather than recorded as elemwise_mul
+      # with 1/x: x_snap is a handle when the forward kept x resident, and 1/x
+      # would have to be computed on the host. x <= 0 gives Inf / sign-flipped
+      # values here exactly as g / x does in the closure.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad))
+        accumulate(as.character(x$id), ggml_div(ctx, g, const(nd$x_snap)))
+
+    } else if (identical(nd$op, "log_softmax")) {
+      # dx = g - p * colSums(g), p = exp(logp). Rebuilt from the logp snapshot
+      # (resident when the forward was), so nothing crosses the bus. The
+      # forward's stability shift does not appear: the result does not depend
+      # on it. p [n,c] * sum_rows(g) [1,c] broadcasts like softmax's rule.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad)) {
+        p <- ggml_exp(ctx, const(nd$y_snap))
+        accumulate(as.character(x$id),
+                   ggml_sub(ctx, g, ggml_mul(ctx, p, ggml_sum_rows(ctx, g))))
+      }
+
+    } else if (identical(nd$op, "sum")) {
+      # ag_sum and ag_mean, any dim: dx = g spread back over the input shape,
+      # times scale (1 for sum, 1/n for mean). g is [1,1], [m,1] or [1,n]; each
+      # is a ggml_repeat onto [m,n]. The template tensor only carries the shape.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad)) {
+        sh  <- nd$in_shape
+        tpl <- ggml_new_tensor_2d(ctx, ggml_type, sh[1L], sh[2L])
+        gx  <- ggml_repeat(ctx, g, tpl)
+        if (nd$scale != 1) gx <- ggml_scale(ctx, gx, nd$scale)
+        accumulate(as.character(x$id), gx)
       }
 
     } else if (identical(nd$op, "elemwise_mul")) {
@@ -608,10 +709,17 @@ ag_backward_profile_report <- function() {
       # 1x1 node over a matrix, and folding a known 1.0 is free -- but that makes
       # this rule valid ONLY at the root. .ag_bwd_reject_reason enforces that: a
       # loss feeding anything else would need the multiply, and is refused.
+      #
+      # Below the root (vf_coef * mse + ... in PPO) g is the loss's own 1x1
+      # gradient and has to be applied. ggml_repeat spreads it to gmat's shape
+      # explicitly rather than relying on ggml_mul's broadcast.
       tgt <- inp[[1L]]
-      if (is_ag_tensor(tgt) && isTRUE(tgt$requires_grad))
-        accumulate(as.character(tgt$id),
-                   ggml_scale(ctx, const(nd$gmat), nd$gscale))
+      if (is_ag_tensor(tgt) && isTRUE(tgt$requires_grad)) {
+        gm <- ggml_scale(ctx, const(nd$gmat), nd$gscale)
+        if (!identical(nd$output_id, loss$id))
+          gm <- ggml_mul(ctx, gm, ggml_repeat(ctx, g, gm))
+        accumulate(as.character(tgt$id), gm)
+      }
     }
   }
 
@@ -676,7 +784,7 @@ ag_backward_profile_report <- function() {
   for (i in seq_along(outs)[-1L]) ggml_graph_expand(graph, outs[[i]])
   if (prof) { acc <- .ag_bwd_prof_add(acc, "build", tk); tk <- Sys.time() }
 
-  ggml_backend_graph_compute(backend, graph)
+  .ag_graph_compute(backend, graph, "graph backward")
   if (prof) { acc <- .ag_bwd_prof_add(acc, "compute", tk); tk <- Sys.time() }
 
   }

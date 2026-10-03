@@ -203,7 +203,7 @@
 
   graph <- ggml_build_forward_expand(ctx, fwd)
   if (!is.null(bwd)) ggml_graph_expand(graph, bwd)
-  ggml_backend_graph_compute(backend, graph)
+  .ag_graph_compute(backend, graph, "flash attention")
 
   # Result comes back permuted: [d_v, n_head, n_q].
   out <- array(ggml_backend_tensor_get_data(fwd), c(dv, n_head, n_q))
@@ -608,7 +608,7 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
            call. = FALSE)
     on.exit(ggml_free(ctx_graph), add = TRUE)
     graph <- ggml_build_forward_expand(ctx_graph, b$out)
-    ggml_backend_graph_compute(.ag_device_state$backend, graph)
+    .ag_graph_compute(.ag_device_state$backend, graph, "flash attention (deferred)")
     h <- .ag_handle(b$out, c(d_model, seq_q), scope = "pass")
   }
   out <- .ag_tensor_from_handle(h, dtype = .ag_device_state$dtype)

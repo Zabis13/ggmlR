@@ -842,6 +842,44 @@ static void ggml_vk_load_shaders(vk_device& device) {
     }
 #undef CREATE_MM
 
+    // ggmlR: exact f32 x f32 for nodes with GGML_PREC_F32 (not upstream).
+    //
+    // On an fp16 or coopmat device every matmul_f32_f32 variant above keeps its
+    // shared-memory tiles in f16, so f32 x f32 with n > 8 (the mat-vec path ends
+    // at 8) carries ~4e-4 relative error. The _fp32 SPIR-V is always generated;
+    // here it is registered with SCALAR tiles (tm/tn/tk of the non-coopmat
+    // layout -- the coopmat ones would not match a non-coopmat shader) and only
+    // in the sizes whose f32 tiles fit in shared memory. Registration is cheap:
+    // pipelines compile lazily on first use, so callers that never ask for
+    // GGML_PREC_F32 (llamaR, sd2R) pay nothing.
+    if (!device->fp16 && !device->coopmat_support && !device->coopmat2) {
+        device->pipeline_matmul_f32_prec32 = device->pipeline_matmul_f32;   // already f32
+    } else {
+        if (!device->pipeline_matmul_f32_prec32 ||
+            device->pipeline_matmul_f32_prec32 == device->pipeline_matmul_f32) {
+            device->pipeline_matmul_f32_prec32 = std::make_shared<vk_matmul_pipeline_struct>();
+        }
+        const std::vector<uint32_t> p32_l = { 128, 128, 128, 16, subgroup_size_8 * 2, 64, 2, 4, 4, 1, subgroup_size_8 };
+        const std::vector<uint32_t> p32_m = { 128,  64,  64, 16, subgroup_size_8,     32, 2, 4, 2, 1, subgroup_size_8 };
+        const std::vector<uint32_t> p32_s = { subgroup_size_16, 32, 32, 16, 32,        32, 2, 2, 2, 1, subgroup_size_8 };
+        const std::array<uint32_t, 3> p32_l_wg = { 128, 128, 1 }, p32_m_wg = { 64, 64, 1 }, p32_s_wg = { 32, 32, 1 };
+        auto &p32 = device->pipeline_matmul_f32_prec32;
+        auto const &reg = [&](vk_pipeline &u, vk_pipeline &a, const char *nu, const char *na,
+                              const std::vector<uint32_t> &wt, const std::array<uint32_t, 3> &wg, uint32_t align) {
+            if (!ggml_vk_matmul_shmem_support(device, wt, false, GGML_TYPE_F32, true)) {
+                return;
+            }
+            ggml_vk_create_pipeline(device, u, nu, matmul_f32_f32_fp32_len, matmul_f32_f32_fp32_data, "main", 3, sizeof(vk_mat_mat_push_constants), wg, wt, 1);
+            ggml_vk_create_pipeline(device, a, na, matmul_f32_f32_aligned_fp32_len, matmul_f32_f32_aligned_fp32_data, "main", 3, sizeof(vk_mat_mat_push_constants), wg, wt, align);
+        };
+        reg(p32->l, p32->a_l, "matmul_f32_f32_prec32_l", "matmul_f32_f32_prec32_aligned_l", p32_l, p32_l_wg, 128);
+        reg(p32->m, p32->a_m, "matmul_f32_f32_prec32_m", "matmul_f32_f32_prec32_aligned_m", p32_m, p32_m_wg,  64);
+        reg(p32->s, p32->a_s, "matmul_f32_f32_prec32_s", "matmul_f32_f32_prec32_aligned_s", p32_s, p32_s_wg,  32);
+        if (p32->is_empty()) {
+            p32 = nullptr;   // ggml_vk_get_mul_mat_mat_pipeline warns once and falls back
+        }
+    }
+
     // mul mat vec
 
     // the number of rows computed per shader depends on GPU model and quant

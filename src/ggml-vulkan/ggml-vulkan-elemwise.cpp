@@ -33,12 +33,19 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, src1, src2, dst, op);
 
     if (pipeline == nullptr) {
-        std::cerr << "ggml_vulkan: Error: Missing op: " << ggml_op_name(op) << " for " << ggml_type_name(src0->type);
-        if (src1 != nullptr) {
-            std::cerr << " and " << ggml_type_name(src1->type);
-        }
-        std::cerr << " to " << ggml_type_name(dst->type) << std::endl;
-        GGML_ABORT("fatal error");
+        // ggmlR: through the ggml log, not std::cerr -- cerr is a null stream in
+        // this build (ggml-vulkan-device.cpp), so the op and types were lost and
+        // the abort said only "fatal error".
+        GGML_LOG_ERROR("ggml_vulkan: Error: Missing op: %s for %s%s%s to %s\n",
+                       ggml_op_name(op), ggml_type_name(src0->type),
+                       src1 != nullptr ? " and " : "",
+                       src1 != nullptr ? ggml_type_name(src1->type) : "",
+                       ggml_type_name(dst->type));
+        GGML_ABORT("ggml_vulkan: missing pipeline for %s (%s%s%s -> %s)",
+                   ggml_op_name(op), ggml_type_name(src0->type),
+                   src1 != nullptr ? ", " : "",
+                   src1 != nullptr ? ggml_type_name(src1->type) : "",
+                   ggml_type_name(dst->type));
     }
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);

@@ -270,14 +270,14 @@ test_that("an op outside the covered set still forces a fallback", {
   ag_device("gpu")
   on.exit(ag_device("cpu"), add = TRUE)
 
-  # ag_sub records no op description, so the tape must decline AS A WHOLE even
+  # ag_pow records no op description, so the tape must decline AS A WHOLE even
   # though every other node on it is covered. That is the guarantee that keeps a
   # partly covered tape from silently dropping the gradients it cannot emit.
   #
   # This test has had to be rewritten twice, as relu and then softmax gained
   # emitters -- so pick the op deliberately: it must be one that is genuinely
   # outside .AG_BWD_GRAPH_OPS, and it should be re-pointed rather than deleted
-  # when ag_sub is eventually covered too.
+  # when ag_pow is eventually covered too (ag_sub was, in the PPO wave).
   build <- function() {
     set.seed(51L)
     w <- ag_param(matrix(runif(12, -1, 1), 4, 3))
@@ -286,7 +286,7 @@ test_that("an op outside the covered set still forces a fallback", {
     b <- ag_tensor(matrix(runif(15, -1, 1), 5, 3))
     loss <- NULL
     with_grad_tape({
-      loss <- ag_mse_loss(ag_sub(ag_matmul(x, w), b), y)
+      loss <- ag_mse_loss(ag_add(ag_pow(ag_matmul(x, w), 2), b), y)
     })
     list(loss = loss, params = list(w))
   }
@@ -512,4 +512,308 @@ test_that("the graph path is off unless enabled", {
 
   expect_identical(ag_backward_path(), "closures")
   expect_false(is.null(w$grad))
+})
+
+
+# ---------------------------------------------------------------------------
+# PPO wave: exp, clamp (elemwise_mul), sub, log, sum/mean, and loss_const below
+# the root. Closures are the reference, but closures and graph share the tape,
+# so log, sub and the branching case are also checked against central finite
+# differences of a plain-R loss -- a defect common to both paths shows there.
+# ---------------------------------------------------------------------------
+
+# Central differences of scalar f(m) w.r.t. every entry of m, in double on host.
+fd_grad <- function(f, m, h = 1e-4) {
+  g <- m
+  for (i in seq_along(m)) {
+    mp <- m; mp[i] <- mp[i] + h
+    mm <- m; mm[i] <- mm[i] - h
+    g[i] <- (f(mp) - f(mm)) / (2 * h)
+  }
+  g
+}
+
+# Graph-path gradient of one parameter, materialised.
+graph_grad <- function(build, k = 1L) {
+  old <- ag_backward_graph(TRUE)
+  on.exit(ag_backward_graph(old %||% FALSE), add = TRUE)
+  b <- build()
+  backward(b$loss)
+  list(g = .bwd_as_matrix(b$params[[k]]$grad), path = ag_backward_path())
+}
+
+test_that("graph backward matches closures for exp, clamp and log", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # clamp: entries exactly on both limits, where the mask must be 0 like the
+  # closure's strict inequality.
+  wc <- matrix(c(-0.5, 0.5, -0.2, 0.3, -0.9, 0.8, 0.5, -0.5, 0.1, 0.0,
+                 0.7, -0.7, 0.25, -0.25, 0.45), 5, 3)
+  cases <- list(
+    list(nm = "exp",   f = function(w) ag_exp(w),
+         w = function() matrix(runif(15, -1, 1), 5, 3)),
+    list(nm = "clamp", f = function(w) ag_clamp(w, -0.5, 0.5),
+         w = function() wc),
+    list(nm = "log",   f = function(w) ag_log(w),
+         w = function() matrix(runif(15, 0.5, 2), 5, 3)))
+
+  for (cs in cases) {
+    build <- function() {
+      set.seed(61L)
+      w <- ag_param(cs$w())
+      y <- ag_tensor(matrix(runif(15, -1, 1), 5, 3))
+      loss <- NULL
+      with_grad_tape({ loss <- ag_mse_loss(cs$f(w), y) })
+      list(loss = loss, params = list(w))
+    }
+    r <- both_paths(build)
+    expect_identical(r$got_path, "graph", info = cs$nm)
+    expect_lt(grad_maxdiff(r), 1e-3)
+  }
+})
+
+test_that("graph backward for log matches finite differences", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  set.seed(62L)
+  w0 <- matrix(runif(15, 0.5, 2), 5, 3)
+  y0 <- matrix(runif(15, -1, 1), 5, 3)
+  build <- function() {
+    w <- ag_param(w0)
+    loss <- NULL
+    with_grad_tape({ loss <- ag_mse_loss(ag_log(w), ag_tensor(y0)) })
+    list(loss = loss, params = list(w))
+  }
+  r <- graph_grad(build)
+  expect_identical(r$path, "graph")
+  expect_equal(r$g, fd_grad(function(m) mean((log(m) - y0)^2), w0),
+               tolerance = 1e-3, ignore_attr = TRUE)
+})
+
+test_that("graph backward for log at x <= 0 behaves like the closure", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # dx = g / x: Inf at 0, finite negative below. The forward is -Inf / NaN;
+  # only the gradient rule is compared, so the loss is a plain sum.
+  build <- function() {
+    w <- ag_param(matrix(c(0, -1, 2, 0.5, -0.25, 4), 2, 3))
+    loss <- NULL
+    with_grad_tape({ loss <- ag_sum(ag_log(w)) })
+    list(loss = loss, params = list(w))
+  }
+  r <- both_paths(build)
+  expect_identical(r$got_path, "graph")
+  expect_equal(.bwd_as_matrix(r$got_params[[1]]$grad),
+               .bwd_as_matrix(r$ref_params[[1]]$grad), tolerance = 1e-5)
+})
+
+test_that("graph backward for sub matches closures and finite differences", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # Asymmetric 5x3: a wrong reduction axis or a lost sign cannot cancel out.
+  set.seed(63L)
+  x0 <- matrix(runif(15, -1, 1), 5, 3)
+  y0 <- matrix(runif(15, -1, 1), 5, 3)
+  for (bs in list(c(5L, 3L), c(1L, 3L), c(5L, 1L))) {
+    b0 <- matrix(runif(prod(bs), -1, 1), bs[1L], bs[2L])
+    build <- function() {
+      a <- ag_param(x0)
+      b <- ag_param(b0)
+      loss <- NULL
+      with_grad_tape({ loss <- ag_mse_loss(ag_sub(a, b), ag_tensor(y0)) })
+      list(loss = loss, params = list(a, b))
+    }
+    info <- paste(bs, collapse = "x")
+    r <- both_paths(build)
+    expect_identical(r$got_path, "graph", info = info)
+    expect_lt(grad_maxdiff(r), 1e-3)
+
+    bexp <- function(m) matrix(m, 5L, 3L, byrow = bs[1L] == 1L)
+    fd <- fd_grad(function(m) mean((x0 - bexp(m) - y0)^2), b0)
+    expect_equal(.bwd_as_matrix(r$got_params[[2]]$grad), fd,
+                 tolerance = 1e-3, ignore_attr = TRUE, info = info)
+  }
+})
+
+test_that("graph backward matches closures for sum and mean on every dim", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  for (red in list(list(f = ag_sum,  nm = "sum"), list(f = ag_mean, nm = "mean"))) {
+    for (d in list(NULL, 1L, 2L)) {
+      ysh <- if (is.null(d)) c(1L, 1L) else if (d == 1L) c(5L, 1L) else c(1L, 3L)
+      build <- function() {
+        set.seed(64L)
+        w <- ag_param(matrix(runif(15, -1, 1), 5, 3))
+        y <- ag_tensor(matrix(runif(prod(ysh), -1, 1), ysh[1L], ysh[2L]))
+        loss <- NULL
+        with_grad_tape({ loss <- ag_mse_loss(red$f(w, dim = d), y) })
+        list(loss = loss, params = list(w))
+      }
+      info <- paste(red$nm, if (is.null(d)) "all" else d)
+      r <- both_paths(build)
+      expect_identical(r$got_path, "graph", info = info)
+      expect_lt(grad_maxdiff(r), 1e-3)
+    }
+  }
+})
+
+test_that("a loss below the tape root stays on the graph path", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # vf_loss as in PPO: scaled and added, so its loss_const is not the root.
+  build <- function() {
+    set.seed(65L)
+    w <- ag_param(matrix(runif(12, -1, 1), 4, 3))
+    x <- ag_tensor(matrix(runif(20, -1, 1), 5, 4))
+    y <- ag_tensor(matrix(runif(15, -1, 1), 5, 3))
+    loss <- NULL
+    with_grad_tape({
+      h <- ag_matmul(x, w)
+      loss <- ag_add(ag_scale(ag_mse_loss(h, y), 0.5),
+                     ag_scale(ag_sum(ag_exp(h)), -0.01))
+    })
+    list(loss = loss, params = list(w))
+  }
+  r <- both_paths(build)
+  expect_identical(r$got_path, "graph")
+  expect_lt(grad_maxdiff(r), 1e-3)
+})
+
+test_that("graph backward sums the gradients of a value used twice", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # h feeds exp and both operands of mul: three contributions to dh.
+  set.seed(66L)
+  w0 <- matrix(runif(12, -0.5, 0.5), 4, 3)
+  x0 <- matrix(runif(20, -1, 1), 5, 4)
+  y0 <- matrix(runif(15, -1, 1), 5, 3)
+  build <- function() {
+    w <- ag_param(w0)
+    loss <- NULL
+    with_grad_tape({
+      h <- ag_matmul(ag_tensor(x0), w)
+      loss <- ag_mse_loss(ag_add(ag_exp(h), ag_mul(h, h)), ag_tensor(y0))
+    })
+    list(loss = loss, params = list(w))
+  }
+  r <- both_paths(build)
+  expect_identical(r$got_path, "graph")
+  expect_lt(grad_maxdiff(r), 1e-3)
+
+  fd <- fd_grad(function(m) { h <- x0 %*% m; mean((exp(h) + h * h - y0)^2) }, w0)
+  expect_equal(.bwd_as_matrix(r$got_params[[1]]$grad), fd,
+               tolerance = 1e-3, ignore_attr = TRUE)
+})
+
+test_that("nodes recorded after the loss do not touch its gradients", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # One node consumes the loss, one is unrelated to it but shares w.
+  build <- function() {
+    set.seed(67L)
+    w <- ag_param(matrix(runif(12, -1, 1), 4, 3))
+    x <- ag_tensor(matrix(runif(20, -1, 1), 5, 4))
+    y <- ag_tensor(matrix(runif(15, -1, 1), 5, 3))
+    loss <- NULL
+    with_grad_tape({
+      loss  <- ag_mse_loss(ag_matmul(x, w), y)
+      after <- ag_scale(loss, 3)
+      other <- ag_sum(ag_exp(ag_matmul(x, w)))
+    })
+    list(loss = loss, params = list(w))
+  }
+  r <- both_paths(build)
+  expect_identical(r$got_path, "graph")
+  expect_lt(grad_maxdiff(r), 1e-3)
+})
+
+test_that("a non-scalar loss is refused by name", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+  old <- ag_backward_graph(TRUE)
+  on.exit(ag_backward_graph(old %||% FALSE), add = TRUE)
+
+  w <- ag_param(matrix(runif(6), 2, 3))
+  out <- NULL
+  with_grad_tape({ out <- ag_exp(w) })
+  try(backward(out), silent = TRUE)
+  expect_identical(ag_backward_path(), "closures (loss is not a scalar)")
+})
+
+test_that("a PPO-shaped loss runs as one graph and matches closures", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # The loss of rltoolsR's ppo_update() with a 2-layer net: the tape is the
+  # same op mix (softmax, clamp, log, sum(dim), exp, sub, relu, scale, mse
+  # below the root). A fallback here is a silent speed loss, hence the path.
+  B <- 256L; nobs <- 9L; nh <- 16L; na <- 9L
+  set.seed(68L)
+  W1 <- matrix(rnorm(nh * nobs, sd = 0.3), nh, nobs); b1 <- matrix(0, nh, 1)
+  Wp <- matrix(rnorm(na * nh, sd = 0.3), na, nh);     bp <- matrix(0, na, 1)
+  Wv <- matrix(rnorm(nh, sd = 0.3), 1, nh);           bv <- matrix(0, 1, 1)
+  obs   <- matrix(runif(nobs * B, -1, 1), nobs, B)
+  legal <- matrix(rbinom(na * B, 1, 0.7), na, B); legal[1, ] <- 1
+  act   <- apply(legal, 2, function(l) which(l == 1)[1L])
+  oh    <- matrix(0, na, B); oh[cbind(act, seq_len(B))] <- 1
+  old0  <- matrix(log(runif(B, 0.1, 0.9)), 1)
+  adv0  <- matrix(rnorm(B), 1)
+  ret0  <- matrix(rnorm(B), 1)
+  clip  <- 0.2
+
+  build <- function() {
+    ps <- lapply(list(W1, b1, Wp, bp, Wv, bv), ag_param)
+    loss <- NULL
+    with_grad_tape({
+      h      <- ag_relu(ag_add(ag_matmul(ps[[1]], ag_tensor(obs)), ps[[2]]))
+      logits <- ag_add(ag_matmul(ps[[3]], h), ps[[4]])
+      value  <- ag_add(ag_matmul(ps[[5]], h), ps[[6]])
+      p      <- ag_softmax(ag_add(logits, ag_tensor(-30 * (1 - legal))))
+      logp   <- ag_log(ag_clamp(p, 1e-8, 1))
+      logp_a <- ag_sum(ag_mul(logp, ag_tensor(oh)), dim = 2L)
+      ratio  <- ag_exp(ag_sub(logp_a, ag_tensor(old0)))
+      A      <- ag_tensor(adv0)
+      s1     <- ag_mul(ratio, A)
+      s2     <- ag_mul(ag_clamp(ratio, 1 - clip, 1 + clip), A)
+      surr   <- ag_sub(s1, ag_relu(ag_sub(s1, s2)))
+      pg     <- ag_scale(ag_sum(surr), -1 / B)
+      vf     <- ag_mse_loss(value, ag_tensor(ret0))
+      ent    <- ag_scale(ag_sum(ag_mul(p, logp)), -1 / B)
+      loss   <- ag_add(ag_add(pg, ag_scale(vf, 0.5)), ag_scale(ent, -0.01))
+    })
+    list(loss = loss, params = ps)
+  }
+
+  r <- both_paths(build)
+  expect_identical(r$got_path, "graph")
+  expect_lt(grad_maxdiff(r), 1e-3)
+
+  # Timing is reported, not asserted: it depends on the device.
+  t_of <- function(on) {
+    old <- ag_backward_graph(on)
+    on.exit(ag_backward_graph(old %||% FALSE), add = TRUE)
+    b <- build(); backward(b$loss)                      # warm-up
+    system.time(for (i in 1:5) { b <- build(); backward(b$loss) })[["elapsed"]] / 5
+  }
+  tc <- t_of(FALSE); tg <- t_of(TRUE)
+  message(sprintf("PPO loss build+backward: closures %.1f ms, graph %.1f ms (%.2fx)",
+                  1000 * tc, 1000 * tg, tc / tg))
 })
