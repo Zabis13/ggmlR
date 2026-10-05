@@ -272,7 +272,8 @@ print.lr_scheduler_cosine <- function(x, ...) {
 #' Call this \strong{after} \code{backward()} and \strong{before}
 #' \code{optimizer$step()}.
 #'
-#' @param params Named list of ag_param tensors (same as passed to optimizer).
+#' @param params List of ag_param tensors (same as passed to optimizer), named
+#'   or not.
 #' @param grads Gradient environment returned by \code{backward()}.
 #' @param max_norm Maximum allowed global L2 norm.
 #' @return Numeric: the global L2 norm before clipping (invisibly).
@@ -293,8 +294,9 @@ clip_grad_norm <- function(params, grads, max_norm) {
   total_sq <- 0
   grad_list <- list()
 
-  for (nm in names(params)) {
-    p   <- params[[nm]]
+  # By position: names(params) is NULL for an unnamed list, and the loop then
+  # silently clipped nothing.
+  for (p in params) {
     key <- as.character(p$id)
     g   <- get0(key, envir = grads)
     if (!is.null(g)) {
@@ -598,7 +600,8 @@ dp_train <- function(make_model,
 #' Call this \strong{after} \code{backward()} and \strong{before}
 #' \code{optimizer$step()}.
 #'
-#' @param params Named list of ag_param tensors (same as passed to optimizer).
+#' @param params List of ag_param tensors (same as passed to optimizer), named
+#'   or not.
 #' @param grads Gradient environment returned by \code{backward()}.
 #' @param clip_value Positive numeric; maximum absolute value per element.
 #' @return Numeric: the largest absolute gradient value before clipping
@@ -624,8 +627,8 @@ clip_grad_value <- function(params, grads, clip_value) {
 
   max_abs <- 0
 
-  for (nm in names(params)) {
-    p   <- params[[nm]]
+  # By position, like clip_grad_norm: names(params) is NULL for an unnamed list.
+  for (p in params) {
     key <- as.character(p$id)
     g   <- .ag_as_matrix(get0(key, envir = grads))
     if (is.null(g)) next
@@ -654,7 +657,8 @@ clip_grad_value <- function(params, grads, clip_value) {
 #' offending layer instead of leaving you with a model that silently turns to
 #' \code{NaN} several epochs later.
 #'
-#' @param params Named list of ag_param tensors (same as passed to optimizer).
+#' @param params List of ag_param tensors (same as passed to optimizer), named
+#'   or not.
 #' @param grads Gradient environment returned by \code{backward()}.
 #' @param action One of \code{"warn"} (default), \code{"stop"} or
 #'   \code{"silent"} — what to do when an anomaly is found.
@@ -684,8 +688,12 @@ check_grad_anomaly <- function(params, grads, action = c("warn", "stop", "silent
 
   rows <- list()
 
-  for (nm in names(params)) {
-    p   <- params[[nm]]
+  # By position: names(params) is NULL for an unnamed list. Unnamed entries
+  # are reported by their index.
+  nms <- names(params)
+  for (i in seq_along(params)) {
+    p   <- params[[i]]
+    nm  <- if (!is.null(nms) && nzchar(nms[i])) nms[i] else as.character(i)
     key <- as.character(p$id)
     g   <- .ag_as_matrix(get0(key, envir = grads))
 

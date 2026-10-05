@@ -12,13 +12,16 @@ ref_W2 <- c(0.96402351897227101, 1.0477416096881784, -0.83804320221027861,
 
 w_of <- function(layer) ggmlR:::.ag_as_matrix(ggmlR:::.ag_data(layer$W))
 
-test_that("default init is bit-identical to the pre-init reference", {
+# Not expect_identical: runif's a + (b - a) * u rounds 1 ULP differently on
+# FMA builds (CI), so only a tolerance is portable; an RNG/formula change
+# still moves values by orders of magnitude more than 1e-12.
+test_that("default init matches the pre-init reference", {
   ag_device("cpu")
   set.seed(42)
   l1 <- ag_linear(5L, 3L)
   l2 <- ag_linear(4L, 1L, "tanh")          # activation still 3rd positional
-  expect_identical(as.numeric(w_of(l1)), ref_W1)
-  expect_identical(as.numeric(w_of(l2)), ref_W2)
+  expect_equal(as.numeric(w_of(l1)), ref_W1, tolerance = 1e-12)
+  expect_equal(as.numeric(w_of(l2)), ref_W2, tolerance = 1e-12)
   expect_identical(dim(w_of(l1)), c(3L, 5L))
 })
 

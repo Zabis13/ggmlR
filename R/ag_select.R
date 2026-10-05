@@ -179,3 +179,86 @@ ag_max <- function(x) ag_gather(x, ag_argmax(x))
   d <- if (!is.null(h)) .ag_dim(h) else dim(.ag_data(x))
   if (is.null(d)) c(length(.ag_data(x)), 1L) else d
 }
+
+#' Sample one index per column from logits
+#'
+#' Categorical sampling by the Gumbel-max trick:
+#' \code{argmax(x + G)} with \code{G = -log(-log(u))}, \code{u ~ U(0, 1)},
+#' draws index i of column j with probability \code{softmax(x[, j])[i]}. \code{x}
+#' may be logits or log-probabilities (they differ by a per-column constant).
+#'
+#' The noise comes from \code{stats::runif}, so \code{set.seed} reproduces the
+#' draw, and the CPU and GPU paths see the same noise. On the GPU only the noise
+#' goes up and only the indices come down: \code{x} stays on the device, and the
+#' add and argmax are one launch. Like \code{ag_argmax} it is a synchronisation
+#' point and not differentiable; get the log-probability of the drawn action with
+#' \code{ag_gather(ag_log_softmax(x), a)}.
+#'
+#' Mask illegal entries as for \code{ag_log_softmax}: add a large but FINITE
+#' negative number (\code{-1e4}). Gumbel noise exceeds 1e4 with probability
+#' about \code{exp(-1e4)}, so a masked entry is never drawn while one column
+#' entry is unmasked.
+#'
+#' Near-ties of \code{x + G} are rounded in f32 on the GPU and in double on the
+#' CPU, so the two paths can differ in a rare column even with the same seed.
+#'
+#' @param x ag_tensor or numeric matrix, \code{[n, batch]}.
+#' @return Integer vector of length \code{ncol(x)}, 0-based.
+#' @export
+#' @examples
+#' set.seed(1)
+#' ag_sample_categorical(matrix(c(0, 0, -1e4,  5, 0, 0), 3, 2))
+ag_sample_categorical <- function(x) {
+  d <- .ag_sel_dim(x)
+  g <- matrix(-log(-log(stats::runif(d[1L] * d[2L]))), d[1L], d[2L])
+  device <- if (is_ag_tensor(x)) x$device else "cpu"
+  if (device == "gpu") {
+    idx <- .ag_run_op(
+      op_fn = function(ctx, ptrs) {
+        # Add in f32: ggml_argmax is F32-only, and an f16 sum would quantise
+        # x + G and bias near-ties towards whichever entry rounds up.
+        f32 <- function(a) {
+          if (ggml_tensor_type(a) != GGML_TYPE_F32) ggml_cast(ctx, a, GGML_TYPE_F32) else a
+        }
+        ggml_argmax(ctx, ggml_add(ctx, f32(ptrs[[1L]]), f32(ptrs[[2L]])))
+      },
+      inputs    = list(.ag_operand(x), g),
+      out_shape = c(1L, d[2L])
+    )
+    return(as.integer(idx))
+  }
+  m <- .ag_as_matrix(.ag_data(x))
+  if (is.null(dim(m))) m <- matrix(m, ncol = 1L)
+  m <- m + g
+  m[is.na(m)] <- -Inf
+  max.col(t(m), ties.method = "first") - 1L
+}
+
+#' Sample from a diagonal Gaussian
+#'
+#' \code{mu + exp(log_std) * eps} with \code{eps ~ N(0, 1)} from
+#' \code{stats::rnorm} (so \code{set.seed} reproduces it). Differentiable in
+#' \code{mu} and \code{log_std} -- the reparameterisation used by SAC; for PPO
+#' collection the result is just the action.
+#'
+#' \code{log_std} is either the shape of \code{mu} (state-dependent) or one
+#' column \code{[n, 1]} broadcast over the batch (state-independent). On the GPU
+#' \code{mu} and \code{log_std} stay on the device; only \code{eps} is uploaded.
+#'
+#' @param mu ag_tensor or numeric matrix, \code{[n, batch]}.
+#' @param log_std ag_tensor or numeric matrix, \code{[n, batch]} or \code{[n, 1]}.
+#' @return ag_tensor \code{[n, batch]}.
+#' @export
+#' @examples
+#' set.seed(1)
+#' a <- ag_sample_normal(matrix(0, 2, 3), matrix(log(0.5), 2, 1))
+ag_sample_normal <- function(mu, log_std) {
+  d  <- .ag_sel_dim(mu)
+  ds <- .ag_sel_dim(log_std)
+  if (ds[1L] != d[1L] || !(ds[2L] %in% c(1L, d[2L])))
+    stop(sprintf("ag_sample_normal: log_std is [%d, %d], expected [%d, %d] or [%d, 1]",
+                 ds[1L], ds[2L], d[1L], d[2L], d[1L]), call. = FALSE)
+  device <- .ag_result_device(mu, log_std)
+  eps <- ag_tensor(matrix(stats::rnorm(d[1L] * d[2L]), d[1L], d[2L]), device = device)
+  ag_add(mu, ag_mul(eps, ag_exp(log_std)))
+}

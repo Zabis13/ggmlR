@@ -8,21 +8,36 @@
 // Computes, matching ggml_compute_forward_out_prod_f32:
 //     dst[i0,i1,i2,i3] = sum_{i01} src0[i0,i01,i2,i3] * src1[i1,i01,i2,i3]
 //
-// One invocation owns one dst element and reduces over i01 itself. That keeps
-// the kernel simple and correct for every layout the CPU accepts:
+// Tiled: a workgroup of 256 invocations owns a TM x TN block of dst and walks
+// the reduction axis TK at a time, staging both operand tiles in shared
+// memory; each invocation accumulates a 2 x 2 block. The first version had one
+// invocation per dst element reducing over i01 alone, reading src1 with a
+// stride of a whole row per step: measured at 78 us for 64 x 64 x 256 on an
+// RX 9070, 38% of a PPO training graph, where the arithmetic is ~2 MFLOP.
+//
+// Layouts it must keep handling, exactly as the CPU kernel does:
 //
 //   * src1 may be transposed. The second mul_mat gradient passes
-//     ggml_transpose(grad), so nb10 is not the element size there -- addresses
-//     are computed from the strides rather than assuming a contiguous row.
+//     ggml_transpose(grad), so nb10 is not the element size there. Addresses
+//     come from the strides, and the src1 tile is loaded along whichever axis
+//     is contiguous in memory (k when nb11 is the element size, i1 otherwise),
+//     so the global reads stay coalesced in both layouts.
 //   * dims 2 and 3 may broadcast (grouped-query attention): src0 is indexed
-//     with i2/dps2 and i3/dps3, exactly as the CPU kernel does.
+//     with i2/dps2 and i3/dps3.
 //
 // All strides arrive as byte counts and are divided by 4 (sizeof(float)) here,
-// the same convention ssm_conv.comp uses.
+// the same convention ssm_conv.comp uses. The dispatch is ceil(ne0/TM) x
+// ceil(ne1/TN) x ne2*ne3 workgroups (wg_denoms {TM, TN, 1}); out-of-range
+// rows and columns are loaded as zeros and not written.
 
 #extension GL_EXT_control_flow_attributes : require
 
-layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+#define TM 32          // dst rows (i0) per workgroup
+#define TN 32          // dst columns (i1) per workgroup
+#define TK 32          // reduction step
+#define WG 256         // invocations: a 16 x 16 grid, each owning 2 x 2 outputs
+
+layout(local_size_x = WG, local_size_y = 1, local_size_z = 1) in;
 
 layout(binding = 0) readonly buffer Src0 { float src0[]; };
 layout(binding = 1) readonly buffer Src1 { float src1[]; };
@@ -37,32 +52,82 @@ layout(push_constant) uniform PushConstants {
     uint dps2; uint dps3;                         // broadcast factors, dims 2/3
 };
 
-void main() {
-    const uint i0 = gl_GlobalInvocationID.x;              // fastest dst axis
-    const uint i1 = gl_GlobalInvocationID.y;
-    const uint i23 = gl_GlobalInvocationID.z;             // dims 2 and 3 folded
+// [k][i] layout: the inner loop reads a row of each, and consecutive tx read
+// consecutive words of sa (no bank conflict); sb is read as a broadcast.
+shared float sa[TK][TM];
+shared float sb[TK][TN];
 
-    if (i0 >= ne0 || i1 >= ne1) {
-        return;
-    }
+void main() {
+    const uint lid = gl_LocalInvocationID.x;
+    const uint tx  = lid % 16u;                   // i0 within the tile: tx, tx+16
+    const uint ty  = lid / 16u;                   // i1 within the tile: ty, ty+16
+
+    const uint tile0 = gl_WorkGroupID.x * TM;
+    const uint tile1 = gl_WorkGroupID.y * TN;
+    const uint i23   = gl_WorkGroupID.z;          // dims 2 and 3 folded
     const uint i2 = i23 % ne2;
     const uint i3 = i23 / ne2;
     if (i3 >= ne3) {
-        return;
+        return;                                   // uniform across the workgroup
     }
 
     // Broadcast: several dst slices may share one src0 slice.
     const uint i02 = i2 / dps2;
     const uint i03 = i3 / dps3;
 
-    const uint s0_base = i0 + (i02 * nb02 + i03 * nb03) / 4u;
-    const uint s1_base = (i1 * nb10 + i2 * nb12 + i3 * nb13) / 4u;
+    const uint s0_base = (i02 * nb02 + i03 * nb03) / 4u;
+    const uint s1_base = (i2 * nb12 + i3 * nb13) / 4u;
+    const uint s01 = nb01 / 4u;                   // src0: k stride, elements
+    const uint s10 = nb10 / 4u;                   // src1: i1 stride
+    const uint s11 = nb11 / 4u;                   // src1: k stride
+    const bool b_k_contig = (s11 == 1u);          // transposed src1
 
-    float sum = 0.0;
-    for (uint i01 = 0u; i01 < ne01; ++i01) {
-        sum += src0[s0_base + (i01 * nb01) / 4u] *
-               src1[s1_base + (i01 * nb11) / 4u];
+    float acc[2][2] = { { 0.0, 0.0 }, { 0.0, 0.0 } };
+
+    for (uint k0 = 0u; k0 < ne01; k0 += TK) {
+        // Each tile is TK x 32 = 1024 values: 4 per invocation.
+        [[unroll]] for (uint r = 0u; r < 4u; ++r) {
+            const uint idx = lid + r * WG;
+
+            // src0 is contiguous along i0 (supports_op requires it).
+            const uint ak = idx / TM;
+            const uint ai = idx % TM;
+            const uint gi = tile0 + ai;
+            const uint gk = k0 + ak;
+            sa[ak][ai] = (gi < ne0 && gk < ne01) ? src0[s0_base + gi + gk * s01] : 0.0;
+
+            // src1: load along its contiguous axis.
+            uint bk, bj;
+            if (b_k_contig) { bk = idx % TK; bj = idx / TK; }
+            else            { bk = idx / TN; bj = idx % TN; }
+            const uint gj  = tile1 + bj;
+            const uint gk1 = k0 + bk;
+            sb[bk][bj] = (gj < ne1 && gk1 < ne01) ? src1[s1_base + gj * s10 + gk1 * s11] : 0.0;
+        }
+        barrier();
+
+        [[unroll]] for (uint kk = 0u; kk < TK; ++kk) {
+            const float a0 = sa[kk][tx];
+            const float a1 = sa[kk][tx + 16u];
+            const float b0 = sb[kk][ty];
+            const float b1 = sb[kk][ty + 16u];
+            acc[0][0] += a0 * b0;
+            acc[1][0] += a1 * b0;
+            acc[0][1] += a0 * b1;
+            acc[1][1] += a1 * b1;
+        }
+        barrier();
     }
 
-    dst[i0 + (i1 * nb1 + i2 * nb2 + i3 * nb3) / 4u] = sum;
+    const uint d_base = (i2 * nb2 + i3 * nb3) / 4u;
+    const uint s1d = nb1 / 4u;
+    [[unroll]] for (uint a = 0u; a < 2u; ++a) {
+        const uint i0 = tile0 + tx + 16u * a;
+        [[unroll]] for (uint b = 0u; b < 2u; ++b) {
+            const uint i1 = tile1 + ty + 16u * b;
+            if (i0 < ne0 && i1 < ne1) {
+                dst[d_base + i0 + i1 * s1d] = acc[a][b];
+            }
+        }
+    }
 }

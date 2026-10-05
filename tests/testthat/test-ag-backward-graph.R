@@ -817,3 +817,36 @@ test_that("a PPO-shaped loss runs as one graph and matches closures", {
   message(sprintf("PPO loss build+backward: closures %.1f ms, graph %.1f ms (%.2fx)",
                   1000 * tc, 1000 * tg, tc / tg))
 })
+
+# ag_mul with a broadcast operand: [m,1], [1,n] and [1,1] against [m,n], the
+# small one first and second, both requiring a gradient. Before the rule was
+# emitted the whole tape fell back to closures ("closures (mul: broadcast)") --
+# PPO's Gaussian policy multiplies [act,B] by exp(-log_std), log_std [act,1].
+for (bc in list(c(4L, 1L), c(1L, 3L), c(1L, 1L))) for (small_first in c(FALSE, TRUE)) {
+  test_that(sprintf("graph backward handles ag_mul broadcast [%d,%d], small %s",
+                    bc[1], bc[2], if (small_first) "first" else "second"), {
+    skip_if_no_gpu()
+    ag_device("gpu")
+    on.exit(ag_device("cpu"), add = TRUE)
+
+    build <- function() {
+      set.seed(31L)
+      w <- ag_param(matrix(runif(15, -1, 1), 3, 5))
+      s <- ag_param(matrix(runif(prod(bc), 0.5, 1.5), bc[1], bc[2]))
+      x <- ag_tensor(matrix(runif(20, -1, 1), 4, 5))
+      y <- ag_tensor(matrix(runif(12, -1, 1), 4, 3))
+      loss <- NULL
+      with_grad_tape({
+        h <- ag_matmul(x, ag_transpose(w))                    # [4,3]
+        p <- if (small_first) ag_mul(s, h) else ag_mul(h, s)
+        loss <- ag_mse_loss(p, y)
+      })
+      list(loss = loss, params = list(w, s))
+    }
+
+    r <- both_paths(build)
+    expect_identical(r$got_path, "graph")
+    expect_identical(.bwd_dim(r$got_params[[2]]$grad), bc)
+    expect_lt(grad_maxdiff(r), 1e-3)
+  })
+}

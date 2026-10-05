@@ -76,6 +76,31 @@ The only supported way to change a tensor's value.
    together; `.ag_data()` refuses a pointer from an older generation rather than
    reading freed memory. Clearing one clears the other.
 
+6. **A computed handle enters a new graph as a leaf alias, never as its node.**
+   Every place that puts a handle into a graph goes through
+   `.ag_graph_operand(h, ctx)` (`R/ag_handle.R`). The node itself carries `op`
+   and `src[]`, and `ggml_build_forward_expand()` would re-run its whole
+   ancestry from the leaves' *current* values — after an optimizer step that is
+   a different number (measured: per-op Adam took b's gradient for the updated
+   W, −9%). Only a handle still pending in the current drain epoch stays a node,
+   because it must be computed, once, in its own graph. Reading a value
+   (`.ag_handle_to_r`) never re-computes; the hazard is graph *operands* only.
+
+7. **Random masks are generated on the host and uploaded as leaves.** Dropout
+   and anything like it draw from R's RNG and enter the graph as an uploaded
+   tensor. A device-side RNG op in an ancestry would make re-computation produce
+   different values; with rule 6 nothing is re-computed, but an op that draws on
+   the device must still be added with this rule in mind (seeding, replay in
+   `ag_checkpoint`).
+
+8. **Only weights survive a tape reset.** `with_grad_tape()` frees the pass pool
+   on entry; `.ag_residency_reset` rescues registered `ag_param` values, nothing
+   else. A tensor computed by `ag_*` ops on the device before the tape (e.g. a
+   normalised observation) is destroyed there and fails on first read. Build
+   such inputs inside the tape. Found in a PPO update with observation
+   normalisation built before the tape: the model could not train on the GPU
+   at all.
+
 ## Sites that must use the mutable path
 
 Found by trace, not by reading the source — each does read-modify-write on

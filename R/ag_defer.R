@@ -49,6 +49,11 @@
 .ag_defer$depth    <- 0L       # >0 while draining; blocks re-entry
 .ag_defer$labels   <- character()  # one per queued root: the ag_* call that queued it
 .ag_defer$check    <- NULL     # NULL = consult GGMLR_AG_GRAPH_CHECK; TRUE = run each op as queued
+# Completed drains. A pending handle records the epoch it was queued in; once a
+# drain of that queue SUCCEEDS the epoch moves on and the handle counts as
+# computed (.ag_handle_computed), so a later graph takes it as a leaf alias
+# instead of re-running its ancestry. A failed drain does not advance it.
+.ag_defer$epoch    <- 0L
 
 #' Defer forward operations into one graph
 #'
@@ -225,12 +230,17 @@ ag_local_mode <- function(graph = NULL, matmul_precision = NULL, envir = parent.
 # messages. The innermost exported-looking frame wins (ag_gather over the
 # ag_mul it is built from would be the outer one; the op that built the node is
 # what helps).
+#
+# Runs on every queued op, so it walks frames outward one at a time and stops
+# at the first match (a few frames up), instead of building the whole
+# sys.calls() list and running a regex per frame -- that was ~17% of
+# graph-mode op recording under Rprof (PPO update forward).
 .ag_defer_label <- function() {
-  calls <- sys.calls()
-  for (i in rev(seq_along(calls))) {
-    fn <- calls[[i]][[1L]]
+  for (i in seq_len(sys.nframe() - 1L)) {
+    fn <- sys.call(-i)[[1L]]
     nm <- if (is.name(fn)) as.character(fn) else if (is.call(fn) && length(fn) == 3L) as.character(fn[[3L]]) else ""
-    if (length(nm) == 1L && grepl("^ag_[a-z]", nm)) return(nm)
+    if (length(nm) == 1L && startsWith(nm, "ag_") && nchar(nm) > 3L &&
+        substr(nm, 4L, 4L) %in% letters) return(nm)
   }
   "?"
 }
@@ -370,7 +380,13 @@ ag_local_mode <- function(graph = NULL, matmul_precision = NULL, envir = parent.
   tryCatch({
     graph <- ggml_build_forward_expand(ctx_graph, nodes[[1L]])
     for (i in seq_along(nodes)[-1L]) ggml_graph_expand(graph, nodes[[i]])
-    .ag_graph_compute(backend, graph, "deferred graph")
+    status <- .ag_graph_compute(backend, graph, "deferred graph")
+    # The compute reports failure as a status, not an error. Only a complete
+    # success makes this queue's handles "computed"; after anything else they
+    # stay pending nodes (re-run if used, never aliased as finished data).
+    if (!identical(as.integer(status), 0L))
+      stop("ggml_backend_graph_compute returned status ", status, call. = FALSE)
+    .ag_defer$epoch <- .ag_defer$epoch + 1L
   }, error = function(e) {
     tab <- table(factor(labels, levels = unique(labels)))
     stop("ggmlR graph mode: the deferred graph failed (", length(nodes),

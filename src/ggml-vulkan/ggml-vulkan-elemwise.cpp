@@ -325,7 +325,8 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         break;
     case GGML_OP_OUT_PROD:
         {
-            // One invocation per dst element, with dims 2 and 3 folded into z.
+            // dst extent; the pipeline's wg_denoms {32, 32, 1} turn it into one
+            // workgroup per 32 x 32 dst tile, with dims 2 and 3 folded into z.
             // Folding keeps z within the workgroup-count limit that matters on
             // NVIDIA (65535 for x, far lower than AMD's), since dims 2/3 are
             // batch-like and small while ne0/ne1 are the wide ones.

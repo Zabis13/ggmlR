@@ -17,6 +17,17 @@ Records all ag_* operations inside \code{expr} for later \code{backward()}.
 When the default device is \code{"gpu"}, the ggml context is reset at the
 start of each tape.
 }
+\section{Inputs computed on the device}{
+
+The reset frees every intermediate result of earlier \code{ag_*} calls; only
+\code{\link{ag_param}} weights (and tensors made from host matrices, which
+keep a host copy) survive it. An input built from \code{ag_*} operations on
+the GPU -- an observation normalised with \code{ag_sub}/\code{ag_mul}, say --
+must therefore be built \emph{inside} \code{expr}: built before the tape, it
+is destroyed on entry and the forward pass fails with "buffer was freed by a
+tape reset".
+}
+
 \examples{
 \donttest{
 w <- ag_param(matrix(c(1, 0, 0, 1), 2, 2))

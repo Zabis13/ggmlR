@@ -12,7 +12,8 @@ check_grad_anomaly(
 )
 }
 \arguments{
-\item{params}{Named list of ag_param tensors (same as passed to optimizer).}
+\item{params}{List of ag_param tensors (same as passed to optimizer), named
+or not.}
 
 \item{grads}{Gradient environment returned by \code{backward()}.}
 

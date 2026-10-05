@@ -371,6 +371,60 @@ SEXP R_ggml_graph_node(SEXP graph_ptr, SEXP i) {
     return R_MakeExternalPtr(node, R_NilValue, R_NilValue);
 }
 
+// Diagnostic: every node of a graph with its op, name, shape and its first
+// three sources -- each as the 1-based index of the node that produced it (0 when
+// the source is a leaf, i.e. not a node of this graph; NA when absent) and that
+// source's op. Enough to read the DAG from R (chains of SCALE, REPEAT feeding a
+// MUL, CONT after TRANSPOSE) without a src accessor per tensor.
+SEXP R_ggml_graph_dump(SEXP graph_ptr) {
+    struct ggml_cgraph * graph = (struct ggml_cgraph *) r_ptr_required(graph_ptr, "graph");
+    const int n = ggml_graph_n_nodes(graph);
+    const int NSRC = 3;
+
+    SEXP op   = PROTECT(allocVector(STRSXP, n));
+    SEXP name = PROTECT(allocVector(STRSXP, n));
+    SEXP ne   = PROTECT(allocMatrix(REALSXP, n, 4));
+    SEXP sidx = PROTECT(allocMatrix(INTSXP, n, NSRC));
+    SEXP sop  = PROTECT(allocMatrix(STRSXP, n, NSRC));
+
+    for (int i = 0; i < n; i++) {
+        struct ggml_tensor * t = ggml_graph_node(graph, i);
+        SET_STRING_ELT(op, i, mkChar(ggml_op_desc(t)));
+        SET_STRING_ELT(name, i, mkChar(t->name));
+        for (int d = 0; d < 4; d++) REAL(ne)[i + d * n] = (double) t->ne[d];
+        for (int s = 0; s < NSRC; s++) {
+            struct ggml_tensor * src = t->src[s];
+            int idx = NA_INTEGER;
+            const char * desc = "";
+            if (src != NULL) {
+                idx = 0;
+                for (int j = 0; j < i; j++) {
+                    if (ggml_graph_node(graph, j) == src) { idx = j + 1; break; }
+                }
+                desc = src->op == GGML_OP_NONE ? "LEAF" : ggml_op_desc(src);
+            }
+            INTEGER(sidx)[i + s * n] = idx;
+            SET_STRING_ELT(sop, i + s * n, mkChar(desc));
+        }
+    }
+
+    SEXP out = PROTECT(allocVector(VECSXP, 5));
+    SET_VECTOR_ELT(out, 0, op);
+    SET_VECTOR_ELT(out, 1, name);
+    SET_VECTOR_ELT(out, 2, ne);
+    SET_VECTOR_ELT(out, 3, sidx);
+    SET_VECTOR_ELT(out, 4, sop);
+    SEXP nms = PROTECT(allocVector(STRSXP, 5));
+    SET_STRING_ELT(nms, 0, mkChar("op"));
+    SET_STRING_ELT(nms, 1, mkChar("name"));
+    SET_STRING_ELT(nms, 2, mkChar("ne"));
+    SET_STRING_ELT(nms, 3, mkChar("src_index"));
+    SET_STRING_ELT(nms, 4, mkChar("src_op"));
+    setAttrib(out, R_NamesSymbol, nms);
+    UNPROTECT(7);
+    return out;
+}
+
 SEXP R_ggml_graph_overhead(void) {
     size_t overhead = ggml_graph_overhead();
     return ScalarReal((double) overhead);
@@ -3180,6 +3234,108 @@ SEXP R_ggml_set_param(SEXP tensor_ptr) {
     ggml_set_param(tensor);
 
     return tensor_ptr;
+}
+
+// Leaf alias of an already COMPUTED tensor: same memory, op NONE, no src[].
+//
+// Putting a computed node straight into a new graph is not "reading its value":
+// ggml_build_forward_expand() walks src[] and adds every ancestor with an op as
+// a node to compute, so the whole chain is re-run from the leaves' CURRENT
+// values. Measured: a per-op Adam step copied b's gradient through such a graph
+// after W's step had moved W, and got b's gradient for the NEW W (-9%).
+//
+// ggml_view_tensor() gives exactly a leaf over the same bytes: op stays NONE,
+// src[] stays empty, nb is copied, and a view of a view is collapsed to the
+// root buffer (view_offs accumulated, ggml-context.c). The buffer is bound here
+// (ggml_backend_view_init): ggml_backend_alloc_ctx_tensors() would skip it,
+// and Vulkan silently drops tensors without one. The alias carries no flags
+// (no PARAM, no OUTPUT), so nothing treats it as a parameter or an output.
+//
+// A source that is already a leaf (op NONE) is returned as is. A source with
+// no memory yet is an R error: aliasing it would read whatever the bytes hold.
+SEXP R_ggml_leaf_alias(SEXP ctx_ptr, SEXP src_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor  * src = (struct ggml_tensor *)  r_ptr_required(src_ptr, "source tensor");
+
+    if (src->op == GGML_OP_NONE) {
+        return src_ptr;
+    }
+    const struct ggml_tensor * root = src->view_src ? src->view_src : src;
+    if (root->buffer == NULL || root->data == NULL || src->data == NULL) {
+        error("ggml leaf alias: source tensor '%s' has no backend memory (never allocated or computed)",
+              src->name);
+    }
+
+    struct ggml_tensor * t = ggml_view_tensor(ctx, src);
+    if (t == NULL) {
+        error("ggml leaf alias: failed to create the alias tensor");
+    }
+    ggml_format_name(t, "%s (leaf)", src->name);
+    if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
+        error("ggml leaf alias: failed to bind the alias to the source buffer");
+    }
+    return R_MakeExternalPtr(t, R_NilValue, R_NilValue);
+}
+
+// AdamW step node: updates a, m and v IN PLACE when the graph runs; the result
+// is a view of a. Every precondition is checked here as an R error, because
+// ggml_opt_step_adamw() and its kernels GGML_ASSERT/ABORT on them, which would
+// take the R session down. The kernels are F32-only (CPU ops-misc.cpp, Vulkan
+// opt_step_adamw.comp), so an F16/BF16 weight is refused with the reason.
+SEXP R_ggml_opt_step_adamw(SEXP ctx_ptr, SEXP a_ptr, SEXP grad_ptr, SEXP m_ptr,
+                           SEXP v_ptr, SEXP params_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * a    = (struct ggml_tensor *) r_ptr_required(a_ptr,      "weight tensor");
+    struct ggml_tensor * grad = (struct ggml_tensor *) r_ptr_required(grad_ptr,   "grad tensor");
+    struct ggml_tensor * m    = (struct ggml_tensor *) r_ptr_required(m_ptr,      "m tensor");
+    struct ggml_tensor * v    = (struct ggml_tensor *) r_ptr_required(v_ptr,      "v tensor");
+    struct ggml_tensor * pars = (struct ggml_tensor *) r_ptr_required(params_ptr, "adamw_params tensor");
+
+    const struct ggml_tensor * f32s[4] = { a, grad, m, v };
+    const char * names[4] = { "weight", "grad", "m", "v" };
+    for (int i = 0; i < 4; i++) {
+        if (f32s[i]->type != GGML_TYPE_F32) {
+            error("ggml_opt_step_adamw: %s is %s, but the AdamW kernels are F32-only",
+                  names[i], ggml_type_name(f32s[i]->type));
+        }
+        if (!ggml_is_contiguous(f32s[i])) {
+            error("ggml_opt_step_adamw: %s must be contiguous", names[i]);
+        }
+        if (i > 0 && !ggml_are_same_shape(a, f32s[i])) {
+            error("ggml_opt_step_adamw: %s must have the same shape as the weight", names[i]);
+        }
+    }
+    if (pars->type != GGML_TYPE_F32 || ggml_nelements(pars) != 7) {
+        error("ggml_opt_step_adamw: adamw_params must be an F32 tensor of 7 elements "
+              "(alpha, beta1, beta2, eps, wd, beta1h, beta2h)");
+    }
+
+    // ggml_opt_step_adamw() asserts FLAG_PARAM on the weight, but nothing after
+    // construction reads it (the kernels do not). Leaving it set is NOT free:
+    // ggml-graph.c turns a PARAM tensor into a graph node instead of a leaf, so a
+    // persistent weight would change every later forward graph that uses it.
+    // Set it for the call only and restore the caller's flags.
+    const int32_t flags_before = a->flags;
+    a->flags |= GGML_TENSOR_FLAG_PARAM;
+    struct ggml_tensor * result = ggml_opt_step_adamw(ctx, a, grad, m, v, pars);
+    a->flags = flags_before;
+    if (result == NULL) {
+        error("Failed to create opt_step_adamw operation");
+    }
+
+    // The node is a view of a: it needs no memory, only its buffer set. Do it
+    // here when a already lives in a backend buffer. Relying on a later
+    // ggml_backend_alloc_ctx_tensors() does NOT work: in a context holding
+    // nothing but such views it returns early ("all tensors in the context are
+    // already allocated", ggml-alloc.c) without initialising them, and Vulkan
+    // then skips a node whose buffer is NULL -- silently: the graph "runs", the
+    // launch is counted, and the weights never move.
+    if (a->buffer != NULL && result->buffer == NULL) {
+        if (ggml_backend_view_init(result) != GGML_STATUS_SUCCESS) {
+            error("ggml_opt_step_adamw: failed to initialise the step node on the weight's buffer");
+        }
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
 // Mark a tensor as the loss to differentiate. ggml_build_backward_expand()

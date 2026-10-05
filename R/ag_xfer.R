@@ -151,6 +151,10 @@ ag_xfer_report <- function(n = 40L) {
 .ag_graph_compute <- function(backend, graph, site) {
   n <- .ag_launch$by_site[[site]]
   .ag_launch$by_site[[site]] <- if (is.null(n)) 1 else n + 1
+  # Nodes of the last graph: the direct measure of re-computation. Re-running a
+  # computed input's ancestry adds NODES to the same launch, not launches, so
+  # the launch count cannot show it (tests/testthat/test-ag-leaf-alias.R).
+  .ag_launch$last_nodes <- ggml_graph_n_nodes(graph)
   ggml_backend_graph_compute(backend, graph)
 }
 

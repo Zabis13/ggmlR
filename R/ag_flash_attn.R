@@ -479,7 +479,7 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
   # Same rule as .ag_run_op, and the same payoff: a projection that is already
   # resident is not sent again.
   operand <- function(x, nc) {
-    if (.ag_is_handle(x)) return(x$ptr)
+    if (.ag_is_handle(x)) return(.ag_graph_operand(x, ctx))   # leaf alias if computed
     tt <- ggml_new_tensor_2d(ctx, ggml_type, d_model, nc)
     uploads[[length(uploads) + 1L]] <<- list(ptr = tt, val = as.numeric(x))
     tt

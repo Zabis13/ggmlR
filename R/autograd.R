@@ -93,6 +93,8 @@ ag_tensor <- function(data, device = .ag_device_state$device,
   #              outlive the step). Each pool counts generations separately, so
   #              $ctx_gen only means something alongside this.
   e$ptr           <- NULL
+  e$ptr_pending   <- FALSE   # $ptr is a queued, not yet computed node (graph mode)
+  e$ptr_epoch     <- NULL    # drain epoch it was queued in (.ag_handle_computed)
   e$shape         <- NULL
   e$ctx_gen       <- NULL
   e$ctx_scope     <- NULL
@@ -245,6 +247,15 @@ ag_grad <- function(x) {
 #' Records all ag_* operations inside \code{expr} for later \code{backward()}.
 #' When the default device is \code{"gpu"}, the ggml context is reset at the
 #' start of each tape.
+#'
+#' @section Inputs computed on the device:
+#' The reset frees every intermediate result of earlier \code{ag_*} calls; only
+#' \code{\link{ag_param}} weights (and tensors made from host matrices, which
+#' keep a host copy) survive it. An input built from \code{ag_*} operations on
+#' the GPU -- an observation normalised with \code{ag_sub}/\code{ag_mul}, say --
+#' must therefore be built \emph{inside} \code{expr}: built before the tape, it
+#' is destroyed on entry and the forward pass fails with "buffer was freed by a
+#' tape reset".
 #'
 #' @param expr Expression to evaluate under gradient tape
 #' @return Value of last expression in expr (invisibly)
@@ -1471,10 +1482,6 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
                              logical(1))) && length(params) > 0L
   env$m <- lapply(params, function(p) .ag_opt_zero_like(p, env$resident))
   env$v <- lapply(params, function(p) .ag_opt_zero_like(p, env$resident))
-  # Per-parameter landing buffer for the incoming gradient, allocated lazily on
-  # the first resident step. It exists so the gradient is copied out of the pass
-  # pool once instead of being re-uploaded into each of the step's graphs.
-  env$gbuf <- vector("list", length(params))
 
   # `grads` is optional -- see the SGD step and .ag_opt_grad_for.
   env$step <- function(grads = NULL) {
@@ -1484,6 +1491,11 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
     # Only a real update advances t. Counting the skipped calls would make the
     # bias correction think k times as many steps had happened.
     env$t <- env$t + 1L
+    # Device steps are collected and run together after the loop: one graph of
+    # native AdamW nodes for all of them (.ag_adam_step_device_fused) instead of
+    # seven launches per parameter. Parameters are independent, so moving their
+    # device steps after the host ones changes nothing numerically.
+    dev_items <- list()
     for (i in seq_along(env$params)) {
       p <- env$params[[i]]
       # A resident step wants the gradient as a handle, not as numbers: that is
@@ -1506,7 +1518,7 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
         # now that all three live on the device.
         gh <- if (.ag_is_handle(g)) g else
                 .ag_handle(.ag_r_to_gpu(g, scope = "pass"), dim(g), scope = "pass")
-        .ag_adam_step_device(env, i, p, gh)
+        dev_items[[length(dev_items) + 1L]] <- list(i = i, p = p, g = gh)
         next
       }
 
@@ -1532,6 +1544,14 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
       # inst/docs/ag_data_contract.md.
       w <- .ag_data_mut(p)
       .ag_opt_store_weight(p, w - env$lr * m_hat / (sqrt(v_hat) + env$eps))
+    }
+
+    # Fused when enabled and every item is eligible (F32, live handles); the
+    # fused step refuses all-or-nothing, so on FALSE nothing was applied and
+    # the per-op path below takes every item.
+    if (length(dev_items) &&
+        !(.ag_adam_fused_enabled() && .ag_adam_step_device_fused(env, dev_items))) {
+      for (it in dev_items) .ag_adam_step_device(env, it$i, it$p, it$g)
     }
     invisible(TRUE)
   }

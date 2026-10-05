@@ -113,6 +113,29 @@ test_that("out_prod matches when dims 2/3 broadcast", {
                  ne10 = 5L, ne12 = 2L, ne13 = 2L, seed = 13)
 })
 
+# The tiled shader: 32 x 32 dst tiles, reduction 32 at a time. Shapes that sit
+# exactly on tile edges, cross them by one, stay under one tile, and reduce over
+# many tiles or less than one -- in both src1 layouts and with broadcast. Sums
+# over long reductions grow like sqrt(k), so the tolerance grows with them.
+for (cs in list(
+  list(nm = "one full tile, k = one step",       d = c(32L, 32L, 1L, 1L, 32L, 1L, 1L)),
+  list(nm = "PPO gradient 64 x 64, k = 256",     d = c(64L, 256L, 1L, 1L, 64L, 1L, 1L)),
+  list(nm = "edges crossed by one, k ragged",    d = c(33L, 77L, 1L, 1L, 65L, 1L, 1L)),
+  list(nm = "thin 64 x 3, long k = 2048",        d = c(64L, 2048L, 1L, 1L, 3L, 1L, 1L)),
+  list(nm = "under one tile, k < step",          d = c(5L, 7L, 1L, 1L, 9L, 1L, 1L)),
+  list(nm = "multi-tile with dims 2 and 3",      d = c(40L, 50L, 3L, 2L, 36L, 3L, 2L)),
+  list(nm = "multi-tile with dims 2/3 broadcast", d = c(40L, 50L, 1L, 1L, 36L, 2L, 2L))))
+  for (tb in c(FALSE, TRUE)) {
+    test_that(sprintf("tiled out_prod: %s%s", cs$nm, if (tb) ", src1 transposed" else ""), {
+      skip_on_cran()
+      skip_no_gpu_op()
+      d <- cs$d
+      check_out_prod(ne00 = d[1], ne01 = d[2], ne02 = d[3], ne03 = d[4],
+                     ne10 = d[5], ne12 = d[6], ne13 = d[7], transpose_b = tb,
+                     tol = 1e-4 * sqrt(d[2]) * 10, seed = 17)
+    })
+  }
+
 test_that("a dense layer trains identically on CPU and GPU", {
   # The end-to-end reason this shader exists: mul_mat's gradients go through
   # out_prod, so a plain dense model exercises it on every step. If the shader

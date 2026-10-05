@@ -47,13 +47,50 @@
 # reading its numbers before the barrier would return whatever the buffer held.
 # Every read path goes through .ag_handle_to_r, which drains the queue first, so
 # the flag exists to make a bypass loud rather than to be checked by callers.
-.ag_handle <- function(ptr, shape, scope = "pass", pending = FALSE) {
+#
+# `epoch` (pending handles only): the drain epoch the node was queued in --
+# .ag_defer$epoch at queue time. A caller whose push may drain at once (check
+# mode) passes the epoch read BEFORE the push.
+.ag_handle <- function(ptr, shape, scope = "pass", pending = FALSE,
+                       epoch = .ag_defer$epoch) {
   structure(list(ptr     = ptr,
                  shape   = as.integer(shape),
                  scope   = scope,
                  pending = isTRUE(pending),
+                 epoch   = if (isTRUE(pending)) epoch else NULL,
                  gen     = .ag_scope_gen(scope)),
             class = "ag_handle")
+}
+
+# TRUE when the handle's tensor holds its final value: never pending, or
+# pending in an epoch whose drain has since SUCCEEDED (.ag_defer_drain advances
+# the epoch only then). A pending handle without an epoch is treated as not
+# computed -- the safe side: it stays a node, as before.
+.ag_handle_computed <- function(h) {
+  if (!isTRUE(h$pending)) return(TRUE)
+  !is.null(h$epoch) && h$epoch < .ag_defer$epoch
+}
+
+# The tensor to put into a NEW graph for this handle.
+#
+# ⚠️ Never the computed node itself: ggml_build_forward_expand() follows src[]
+# and re-runs the whole ancestry from the leaves' CURRENT values. Measured: a
+# per-op Adam step read b's gradient re-computed with the W it had just
+# updated (-9%), which no ordering of the copies could fix in general.
+#
+# A computed handle becomes a leaf alias (same memory, op NONE, built in
+# `ctx`); a still-pending one stays the node, since it must be computed -- in
+# the same deferred graph, once. Liveness is checked here so an alias can never
+# point into a pool that has been reset: the alias is built in the consuming
+# op's own context and dies with it.
+.ag_graph_operand <- function(h, ctx) {
+  if (!.ag_handle_live(h))
+    stop("ggmlR: a device handle from the ", .ag_handle_scope(h), " pool, ",
+         "generation ", h$gen %||% NA, ", is used after that pool was reset.",
+         " Build inputs computed with ag_* inside with_grad_tape().",
+         call. = FALSE)
+  if (!.ag_handle_computed(h)) return(h$ptr)
+  .Call("R_ggml_leaf_alias", ctx, h$ptr, PACKAGE = "ggmlR")
 }
 
 .ag_is_handle <- function(x) inherits(x, "ag_handle")
@@ -87,6 +124,7 @@
     stop("ggmlR: this device handle refers to a buffer freed by a tape reset ",
          "(", .ag_handle_scope(h), " pool, generation ", h$gen %||% NA, " < ",
          .ag_scope_gen(.ag_handle_scope(h)), ").",
+         " Build inputs computed with ag_* inside with_grad_tape().",
          call. = FALSE)
   matrix(.ag_xfer_down(h$ptr, "handle_to_r"),
          nrow = h$shape[1L], ncol = h$shape[2L])

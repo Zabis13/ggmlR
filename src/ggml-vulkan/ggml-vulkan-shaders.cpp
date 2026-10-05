@@ -1686,7 +1686,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
         ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_back_f32_d128, "ssm_scan_back_128_f32", ssm_scan_back_f32_len, ssm_scan_back_f32_data, "main", 10, sizeof(vk_op_ssm_scan_back_push_constants), {1, 1, 1}, {128}, 1);
         ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_back_f32_d256, "ssm_scan_back_256_f32", ssm_scan_back_f32_len, ssm_scan_back_f32_data, "main", 10, sizeof(vk_op_ssm_scan_back_push_constants), {1, 1, 1}, {256}, 1);
     }
-    ggml_vk_create_pipeline(device, device->pipeline_out_prod_f32, "out_prod_f32", out_prod_f32_len, out_prod_f32_data, "main", 3, sizeof(vk_op_out_prod_push_constants), {32, 8, 1}, {}, 1);
+    // wg_denoms = the dst tile of one workgroup (TM x TN in out_prod.comp).
+    ggml_vk_create_pipeline(device, device->pipeline_out_prod_f32, "out_prod_f32", out_prod_f32_len, out_prod_f32_data, "main", 3, sizeof(vk_op_out_prod_push_constants), {32, 32, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32, "cross_entropy_loss_back_f32", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_cross_entropy_loss_back_push_constants), {1, 1, 1}, {32}, 1);
 
     // ggmlR: backward of flash attention. Six buffers (q, k, v, mask, d, and the

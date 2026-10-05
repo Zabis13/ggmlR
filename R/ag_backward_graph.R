@@ -459,7 +459,7 @@ ag_backward_profile_report <- function() {
       if (!.ag_handle_live(m))
         stop("ggmlR: a backward snapshot refers to a buffer freed since the ",
              "forward pass ran.", call. = FALSE)
-      return(m$ptr)
+      return(.ag_graph_operand(m, ctx))   # leaf alias if computed
     }
     if (is.null(dim(m))) m <- matrix(m, ncol = 1L)
     tt <- ggml_new_tensor_2d(ctx, ggml_type, nrow(m), ncol(m))
@@ -482,28 +482,36 @@ ag_backward_profile_report <- function() {
   # row-broadcast case; the column one needs the other axis and goes through a
   # transpose. Shapes via the accessors: b_orig is a device handle whenever the
   # forward kept it resident, and dim() on one is NULL.
+  #
+  # Both axes are reduced in turn, so a [1,1] operand broadcast over [m,n]
+  # gets the full sum. (One axis only, it reshaped the [1,m] column sums to
+  # [1,1] -- an element-count mismatch ggml asserts on.)
   reduce_b <- function(g, bo, out_nr, out_nc) {
     bdim <- .ag_dim(bo)
-    if (!is.null(bdim) && bdim[2L] == 1L && out_nc > 1L) {
+    if (is.null(bdim)) return(g)
+    if (bdim[2L] == 1L && out_nc > 1L) {
       # b was [m,1] broadcast across columns -> db = rowSums(g), [m,1].
       # Reducing ne[1] is not something sum_rows does, so transpose to
       # [n,m] and reduce ne[0] instead, then reshape [1,m] back to [m,1].
       # ggml_cont before the reduction: sum_rows over a transposed VIEW is
       # a different (and here wrong) memory walk.
       gt <- ggml_cont(ctx, ggml_transpose(ctx, g))
-      ggml_reshape_2d(ctx, ggml_sum_rows(ctx, gt), bdim[1L], 1L)
-    } else if (!is.null(bdim) && bdim[1L] == 1L && out_nr > 1L) {
+      g <- ggml_reshape_2d(ctx, ggml_sum_rows(ctx, gt), out_nr, 1L)
+    }
+    if (bdim[1L] == 1L && out_nr > 1L) {
       # b was [1,n] broadcast down rows -> db = colSums(g), [1,n], which
       # is sum_rows' native shape.
-      ggml_sum_rows(ctx, g)
-    } else {
-      g
+      g <- ggml_sum_rows(ctx, g)
     }
+    g
   }
 
   # Seed: dL/dL = 1. A 1x1 tensor, so the scalar rules below can multiply by it
   # in the graph rather than reading it back.
   assign(as.character(loss$id), const(matrix(1.0)), envir = gnodes)
+  # The seed does not depend on the data, so ag_capture_step() may freeze it
+  # into a recording; every other upload here is refused by its guard.
+  uploads[[length(uploads)]]$const <- TRUE
 
   for (nd in rev(nodes)) {
     g <- get0(as.character(nd$output_id), envir = gnodes)
@@ -625,22 +633,27 @@ ag_backward_profile_report <- function() {
       # one's rule needs the OTHER operand's forward value -- the same
       # a_snap/b_snap pairing matmul uses.
       #
-      # Broadcasting is refused rather than emitted. ag_mul's closure reduces a
-      # broadcast gradient with colSums/rowSums over the pre-expansion shape,
-      # and getting that wrong produces a plausible but incorrect gradient. No
-      # caller in the package broadcasts through ag_mul today (dropout, the
-      # attention mask and batch_norm's gamma all pass matching shapes), so the
-      # case is declined until something needs it.
+      # Broadcasting (either operand [m,1], [1,n] or [1,1] against the
+      # output): g has the OUTPUT shape, ggml_mul repeats the smaller snapshot
+      # over it, and the product is reduced back to the operand's own shape by
+      # reduce_b -- as the closure does with rowSums/colSums. Needed by a
+      # Gaussian policy's state-independent log_std ([act,1] times [act,B]),
+      # which before this sent the whole tape to the closures.
       A <- inp$A; B <- inp$B
-      bc <- !identical(.ag_dim(nd$a_orig), .ag_dim(nd$b_orig))
-      if (bc) {
-        .ag_bwd$last_path <- "closures (mul: broadcast)"
+      adim <- .ag_dim(nd$a_orig); bdim <- .ag_dim(nd$b_orig)
+      if (!identical(adim, bdim) && (is.null(adim) || is.null(bdim))) {
+        .ag_bwd$last_path <- "closures (mul: broadcast, shape unknown)"
         return(NULL)
       }
+      # both NULL (identical, so no broadcast): reduce_b returns g unchanged
+      out_nr <- if (is.null(adim)) NA else max(adim[1L], bdim[1L])
+      out_nc <- if (is.null(adim)) NA else max(adim[2L], bdim[2L])
       if (is_ag_tensor(A) && isTRUE(A$requires_grad))
-        accumulate(as.character(A$id), ggml_mul(ctx, g, const(nd$b_snap)))
+        accumulate(as.character(A$id),
+                   reduce_b(ggml_mul(ctx, g, const(nd$b_snap)), nd$a_orig, out_nr, out_nc))
       if (is_ag_tensor(B) && isTRUE(B$requires_grad))
-        accumulate(as.character(B$id), ggml_mul(ctx, g, const(nd$a_snap)))
+        accumulate(as.character(B$id),
+                   reduce_b(ggml_mul(ctx, g, const(nd$a_snap)), nd$b_orig, out_nr, out_nc))
 
     } else if (identical(nd$op, "transpose")) {
       # dx = t(g). ggml_transpose only relabels ne/nb, so the result is a view;

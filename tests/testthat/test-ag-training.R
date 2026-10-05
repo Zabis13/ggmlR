@@ -187,6 +187,45 @@ test_that("clip_grad_norm: does not clip when norm < max_norm", {
   expect_equal(orig_g, after_g, tolerance = 1e-10)
 })
 
+test_that("clip_grad_norm: an unnamed params list is clipped too", {
+  # It iterated names(params), which is NULL here: nothing was clipped and the
+  # returned norm was 0.
+  w  <- ag_param(matrix(c(1, 2, 3, 4), 2, 2))
+  x  <- ag_tensor(matrix(c(10, 10), 2, 1))
+  with_grad_tape({
+    out  <- ag_matmul(w, x)
+    loss <- ag_mse_loss(out, matrix(0, 2, 1))
+  })
+  grads    <- backward(loss)
+  g0       <- get0(as.character(w$id), envir = grads)
+  pre_norm <- clip_grad_norm(list(w), grads, max_norm = 1.0)
+  expect_equal(pre_norm, sqrt(sum(g0^2)))
+  expect_equal(sqrt(sum(get0(as.character(w$id), envir = grads)^2)), 1.0,
+               tolerance = 1e-5)
+})
+
+test_that("clip_grad_value and check_grad_anomaly: an unnamed params list works", {
+  # Both iterated names(params) too: nothing was clipped or checked.
+  w  <- ag_param(matrix(c(1, 2, 3, 4), 2, 2))
+  v  <- ag_param(matrix(c(1, 1), 2, 1))
+  x  <- ag_tensor(matrix(c(10, 10), 2, 1))
+  with_grad_tape({
+    out  <- ag_add(ag_matmul(w, x), v)
+    loss <- ag_mse_loss(out, matrix(0, 2, 1))
+  })
+  grads <- backward(loss)
+  g0 <- get0(as.character(w$id), envir = grads)
+  v0 <- get0(as.character(v$id), envir = grads)
+
+  rep <- check_grad_anomaly(list(w, named_v = v), grads, action = "silent")
+  expect_identical(rep$param, c("1", "named_v"))
+  expect_identical(rep$status, c("ok", "ok"))
+
+  mx <- clip_grad_value(list(w, v), grads, clip_value = 0.5)
+  expect_equal(mx, max(abs(g0), abs(v0)))
+  expect_lte(max(abs(get0(as.character(w$id), envir = grads))), 0.5)
+})
+
 test_that("clip_grad_norm: clips to max_norm", {
   w  <- ag_param(matrix(c(1, 2, 3, 4), 2, 2))
   x  <- ag_tensor(matrix(c(10, 10), 2, 1))
