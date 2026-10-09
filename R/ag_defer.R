@@ -327,6 +327,9 @@ ag_local_mode <- function(graph = NULL, matmul_precision = NULL, envir = parent.
   if (.ag_defer$depth > 0L) return(invisible(FALSE))
   .ag_defer$depth <- .ag_defer$depth + 1L
   on.exit(.ag_defer$depth <- .ag_defer$depth - 1L, add = TRUE)
+  # Device buffers collected while this queue read them are freed once it ran
+  # (R/ag_buffer.R).
+  on.exit(.ag_buffer_reap(), add = TRUE)
 
   nodes   <- .ag_defer$nodes
   uploads <- .ag_defer$uploads

@@ -1,3 +1,9 @@
+# ggmlR 0.8.7
+
+* **Device buffers** — new `ag_buffer()` keeps a large table on the device, written in place with `ag_buffer_write()` and read back in parts with `ag_buffer_read()`; `ag_get_rows()` gathers columns by index inside ag_* graphs and `ag_capture()` recordings, sending only the indices. Built for replay buffers in off-policy RL. `ag_buffer_free()` releases the memory at once.
+* New `ag_slice_rows(x, from, n)` and `ag_concat_rows(a, b)` — row slice and `rbind` on the device, with gradients and graph-backward rules.
+* New `ggml_pad_ext()` — zero padding before and after each dimension.
+
 # ggmlR 0.8.6
 
 * **ONNX inference matches ONNX Runtime bit for bit on all 15 reference models**, MaskRCNN-12-int8 included (`max|d| = 0`, was 14/15).

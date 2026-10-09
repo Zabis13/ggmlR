@@ -3041,6 +3041,21 @@ ggml_pad <- function(ctx, a, p0 = 0L, p1 = 0L, p2 = 0L, p3 = 0L) {
         as.integer(p2), as.integer(p3), PACKAGE = "ggmlR")
 }
 
+#' Pad a tensor with zeros on both sides
+#'
+#' Like \code{\link{ggml_pad}}, but each dimension can also be padded before its
+#' first element.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor to pad
+#' @param lp Integer vector of length 4: zeros added before dimensions 0..3
+#' @param rp Integer vector of length 4: zeros added after dimensions 0..3
+#' @return Padded tensor with shape [ne0+lp0+rp0, ne1+lp1+rp1, ...]
+#' @export
+ggml_pad_ext <- function(ctx, a, lp = c(0L, 0L, 0L, 0L), rp = c(0L, 0L, 0L, 0L)) {
+  .Call("R_ggml_pad_ext", ctx, a, as.integer(lp), as.integer(rp), PACKAGE = "ggmlR")
+}
+
 #' Sort Order Constants
 #'
 #' Sort Order Constants

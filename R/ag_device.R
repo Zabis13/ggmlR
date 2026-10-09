@@ -109,6 +109,9 @@
 #' best available ggml backend (Vulkan, Metal, CUDA, or CPU fallback) the first
 #' time it is called.
 #'
+#' @details Switching to the CPU moves every \code{\link{ag_buffer}} on the GPU
+#'   to the host first; plan for host memory of about twice the buffers' device
+#'   size (R stores the values as doubles).
 #' @param device \code{"cpu"} (default) or \code{"gpu"}
 #' @return Invisibly the previous device string
 #' @export
@@ -414,6 +417,9 @@ ag_to_device <- function(tensor, device) {
   # Recordings (R/ag_capture.R) point into the persistent pool and own buffers
   # of their own, which must be freed while the backend still exists.
   if ("persistent" %in% pools) .ag_capture_free_all()
+  # Device buffers (R/ag_buffer.R) live outside the pools but on the same
+  # backend, which the caller may free next: their values move to the host.
+  if ("persistent" %in% pools) .ag_buffer_rescue_all()
 
   for (sc in pools) {
     # Resident VALUES need the same rescue, and for a stronger reason: a weight
@@ -1167,6 +1173,34 @@ GGML_PREC_F32 <- 10L
     inputs   = list(x_data),
     out_shape = out_shape,
     resident  = .ag_is_handle(x_data)
+  )
+}
+
+# Rows from+1..from+n: a view (rows are ne0, so the view keeps the column
+# stride and starts `from` elements in) made contiguous -- consumers such as
+# mul_mat need a contiguous operand.
+.ag_gpu_slice_rows <- function(x_data, from, n) {
+  nc <- .ag_ncol(x_data)
+  .ag_run_op(
+    op_fn = function(ctx, ptrs) {
+      x  <- ptrs[[1L]]
+      nb <- ggml_tensor_nb(x)
+      v  <- ggml_view_2d(ctx, x, n, nc, nb[2L], offset = from * ggml_element_size(x))
+      ggml_cont(ctx, v)
+    },
+    inputs    = list(x_data),
+    out_shape = c(n, nc),
+    resident  = .ag_is_handle(x_data)
+  )
+}
+
+# rbind(a, b): concat along ne0, which is R's rows.
+.ag_gpu_concat_rows <- function(a_data, b_data) {
+  .ag_run_op(
+    op_fn     = function(ctx, ptrs) ggml_concat(ctx, ptrs[[1L]], ptrs[[2L]], 0L),
+    inputs    = list(a_data, b_data),
+    out_shape = c(.ag_nrow(a_data) + .ag_nrow(b_data), .ag_ncol(a_data)),
+    resident  = .ag_is_handle(a_data) || .ag_is_handle(b_data)
   )
 }
 

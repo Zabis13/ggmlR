@@ -1019,6 +1019,7 @@ SEXP R_ggml_custom_ops(void);
 
 // Sequence/Token operations
 SEXP R_ggml_pad(SEXP ctx_ptr, SEXP a_ptr, SEXP p0, SEXP p1, SEXP p2, SEXP p3);
+SEXP R_ggml_pad_ext(SEXP ctx_ptr, SEXP a_ptr, SEXP lp, SEXP rp);
 SEXP R_ggml_argsort(SEXP ctx_ptr, SEXP a_ptr, SEXP order);
 SEXP R_ggml_top_k(SEXP ctx_ptr, SEXP a_ptr, SEXP k);
 SEXP R_ggml_repeat_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr);
@@ -1569,6 +1570,7 @@ static const R_CallMethodDef CallEntries[] = {
 
     // Sequence/Token operations
     {"R_ggml_pad",            (DL_FUNC) &R_ggml_pad,            6},
+    {"R_ggml_pad_ext",        (DL_FUNC) &R_ggml_pad_ext,        4},
     {"R_ggml_argsort",        (DL_FUNC) &R_ggml_argsort,        3},
     {"R_ggml_top_k",          (DL_FUNC) &R_ggml_top_k,          3},
     {"R_ggml_repeat_back",    (DL_FUNC) &R_ggml_repeat_back,    3},

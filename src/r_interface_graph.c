@@ -3078,6 +3078,32 @@ SEXP R_ggml_pad(SEXP ctx_ptr, SEXP a_ptr, SEXP p0_sexp, SEXP p1_sexp,
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+// Pad with zeros on both sides of each dimension: lp before, rp after.
+SEXP R_ggml_pad_ext(SEXP ctx_ptr, SEXP a_ptr, SEXP lp_sexp, SEXP rp_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+    if (length(lp_sexp) != 4 || length(rp_sexp) != 4) {
+        error("lp and rp must have length 4");
+    }
+    int * lp = INTEGER(lp_sexp);
+    int * rp = INTEGER(rp_sexp);
+    for (int i = 0; i < 4; i++) {
+        if (lp[i] < 0 || rp[i] < 0) error("padding must be non-negative");
+    }
+
+    struct ggml_tensor * result = ggml_pad_ext(ctx, a, lp[0], rp[0], lp[1], rp[1],
+                                               lp[2], rp[2], lp[3], rp[3]);
+    if (result == NULL) {
+        error("Failed to create pad_ext operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // Argsort - returns indices that would sort the tensor
 // order: 0 = ascending (GGML_SORT_ORDER_ASC), 1 = descending (GGML_SORT_ORDER_DESC)
 SEXP R_ggml_argsort(SEXP ctx_ptr, SEXP a_ptr, SEXP order_sexp) {

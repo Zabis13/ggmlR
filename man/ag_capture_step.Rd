@@ -11,7 +11,8 @@ ag_capture_step(fn, params = NULL, optimizer, max_grad_norm = NULL)
 ag_tensor), or a named list of ag_tensors with an element \code{loss}.}
 
 \item{params}{Optional list of further ag_tensors the recording references
-(e.g. frozen weights); the optimizer's parameters are always included.}
+(e.g. frozen weights) and \code{\link{ag_buffer}}s read with
+\code{\link{ag_get_rows}}; the optimizer's parameters are always included.}
 
 \item{optimizer}{An optimizer from \code{\link{optimizer_adam}}, created on
 the GPU when the step is to run there.}

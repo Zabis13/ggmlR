@@ -865,7 +865,8 @@ Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM),
 | Activations | `ag_relu`, `ag_sigmoid`, `ag_tanh`, `ag_softmax` |
 | Reductions | `ag_sum`, `ag_mean` (with `dim`, `keepdim`) |
 | Math | `ag_log`, `ag_exp`, `ag_pow`, `ag_clamp` |
-| Shape | `ag_reshape`, `ag_transpose` |
+| Shape | `ag_reshape`, `ag_transpose`, `ag_slice_rows`, `ag_concat_rows` |
+| Device buffers | `ag_buffer`, `ag_buffer_write`, `ag_buffer_read`, `ag_buffer_free`, `ag_get_rows` (see [Device buffers](#device-buffers)) |
 | Attention | `ag_multihead_attention`, `ag_flash_attention` (all heads in one fused op) |
 | Loss | `ag_mse_loss`, `ag_cross_entropy_loss`, `ag_softmax_cross_entropy_loss` |
 | Layers | `ag_linear`, `ag_batch_norm`, `ag_layer_norm`, `ag_dropout`, `ag_embedding` |
@@ -1190,6 +1191,45 @@ Rscript inst/scripts/measure_ag_resident_gain.R      # what residency delivered
 Rscript inst/scripts/measure_ag_forward_profile.R    # where the forward goes
 Rscript inst/scripts/measure_ag_tape_memory.R        # tape composition by shape
 ```
+
+### Device buffers
+
+A large table that is written a few columns at a time and read in random
+batches — a replay buffer in off-policy reinforcement learning is the typical
+case — would cost a full upload per write as an `ag_tensor`, or a batch upload
+per read if kept in R. `ag_buffer()` keeps it on the device instead: writes send
+only the new columns, and `ag_get_rows()` sends only the indices.
+
+```r
+ag_device("gpu")
+buf <- ag_buffer(rows = 6, capacity = 100000)   # one column per transition
+ag_buffer_write(buf, new_columns, col_offset = pos)   # in place, synchronous
+
+# a batch, split into fields on the device
+f <- ag_capture(function(idx) {
+  x <- ag_get_rows(buf, idx)                    # rows x B, no gradient
+  list(obs = ag_slice_rows(x, 0, 3), act = ag_slice_rows(x, 3, 2))
+}, params = list(buf))
+batch <- f(idx = matrix(sample.int(100000, 256) - 1, ncol = 1))
+
+ag_buffer_read(buf, 0, 1000)                    # download a range (checkpoints)
+ag_buffer_free(buf)                             # release now, not at gc()
+```
+
+* `ag_get_rows()` selects **columns** of the R `rows x capacity` view; the name
+  follows `ggml_get_rows`, which selects along ggml's second dimension.
+  Indices are 0-based. Host indices are checked; indices already on the device
+  (inside a recording) are clamped to `0..capacity-1`.
+* Inside `ag_capture()` pass the indices as an argument and list the buffer in
+  `params`: one recording serves every batch of the same size, and freeing or
+  re-uploading the buffer records anew.
+* `ag_slice_rows()` cuts a range of rows on the device (a view made
+  contiguous); its gradient is zero outside the range, so it can feed a
+  network.
+* Creation fails when the buffer needs more than 85% of the free device memory
+  the driver reports. `ag_device("cpu")` moves buffers to the host first (about
+  twice their device size, as R doubles); the next GPU use uploads them again.
+* On the CPU the same calls work on an R matrix.
 
 ### Budgeting a training run
 

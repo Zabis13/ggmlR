@@ -12,6 +12,7 @@ named list of ag_tensors. Forward computations only (no
 \code{with_grad_tape}).}
 
 \item{params}{Optional list of ag_tensors (typically the model parameters)
+and \code{\link{ag_buffer}}s read with \code{\link{ag_get_rows}}
 whose device memory the recording may reference; a change re-records.}
 }
 \value{

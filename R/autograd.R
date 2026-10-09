@@ -1922,6 +1922,115 @@ ag_transpose <- function(x) {
   out
 }
 
+#' Slice a range of rows
+#'
+#' Returns rows \code{from + 1} to \code{from + n} of \code{x} (\code{from} is
+#' 0-based), e.g. one field of a packed batch read with
+#' \code{\link{ag_get_rows}}. On the GPU it is a view made contiguous on the
+#' device, with nothing crossing the bus; inside \code{\link{ag_capture}()}
+#' \code{from} and \code{n} are constants of the recording.
+#'
+#' The gradient is \code{g} in the sliced rows and zero elsewhere.
+#'
+#' @param x ag_tensor (or matrix) with at least \code{from + n} rows
+#' @param from 0-based index of the first row
+#' @param n Number of rows
+#' @return ag_tensor of shape \code{n x ncol(x)}
+#' @export
+#' @examples
+#' x <- ag_tensor(matrix(1:12, 4, 3))
+#' as.matrix(ag_slice_rows(x, 1, 2))
+ag_slice_rows <- function(x, from, n) {
+  device <- if (is_ag_tensor(x)) x$device else "cpu"
+  x_data <- if (device == "gpu") .ag_operand(x) else .ag_data(x)
+  if (!is.matrix(x_data) && !.ag_is_handle(x_data)) x_data <- matrix(x_data, ncol = 1L)
+  nr <- .ag_nrow(x_data)
+  ok <- function(v) is.numeric(v) && length(v) == 1L && !is.na(v) && v == round(v)
+  if (!ok(from) || from < 0)
+    stop("ag_slice_rows: from must be a non-negative whole number", call. = FALSE)
+  if (!ok(n) || n < 1)
+    stop("ag_slice_rows: n must be a positive whole number", call. = FALSE)
+  if (from + n > nr)
+    stop(sprintf("ag_slice_rows: rows %d..%d are outside x (%d rows)",
+                 as.integer(from), as.integer(from + n - 1), nr), call. = FALSE)
+  from <- as.integer(from); n <- as.integer(n)
+
+  if (device == "gpu") {
+    out <- .ag_wrap_result(.ag_gpu_slice_rows(x_data, from, n), device)
+  } else {
+    out <- ag_tensor(x_data[from + seq_len(n), , drop = FALSE], device = device)
+  }
+  out$requires_grad <- is_ag_tensor(x) && x$requires_grad
+  if (out$requires_grad) {
+    nc <- .ag_ncol(x_data)
+    grad_fn <- function(grad_out) {
+      dx <- matrix(0, nr, nc)
+      dx[from + seq_len(n), ] <- .ag_as_matrix(grad_out)
+      list(x = dx)
+    }
+    out$grad_fn <- grad_fn
+    # graph rule: pad g with `from` zero rows before and the rest after
+    ag_record(out, grad_fn, list(x = x), op = "slice_rows",
+              from = from, n = n, nrow_x = nr)
+  }
+  out
+}
+
+#' Concatenate two tensors by rows
+#'
+#' Stacks \code{a} above \code{b}, like \code{rbind(a, b)}: both must have the
+#' same number of columns (the batch). Typical use is a critic input built from
+#' observations and an action computed by the actor. The gradient of \code{a}
+#' is rows \code{1..nrow(a)} of the incoming gradient and that of \code{b} the
+#' rest; an operand without gradient gets none.
+#'
+#' @param a,b ag_tensors (or matrices) with the same number of columns
+#' @return ag_tensor of shape \code{(nrow(a) + nrow(b)) x ncol(a)}
+#' @seealso \code{\link{ag_slice_rows}}
+#' @export
+#' @examples
+#' a <- ag_tensor(matrix(1:6, 2, 3)); b <- ag_tensor(matrix(7:9, 1, 3))
+#' as.matrix(ag_concat_rows(a, b))
+ag_concat_rows <- function(a, b) {
+  device <- .ag_result_device(a, b)
+  if (is_ag_tensor(a) && is_ag_tensor(b) &&
+      !identical(a$dtype %||% "f32", b$dtype %||% "f32"))
+    stop(sprintf("ag_concat_rows: a is %s, b is %s; the dtypes must match",
+                 a$dtype, b$dtype), call. = FALSE)
+  as_op <- function(t) {
+    d <- if (device == "gpu") .ag_operand(t) else .ag_data(t)
+    if (!is.matrix(d) && !.ag_is_handle(d)) d <- matrix(d, ncol = 1L)
+    d
+  }
+  a_data <- as_op(a); b_data <- as_op(b)
+  ra <- .ag_nrow(a_data); rb <- .ag_nrow(b_data); nc <- .ag_ncol(a_data)
+  if (.ag_ncol(b_data) != nc)
+    stop(sprintf(paste0("ag_concat_rows: a has %d columns, b has %d; both must ",
+                        "have the batch size as columns"), nc, .ag_ncol(b_data)),
+         call. = FALSE)
+
+  if (device == "gpu") {
+    out <- .ag_wrap_result(.ag_gpu_concat_rows(a_data, b_data), device)
+  } else {
+    out <- ag_tensor(rbind(a_data, b_data), device = device)
+  }
+  ga_on <- is_ag_tensor(a) && isTRUE(a$requires_grad)
+  gb_on <- is_ag_tensor(b) && isTRUE(b$requires_grad)
+  out$requires_grad <- ga_on || gb_on
+  if (out$requires_grad) {
+    grad_fn <- function(grad_out) {
+      g <- .ag_as_matrix(grad_out)
+      list(a = if (ga_on) g[seq_len(ra), , drop = FALSE],
+           b = if (gb_on) g[ra + seq_len(rb), , drop = FALSE])
+    }
+    out$grad_fn <- grad_fn
+    # graph rule: a row slice of g for each operand that wants a gradient
+    ag_record(out, grad_fn, list(a = a, b = b), op = "concat_rows",
+              nrow_a = ra, nrow_b = rb)
+  }
+  out
+}
+
 #' Element-wise clamp
 #'
 #' Clamps values to \code{[lo, hi]}.  Gradient is 1 inside the interval,

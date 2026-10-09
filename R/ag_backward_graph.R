@@ -271,7 +271,8 @@ ag_backward_resident <- function(on = TRUE) {
 # gradients across the bus mid-pass, which is the per-op round trip again.
 .AG_BWD_GRAPH_OPS <- c("matmul", "add", "loss_const", "elemwise_mul",
                        "transpose", "softmax", "scale", "mul", "flash_attn",
-                       "sub", "log", "sum", "log_softmax")
+                       "sub", "log", "sum", "log_softmax", "slice_rows",
+                       "concat_rows")
 
 # Can this tape run as one graph?
 #
@@ -662,6 +663,29 @@ ag_backward_profile_report <- function() {
       x <- inp$x
       if (is_ag_tensor(x) && isTRUE(x$requires_grad))
         accumulate(as.character(x$id), ggml_cont(ctx, ggml_transpose(ctx, g)))
+
+    } else if (identical(nd$op, "slice_rows")) {
+      # dx = g in rows from+1..from+n, zero elsewhere: one pad node with zero
+      # rows before (from) and after (the rest), along ne0 = R's rows.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad))
+        accumulate(as.character(x$id),
+                   ggml_pad_ext(ctx, g, lp = c(nd$from, 0L, 0L, 0L),
+                                rp = c(nd$nrow_x - nd$from - nd$n, 0L, 0L, 0L)))
+
+    } else if (identical(nd$op, "concat_rows")) {
+      # dA = rows 1..nrow_a of g, dB = the rest: a view each (rows are ne0, so
+      # the column stride stays and B starts nrow_a elements in), made
+      # contiguous. An operand without gradient gets no node.
+      A <- inp$a; B <- inp$b
+      nb1 <- ggml_tensor_nb(g)[2L]; nc <- ggml_nrows(g)
+      es  <- ggml_element_size(g)
+      if (is_ag_tensor(A) && isTRUE(A$requires_grad))
+        accumulate(as.character(A$id),
+                   ggml_cont(ctx, ggml_view_2d(ctx, g, nd$nrow_a, nc, nb1, 0)))
+      if (is_ag_tensor(B) && isTRUE(B$requires_grad))
+        accumulate(as.character(B$id),
+                   ggml_cont(ctx, ggml_view_2d(ctx, g, nd$nrow_b, nc, nb1, nd$nrow_a * es)))
 
     } else if (identical(nd$op, "softmax")) {
       # dx = p * (g - colSums(p * g)), the softmax Jacobian applied to g.

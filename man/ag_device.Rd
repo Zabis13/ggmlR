@@ -18,3 +18,8 @@ on the specified device.  Calling \code{ag_device("gpu")} initialises the
 best available ggml backend (Vulkan, Metal, CUDA, or CPU fallback) the first
 time it is called.
 }
+\details{
+Switching to the CPU moves every \code{\link{ag_buffer}} on the GPU
+  to the host first; plan for host memory of about twice the buffers' device
+  size (R stores the values as doubles).
+}

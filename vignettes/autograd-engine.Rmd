@@ -72,6 +72,8 @@ cat("dL/db:\n"); print(grads[["b"]])
 | `ag_mean(x)` | Mean all elements → scalar |
 | `ag_transpose(x)` | Transpose [m,n] → [n,m] |
 | `ag_reshape(x, dims)` | Reshape tensor |
+| `ag_slice_rows(x, from, n)` | Rows `from+1..from+n` (0-based `from`); gradient zero outside |
+| `ag_concat_rows(a, b)` | `rbind(a, b)`, same number of columns; gradient split back by rows |
 | `ag_softmax_cross_entropy_loss(logits, y)` | Fused softmax + cross-entropy |
 
 ---
@@ -405,6 +407,37 @@ close to nothing where the weight upload dominates.
 
 Residency lowers the size at which the GPU beats the CPU; it does not remove
 it. Below roughly `d = 128` the dispatch cost still outweighs the arithmetic.
+
+### Device buffers
+
+A table written a few columns at a time and read in random batches (a replay
+buffer in off-policy RL) is kept on the device with `ag_buffer()`: a write sends
+only the new columns, and `ag_get_rows()` sends only the indices. The same calls
+run on an R matrix on the CPU, as here.
+
+```{r}
+ag_device("cpu")
+set.seed(1)
+buf <- ag_buffer(rows = 6, capacity = 50)       # one column per transition
+ag_buffer_write(buf, matrix(rnorm(6 * 20), 6, 20), col_offset = 0)
+
+f <- ag_capture(function(idx) {
+  x <- ag_get_rows(buf, idx)                    # 6 x B, no gradient
+  list(obs = ag_slice_rows(x, 0, 3),            # rows 1..3
+       act = ag_slice_rows(x, 3, 2))            # rows 4..5
+}, params = list(buf))
+batch <- f(idx = matrix(c(0, 7, 19), ncol = 1))
+batch$act
+
+ag_buffer_read(buf, col_offset = 0, k = 2)      # download a range
+ag_buffer_free(buf)                             # release now
+```
+
+Indices are 0-based and select columns (the name follows `ggml_get_rows`).
+Indices given from R are checked; inside a GPU recording they are clamped to
+`0..capacity-1`. List the buffer in `params` of `ag_capture()` so that freeing
+or re-uploading it records the graph anew. Switching to the CPU moves GPU
+buffers to the host first, which needs about twice their device size.
 
 ---
 

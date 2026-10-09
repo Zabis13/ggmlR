@@ -82,6 +82,7 @@
 #'   named list of ag_tensors. Forward computations only (no
 #'   \code{with_grad_tape}).
 #' @param params Optional list of ag_tensors (typically the model parameters)
+#'   and \code{\link{ag_buffer}}s read with \code{\link{ag_get_rows}}
 #'   whose device memory the recording may reference; a change re-records.
 #' @return A function taking the same named arguments as numeric matrices (a
 #'   vector is one column) and returning a matrix, or a named list of matrices.
@@ -95,8 +96,8 @@
 #' }
 ag_capture <- function(fn, params = NULL) {
   stopifnot(is.function(fn))
-  if (!is.null(params) && (!is.list(params) || !all(vapply(params, is_ag_tensor, logical(1)))))
-    stop("ag_capture: params must be a list of ag_tensors", call. = FALSE)
+  if (!is.null(params) && (!is.list(params) || !all(vapply(params, .ag_capture_is_param, logical(1)))))
+    stop("ag_capture: params must be a list of ag_tensors or ag_buffers", call. = FALSE)
   cache <- new.env(parent = emptyenv())
   # The recording used by the previous call, and what selected it. A replay is
   # a few hundred microseconds, so building the cache key with paste() on every
@@ -200,7 +201,8 @@ ag_capture_free <- function(f) {
 #' @param fn Function of named ag_tensor arguments returning the loss (an
 #'   ag_tensor), or a named list of ag_tensors with an element \code{loss}.
 #' @param params Optional list of further ag_tensors the recording references
-#'   (e.g. frozen weights); the optimizer's parameters are always included.
+#'   (e.g. frozen weights) and \code{\link{ag_buffer}}s read with
+#'   \code{\link{ag_get_rows}}; the optimizer's parameters are always included.
 #' @param max_grad_norm \code{NULL} (no clipping) or a positive number: clip
 #'   gradients to this global norm before the update.
 #' @param optimizer An optimizer from \code{\link{optimizer_adam}}, created on
@@ -221,8 +223,8 @@ ag_capture_free <- function(f) {
 ag_capture_step <- function(fn, params = NULL, optimizer, max_grad_norm = NULL) {
   stopifnot(is.function(fn))
   if (!is.null(max_grad_norm)) .ag_capture_check_clip(max_grad_norm)
-  if (!is.null(params) && (!is.list(params) || !all(vapply(params, is_ag_tensor, logical(1)))))
-    stop("ag_capture_step: params must be a list of ag_tensors", call. = FALSE)
+  if (!is.null(params) && (!is.list(params) || !all(vapply(params, .ag_capture_is_param, logical(1)))))
+    stop("ag_capture_step: params must be a list of ag_tensors or ag_buffers", call. = FALSE)
   if (!inherits(optimizer, "ag_optimizer_adam"))
     stop("ag_capture_step: only optimizer_adam() is supported", call. = FALSE)
   # One recording: shapes are fixed. Kept in an env of its own, so that
@@ -369,8 +371,17 @@ ag_capture_set <- function(f, max_grad_norm) {
 # and a liveness check per parameter, every call); liveness is covered by the
 # persistent-pool generation in .ag_capture_valid().
 .ag_capture_param_ptrs <- function(params) {
-  lapply(params, function(p) p[["ptr"]])
+  lapply(params, function(p) {
+    if (!inherits(p, "ag_buffer")) return(p[["ptr"]])
+    # the allocation count, not the pointer: a buffer moved to the host and
+    # back may get the same address for new memory
+    if (is.null(p$core$ptr)) NULL else c(p$core$id, p$core$gen)
+  })
 }
+
+# A recording may reference weights (ag_tensor) and device buffers (ag_buffer,
+# read by ag_get_rows): a buffer freed or moved to the host re-records.
+.ag_capture_is_param <- function(p) is_ag_tensor(p) || inherits(p, "ag_buffer")
 
 .ag_capture_valid <- function(cap, params) {
   st <- .ag_device_state
@@ -421,6 +432,10 @@ ag_capture_set <- function(f, max_grad_norm) {
 # the guard refuses -- although the caller did everything right.
 .ag_capture_make_resident <- function(params) {
   for (p in params) {
+    if (inherits(p, "ag_buffer")) {
+      if (!isTRUE(p$core$freed)) .ag_buffer_on_device(p$core)
+      next
+    }
     if (!identical(p$device, "gpu") || !is.null(.ag_handle_of(p))) next
     d   <- .ag_data(p)
     dt  <- p$dtype %||% .ag_device_state$dtype
