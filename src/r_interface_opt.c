@@ -494,6 +494,13 @@ SEXP R_ggml_opt_outputs_i(SEXP opt_ctx_ptr, SEXP ihead) {
     return r_opt_head_tensor(opt_ctx_ptr, ihead, ggml_opt_outputs_i, "outputs");
 }
 
+// Make the next ggml_opt_alloc() allocate again; see ggml_opt_invalidate_alloc().
+SEXP R_ggml_opt_invalidate_alloc(SEXP opt_ctx_ptr) {
+    ggml_opt_context_t opt_ctx = (ggml_opt_context_t) r_ptr_required(opt_ctx_ptr, "optimizer context");
+    ggml_opt_invalidate_alloc(opt_ctx);
+    return R_NilValue;
+}
+
 SEXP R_ggml_opt_labels_i(SEXP opt_ctx_ptr, SEXP ihead) {
     return r_opt_head_tensor(opt_ctx_ptr, ihead, ggml_opt_labels_i, "labels");
 }

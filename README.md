@@ -424,15 +424,17 @@ it yourself:
 tr <- ggml_trainer(model, batch_size = 32L)
 on.exit(tr$free())
 
-target <- tr$model()                    # target network for bootstrapping
+target <- tr$snapshot()                 # independent copy: the target network
 for (i in seq_len(10000L)) {
   rollout(env, target)                  # your agent fills a replay buffer
   b <- sample_batch(replay, 32L)
   loss <- tr$step(b$x, b$y)             # one forward + backward, returns the loss
 
-  if (i %% 500L == 0L) target <- tr$model()   # refresh every 500 steps
+  if (i %% 500L == 0L) tr$update_target(target)       # hard copy (DQN)
+  # or every step: tr$update_target(target, tau = 0.005)   # Polyak (DDPG, SAC)
 }
 
+ggml_snapshot_free(target)
 model <- tr$model()                     # weights back into a model object
 tr$free()
 ```
@@ -443,6 +445,38 @@ without training, `$set_lr()` changes the rate mid-run, and gradient
 accumulation follows `nbatch_logical` — the optimizer updates only on the period
 boundary, and the trainer tracks that internally. The context holds GPU buffers,
 so free it when done.
+
+Do not emulate this by calling `ggml_fit()` once per batch: every call builds a
+fresh optimizer context, so the Adam moments restart and each step is the
+optimizer's first.
+
+Sequential models and functional models with one input and one output are
+supported.
+
+**Masked losses.** With `loss_mask`, the loss becomes a weighted MSE and `$step()`
+takes a `sample_weight`. `loss_mask = 1` gives one weight per sample;
+`loss_mask = <outputs>` gives one per output element, so a 0/1 matrix trains only
+the outputs whose label is known — one action of a Q-network, say. The masked
+terms and their gradients are removed exactly; the loss is divided by the total
+element count, not by the number of active ones.
+
+```r
+tr <- ggml_trainer(q_net, batch_size = 512L, loss_mask = 18L)  # 18 actions
+tr$step(x, y, sample_weight = mask)     # mask: [512, 18], 1 where y is known
+```
+
+**Predicting during training.** `$predict(x)` runs the current weights in eval
+mode (no dropout) on a scheduler of its own, so it never disturbs the training
+graph or the optimizer state, and `x` may have any number of rows. Use it for
+validation inside the loop rather than `ggml_predict(tr$model(), x)`.
+
+**Target networks.** `$snapshot()` returns an independent model — its own weights
+in its own buffer, its own scheduler — that later steps do not move and that
+outlives `$free()`. `$update_target(target, tau)` moves it towards the current
+weights, `tau * theta + (1 - tau) * theta_target`: `tau = 1` is the hard copy,
+a small `tau` the Polyak average. Batch-norm running statistics are copied whole,
+never averaged, and a target with different weights is refused. Release a
+snapshot with `ggml_snapshot_free()`.
 
 ## Functional API
 

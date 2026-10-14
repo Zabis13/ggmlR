@@ -2727,6 +2727,16 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
     stop("Model must be compiled before training. Call ggml_compile() first.")
   }
 
+  # These used to fall into `...` and be ignored without a word, so a masked
+  # loss silently trained every output.
+  dots <- names(list(...))
+  bad  <- intersect(c("sample_weight", "class_weight"), dots)
+  if (length(bad) > 0L) {
+    stop("'", paste(bad, collapse = "'/'"), "' is not supported by ggml_fit() ",
+         "for functional models. Use ggml_trainer(model, batch_size, ",
+         "loss_mask = ...) and pass sample_weight to $step().", call. = FALSE)
+  }
+
   # Prepare input data (handles both single and multi-input)
   xp <- nn_prepare_x(model, x)
   is_multi      <- xp$is_multi

@@ -1580,6 +1580,11 @@ ggml_evaluate.ggml_sequential_model <- function(model, x, y, batch_size = 32,
 #' @return Matrix of predictions with shape \code{[N, output_units]}
 #' @export
 ggml_predict <- function(model, ...) {
+  # A trainer snapshot whose memory has been released would read freed tensors.
+  if (is.environment(model$snapshot_state) && !isTRUE(model$snapshot_state$alive)) {
+    stop("this snapshot has been released with ggml_snapshot_free(); take a ",
+         "new one with $snapshot().", call. = FALSE)
+  }
   UseMethod("ggml_predict")
 }
 

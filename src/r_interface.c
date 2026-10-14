@@ -97,6 +97,7 @@ extern SEXP R_ggml_opt_n_loss(SEXP);
 extern SEXP R_ggml_opt_outputs_i(SEXP, SEXP);
 extern SEXP R_ggml_opt_labels_i(SEXP, SEXP);
 extern SEXP R_ggml_opt_loss_weights_i(SEXP, SEXP);
+extern SEXP R_ggml_opt_invalidate_alloc(SEXP);
 extern SEXP R_ggml_opt_loss_i(SEXP, SEXP);
 extern SEXP R_ggml_opt_pred_i(SEXP, SEXP);
 extern SEXP R_ggml_opt_ncorrect_i(SEXP, SEXP);
@@ -1742,6 +1743,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_opt_outputs_i",                    (DL_FUNC) &R_ggml_opt_outputs_i,                    2},
     {"R_ggml_opt_labels_i",                     (DL_FUNC) &R_ggml_opt_labels_i,                     2},
     {"R_ggml_opt_loss_weights_i",               (DL_FUNC) &R_ggml_opt_loss_weights_i,               2},
+    {"R_ggml_opt_invalidate_alloc",             (DL_FUNC) &R_ggml_opt_invalidate_alloc,             1},
     {"R_ggml_opt_loss_i",                       (DL_FUNC) &R_ggml_opt_loss_i,                       2},
     {"R_ggml_opt_pred_i",                       (DL_FUNC) &R_ggml_opt_pred_i,                       2},
     {"R_ggml_opt_ncorrect_i",                   (DL_FUNC) &R_ggml_opt_ncorrect_i,                   2},

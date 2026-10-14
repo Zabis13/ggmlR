@@ -4,25 +4,33 @@
 \alias{ggml_trainer}
 \title{A Training Context You Step Yourself}
 \usage{
-ggml_trainer(model, batch_size = 32L, nbatch_logical = NULL)
+ggml_trainer(model, batch_size = 32L, nbatch_logical = NULL, loss_mask = NULL)
 }
 \arguments{
-\item{model}{A compiled \code{ggml_sequential_model}}
+\item{model}{A compiled \code{ggml_sequential_model}, or a compiled
+functional model with one input and one output}
 
 \item{batch_size}{Samples per step. The graph is built for exactly this many;
 every batch handed to \code{$step()} must match.}
 
 \item{nbatch_logical}{Logical batch size for gradient accumulation. Defaults
 to \code{batch_size}, meaning every step updates the weights.}
+
+\item{loss_mask}{\code{NULL} (default) for the compiled loss unweighted;
+\code{1} for one weight per sample; the number of outputs for one weight
+per output element. See the section on loss weights.}
 }
 \value{
 An object of class \code{ggml_trainer}: a list of functions
-  \code{$step(x, y)}, \code{$eval(x, y)}, \code{$model()},
-  \code{$set_lr(lr)}, \code{$free()}.
+  \code{$step(x, y, sample_weight = NULL)},
+  \code{$eval(x, y, sample_weight = NULL)},
+  \code{$predict(x, batch_size = NULL)}, \code{$snapshot()},
+  \code{$update_target(target, tau = 1)}, \code{$model()},
+  \code{$set_lr(lr)}, \code{$n_steps()}, \code{$free()}.
 }
 \description{
-Builds the graph and optimizer context for a compiled sequential model and
-hands them back, so a training loop can be written in R rather than handed to
+Builds the graph and optimizer context for a compiled model and hands them
+back, so a training loop can be written in R rather than handed to
 \code{\link{ggml_fit}}. The context lives until \code{$free()}, keeping
 weights, Adam moments and the compute graph across as many steps as the loop
 takes.
@@ -32,8 +40,12 @@ This is the level below \code{\link{ggml_fit_opt_gen}}. Reach for it when the
 loop is not a pass over data: reinforcement learning, where experience comes
 from a replay buffer the agent is still filling and a target network is
 refreshed every so many steps; curriculum schemes that change the data
-distribution as they go; or anything where "epoch" is not the unit of
-progress.
+distribution as they go; data generated fresh for every step; or anything
+where "epoch" is not the unit of progress.
+
+Do not emulate this by calling \code{\link{ggml_fit}} once per batch: each
+such call builds a new optimizer context, so the Adam moments are reset and
+every step is the optimizer's first.
 }
 \section{Using it}{
 
@@ -44,7 +56,7 @@ on.exit(tr$free())
 for (i in seq_len(10000L)) {
   b <- sample_batch(replay, 32L)     # your own bookkeeping
   loss <- tr$step(b$x, b$y)
-  if (i %% 500L == 0L) target <- tr$model()   # refresh a target network
+  if (i \%\% 500L == 0L) target <- tr$model()   # refresh a target network
 }
 
 model <- tr$model()                  # weights back into an R model object
@@ -54,11 +66,68 @@ tr$free()
 
 \section{What a step does}{
 
-\code{$step(x, y)} runs one forward and backward pass and returns that step's
-loss. Gradient accumulation, if \code{nbatch_logical} asked for it, is
-tracked inside the context: the optimizer updates the weights only on the
-period boundary, and the intervening steps only accumulate. \code{$eval(x, y)}
-is the same without the backward pass, for measuring on held-out data.
+\code{$step(x, y, sample_weight)} runs one forward and backward pass and
+returns that step's loss. Gradient accumulation, if \code{nbatch_logical}
+asked for it, is tracked inside the context: the optimizer updates the
+weights only on the period boundary, and the intervening steps only
+accumulate. \code{$eval(x, y, sample_weight)} is the same without the
+backward pass, for measuring on held-out data.
+}
+
+\section{Loss weights and masks}{
+
+With \code{loss_mask} set, the loss is weighted mean squared error,
+\code{sum(w * (pred - y)^2) / (batch * outputs)}, and \code{$step()} and
+\code{$eval()} take a \code{sample_weight} matrix:
+\itemize{
+  \item \code{loss_mask = 1}: \code{sample_weight} is \code{[batch, 1]} (or
+    a vector of length \code{batch}) -- one weight per sample, as in Keras.
+  \item \code{loss_mask = <outputs>}: \code{sample_weight} is
+    \code{[batch, outputs]} -- one weight per output element. This is
+    \emph{not} Keras' \code{sample_weight}: a 0/1 matrix is a mask that
+    trains only the outputs whose label is known (e.g. one action of a
+    Q-network), and a 0 removes that element's gradient exactly. The loss is
+    not renormalised by the number of active elements.
+}
+Omitting \code{sample_weight} on a weighted trainer means all ones. Only
+\code{loss = "mse"} supports weights.
+}
+
+\section{Models}{
+
+Sequential models and functional models (\code{\link{ggml_model}}) with
+\strong{one input and one output} are supported. Functional models with
+several inputs or outputs are refused. For a functional model with dropout
+the dropout masks are redrawn before every \code{$step()}.
+}
+
+\section{Predicting during training}{
+
+\code{$predict(x, batch_size)} returns predictions from the current weights,
+as \code{\link{ggml_predict}} would, in eval mode (no dropout). It runs on a
+scheduler of its own, created on first use: the weights are copied into a
+separate buffer for the call and released after it, so neither the training
+graph's buffers nor the optimizer state are touched. \code{batch_size}
+defaults to the trainer's; \code{x} may have any number of rows.
+}
+
+\section{Target networks}{
+
+\code{$snapshot()} returns an independent copy of the model: its own weight
+tensors in its own buffer and its own scheduler, sharing nothing mutable with
+the trainer. Later steps do not move it, \code{\link{ggml_predict}} on it
+never touches the training path, and it outlives \code{$free()}. It is built
+in eval mode, so dropout is off in it. Release it with
+\code{\link{ggml_snapshot_free}} (a finaliser is only a backstop); after that
+\code{ggml_predict} and \code{$update_target} on it are refused with an error.
+
+\code{$update_target(target, tau = 1)} moves a snapshot towards the current
+weights, \eqn{\theta' \leftarrow \tau\theta + (1 - \tau)\theta'}:
+\code{tau = 1} is the hard copy of DQN, a small \code{tau} the Polyak
+average of DDPG/SAC. Non-trainable buffers (a sequential batch-norm's
+running mean and variance) are copied whole, never averaged. The target
+must have the same weights, by name and shape, or it is refused. The update
+goes through host memory, one read and one write per tensor.
 }
 
 \section{Lifetime}{
@@ -72,6 +141,15 @@ touching released memory.
 The model object passed in is unchanged -- R semantics being what they are,
 the trainer works on its own copy of the weights. \code{$model()} returns a
 model carrying the current ones.
+
+The returned model shares the trainer's backend scheduler, and predicting
+with it re-lays the scheduler's buffers for another graph. The trainer
+therefore re-allocates its own graph on the first step after any
+\code{$model()} call; weights and Adam moments are kept. \code{$predict()}
+needs none of this. Predicting with the
+\emph{original} model object while the trainer is alive is not covered by
+this and can crash the session on the next step -- take the model from
+\code{$model()} instead.
 }
 
 \examples{
@@ -160,6 +238,7 @@ Other optimization:
 \code{\link{ggml_opt_result_pred}()},
 \code{\link{ggml_opt_result_reset}()},
 \code{\link{ggml_opt_set_lr}()},
-\code{\link{ggml_opt_static_graphs}()}
+\code{\link{ggml_opt_static_graphs}()},
+\code{\link{ggml_snapshot_free}()}
 }
 \concept{optimization}

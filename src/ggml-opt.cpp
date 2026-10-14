@@ -1175,6 +1175,14 @@ bool ggml_opt_static_graphs(ggml_opt_context_t opt_ctx) {
     return opt_ctx->static_graphs;
 }
 
+void ggml_opt_invalidate_alloc(ggml_opt_context_t opt_ctx) {
+    // Only the record of the scheduler's allocation is dropped. Parameters,
+    // gradients and Adam moments live in opt_ctx's own static buffers, which
+    // ggml_opt_alloc() never touches, so the optimizer state survives.
+    GGML_ASSERT(!opt_ctx->eval_ready);
+    opt_ctx->allocated_graph = nullptr;
+}
+
 struct ggml_tensor * ggml_opt_inputs(ggml_opt_context_t opt_ctx) {
     return opt_ctx->inputs;
 }

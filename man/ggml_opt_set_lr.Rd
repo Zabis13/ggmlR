@@ -79,6 +79,7 @@ Other optimization:
 \code{\link{ggml_opt_result_pred}()},
 \code{\link{ggml_opt_result_reset}()},
 \code{\link{ggml_opt_static_graphs}()},
+\code{\link{ggml_snapshot_free}()},
 \code{\link{ggml_trainer}()}
 }
 \concept{optimization}

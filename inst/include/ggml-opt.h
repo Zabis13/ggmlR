@@ -207,6 +207,10 @@ extern "C" {
 
     GGML_API bool ggml_opt_static_graphs(ggml_opt_context_t opt_ctx); // whether the graphs are allocated_statically
 
+    // forget which graph the scheduler holds, so the next ggml_opt_alloc() allocates again;
+    // needed after the scheduler was used for another graph (e.g. a predict on the same model)
+    GGML_API void ggml_opt_invalidate_alloc(ggml_opt_context_t opt_ctx);
+
     // get underlying tensors that store data
     // if not using static graphs these pointers become invalid with the next call to ggml_opt_alloc
     GGML_API struct ggml_tensor * ggml_opt_inputs(  ggml_opt_context_t opt_ctx); // forward graph input tensor

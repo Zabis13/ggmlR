@@ -3,6 +3,7 @@
 * **Device buffers** — new `ag_buffer()` keeps a large table on the device, written in place with `ag_buffer_write()` and read back in parts with `ag_buffer_read()`; `ag_get_rows()` gathers columns by index inside ag_* graphs and `ag_capture()` recordings, sending only the indices. Built for replay buffers in off-policy RL. `ag_buffer_free()` releases the memory at once.
 * New `ag_slice_rows(x, from, n)` and `ag_concat_rows(a, b)` — row slice and `rbind` on the device, with gradients and graph-backward rules.
 * New `ggml_pad_ext()` — zero padding before and after each dimension.
+* `ggml_trainer()` now takes functional models and per-output loss masks (`loss_mask`), and gains `$predict()`, `$snapshot()` and `$update_target()` for target networks; functional `ggml_fit()` now rejects `sample_weight` instead of silently ignoring it.
 
 # ggmlR 0.8.6
 

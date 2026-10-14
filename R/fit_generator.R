@@ -115,6 +115,13 @@
     }
   }
 
+  # Loss weights for weighted MSE, already in ggml layout. Only ggml_trainer()
+  # passes them; a generator batch has no such field.
+  if (!is.null(batch$weights)) {
+    ggml_backend_tensor_set_data(ggml_opt_loss_weights_i(opt_ctx, 1L),
+                                 as.numeric(batch$weights))
+  }
+
   ggml_opt_eval(opt_ctx, result)
   invisible(NULL)
 }
