@@ -12,7 +12,9 @@
   loss = "categorical_crossentropy",
   metrics = c("accuracy"),
   backend = "auto",
-  loss_weights = NULL
+  loss_weights = NULL,
+  weight_decay = 0,
+  predict_precision = "default"
 )
 
 ggml_compile(
@@ -21,7 +23,9 @@ ggml_compile(
   loss = "categorical_crossentropy",
   metrics = c("accuracy"),
   backend = "auto",
-  loss_weights = NULL
+  loss_weights = NULL,
+  weight_decay = 0,
+  predict_precision = "default"
 )
 
 \method{ggml_compile}{ggml_sequential_model}(
@@ -30,7 +34,9 @@ ggml_compile(
   loss = "categorical_crossentropy",
   metrics = c("accuracy"),
   backend = "auto",
-  loss_weights = NULL
+  loss_weights = NULL,
+  weight_decay = 0,
+  predict_precision = "default"
 )
 }
 \arguments{
@@ -60,6 +66,17 @@ only when asked for.  Any other name is dropped with a warning.}
 \item{loss_weights}{Optional per-output weights for a multi-output model;
 the optimized total is \code{sum(loss_weights[i] * loss_i)}. Named after
 the output layers or positional. Default: all outputs weighted 1.}
+
+\item{weight_decay}{Decoupled weight decay for the optimizer, in \code{[0, 1]};
+0 (the default) turns it off. It is applied to trainable weights only:
+layers frozen with \code{\link{ggml_freeze_weights}} are not decayed.}
+
+\item{predict_precision}{Matrix-multiply precision for prediction:
+\code{"default"} (as ggml builds it; f16 tiles on an fp16 Vulkan device)
+or \code{"f32"}. Used by \code{\link{ggml_predict}}, a trainer's
+\code{$predict()} and its snapshots unless a call gives its own
+\code{matmul_precision}; training is unaffected. See the precision section
+of \code{\link{ggml_predict}}.}
 }
 \value{
 The compiled model (invisibly).

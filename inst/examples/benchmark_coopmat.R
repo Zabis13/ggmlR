@@ -11,6 +11,14 @@
 #   full         — coopmat + coopmat2 enabled (default; fastest if supported)
 #   no-coopmat2  — GGML_VK_DISABLE_COOPMAT2=1 (falls back to coopmat1)
 #   no-coopmat   — GGML_VK_DISABLE_COOPMAT=1 + COOPMAT2=1 (scalar/vec shaders)
+#   full-prec32  — as full, with GGML_PREC_F32 on the MUL_MAT node (the f32-tile
+#                  kernel ggmlR adds; what matmul_precision = "f32" would select)
+#   f32-tiles    — no coopmat and GGML_VK_DISABLE_F16=1: the scalar path with f32
+#                  shared memory, the precision reference on the GPU
+#
+# Each shape also reports relerr = max|C - C_ref| / max|C_ref| against R's %*%
+# (shapes up to 2048^3 and the model-sized ones; skipped above that). f16 tiles
+# land near 1e-3, f32 near 1e-6.
 #
 # The full-vs-no-coopmat GFLOPS delta is the measurable Matrix-Core gain.
 #
@@ -29,7 +37,10 @@ SHAPES <- list(
   c(M = 1024L, N = 1024L, K = 1024L),
   c(M = 2048L, N = 2048L, K = 2048L),
   c(M = 4096L, N = 4096L, K = 4096L),
-  c(M = 4096L, N = 4096L, K = 1024L)
+  c(M = 4096L, N = 4096L, K = 1024L),
+  # cayleyR's Q-model: 512 states x 26 tokens through d_model 512 and ff 1024
+  c(M = 512L,  N = 13312L, K = 512L),
+  c(M = 1024L, N = 13312L, K = 512L)
 )
 # Defaults with no arguments: 1 warmup, then 2 timed graph computes.
 # Override from the environment:
@@ -41,7 +52,7 @@ SHAPES <- list(
 N_WARMUP <- .env_int("BENCH_WARMUP", 1L)  # warmup graph computes (untimed)
 N_RUNS   <- .env_int("BENCH_RUNS",   2L)  # timed graph computes (averaged)
 
-bench_one <- function(device, shape) {
+bench_one <- function(device, shape, prec = "default") {
   M <- shape[["M"]]; N <- shape[["N"]]; K <- shape[["K"]]
 
   # ggml_mul_mat(a, b): a is [K, M], b is [K, N], result is [M, N].
@@ -54,6 +65,8 @@ bench_one <- function(device, shape) {
   a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, M)
   b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, N)
   cmat <- ggml_mul_mat(ctx, a, b)
+  if (identical(prec, "f32"))
+    .Call("R_ggml_mul_mat_set_prec", cmat, 10L, PACKAGE = "ggmlR")  # GGML_PREC_F32
   graph <- ggml_build_forward_expand(ctx, cmat)
 
   backend <- ggml_vulkan_init(device)
@@ -63,10 +76,21 @@ bench_one <- function(device, shape) {
   buf <- ggml_backend_alloc_ctx_tensors(ctx, backend)
   on.exit(ggml_backend_buffer_free(buf), add = TRUE)
 
-  ggml_backend_tensor_set_data(a, as.numeric(stats::rnorm(K * M)))
-  ggml_backend_tensor_set_data(b, as.numeric(stats::rnorm(K * N)))
+  a_data <- as.numeric(stats::rnorm(K * M))
+  b_data <- as.numeric(stats::rnorm(K * N))
+  ggml_backend_tensor_set_data(a, a_data)
+  ggml_backend_tensor_set_data(b, b_data)
 
   for (i in seq_len(N_WARMUP)) ggml_backend_graph_compute(backend, graph)
+
+  # Accuracy against R: a is [K, M] and b [K, N] in ggml order, so the result
+  # [M, N] is t(A) %*% B with A, B the K-row R matrices.
+  relerr <- NA_real_
+  if (as.numeric(M) * N * K <= 2048^3 || N == 13312L) {
+    ref <- crossprod(matrix(a_data, K, M), matrix(b_data, K, N))
+    got <- matrix(ggml_backend_tensor_get_data(cmat), M, N)
+    relerr <- max(abs(got - ref)) / max(abs(ref))
+  }
 
   # The user asked for "1 warmup + N_RUNS timed runs". But system.time()
   # resolution is ~10 ms, and every shape except 4096^3 runs far below that,
@@ -91,13 +115,13 @@ bench_one <- function(device, shape) {
 
   mean_per_run <- mean(per_run)
   if (!is.finite(mean_per_run) || mean_per_run <= 0) {
-    return(list(ms = NA_real_, gflops = NA_real_, untimed = TRUE))
+    return(list(ms = NA_real_, gflops = NA_real_, relerr = relerr, untimed = TRUE))
   }
   gflops <- (2 * M * N * K) / mean_per_run / 1e9
-  list(ms = mean_per_run * 1000, gflops = gflops, untimed = FALSE)
+  list(ms = mean_per_run * 1000, gflops = gflops, relerr = relerr, untimed = FALSE)
 }
 
-run_worker <- function(device) {
+run_worker <- function(device, prec = "default") {
   caps <- tryCatch(ggml_vulkan_device_caps(device), error = function(e) NULL)
   cm   <- if (!is.null(caps)) isTRUE(caps$coopmat_support)     else NA
   cmfa <- if (!is.null(caps)) isTRUE(caps$coopmat1_fa_support) else NA
@@ -108,9 +132,9 @@ run_worker <- function(device) {
               cm, cmfa, cmnk, if (!is.null(caps)) caps$subgroup_size else NA))
 
   for (sh in SHAPES) {
-    r <- bench_one(device, sh)
-    cat(sprintf("RESULT %dx%dx%d %.3f %.2f\n",
-                sh[["M"]], sh[["N"]], sh[["K"]], r$ms, r$gflops))
+    r <- bench_one(device, sh, prec)
+    cat(sprintf("RESULT %dx%dx%d %.3f %.2f %.3g\n",
+                sh[["M"]], sh[["N"]], sh[["K"]], r$ms, r$gflops, r$relerr))
   }
 }
 
@@ -123,10 +147,13 @@ run_parent <- function(device) {
   cat("Device:", ggml_vulkan_device_description(device), "\n\n")
 
   # 3rd worker arg encodes which coopmat paths to disable (see entry point).
+  # Each entry: the disable flags, then the MUL_MAT precision.
   configs <- list(
-    "full"        = "none",
-    "no-coopmat2" = "COOPMAT2",
-    "no-coopmat"  = "COOPMAT2,COOPMAT"
+    "full"        = c("none", "default"),
+    "no-coopmat2" = c("COOPMAT2", "default"),
+    "no-coopmat"  = c("COOPMAT2,COOPMAT", "default"),
+    "full-prec32" = c("none", "f32"),
+    "f32-tiles"   = c("COOPMAT2,COOPMAT,F16", "default")
   )
 
   self <- normalizePath(sub("^--file=", "",
@@ -136,10 +163,11 @@ run_parent <- function(device) {
   results <- list()
   for (cfg in names(configs)) {
     cat(sprintf("=== Running configuration: %s ===\n", cfg))
-    flag <- configs[[cfg]]
+    flag <- configs[[cfg]][[1L]]
+    prec <- configs[[cfg]][[2L]]
     # No env= : the child inherits the full parent environment (PATH,
     # VULKAN_SDK, LD_LIBRARY_PATH). The disable flag is a plain arg.
-    out <- system2(rscript, c(shQuote(self), device, "worker", flag),
+    out <- system2(rscript, c(shQuote(self), device, "worker", flag, prec),
                     stdout = TRUE, stderr = TRUE)
     caps_line <- grep("^CAPS ", out, value = TRUE)
     if (length(caps_line)) cat("  ", caps_line[1], "\n")
@@ -152,7 +180,9 @@ run_parent <- function(device) {
     parsed <- do.call(rbind, lapply(res_lines, function(l) {
       p <- strsplit(l, " ")[[1]]
       data.frame(shape = p[2], ms = as.numeric(p[3]),
-                 gflops = as.numeric(p[4]), stringsAsFactors = FALSE)
+                 gflops = as.numeric(p[4]),
+                 relerr = suppressWarnings(as.numeric(p[5])),  # "NA" when skipped
+                 stringsAsFactors = FALSE)
     }))
     results[[cfg]] <- parsed
     cat(sprintf("  (%d warmup + %d timed graph computes, averaged)\n",
@@ -259,7 +289,7 @@ if (identical(mode, "worker")) {
                                           paste0("GGML_VK_DISABLE_", v)))
     }
   }
-  run_worker(device)
+  run_worker(device, if (length(args) >= 4L) args[4] else "default")
 } else {
   run_parent(device)
 }

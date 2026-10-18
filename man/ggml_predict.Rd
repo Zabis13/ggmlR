@@ -6,11 +6,11 @@
 \alias{ggml_predict.ggml_sequential_model}
 \title{Get Predictions from a Trained Model}
 \usage{
-\method{ggml_predict}{ggml_functional_model}(model, x, batch_size = 32L, ...)
+\method{ggml_predict}{ggml_functional_model}(model, x, batch_size = 32L, matmul_precision = NULL, ...)
 
 ggml_predict(model, ...)
 
-\method{ggml_predict}{ggml_sequential_model}(model, x, batch_size = 32L, ...)
+\method{ggml_predict}{ggml_sequential_model}(model, x, batch_size = 32L, matmul_precision = NULL, ...)
 }
 \arguments{
 \item{model}{A trained ggml_sequential_model}
@@ -18,6 +18,10 @@ ggml_predict(model, ...)
 \item{x}{Input data (matrix or array)}
 
 \item{batch_size}{Batch size for inference}
+
+\item{matmul_precision}{\code{"default"} or \code{"f32"} for this call;
+\code{NULL} (the default) takes the model's \code{predict_precision}
+from \code{\link{ggml_compile}}. See the section on precision.}
 
 \item{...}{Additional arguments (ignored).}
 }
@@ -29,3 +33,18 @@ Runs forward pass on input data and returns prediction probabilities
 (or raw output values for regression). Unlike \code{ggml_evaluate()}, this
 does not require labels.
 }
+\section{Precision}{
+
+  On a Vulkan device with fp16 support the matrix multiplies keep their
+  tiles in f16 by default. Results then carry a relative error near 1e-3
+  that depends on the batch size (a single row takes an exact f32 path,
+  larger batches the tiled one), so the same input can predict slightly
+  differently in a batch of 1 and a batch of 64. \code{"f32"} marks every
+  multiply \code{GGML_PREC_F32} and selects f32 tiles: the result then
+  matches the CPU to about 1e-6, at a cost in matmul throughput that depends
+  on the device and driver. The CPU backend is exact either way.
+
+  Which setting wins: the \code{matmul_precision} argument of the call, then
+  the model's \code{predict_precision}, then \code{"default"}.
+}
+

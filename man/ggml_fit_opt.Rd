@@ -19,7 +19,8 @@ ggml_fit_opt(
   shuffle_all = shuffle,
   callbacks = list(),
   silent = FALSE,
-  loss_mask_ne0 = NULL
+  loss_mask_ne0 = NULL,
+  weight_decay = 0
 )
 }
 \arguments{
@@ -66,6 +67,9 @@ Built-in factories: `ggml_callback_early_stopping()`,
 \item{loss_mask_ne0}{Width of the weighted-MSE weight tensor: \code{NULL} or
 1 for per-datapoint weights, or the output width for a per-output mask.
 Ignored by every other loss type.}
+
+\item{weight_decay}{Decoupled weight decay in \code{[0, 1]}, as for
+\code{\link{ggml_opt_init_for_fit}}; 0 turns it off.}
 }
 \value{
 Data frame with columns epoch, train_loss, train_accuracy, val_loss, val_accuracy

@@ -1403,6 +1403,27 @@ void ggml_mul_mat_set_prec(
     ggml_set_op_params_i32(a, 0, prec_i32);
 }
 
+// ggmlR-patch: backport from ggml 0.27
+bool ggml_prec_set_acc(
+        struct ggml_tensor * a,
+        enum ggml_prec       prec) {
+    const int32_t prec_i32 = (int32_t) prec;
+
+    switch (a->op) {
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
+            ggml_set_op_params_i32(a, 0, prec_i32);
+            break;
+        case GGML_OP_FLASH_ATTN_EXT:
+            ggml_set_op_params_i32(a, 3, prec_i32); // scale is on first pos, max_bias on second
+            break;
+        default:
+            return false;
+    }
+
+    return true;
+}
+
 void ggml_mul_mat_set_hint(
         struct ggml_tensor * a,
         enum ggml_op_hint    hint) {
@@ -4922,6 +4943,25 @@ struct ggml_tensor * ggml_gated_delta_net(
     result->src[3] = g;
     result->src[4] = beta;
     result->src[5] = state;
+
+    return result;
+}
+
+// ggmlR-patch: ggml 0.27 signature; kernels only write the final state, so K must be 1
+struct ggml_tensor * ggml_gated_delta_net_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        int64_t               K) {
+    GGML_ASSERT(K == 1 && "ggml_gated_delta_net_ext: only K == 1 is supported");
+
+    struct ggml_tensor * result = ggml_gated_delta_net(ctx, q, k, v, g, beta, state);
+
+    ggml_set_op_params_i32(result, 0, (int32_t) K);
 
     return result;
 }

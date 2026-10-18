@@ -2206,6 +2206,11 @@ nn_build_functional_graph <- function(model, batch_size, training = FALSE,
       next  # weights already initialized and params set by primary occurrence
     }
 
+    if (!is.null(swd))
+      nn_check_saved_weights(w, swd, node$node_type,
+                             sprintf("node '%s' (%s)", if (is.null(node$config$name)) node$id
+                                     else node$config$name, node$node_type))
+
     if (node$node_type == "dense") {
       psh    <- shapes[[node$parents[[1]]$id]]
       fan_in <- nn_dense_fan_in(node, psh)
@@ -2477,8 +2482,12 @@ ggml_compile.ggml_functional_model <- function(model,
                                                 loss = "categorical_crossentropy",
                                                 metrics = c("accuracy"),
                                                 backend = "auto",
-                                                loss_weights = NULL) {
+                                                loss_weights = NULL,
+                                                weight_decay = 0,
+                                                predict_precision = "default") {
   nn_validate_compilation(optimizer, loss, metrics)
+  weight_decay <- nn_check_weight_decay(weight_decay)
+  predict_precision <- nn_check_precision(predict_precision, "predict_precision")
 
   # Resolve loss/loss_weights against the output heads now, so a mismatch is
   # reported at compile time rather than part-way into training.
@@ -2539,6 +2548,8 @@ ggml_compile.ggml_functional_model <- function(model,
   # Per-head resolution of loss/loss_weights (one entry per output).
   model$compilation$loss_spec    <- loss_spec
   model$compilation$loss_weights <- loss_weights
+  model$compilation$weight_decay <- weight_decay
+  model$compilation$predict_precision <- predict_precision
   model$compilation$output_names <- output_names
   # Record requested vs actually-used backend so a silent "auto" -> CPU
   # fallback is inspectable later (see ggml_model_backend()).
@@ -2572,7 +2583,11 @@ nn_prepare_x <- function(model, x) {
     ne    <- prod(shape)
     dtype <- if (!is.null(model$inputs[[1L]]$config$dtype)) model$inputs[[1L]]$config$dtype else "float32"
     if (dtype == "int32") {
-      x_ggml <- as.integer(t(x))
+      # Left as it is: ggml_backend_tensor_set_data() turns it into indices and
+      # refuses NA and fractions, which as.integer() would truncate silently.
+      vocab <- nn_index_vocab(model)
+      if (!is.null(vocab)) nn_check_index_range(x, vocab)
+      x_ggml <- as.vector(t(x))
     } else {
       x_ggml <- if (length(shape) == 3L) as.vector(aperm(x, c(3L, 2L, 4L, 1L)))
                 else if (length(shape) == 2L) as.vector(aperm(x, c(3L, 2L, 1L)))
@@ -2987,7 +3002,8 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
         shuffle        = shuffle,
         shuffle_all    = shuffle_all,
         callbacks      = callbacks,
-        silent         = (verbose == 0L)
+        silent         = (verbose == 0L),
+        weight_decay   = model$compilation$weight_decay %||% 0
       )
       train_loss_vec <- history_raw$train_loss
       train_acc_vec  <- history_raw$train_accuracy
@@ -3018,7 +3034,8 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
         shuffle        = shuffle,
         shuffle_all    = shuffle_all,
         callbacks      = callbacks,
-        silent         = (verbose == 0L)
+        silent         = (verbose == 0L),
+        weight_decay   = model$compilation$weight_decay %||% 0
       )
       train_loss_vec <- history_raw$train_loss
       train_acc_vec  <- history_raw$train_accuracy
@@ -3037,7 +3054,8 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
         opt_period  = 1L,
         ctx_compute = graph_info$ctx_compute,
         inputs      = fit_input,
-        outputs     = fit_output
+        outputs     = fit_output,
+        weight_decay = model$compilation$weight_decay %||% 0
       )
       opt_ctx <- init_info$opt_ctx
 
@@ -3165,7 +3183,8 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
         opt_period   = 1L,
         ctx_compute  = graph_info$ctx_compute,
         inputs       = graph_info$inputs[[1L]],
-        outputs      = graph_info$outputs
+        outputs      = graph_info$outputs,
+        weight_decay = model$compilation$weight_decay %||% 0
       )
     } else {
       labels_offs <- 0
@@ -3176,7 +3195,8 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
         opt_period  = 1L,
         ctx_compute = graph_info$ctx_compute,
         inputs      = graph_info$inputs[[1L]],
-        outputs     = fit_output
+        outputs     = fit_output,
+        weight_decay = model$compilation$weight_decay %||% 0
       )
     }
     opt_ctx      <- init_info$opt_ctx
@@ -3500,7 +3520,9 @@ ggml_evaluate.ggml_functional_model <- function(model, x, y,
 #' @rdname ggml_predict
 #' @param ... Additional arguments (ignored).
 #' @export
-ggml_predict.ggml_functional_model <- function(model, x, batch_size = 32L, ...) {
+ggml_predict.ggml_functional_model <- function(model, x, batch_size = 32L,
+                                               matmul_precision = NULL, ...) {
+  precision <- nn_predict_precision(model, matmul_precision)
   if (!model$compiled) stop("Model must be compiled before prediction.")
 
   xp           <- nn_prepare_x(model, x)
@@ -3567,6 +3589,7 @@ ggml_predict.ggml_functional_model <- function(model, x, batch_size = 32L, ...) 
   for (io in seq_len(n_outputs)[-1L]) {
     ggml_graph_expand(graph, graph_info$outputs[[io]])
   }
+  nn_apply_matmul_precision(graph, precision)
 
   out_shapes     <- lapply(model$outputs, function(o) graph_info$shapes[[o$id]])
   ne_outputs_vec <- vapply(out_shapes, prod, numeric(1))

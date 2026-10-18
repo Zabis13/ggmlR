@@ -857,17 +857,23 @@ ggml_opt_epoch <- function(opt_ctx, dataset, result_train = NULL, result_eval = 
 #' @param loss_mask_ne0 Width of the weighted-MSE weight tensor: \code{NULL} or
 #'   1 for per-datapoint weights, or the output width for a per-output mask.
 #'   Ignored by every other loss type.
+#' @param weight_decay Decoupled weight decay, in \code{[0, 1]}; 0 turns it off.
+#'   Applied to trainable parameters only, so frozen weights are not decayed.
 #' @return List with elements `opt_ctx` and `lr_ud`
 #' @export
 #' @family optimization
 ggml_opt_init_for_fit <- function(sched, loss_type, optimizer = ggml_opt_optimizer_type_adamw(),
                                    opt_period = 1L, ctx_compute = NULL,
                                    inputs = NULL, outputs = NULL,
-                                   loss_mask_ne0 = NULL) {
-  .Call("R_ggml_opt_init_for_fit",
+                                   loss_mask_ne0 = NULL,
+                                   weight_decay = 0) {
+  weight_decay <- nn_check_weight_decay(weight_decay)  # before the context exists
+  res <- .Call("R_ggml_opt_init_for_fit",
         sched, as.integer(loss_type), as.integer(optimizer), as.integer(opt_period),
         ctx_compute, inputs, outputs,
         if (is.null(loss_mask_ne0)) NULL else as.numeric(loss_mask_ne0))
+  nn_opt_apply_weight_decay(res$lr_ud, weight_decay)
+  res
 }
 
 #' Initialize a multi-output optimizer context for an R-side epoch loop
@@ -887,18 +893,38 @@ ggml_opt_init_for_fit <- function(sched, loss_type, optimizer = ggml_opt_optimiz
 #' @param ctx_compute Compute context holding the model graph
 #' @param inputs Input tensor
 #' @param outputs List of output tensors, one per head
+#' @param weight_decay As for \code{ggml_opt_init_for_fit()}.
 #' @return List with elements `opt_ctx` and `lr_ud`
 #' @export
 #' @family optimization
 ggml_opt_init_for_fit_multi <- function(sched, loss_types, loss_weights, labels_offs,
                                         optimizer = ggml_opt_optimizer_type_adamw(),
                                         opt_period = 1L, ctx_compute = NULL,
-                                        inputs = NULL, outputs = NULL) {
+                                        inputs = NULL, outputs = NULL,
+                                        weight_decay = 0) {
   if (!is.list(outputs)) outputs <- list(outputs)
-  .Call("R_ggml_opt_init_for_fit_multi",
+  weight_decay <- nn_check_weight_decay(weight_decay)
+  res <- .Call("R_ggml_opt_init_for_fit_multi",
         sched, as.integer(loss_types), as.numeric(loss_weights), as.numeric(labels_offs),
         as.integer(optimizer), as.integer(opt_period),
         ctx_compute, inputs, outputs)
+  nn_opt_apply_weight_decay(res$lr_ud, weight_decay)
+  res
+}
+
+# Checks a weight decay and writes it into the optimizer userdata. ggml asserts
+# 0 <= wd <= 1 and would abort the session on anything else.
+nn_check_weight_decay <- function(weight_decay) {
+  if (!is.numeric(weight_decay) || length(weight_decay) != 1L ||
+      is.na(weight_decay) || weight_decay < 0 || weight_decay > 1)
+    stop("'weight_decay' must be one number in [0, 1]", call. = FALSE)
+  as.numeric(weight_decay)
+}
+
+nn_opt_apply_weight_decay <- function(lr_ud, weight_decay) {
+  weight_decay <- nn_check_weight_decay(weight_decay)
+  if (weight_decay > 0) .Call("R_ggml_opt_set_wd", lr_ud, weight_decay)
+  invisible(NULL)
 }
 
 #' Set learning rate in optimizer context
@@ -965,6 +991,8 @@ ggml_opt_get_lr <- function(lr_ud) {
 #' @param loss_mask_ne0 Width of the weighted-MSE weight tensor: \code{NULL} or
 #'   1 for per-datapoint weights, or the output width for a per-output mask.
 #'   Ignored by every other loss type.
+#' @param weight_decay Decoupled weight decay in \code{[0, 1]}, as for
+#'   \code{\link{ggml_opt_init_for_fit}}; 0 turns it off.
 #' @return Data frame with columns epoch, train_loss, train_accuracy, val_loss, val_accuracy
 #' @export
 #' @family optimization
@@ -987,7 +1015,8 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
                      shuffle_all = shuffle,
                      callbacks   = list(),
                      silent      = FALSE,
-                     loss_mask_ne0 = NULL) {
+                     loss_mask_ne0 = NULL,
+                     weight_decay = 0) {
 
   # --- compute parameters (same as R_ggml_opt_fit) ---
   ndata <- as.integer(ggml_opt_dataset_ndata(dataset))
@@ -1007,7 +1036,8 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
   # --- init optimizer context (preserves momentum across epochs) ---
   ctx_list <- ggml_opt_init_for_fit(
     sched, loss_type, optimizer, opt_period,
-    ctx_compute, inputs, outputs, loss_mask_ne0
+    ctx_compute, inputs, outputs, loss_mask_ne0,
+    weight_decay = weight_decay
   )
   opt_ctx <- ctx_list$opt_ctx
   lr_ud   <- ctx_list$lr_ud
@@ -1169,6 +1199,8 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
 #'   validation keys are `NA` when `val_split` is 0, and accuracy keys are `NA`
 #'   for heads whose loss is not cross-entropy.
 #' @param silent Whether to suppress per-epoch progress output
+#' @param weight_decay Decoupled weight decay in \code{[0, 1]}, as for
+#'   \code{\link{ggml_opt_init_for_fit}}; 0 turns it off.
 #' @return Data frame with columns epoch, train_loss, train_accuracy, val_loss,
 #'   val_accuracy -- one row per epoch actually run, so a callback that stops
 #'   early shortens it. The per-head metrics come as attributes rather than
@@ -1198,7 +1230,8 @@ ggml_fit_opt_multi <- function(sched, ctx_compute, inputs, outputs, dataset,
                                shuffle     = TRUE,
                                shuffle_all = shuffle,
                                callbacks   = list(),
-                               silent      = FALSE) {
+                               silent      = FALSE,
+                               weight_decay = 0) {
 
   if (!is.list(outputs)) outputs <- list(outputs)
   n_head <- length(outputs)
@@ -1259,7 +1292,8 @@ ggml_fit_opt_multi <- function(sched, ctx_compute, inputs, outputs, dataset,
   # --- init optimizer context (preserves momentum across epochs) ---
   ctx_list <- ggml_opt_init_for_fit_multi(
     sched, loss_types, loss_weights, labels_offs,
-    optimizer, opt_period, ctx_compute, inputs, outputs
+    optimizer, opt_period, ctx_compute, inputs, outputs,
+    weight_decay = weight_decay
   )
   opt_ctx <- ctx_list$opt_ctx
   lr_ud   <- ctx_list$lr_ud

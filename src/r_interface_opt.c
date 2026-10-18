@@ -1479,6 +1479,19 @@ SEXP R_ggml_opt_set_lr(SEXP ud_ptr, SEXP adamw_lr, SEXP sgd_lr) {
     return R_NilValue;
 }
 
+// Set decoupled weight decay in the userdata, for AdamW and SGD alike. ggml
+// applies it to parameter tensors only, so a frozen weight -- never marked as a
+// parameter -- is not decayed. ggml asserts 0 <= wd <= 1; R checks that first.
+SEXP R_ggml_opt_set_wd(SEXP ud_ptr, SEXP wd) {
+    r_opt_lr_userdata * ud = (r_opt_lr_userdata *)R_ExternalPtrAddr(ud_ptr);
+    if (ud == NULL) error("Invalid LR userdata pointer");
+
+    ud->params.adamw.wd = (float)asReal(wd);
+    ud->params.sgd.wd   = (float)asReal(wd);
+
+    return R_NilValue;
+}
+
 // Get current LR from userdata
 SEXP R_ggml_opt_get_lr(SEXP ud_ptr) {
     r_opt_lr_userdata * ud = (r_opt_lr_userdata *)R_ExternalPtrAddr(ud_ptr);

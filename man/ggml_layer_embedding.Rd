@@ -4,7 +4,14 @@
 \alias{ggml_layer_embedding}
 \title{Add Embedding Layer}
 \usage{
-ggml_layer_embedding(model, vocab_size, dim, name = NULL, trainable = TRUE)
+ggml_layer_embedding(
+  model,
+  vocab_size,
+  dim,
+  name = NULL,
+  trainable = TRUE,
+  input_shape = NULL
+)
 }
 \arguments{
 \item{model}{A \code{ggml_sequential_model} or \code{ggml_tensor_node}.}
@@ -16,6 +23,11 @@ ggml_layer_embedding(model, vocab_size, dim, name = NULL, trainable = TRUE)
 \item{name}{Optional layer name.}
 
 \item{trainable}{Logical; whether embedding weights are updated during training.}
+
+\item{input_shape}{Sequence length, for an embedding that is the first layer
+of a sequential model (its input is then a matrix of token indices,
+one row per sample). Ignored in the functional API, where
+\code{ggml_input(dtype = "int32")} gives the shape.}
 }
 \value{
 The model with the embedding layer appended, or a new tensor node.

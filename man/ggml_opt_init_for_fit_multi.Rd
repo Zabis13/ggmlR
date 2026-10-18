@@ -13,7 +13,8 @@ ggml_opt_init_for_fit_multi(
   opt_period = 1L,
   ctx_compute = NULL,
   inputs = NULL,
-  outputs = NULL
+  outputs = NULL,
+  weight_decay = 0
 )
 }
 \arguments{
@@ -34,6 +35,8 @@ ggml_opt_init_for_fit_multi(
 \item{inputs}{Input tensor}
 
 \item{outputs}{List of output tensors, one per head}
+
+\item{weight_decay}{As for \code{ggml_opt_init_for_fit()}.}
 }
 \value{
 List with elements `opt_ctx` and `lr_ud`

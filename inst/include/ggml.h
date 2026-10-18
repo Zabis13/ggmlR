@@ -227,9 +227,11 @@
 #define GGML_MAX_N_THREADS      512
 #define GGML_MAX_OP_PARAMS      64
 
-#ifndef GGML_MAX_NAME
-#   define GGML_MAX_NAME        128
-#endif
+// ggmlR-patch: 160 (upstream 64) — stable-diffusion.cpp asserts GGML_MAX_NAME >= 160.
+// libggml.a is built with this value, so it is fixed here: a dependent passing its own
+// -DGGML_MAX_NAME (e.g. older sd2R with 128) still gets the same ggml_tensor layout.
+#undef  GGML_MAX_NAME
+#define GGML_MAX_NAME           160
 
 #define GGML_DEFAULT_N_THREADS  4
 #define GGML_DEFAULT_GRAPH_SIZE 8192
@@ -1508,6 +1510,14 @@ extern "C" {
             struct ggml_tensor * a,
             enum ggml_prec       prec);
 
+    // ggmlR-patch: backport from ggml 0.27 [TAG_GGML_PREC]
+    // set the minimum required accumulator type (MUL_MAT, MUL_MAT_ID, FLASH_ATTN_EXT)
+    // same op_params slots as ggml_mul_mat_set_prec / ggml_flash_attn_ext_set_prec
+    // return false if the op does not support it
+    GGML_API bool ggml_prec_set_acc(
+            struct ggml_tensor * a,
+            enum ggml_prec       prec);
+
     // change the hint of a matrix multiplication
     GGML_API void ggml_mul_mat_set_hint(
             struct ggml_tensor * a,
@@ -2758,6 +2768,19 @@ extern "C" {
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state);
 
+    // ggmlR-patch: ggml 0.27 signature with K (number of state snapshots in the output).
+    // Only K == 1 (final state only) is supported — identical to ggml_gated_delta_net().
+    // C++ callers can also use the 8-argument ggml_gated_delta_net() overload below.
+    GGML_API struct ggml_tensor * ggml_gated_delta_net_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state,
+            int64_t               K);
+
     /* 2D Relative Position Bias (BoTNet-style).
      * x:    [C, H*W, B]  — query/key features (col-major)
      * wcat: [rel_h+rel_w, C]  — concat(W_h, W_w) weight table (col-major)
@@ -3056,5 +3079,21 @@ extern "C" {
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
 
 #ifdef  __cplusplus
+}
+#endif
+
+#ifdef __cplusplus
+// ggmlR-patch: C++ overload with the ggml 0.27 signature (extra K). The 7-argument
+// extern "C" ggml_gated_delta_net() is unchanged, so existing callers keep compiling.
+inline struct ggml_tensor * ggml_gated_delta_net(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * g,
+        struct ggml_tensor  * beta,
+        struct ggml_tensor  * state,
+        int64_t               K) {
+    return ggml_gated_delta_net_ext(ctx, q, k, v, g, beta, state, K);
 }
 #endif

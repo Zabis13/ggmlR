@@ -413,6 +413,24 @@ test_that("$predict agrees with ggml_predict on the handed-out model", {
   cleanup_model(m)
 })
 
+test_that("$predict takes fewer rows than a batch", {
+  # A functional ggml_predict() refuses fewer rows than its batch_size; the
+  # trainer's $predict() shrinks the batch to the rows instead.
+  d  <- make_regression()
+  m  <- build_functional()
+  tr <- ggml_trainer(m, batch_size = 16L)
+  tr$step(d$x[1:16, , drop = FALSE], d$y[1:16, , drop = FALSE])
+
+  x5 <- d$x[1:5, , drop = FALSE]
+  p  <- tr$predict(x5)
+  expect_equal(dim(p), c(5L, 3L))
+  expect_equal(p, ggml_predict(tr$model(), x5, batch_size = 5L))
+  expect_equal(dim(tr$predict(d$x[1L, , drop = FALSE])), c(1L, 3L))
+
+  tr$free()
+  cleanup_model(m)
+})
+
 test_that("$predict reads the current weights, not a snapshot", {
   ggml_set_n_threads(1L)
   d <- make_regression()
@@ -623,4 +641,49 @@ test_that("taking and releasing a snapshot leaves the trainer's weights alone", 
 
   tr$free()
   cleanup_model(m)
+})
+
+# ---- a trainer built on a loaded model --------------------------------------
+
+test_that("a trainer on a loaded model predicts from the trained weights", {
+  ggml_set_n_threads(1L)
+  d <- make_regression()
+  x <- d$x[1:16, , drop = FALSE]
+
+  m0  <- build_functional()
+  tr0 <- ggml_trainer(m0, batch_size = 16L)
+  train_steps(tr0, d, 3L)
+  f0 <- tempfile(fileext = ".ggml")
+  ggml_save_model(tr0$model(), f0)
+  tr0$free()
+
+  loaded  <- ggml_load_model(f0)
+  p_saved <- ggml_predict(loaded, x, batch_size = 16L)
+
+  tr <- ggml_trainer(loaded, batch_size = 16L)
+  expect_equal(tr$predict(x), p_saved)        # starts from the loaded weights
+
+  train_steps(tr, d, 5L)
+  p_live <- tr$predict(x)
+  # Bit-identical predictions after training mean the steps were not seen.
+  expect_false(isTRUE(all.equal(p_live, p_saved)))
+
+  # All three paths out of the trainer agree with the live weights.
+  target <- tr$snapshot()
+  expect_equal(ggml_predict(target, x, batch_size = 16L), p_live)
+  ggml_snapshot_free(target)
+  trained <- tr$model()
+  expect_equal(ggml_predict(trained, x, batch_size = 16L), p_live)
+
+  # Saved and loaded again, it is the trained net that comes back.
+  f1 <- tempfile(fileext = ".ggml")
+  ggml_save_model(trained, f1)
+  reloaded <- ggml_load_model(f1)
+  expect_equal(ggml_predict(reloaded, x, batch_size = 16L), p_live)
+
+  tr$free()
+  cleanup_model(reloaded)
+  cleanup_model(loaded)
+  cleanup_model(m0)
+  unlink(c(f0, f1))
 })

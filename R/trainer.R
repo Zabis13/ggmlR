@@ -173,12 +173,23 @@
 #' @param loss_mask \code{NULL} (default) for the compiled loss unweighted;
 #'   \code{1} for one weight per sample; the number of outputs for one weight
 #'   per output element. See the section on loss weights.
+#' @param weight_decay Decoupled weight decay in \code{[0, 1]}. \code{NULL}
+#'   (default) takes the value given to \code{\link{ggml_compile}}. Frozen
+#'   weights are not decayed.
 #' @return An object of class \code{ggml_trainer}: a list of functions
 #'   \code{$step(x, y, sample_weight = NULL)},
 #'   \code{$eval(x, y, sample_weight = NULL)},
-#'   \code{$predict(x, batch_size = NULL)}, \code{$snapshot()},
+#'   \code{$predict(x, batch_size = NULL, matmul_precision = NULL)}, \code{$snapshot()},
 #'   \code{$update_target(target, tau = 1)}, \code{$model()},
-#'   \code{$set_lr(lr)}, \code{$n_steps()}, \code{$free()}.
+#'   \code{$calibrate_bn(x)}, \code{$set_lr(lr)}, \code{$n_steps()}, \code{$free()}.
+#' @section Batch norm:
+#'   A step normalizes each batch by its own statistics and does not update the
+#'   running ones a sequential \code{batch_norm} predicts with; \code{ggml_fit()}
+#'   recalibrates them after training, a trainer does not. Call
+#'   \code{$calibrate_bn(x)} with representative inputs (up to 1024 rows are
+#'   used) before predicting, snapshotting or saving -- or fix the statistics
+#'   with \code{\link{ggml_freeze_bn_stats}}. Creating a trainer for a model
+#'   with unfixed batch-norm layers warns once.
 #' @export
 #' @family optimization
 #' @seealso \code{\link{ggml_fit_opt_gen}} for a generator-driven epoch loop,
@@ -207,7 +218,8 @@
 #' tr$free()
 #' }
 ggml_trainer <- function(model, batch_size = 32L, nbatch_logical = NULL,
-                         loss_mask = NULL) {
+                         loss_mask = NULL, weight_decay = NULL) {
+  if (!is.null(weight_decay)) nn_check_weight_decay(weight_decay)
   is_seq <- inherits(model, "ggml_sequential_model")
   is_fun <- inherits(model, "ggml_functional_model")
   if (!is_seq && !is_fun) {
@@ -247,15 +259,29 @@ ggml_trainer <- function(model, batch_size = 32L, nbatch_logical = NULL,
   use_ce_loss <- is.null(w_ne0) &&
     loss %in% c("categorical_crossentropy", "crossentropy", "cross_entropy")
 
+  if (is_seq && any(vapply(model$layers, function(l)
+        identical(l$type, "batch_norm") && !isTRUE(l$config$fixed_stats),
+        logical(1))))
+    warning("this model has batch_norm layers whose running statistics a trainer ",
+            "does not update; call $calibrate_bn(x) before predicting or saving, ",
+            "or fix them with ggml_freeze_bn_stats()", call. = FALSE)
+
   if (is_seq) {
     graph_info  <- nn_build_graph(model, batch_size, logits_output = use_ce_loss)
     in_tensor   <- graph_info$inputs
     out_tensor  <- graph_info$outputs
     input_shape <- model$input_shape
-    to_ggml     <- function(x) .gen_to_ggml_layout(x, input_shape)
+    vocab       <- nn_index_vocab(model)
+    to_ggml     <- function(x) .gen_to_ggml_layout(x, input_shape, vocab)
   } else {
     graph_info <- nn_build_functional_graph(model, batch_size, training = TRUE,
                                             logits_output = use_ce_loss)
+    # A model from ggml_load_model() carries its weights as R vectors that win
+    # over any tensors at every graph build. The build above has just copied
+    # them into the trainer's tensors; left in place they would shadow those
+    # tensors from then on, and $predict(), $snapshot() and $model() would all
+    # rebuild from the weights as loaded, not as trained. One source of truth.
+    model$node_weights_data <- NULL
     in_tensor  <- graph_info$inputs[[1L]]
     out_tensor <- graph_info$outputs[[1L]]
     to_ggml    <- function(x) nn_prepare_x(model, x)$x_ggml
@@ -293,7 +319,8 @@ ggml_trainer <- function(model, batch_size = 32L, nbatch_logical = NULL,
 
   ctx_list <- ggml_opt_init_for_fit(
     model$compilation$sched, loss_type, optimizer_type, opt_period,
-    graph_info$ctx_compute, in_tensor, out_tensor, w_ne0
+    graph_info$ctx_compute, in_tensor, out_tensor, w_ne0,
+    weight_decay = weight_decay %||% model$compilation$weight_decay %||% 0
   )
 
   # One result object, reset per step: ggml_opt_result_* accumulate over
@@ -414,16 +441,34 @@ ggml_trainer <- function(model, batch_size = 32L, nbatch_logical = NULL,
       current_model()
     },
 
-    predict = function(x, batch_size = NULL) {
+    # Running statistics of a sequential batch_norm from x, into the live
+    # weights -- the step never updates them. Runs on the predict scheduler so
+    # the training graph is left as it was.
+    calibrate_bn = function(x) {
+      check_alive()
+      if (!is_seq)
+        stop("$calibrate_bn(): a functional model has no batch-norm statistics ",
+             "(its batch_norm is per-sample RMS normalization)", call. = FALSE)
+      if (is.null(st$pred_sched)) st$pred_sched <- new_sched()
+      m <- current_model()
+      m$compilation$sched <- st$pred_sched
+      nn_bn_calibrate(m, x)
+      invisible(NULL)
+    },
+
+    predict = function(x, batch_size = NULL, matmul_precision = NULL) {
       check_alive()
       if (is.null(st$pred_sched)) st$pred_sched <- new_sched()
       # A local copy: the scheduler is swapped on it alone, never on a model
       # that $model() has handed out.
       m <- current_model()
       m$compilation$sched <- st$pred_sched
-      ggml_predict(m, x,
-                   batch_size = if (is.null(batch_size)) batch_size_tr
-                                else as.integer(batch_size))
+      bs <- if (is.null(batch_size)) batch_size_tr else as.integer(batch_size)
+      # Fewer rows than a batch: the functional predict refuses that outright
+      # and pads only a short LAST batch, so the batch shrinks to the rows.
+      n  <- if (is.null(dim(x))) 1L else dim(x)[1L]   # a bare vector is one row
+      ggml_predict(m, x, batch_size = max(1L, min(bs, as.integer(n))),
+                   matmul_precision = matmul_precision)
     },
 
     set_lr = function(lr) {

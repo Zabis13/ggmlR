@@ -12,7 +12,8 @@ ggml_opt_init_for_fit(
   ctx_compute = NULL,
   inputs = NULL,
   outputs = NULL,
-  loss_mask_ne0 = NULL
+  loss_mask_ne0 = NULL,
+  weight_decay = 0
 )
 }
 \arguments{
@@ -33,6 +34,9 @@ ggml_opt_init_for_fit(
 \item{loss_mask_ne0}{Width of the weighted-MSE weight tensor: \code{NULL} or
 1 for per-datapoint weights, or the output width for a per-output mask.
 Ignored by every other loss type.}
+
+\item{weight_decay}{Decoupled weight decay, in \code{[0, 1]}; 0 turns it off.
+Applied to trainable parameters only, so frozen weights are not decayed.}
 }
 \value{
 List with elements `opt_ctx` and `lr_ud`

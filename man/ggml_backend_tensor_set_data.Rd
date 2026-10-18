@@ -20,3 +20,10 @@ No return value, called for side effects
 Sets tensor data using the backend API. This works with tensors
 allocated on any backend, not just CPU.
 }
+\details{
+Integer and logical data are accepted for float tensors and
+  converted element by element to float (an integer \code{NA} becomes
+  \code{NaN}). An \code{I32} tensor (token indices, say) takes
+  integers or whole-valued doubles; \code{NA}, fractions and values outside
+  the 32-bit range stop with an error rather than being truncated.
+}

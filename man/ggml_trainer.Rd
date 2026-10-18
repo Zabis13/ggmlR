@@ -4,7 +4,13 @@
 \alias{ggml_trainer}
 \title{A Training Context You Step Yourself}
 \usage{
-ggml_trainer(model, batch_size = 32L, nbatch_logical = NULL, loss_mask = NULL)
+ggml_trainer(
+  model,
+  batch_size = 32L,
+  nbatch_logical = NULL,
+  loss_mask = NULL,
+  weight_decay = NULL
+)
 }
 \arguments{
 \item{model}{A compiled \code{ggml_sequential_model}, or a compiled
@@ -19,14 +25,18 @@ to \code{batch_size}, meaning every step updates the weights.}
 \item{loss_mask}{\code{NULL} (default) for the compiled loss unweighted;
 \code{1} for one weight per sample; the number of outputs for one weight
 per output element. See the section on loss weights.}
+
+\item{weight_decay}{Decoupled weight decay in \code{[0, 1]}. \code{NULL}
+(default) takes the value given to \code{\link{ggml_compile}}. Frozen
+weights are not decayed.}
 }
 \value{
 An object of class \code{ggml_trainer}: a list of functions
   \code{$step(x, y, sample_weight = NULL)},
   \code{$eval(x, y, sample_weight = NULL)},
-  \code{$predict(x, batch_size = NULL)}, \code{$snapshot()},
+  \code{$predict(x, batch_size = NULL, matmul_precision = NULL)}, \code{$snapshot()},
   \code{$update_target(target, tau = 1)}, \code{$model()},
-  \code{$set_lr(lr)}, \code{$n_steps()}, \code{$free()}.
+  \code{$calibrate_bn(x)}, \code{$set_lr(lr)}, \code{$n_steps()}, \code{$free()}.
 }
 \description{
 Builds the graph and optimizer context for a compiled model and hands them
@@ -150,6 +160,17 @@ needs none of this. Predicting with the
 \emph{original} model object while the trainer is alive is not covered by
 this and can crash the session on the next step -- take the model from
 \code{$model()} instead.
+}
+
+\section{Batch norm}{
+
+  A step normalizes each batch by its own statistics and does not update the
+  running ones a sequential \code{batch_norm} predicts with; \code{ggml_fit()}
+  recalibrates them after training, a trainer does not. Call
+  \code{$calibrate_bn(x)} with representative inputs (up to 1024 rows are
+  used) before predicting, snapshotting or saving -- or fix the statistics
+  with \code{\link{ggml_freeze_bn_stats}}. Creating a trainer for a model
+  with unfixed batch-norm layers warns once.
 }
 
 \examples{

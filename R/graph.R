@@ -437,13 +437,43 @@ ggml_gallocr_get_buffer_size <- function(galloc, buffer_id = 0L) {
 #' allocated on any backend, not just CPU.
 #'
 #' @param tensor Tensor pointer
+#' @details Integer and logical data are accepted for float tensors and
+#'   converted element by element to float (an integer \code{NA} becomes
+#'   \code{NaN}). An \code{I32} tensor (token indices, say) takes
+#'   integers or whole-valued doubles; \code{NA}, fractions and values outside
+#'   the 32-bit range stop with an error rather than being truncated.
 #' @param data R vector with data to set
 #' @param offset Byte offset (default: 0)
 #' @return No return value, called for side effects
 #' @export
 ggml_backend_tensor_set_data <- function(tensor, data, offset = 0) {
-  invisible(.Call("R_ggml_backend_tensor_set", tensor, data,
+  invisible(.Call("R_ggml_backend_tensor_set", tensor, nn_tensor_values(tensor, data),
                   as.numeric(offset), PACKAGE = "ggmlR"))
+}
+
+# The one place R data meets a tensor's element type. Every path that feeds a
+# model -- ggml_fit(), ggml_predict(), ggml_trainer(), the generator loop --
+# writes its batches through ggml_backend_tensor_set_data(), so checking here
+# covers them all. Float tensors take doubles, integers and logicals as they
+# are -- the C side converts each element straight into the float buffer, with
+# no R-side copy to double. I32 tensors want integers, so whole-valued doubles
+# are converted here after the checks.
+nn_tensor_values <- function(tensor, data) {
+  type <- ggml_tensor_type(tensor)
+  if (type == GGML_TYPE_I32) {
+    if (!is.numeric(data) && !is.logical(data))
+      stop("index data must be numeric, got ", class(data)[1L], call. = FALSE)
+    if (anyNA(data))
+      stop("index data has ", sum(is.na(data)), " NA value(s)", call. = FALSE)
+    if (is.integer(data)) return(data)
+    if (any(data != trunc(data)))
+      stop("index data must be whole numbers; found e.g. ",
+           data[which(data != trunc(data))[1L]], call. = FALSE)
+    if (any(abs(data) > .Machine$integer.max))
+      stop("index data is outside the 32-bit integer range", call. = FALSE)
+    return(as.integer(data))
+  }
+  data
 }
 
 #' Get Tensor Data via Backend

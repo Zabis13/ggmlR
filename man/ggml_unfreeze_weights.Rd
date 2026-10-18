@@ -9,6 +9,7 @@ ggml_unfreeze_weights(
   from = 1L,
   to = length(model$layers),
   layer_names = NULL,
+  prefix = NULL,
   ...
 )
 }
@@ -21,15 +22,18 @@ ggml_unfreeze_weights(
 
 \item{layer_names}{Character vector of layer names to unfreeze (overrides from/to)}
 
+\item{prefix}{Character vector: unfreeze every layer whose name starts with
+one of these. With \code{layer_names}, the union of the two.}
+
 \item{...}{Additional arguments passed to methods}
 }
 \value{
 The model with selected layers unfrozen.
 }
 \description{
-Sets \code{trainable = TRUE} on layers. Accepts optional \code{from} / \code{to}
-to unfreeze a range of layers, or \code{layer_names} to unfreeze by name.
-If none are provided, all layers are unfrozen.
+Sets \code{trainable = TRUE} on layers, chosen as in
+\code{\link{ggml_freeze_weights}}: by \code{layer_names} and/or
+\code{prefix}, else by \code{from} / \code{to}, else all of them.
 }
 \examples{
 \donttest{

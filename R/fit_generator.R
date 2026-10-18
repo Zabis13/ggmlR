@@ -236,6 +236,8 @@
 #' @param callbacks List of callback lists, as for \code{\link{ggml_fit_opt}}
 #' @param silent Suppress per-epoch messages
 #' @param loss_mask_ne0 Width of the per-output loss mask, or NULL
+#' @param weight_decay Decoupled weight decay in \code{[0, 1]}, as for
+#'   \code{\link{ggml_opt_init_for_fit}}; 0 turns it off.
 #' @return A history data frame, one row per epoch, as
 #'   \code{\link{ggml_fit_opt}} returns.
 #' @export
@@ -252,7 +254,8 @@ ggml_fit_opt_gen <- function(sched, ctx_compute, inputs, outputs, generator,
                              nbatch_logical = NULL,
                              callbacks   = list(),
                              silent      = FALSE,
-                             loss_mask_ne0 = NULL) {
+                             loss_mask_ne0 = NULL,
+                             weight_decay = 0) {
 
   if (!is.function(generator)) {
     stop("'generator' must be a function of no arguments returning one batch, ",
@@ -296,7 +299,8 @@ ggml_fit_opt_gen <- function(sched, ctx_compute, inputs, outputs, generator,
 
   ctx_list <- ggml_opt_init_for_fit(
     sched, loss_type, optimizer, opt_period,
-    ctx_compute, inputs, outputs, loss_mask_ne0
+    ctx_compute, inputs, outputs, loss_mask_ne0,
+    weight_decay = weight_decay
   )
   opt_ctx <- ctx_list$opt_ctx
   lr_ud   <- ctx_list$lr_ud
@@ -410,7 +414,8 @@ ggml_fit_opt_gen <- function(sched, ctx_compute, inputs, outputs, generator,
 # that is what every other entry point in the package takes; the column-major
 # reordering is an implementation detail of ggml and stays here. This is also
 # what lets the batch be handed to nn_bn_calibrate() unchanged.
-.gen_to_ggml_layout <- function(x, input_shape) {
+.gen_to_ggml_layout <- function(x, input_shape, vocab = NULL) {
+  if (!is.null(vocab)) nn_check_index_range(x, vocab)
   if (length(input_shape) == 3L) {
     as.vector(aperm(x, c(3, 2, 4, 1)))   # [N,H,W,C] -> [W,H,C,N]
   } else if (length(input_shape) == 2L) {
@@ -422,13 +427,28 @@ ggml_fit_opt_gen <- function(sched, ctx_compute, inputs, outputs, generator,
   }
 }
 
+# Token indices for an embedding must lie in [0, vocab - 1]. ggml's get_rows
+# does not check: on the CPU an out-of-range index aborts, on Vulkan it reads
+# whatever lies past the table. The vocabulary is known only to the model, so
+# this runs where a model's batch is laid out, not in the tensor writer. NA
+# and fractions are left to ggml_backend_tensor_set_data(), which refuses them.
+nn_check_index_range <- function(x, vocab) {
+  r <- suppressWarnings(range(x, na.rm = TRUE))
+  if (all(is.finite(r)) && (r[1L] < 0 || r[2L] >= vocab))
+    stop(sprintf("token index out of range: found %s, the embedding has %d rows (0..%d)",
+                 if (r[1L] < 0) format(r[1L]) else format(r[2L]), vocab, vocab - 1L),
+         call. = FALSE)
+  invisible(NULL)
+}
+
 # Internal: wrap a user generator so it yields ggml-layout batches, and
 # optionally record the R-layout inputs for batch-norm calibration.
 #
 # `recorder` is an environment; when non-NULL each batch's R-layout x is pushed
 # onto it, capped at the number of samples nn_bn_calibrate() actually uses.
 .gen_adapt_sequential <- function(generator, input_shape, batch_size,
-                                  what = "generator", recorder = NULL) {
+                                  what = "generator", recorder = NULL,
+                                  vocab = NULL) {
   function() {
     batch <- generator()
     if (is.null(batch)) return(NULL)
@@ -452,7 +472,7 @@ ggml_fit_opt_gen <- function(sched, ctx_compute, inputs, outputs, generator,
       recorder$n <- recorder$n + n
     }
 
-    list(inputs = list(.gen_to_ggml_layout(x, input_shape)),
+    list(inputs = list(.gen_to_ggml_layout(x, input_shape, vocab)),
          labels = list(as.vector(t(y))))
   }
 }
@@ -541,11 +561,12 @@ ggml_fit_generator <- function(model, generator, steps_per_epoch = NULL,
     recorder$cap   <- 1024L
   }
 
+  vocab <- nn_index_vocab(model)
   gen_wrapped <- .gen_adapt_sequential(generator, input_shape, batch_size,
-                                       "generator", recorder)
+                                       "generator", recorder, vocab)
   val_wrapped <- if (is.null(validation_generator)) NULL else {
     .gen_adapt_sequential(validation_generator, input_shape, batch_size,
-                          "validation_generator")
+                          "validation_generator", vocab = vocab)
   }
 
   history_raw <- ggml_fit_opt_gen(
@@ -563,7 +584,8 @@ ggml_fit_generator <- function(model, generator, steps_per_epoch = NULL,
     optimizer = optimizer_type,
     nbatch_logical = batch_size,
     callbacks = callbacks,
-    silent = (verbose == 0)
+    silent = (verbose == 0),
+    weight_decay = model$compilation$weight_decay %||% 0
   )
 
   model$layers <- graph_info$layers_built

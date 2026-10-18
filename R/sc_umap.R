@@ -41,10 +41,12 @@
 #
 # The GPU path is pairwise_dist.comp (a tiled 32x32 compute shader that
 # accumulates each D^2 in f32). An earlier attempt via the Gram matrix
-# (D^2 = ||x_i||^2 + ||x_j||^2 - 2 X X^T on mul_mat) was rejected: the
-# Vulkan/RADV mul_mat accumulates in f16 even with GGML_PREC_F32 forced on the
-# node (rel error ~2.7e-4), which the Gram identity amplifies into ~0.1 absolute
-# distance error — enough to reorder the top-k nearest neighbours. f16 distances
+# (D^2 = ||x_i||^2 + ||x_j||^2 - 2 X X^T on mul_mat) was rejected: the default
+# Vulkan mul_mat keeps its tiles in f16 (rel error ~3e-4), which the Gram
+# identity amplifies into ~0.1 absolute distance error — enough to reorder the
+# top-k nearest neighbours. (At the time GGML_PREC_F32 did not help either; it
+# now selects ggmlR's f32-tile kernel, rel error ~1e-6 on RADV, measured with
+# inst/examples/benchmark_coopmat.R, but at ~1/7 the throughput.) f16 distances
 # are a kNN bug, so the dedicated f32 shader is the supported GPU path and the
 # exact CPU dist() is the fallback. gpu_neighbor_max_cells caps the GPU path
 # (the n x n output is n^2 * 4 bytes of VRAM); above it we fall back to the CPU.

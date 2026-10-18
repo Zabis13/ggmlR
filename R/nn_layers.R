@@ -1100,6 +1100,10 @@ ggml_layer_dropout <- function(model, rate, stochastic = FALSE, name = NULL,
 #' @param dim Embedding dimension (vector length per token).
 #' @param name Optional layer name.
 #' @param trainable Logical; whether embedding weights are updated during training.
+#' @param input_shape Sequence length, for an embedding that is the first layer
+#'   of a sequential model (its input is then a matrix of token indices,
+#'   one row per sample). Ignored in the functional API, where
+#'   \code{ggml_input(dtype = "int32")} gives the shape.
 #' @return The model with the embedding layer appended, or a new tensor node.
 #' @export
 #' @examples
@@ -1111,7 +1115,8 @@ ggml_layer_dropout <- function(model, rate, stochastic = FALSE, name = NULL,
 #'   ggml_layer_dense(10L, activation = "softmax")
 #' model <- ggml_model(inputs = inp, outputs = out)
 #' }
-ggml_layer_embedding <- function(model, vocab_size, dim, name = NULL, trainable = TRUE) {
+ggml_layer_embedding <- function(model, vocab_size, dim, name = NULL, trainable = TRUE,
+                                 input_shape = NULL) {
   vocab_size <- as.integer(vocab_size)
   dim        <- as.integer(dim)
 
@@ -1134,6 +1139,9 @@ ggml_layer_embedding <- function(model, vocab_size, dim, name = NULL, trainable 
     input_shape = NULL, output_shape = NULL, weights = list(weight = NULL)
   )
   model$layers <- c(model$layers, list(layer))
+  if (!is.null(input_shape) && is.null(model$input_shape)) {
+    model$input_shape <- as.integer(input_shape)
+  }
   model
 }
 
@@ -1685,6 +1693,9 @@ nn_bn_normalize_conv <- function(ctx, input_tensor, layer, training, eps) {
 #' @return A \code{ggml_tensor} with batch-normalized, scaled and shifted values.
 #' @keywords internal
 nn_build_batch_norm <- function(ctx, input_tensor, layer, training = TRUE) {
+  # Fixed statistics (ggml_freeze_bn_stats): normalize with the stored running
+  # estimates in training too, exactly as at inference.
+  if (isTRUE(layer$config$fixed_stats)) training <- FALSE
   gamma <- layer$weights$gamma
   beta <- layer$weights$beta
   eps <- layer$config$eps
@@ -1831,10 +1842,18 @@ nn_build_dropout <- function(ctx, input_tensor, layer, training = TRUE) {
 #' @return A \code{ggml_tensor} with the embedded rows for each input index.
 #' @keywords internal
 nn_build_embedding <- function(ctx_weights, ctx_compute, input_tensor, layer) {
-  vocab_size <- layer$config$vocab_size
-  dim        <- layer$config$dim
-  E <- layer$weights$weight
-  ggml_get_rows(ctx_compute, E, input_tensor)
+  dim <- layer$config$dim
+  E   <- layer$weights$weight
+  if (is.null(E))
+    stop("embedding layer '", layer$name, "' has no weight tensor", call. = FALSE)
+  # The same lookup as the functional embedding: ggml_get_rows() wants a 1-D
+  # index vector, so the I32 input [seq_len, N] is flattened, looked up into
+  # [dim, seq_len * N], and reshaped to [dim, seq_len, N].
+  total   <- as.integer(ggml_nelements(input_tensor))
+  seq_len <- as.integer(prod(layer$input_shape))
+  idx_1d  <- ggml_reshape_1d(ctx_compute, input_tensor, total)
+  flat    <- ggml_get_rows(ctx_compute, E, idx_1d)
+  ggml_reshape_3d(ctx_compute, flat, dim, seq_len, total %/% seq_len)
 }
 
 #' Build a layer's forward pass

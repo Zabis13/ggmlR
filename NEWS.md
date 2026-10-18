@@ -1,4 +1,18 @@
+# ggmlR 0.8.8
+
+* `GGML_MAX_NAME` raised to 160 (needed by stable-diffusion.cpp); dependent packages only need a rebuild.
+* New C API from ggml 0.27: `ggml_prec_set_acc()` and `ggml_gated_delta_net_ext(..., K)` (`K = 1` only), plus an 8-argument C++ overload of `ggml_gated_delta_net()`. Existing calls are unchanged.
+
 # ggmlR 0.8.7
+
+* **Breaking:** `ggml_freeze_weights()` / `ggml_unfreeze_weights()` now stop when a `layer_names` entry or `prefix` matches no layer; a functional model used to ignore it silently.
+* Sequential models with `batch_norm` under `ggml_trainer()`: new `$calibrate_bn(x)` sets the running statistics the trainer never updated, and creating such a trainer warns.
+* `ggml_freeze_weights()` / `ggml_unfreeze_weights()` take `prefix` (a whole transformer block with `prefix = "block1_"`); new `ggml_freeze_bn_stats()` / `ggml_unfreeze_bn_stats()` fix batch-norm statistics in training and stop their recalibration, independently of freezing gamma and beta.
+* New `predict_precision` in `ggml_compile()` and `matmul_precision` in `ggml_predict()` / `$predict()`: `"f32"` makes Vulkan predictions match the CPU (~1e-6) instead of carrying f16-tile error (~1e-3) that depends on batch size; see README, "Precision of matrix multiplies on Vulkan".
+* Sequential `ggml_layer_embedding()` works as a first layer (new `input_shape`; it was never allocated before); integer data is accepted for every input, and index inputs refuse NA and fractions.
+* New `weight_decay` in `ggml_compile()` and `ggml_trainer()` (decoupled, AdamW/SGD; frozen weights are not decayed).
+* Fixes: trainer `$predict()` on fewer rows than a batch; out-of-vocabulary token indices are an error; clear error for freezing `ag_*` modules.
+* `ggml_save_model()` writes format 3 (keeps functional frozen marks), `ggml_load_model()` checks saved weights' names and sizes and refuses newer formats; earlier releases load format-3 files ignoring the frozen marks — see README, "Save / Load".
 
 * **Device buffers** — new `ag_buffer()` keeps a large table on the device, written in place with `ag_buffer_write()` and read back in parts with `ag_buffer_read()`; `ag_get_rows()` gathers columns by index inside ag_* graphs and `ag_capture()` recordings, sending only the indices. Built for replay buffers in off-policy RL. `ag_buffer_free()` releases the memory at once.
 * New `ag_slice_rows(x, from, n)` and `ag_concat_rows(a, b)` — row slice and `rbind` on the device, with gradients and graph-backward rules.

@@ -9,6 +9,7 @@ ggml_freeze_weights(
   from = 1L,
   to = length(model$layers),
   layer_names = NULL,
+  prefix = NULL,
   ...
 )
 }
@@ -21,6 +22,13 @@ ggml_freeze_weights(
 
 \item{layer_names}{Character vector of layer names to freeze (overrides from/to)}
 
+\item{prefix}{Character vector: freeze every layer whose name starts with one
+of these -- a whole transformer block, say: \code{prefix = "block1_"}
+reaches \code{block1_norm1}, \code{block1_attn}, \code{block1_norm2},
+\code{block1_ff1} and \code{block1_ff2} -- not \code{block10_*}. Given with
+\code{layer_names}, the selection is the union of the two; every name and
+every prefix must match at least one layer, or the call stops.}
+
 \item{...}{Additional arguments passed to methods}
 }
 \value{
@@ -28,9 +36,9 @@ The model with selected layers frozen.
 }
 \description{
 Sets \code{trainable = FALSE} on layers, preventing their weights from being
-updated during training. Accepts optional \code{from} / \code{to} to freeze
-a range of layers by index, or \code{layer_names} to freeze by name.
-If none are provided, all layers are frozen.
+updated during training. Layers are chosen by \code{layer_names} and/or
+\code{prefix}; without either, by the index range \code{from} / \code{to}
+(sequential models), or all of them.
 }
 \examples{
 \donttest{
@@ -44,4 +52,8 @@ model <- ggml_freeze_weights(model)
 # Freeze only the first layer
 model <- ggml_freeze_weights(model, from = 1, to = 1)
 }
+}
+\seealso{
+\code{\link{ggml_freeze_bn_stats}} to fix batch-norm statistics,
+  which freezing the weights does not do.
 }

@@ -314,7 +314,7 @@ preds <- ggml_predict(model, x_new)
 | Conv2D | `ggml_layer_conv_2d(filters, kernel_size, padding)` |
 | MaxPooling2D | `ggml_layer_max_pooling_2d(pool_size)` |
 | GlobalAvgPool2D | `ggml_layer_global_average_pooling_2d()` |
-| BatchNorm | `ggml_layer_batch_norm()` (RMS-normalizes, then scales/shifts) |
+| BatchNorm | `ggml_layer_batch_norm()` — batch mean/variance in training, running statistics at inference. (In the functional API the same function is per-sample RMS normalization; see its help page.) |
 | RMSNorm | `ggml_layer_rms_norm()` |
 | LayerNorm | `ggml_layer_layer_norm()` (centres as well as scales) |
 | Flatten | `ggml_layer_flatten()` |
@@ -322,7 +322,7 @@ preds <- ggml_predict(model, x_new)
 | Reshape | `ggml_layer_reshape(shape)` — one axis may be `-1` |
 | SequencePooling | `ggml_layer_sequence_pooling(mode)` — `c(seq, d_model)` to `d_model` |
 | Dropout | `ggml_layer_dropout(rate)` |
-| Embedding | `ggml_layer_embedding(vocab_size, dim)` |
+| Embedding | `ggml_layer_embedding(vocab_size, dim, input_shape = seq_len)` — first layer only; input is a matrix of token indices |
 | PositionalEmbedding | `ggml_layer_positional_embedding()` |
 | LSTM | `ggml_layer_lstm(units, return_sequences)` |
 | GRU | `ggml_layer_gru(units, return_sequences)` |
@@ -1887,6 +1887,106 @@ ggml_save_model(model, "my_model.rds")
 model <- ggml_load_model("my_model.rds")
 ```
 
+**File format.** `ggml_save_model()` writes format 3, which adds to format 2 a
+functional model's `ggml_freeze_weights()` marks, the compiled `weight_decay`
+and `predict_precision`, and fixed batch-norm statistics. `ggml_load_model()`
+reads formats 2 and 3 and refuses anything newer with a message to update
+ggmlR. Releases before 0.8.7 accept any format from 2 up, so they load a
+format-3 file and ignore its frozen marks and fixed batch-norm statistics
+without a word: load format-3 files with 0.8.7 or later.
+
+**Checks on load.** A truncated or non-RDS file stops at `ggml_load_model()`.
+Every saved tensor is compared by name and size with the one it is about to
+fill, before anything is written. A file from another architecture, or a damaged
+one, then stops with the layer and tensor named, instead of being copied in
+partly or falling back to random init. This check runs when the graph is first
+built: the first `ggml_predict()`, `ggml_fit()` or `ggml_trainer()` call.
+
+`ggml_freeze_weights()` and `ggml_unfreeze_weights()` on anything other than a
+`ggml_*` model (an `ag_*` module, say) stop with a message naming what is
+supported.
+
+### Fine-tuning a saved model
+
+`ggml_load_model()` returns a compiled model with the saved weights, so training
+goes on from where it stopped with either `ggml_fit()` or `ggml_trainer()`:
+
+```r
+model <- ggml_load_model("my_model.rds", backend = "auto")
+
+# a few more epochs on new data
+model <- ggml_fit(model, x_new, y_new, epochs = 5L, batch_size = 32L)
+
+# or your own loop
+tr <- ggml_trainer(model, batch_size = 512L)
+tr$set_lr(5e-4)
+for (i in seq_len(steps)) tr$step(x_batch(i), y_batch(i))
+model <- tr$model()
+tr$free()
+
+ggml_save_model(model, "my_model_ft.rds")
+```
+
+- Only the weights are saved, not the optimizer state. The Adam moments start
+  from zero, so the first steps after loading are Adam's first steps. A lower
+  rate or a short warm-up keeps them from knocking the weights about.
+- The architecture comes from the file, along with the optimizer, loss and
+  metrics given to `ggml_compile()`. Inputs and outputs must keep the shapes
+  the model was saved with.
+- Files written by `ggml_save_weights()` are not accepted by
+  `ggml_load_model()`. Rebuild and compile the same architecture, then call
+  `ggml_load_weights(model, path)`.
+
+**Freezing layers.** `ggml_freeze_weights()` marks layers as not trainable, and
+`ggml_unfreeze_weights()` undoes it. The flag is read when the training graph is
+built, so it can be set on a loaded model before `ggml_fit()` or
+`ggml_trainer()`:
+
+```r
+model <- ggml_load_model("my_model.rds")
+model <- ggml_freeze_weights(model, from = 1L, to = 3L)  # sequential: by index
+# model <- ggml_freeze_weights(model, layer_names = c("enc1", "enc2"))  # by name
+model <- ggml_fit(model, x_new, y_new, epochs = 5L)
+```
+
+`prefix` selects every layer whose name starts with it -- a whole block, a
+head, the embeddings -- and combines with `layer_names`; a name or prefix that
+matches nothing is an error. For functional models only names and prefixes
+select layers; without them every layer is frozen. Weight decay
+(`weight_decay` in `ggml_compile()` or `ggml_trainer()`) reaches trainable
+weights only, so frozen layers are not decayed either. `ggml_save_model()`
+keeps the frozen marks for both kinds of model, so a reloaded model trains the
+same layers as before. Functional files saved before
+this was added load with nothing frozen.
+
+What freezing reaches:
+
+| Model | Layers that can be frozen |
+|---|---|
+| `ggml_model_sequential()` | `dense`, `conv_1d`, `conv_2d`, the norm layers (`gamma`, `beta`), `lstm`, `gru` |
+| `ggml_model()` (functional) | the same, plus `embedding`, `positional_embedding` and `attention` (`W_q`, `W_k`, `W_v`, `W_o`, `b_o`) |
+| `ggml_layer_transformer_block()` | as one unit with `prefix = "<name>_"`, which reaches `<name>_norm1`, `<name>_attn`, `<name>_norm2`, `<name>_ff1`, `<name>_ff2` |
+| `ag_*` autograd modules | not covered: `ggml_freeze_weights()` works on `ggml_*` models only |
+
+Layers without weights (activations, dropout, pooling, `add`, flatten) have
+nothing to freeze.
+
+**Batch-norm statistics.** Freezing a sequential batch-norm stops `gamma` and
+`beta` only: in training it still normalizes each batch by its own mean and
+variance, and `ggml_fit()` still recalibrates its running statistics.
+`ggml_freeze_bn_stats()` fixes them -- the layer then uses the stored
+statistics in training as at prediction, and they are no longer recalibrated --
+while `gamma` and `beta` keep training unless frozen too. That is the usual
+setting for fine-tuning on small batches; `ggml_unfreeze_bn_stats()` undoes it.
+The state is saved with the model. Fix them after the statistics have been
+calibrated by a fit. A functional `batch_norm` is per-sample RMS normalization
+with no statistics, and the call says so.
+
+```r
+model <- ggml_freeze_bn_stats(model)                     # all batch-norm layers
+model <- ggml_freeze_weights(model, prefix = "block1_")  # and, if wanted, weights
+```
+
 ## ONNX Benchmark: GPU (Vulkan) vs CPU
 
 Measured on AMD Ryzen 5 5600 + AMD RX 9070 (Resizable BAR off), single-image inference, mean of 3 runs:
@@ -1957,6 +2057,30 @@ Supported GPUs: NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno.
 - **Push Descriptors** (`VK_KHR_push_descriptor`) — when available, descriptors are pushed directly into the command buffer, eliminating descriptor pool allocation overhead. Falls back to descriptor pools on older hardware.
 - **Q4_K flash attention** — `GGML_OP_FLASH_ATTN_EXT` with Q4_K key/value tensors now runs fully on GPU (FA_SCALAR and FA_COOPMAT1 paths). Previously Q4_K attention fell back to CPU. Relevant for llamaR with quantized LLMs on AMD/Intel GPU (KHR cooperative matrix).
 - **Subgroup-shuffle mmq** (`USE_SUBGROUP_NO_SHMEM`) — on wavefront-64 devices (RDNA4, subgroup_size=64) Q4_K / Q5_K / Q6_K weight tiles are loaded directly into registers via `subgroupShuffle`, eliminating the shared-memory staging round-trip. ~10-15% token-generation throughput gain on LLaMA 3.x models.
+
+### Precision of matrix multiplies on Vulkan
+
+On a Vulkan device with fp16 support, `MUL_MAT` keeps its tiles in f16 by
+default. A single row goes through an exact f32 matrix-vector kernel, larger
+batches through the tiled one, so predictions carry a relative error around
+1e-3 that depends on the batch size: the same input can come out slightly
+differently alone and in a batch of 64. Training is not hurt by noise of that
+size; comparisons against a reference, tests and reproducible evaluation are.
+
+```r
+model <- ggml_compile(model, optimizer = "adam", loss = "mse",
+                      predict_precision = "f32")      # every prediction
+ggml_predict(model, x, matmul_precision = "f32")      # one call
+tr$predict(x, matmul_precision = "f32")              # a trainer's predict
+```
+
+`"f32"` marks every multiply `GGML_PREC_F32`; the result then matches the CPU to
+about 1e-6. The argument of the call wins over the model's `predict_precision`,
+which wins over `"default"`. Training graphs are not affected. The throughput
+cost depends on the device and driver: on an RX 9070 under RADV the f32 tiles
+ran at about a seventh of the f16 ones for large multiplies
+(`inst/examples/benchmark_coopmat.R` measures it on yours). The CPU backend is
+exact either way.
 
 ## System Requirements
 

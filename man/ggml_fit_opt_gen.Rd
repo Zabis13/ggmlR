@@ -20,7 +20,8 @@ ggml_fit_opt_gen(
   nbatch_logical = NULL,
   callbacks = list(),
   silent = FALSE,
-  loss_mask_ne0 = NULL
+  loss_mask_ne0 = NULL,
+  weight_decay = 0
 )
 }
 \arguments{
@@ -64,6 +65,9 @@ epoch, following the same contract. Evaluated without a backward pass.}
 \item{silent}{Suppress per-epoch messages}
 
 \item{loss_mask_ne0}{Width of the per-output loss mask, or NULL}
+
+\item{weight_decay}{Decoupled weight decay in \code{[0, 1]}, as for
+\code{\link{ggml_opt_init_for_fit}}; 0 turns it off.}
 }
 \value{
 A history data frame, one row per epoch, as

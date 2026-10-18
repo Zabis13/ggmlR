@@ -2076,6 +2076,25 @@ SEXP R_ggml_graph_dump_dot(SEXP graph_ptr, SEXP leafs_ptr, SEXP filename_sexp) {
 // ============================================================================
 
 // Set tensor data from R vector (works with any backend)
+// Element i of an R numeric vector as a float: doubles directly, integers and
+// logicals converted here so R does not have to copy the whole vector to double
+// first (7 ms per million elements). An integer NA becomes NaN, as a double NA
+// does on the way to float.
+static inline float r_numeric_float_at(const double * dx, const int * ix, int i) {
+    if (dx != NULL) return (float) dx[i];
+    return ix[i] == NA_INTEGER ? (float) R_NaN : (float) ix[i];
+}
+
+static void r_numeric_ptrs(SEXP x, const double ** dx, const int ** ix) {
+    *dx = NULL; *ix = NULL;
+    switch (TYPEOF(x)) {
+    case REALSXP: *dx = REAL(x);    break;
+    case INTSXP:  *ix = INTEGER(x); break;
+    case LGLSXP:  *ix = LOGICAL(x); break;
+    default: error("tensor data must be numeric, integer or logical");
+    }
+}
+
 SEXP R_ggml_backend_tensor_set(SEXP tensor_ptr, SEXP data_sexp, SEXP offset_sexp) {
     struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
 
@@ -2100,15 +2119,16 @@ SEXP R_ggml_backend_tensor_set(SEXP tensor_ptr, SEXP data_sexp, SEXP offset_sexp
         int n = length(data_sexp);
         size_t size = n * sizeof(float);
 
-        // Convert R doubles to float
+        // Convert R doubles (or integers) to float
+        const double * dx; const int * ix;
+        r_numeric_ptrs(data_sexp, &dx, &ix);
         float * buffer = (float *) malloc(size);
         if (buffer == NULL) {
             error("Failed to allocate buffer");
         }
 
-        double * r_data = REAL(data_sexp);
         for (int i = 0; i < n; i++) {
-            buffer[i] = (float) r_data[i];
+            buffer[i] = r_numeric_float_at(dx, ix, i);
         }
 
         ggml_backend_tensor_set(tensor, buffer, offset, size);
@@ -2123,14 +2143,15 @@ SEXP R_ggml_backend_tensor_set(SEXP tensor_ptr, SEXP data_sexp, SEXP offset_sexp
         int n = length(data_sexp);
         size_t size = n * sizeof(ggml_fp16_t);
 
+        const double * dx; const int * ix;
+        r_numeric_ptrs(data_sexp, &dx, &ix);
         ggml_fp16_t * buffer = (ggml_fp16_t *) malloc(size);
         if (buffer == NULL) {
             error("Failed to allocate buffer");
         }
 
-        double * r_data = REAL(data_sexp);
         for (int i = 0; i < n; i++) {
-            buffer[i] = ggml_fp32_to_fp16((float) r_data[i]);
+            buffer[i] = ggml_fp32_to_fp16(r_numeric_float_at(dx, ix, i));
         }
 
         ggml_backend_tensor_set(tensor, buffer, offset, size);
@@ -4867,6 +4888,30 @@ SEXP R_ggml_mul_mat_set_prec(SEXP tensor_ptr, SEXP prec) {
     }
     ggml_mul_mat_set_prec(tensor, (enum ggml_prec) asInteger(prec));
     return R_NilValue;
+}
+
+// Set the precision of every matrix multiply in a built graph -- MUL_MAT and
+// FLASH_ATTN_EXT, the two ops whose Vulkan kernels keep f16 tiles by default.
+// Done on the graph rather than where each layer builds its multiply, so no
+// layer can be missed. Returns the number of nodes changed.
+SEXP R_ggml_graph_set_matmul_prec(SEXP graph_ptr, SEXP prec) {
+    struct ggml_cgraph * graph = (struct ggml_cgraph *) R_ExternalPtrAddr(graph_ptr);
+    if (graph == NULL) {
+        error("Invalid graph pointer");
+    }
+    enum ggml_prec p = (enum ggml_prec) asInteger(prec);
+    int n = 0;
+    for (int i = 0; i < ggml_graph_n_nodes(graph); i++) {
+        struct ggml_tensor * node = ggml_graph_node(graph, i);
+        if (node->op == GGML_OP_MUL_MAT) {
+            ggml_mul_mat_set_prec(node, p);
+            n++;
+        } else if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+            ggml_flash_attn_ext_set_prec(node, p);
+            n++;
+        }
+    }
+    return ScalarInteger(n);
 }
 
 // Flash attention get precision
