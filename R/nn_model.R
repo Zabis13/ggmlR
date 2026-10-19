@@ -725,17 +725,6 @@ ggml_compile.ggml_sequential_model <- function(model, optimizer = "adam",
 # Internal: Build graph with weights for a given batch_size
 # ============================================================================
 
-#' Build computation graph with allocated weights and inputs
-#' @param model Compiled model
-#' @param batch_size Batch size
-#' @return List with ctx_weights, ctx_compute, inputs, outputs, buffer
-#' @keywords internal
-# logits_output: drop a final softmax from the graph, leaving the last layer's
-# raw logits as the output. ggml_cross_entropy_loss() applies log_softmax to its
-# own input, so feeding it softmax probabilities would apply softmax twice --
-# that flattens the distribution, understates the reported loss and weakens the
-# gradient. Training with a cross-entropy loss therefore builds the graph with
-# logits_output = TRUE; inference leaves it FALSE and keeps the probabilities.
 # A sequential model whose first layer is an embedding is fed token indices.
 nn_seq_takes_indices <- function(model)
   length(model$layers) > 0L && identical(model$layers[[1L]]$type, "embedding")
@@ -756,6 +745,17 @@ nn_index_vocab <- function(model) {
   if (length(v)) min(v)
 }
 
+#' Build computation graph with allocated weights and inputs
+#' @param model Compiled model
+#' @param batch_size Batch size
+#' @return List with ctx_weights, ctx_compute, inputs, outputs, buffer
+#' @keywords internal
+# logits_output: drop a final softmax from the graph, leaving the last layer's
+# raw logits as the output. ggml_cross_entropy_loss() applies log_softmax to its
+# own input, so feeding it softmax probabilities would apply softmax twice --
+# that flattens the distribution, understates the reported loss and weakens the
+# gradient. Training with a cross-entropy loss therefore builds the graph with
+# logits_output = TRUE; inference leaves it FALSE and keeps the probabilities.
 nn_build_graph <- function(model, batch_size, training = TRUE,
                            logits_output = FALSE) {
   if (length(model$layers) > 1L)
