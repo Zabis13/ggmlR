@@ -77,7 +77,25 @@ heavy <- c(
   "getrows-offload-vulkan",
   "gpu-linalg",
   "sc-umap",
-  "diagnostics"
+  "diagnostics",
+  "sc-seurat",
+  "quantize-fns",
+  "sc-sce",
+  "loss-mask",
+  "sc-neighbors",
+  "onnx-qconv-i32-im2col",
+  "mlr3-autograd",
+  "ag-backward-graph",
+  "ag-adam-fused",
+  "ag-mha",
+  "chain-ag-early-stopping",
+  "ag-residency",
+  "ag-resident-ops",
+  "ag-select",
+  "uncovered-exports",
+  "ag-capture-step",
+  "ag-clip-sched",
+  "trainer"
 )
 
 # Under the valgrind memtest, running the full light suite (~67 files) blows

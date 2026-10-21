@@ -1,3 +1,7 @@
+# ggmlR 0.8.8.1
+
+* `ag_tape_memory()` now deduplicates shared storage on R builds without memory profiling (it relied on `tracemem()`, which errors there), fixing two test failures on CRAN's r-devel fedora flavour.
+
 # ggmlR 0.8.8
 
 * `GGML_MAX_NAME` raised to 160 (needed by stable-diffusion.cpp); dependent packages only need a rebuild.

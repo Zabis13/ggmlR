@@ -31,10 +31,13 @@ library(ggmlR)
 # submit/destroy) fire while another backend is still in use, which
 # intermittently crashed this test (segfault / GGML_ASSERT(buffer != nullptr)).
 # One backend per device, freed explicitly, matches real usage and is stable.
-run_get_rows <- function(backend, n_embd, n_vocab, idx0) {
-  n_tok <- length(idx0)
-  set.seed(7)
-  tbl <- matrix(rnorm(n_embd * n_vocab, sd = 0.1), nrow = n_embd, ncol = n_vocab)
+#
+# `tbl` is likewise generated ONCE by the caller: at 2048 x 32000 it is 65.5M
+# rnorm draws, which dominated the test's runtime when rebuilt per batch size.
+run_get_rows <- function(backend, tbl, idx0) {
+  n_tok   <- length(idx0)
+  n_embd  <- nrow(tbl)
+  n_vocab <- ncol(tbl)
 
   ctx <- ggml_init(512L * 1024 * 1024)
   ggml_set_no_alloc(ctx, TRUE)
@@ -61,11 +64,11 @@ run_get_rows <- function(backend, n_embd, n_vocab, idx0) {
   list(res = res, ref = as.vector(tbl[, idx0 + 1L, drop = FALSE]))
 }
 
-expect_get_rows_correct <- function(backend, n_embd, n_vocab, idx0) {
-  out <- run_get_rows(backend, n_embd, n_vocab, idx0)
+expect_get_rows_correct <- function(backend, tbl, idx0) {
+  out <- run_get_rows(backend, tbl, idx0)
   md  <- max(abs(out$res - out$ref))
   info <- sprintf("get_rows n_embd=%d n_vocab=%d batch=%d max|diff|=%.6g",
-                  n_embd, n_vocab, length(idx0), md)
+                  nrow(tbl), ncol(tbl), length(idx0), md)
   expect_lt(md, 1e-4, label = info)
 }
 
@@ -88,6 +91,8 @@ test_that("get_rows Vulkan == CPU across offload-threshold batch sizes", {
           sprintf("insufficient VRAM: need ~%.0f MB free, have %.0f MB",
                   tbl_bytes * 1.5 / 1e6, free / 1e6))
 
+  set.seed(7)
+  tbl <- matrix(rnorm(n_embd * n_vocab, sd = 0.1), nrow = n_embd, ncol = n_vocab)
   set.seed(11)
 
   # Single Vulkan backend reused for all batch sizes, freed deterministically.
@@ -95,7 +100,7 @@ test_that("get_rows Vulkan == CPU across offload-threshold batch sizes", {
   on.exit(ggml_backend_free(backend), add = TRUE)
 
   # batch=1 (decode), batch=8 (small prompt), batch=64 (above min_batch_size).
-  expect_get_rows_correct(backend, n_embd, n_vocab, sample.int(n_vocab, 1L)  - 1L)
-  expect_get_rows_correct(backend, n_embd, n_vocab, sample.int(n_vocab, 8L)  - 1L)
-  expect_get_rows_correct(backend, n_embd, n_vocab, sample.int(n_vocab, 64L) - 1L)
+  expect_get_rows_correct(backend, tbl, sample.int(n_vocab, 1L)  - 1L)
+  expect_get_rows_correct(backend, tbl, sample.int(n_vocab, 8L)  - 1L)
+  expect_get_rows_correct(backend, tbl, sample.int(n_vocab, 64L) - 1L)
 })

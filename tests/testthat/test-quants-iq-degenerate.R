@@ -23,7 +23,6 @@ test_that("IQ1_S handles all-zero block without aborting (besti<0 fallback)", {
   expect_length(d, n)
   expect_false(any(is.nan(d)))
   expect_false(any(is.infinite(d)))
-  ggml_quantize_free()
 })
 
 test_that("IQ1_S handles uniform-magnitude block (degenerate scale case)", {
@@ -40,7 +39,6 @@ test_that("IQ1_S handles uniform-magnitude block (degenerate scale case)", {
   d <- dequantize_row_iq1_s(q, n)
   expect_length(d, n)
   expect_false(any(is.nan(d)))
-  ggml_quantize_free()
 })
 
 test_that("IQ1_M handles all-zero block (besti<0 / best_k<0 fallback)", {
@@ -55,7 +53,6 @@ test_that("IQ1_M handles all-zero block (besti<0 / best_k<0 fallback)", {
   expect_length(d, n)
   expect_false(any(is.nan(d)))
   expect_false(any(is.infinite(d)))
-  ggml_quantize_free()
 })
 
 test_that("IQ1_M handles uniform-magnitude block", {
@@ -69,7 +66,6 @@ test_that("IQ1_M handles uniform-magnitude block", {
   d <- dequantize_row_iq1_m(q, n)
   expect_length(d, n)
   expect_false(any(is.nan(d)))
-  ggml_quantize_free()
 })
 
 test_that("IQ4_NL handles all-zero input (sumq2 > 0 guard)", {
@@ -85,7 +81,6 @@ test_that("IQ4_NL handles all-zero input (sumq2 > 0 guard)", {
   expect_length(d, n)
   expect_false(any(is.nan(d)))
   expect_false(any(is.infinite(d)))
-  ggml_quantize_free()
 })
 
 test_that("IQ4_XS handles all-zero input (sumq2 > 0 guard)", {
@@ -99,7 +94,6 @@ test_that("IQ4_XS handles all-zero input (sumq2 > 0 guard)", {
   expect_length(d, n)
   expect_false(any(is.nan(d)))
   expect_false(any(is.infinite(d)))
-  ggml_quantize_free()
 })
 
 test_that("IQ3_S handles all-zero input (make_qp_quants eff_max<=0 guard)", {
@@ -113,7 +107,6 @@ test_that("IQ3_S handles all-zero input (make_qp_quants eff_max<=0 guard)", {
   expect_length(d, n)
   expect_false(any(is.nan(d)))
   expect_false(any(is.infinite(d)))
-  ggml_quantize_free()
 })
 
 test_that("IQ3_XXS handles all-zero input (memset(L,0) above guard)", {
@@ -130,7 +123,6 @@ test_that("IQ3_XXS handles all-zero input (memset(L,0) above guard)", {
   expect_length(d, n)
   expect_false(any(is.nan(d)))
   expect_false(any(is.infinite(d)))
-  ggml_quantize_free()
 })
 
 test_that("IQ2_S handles all-zero input (memset(L,0) above guard)", {
@@ -144,7 +136,6 @@ test_that("IQ2_S handles all-zero input (memset(L,0) above guard)", {
   expect_length(d, n)
   expect_false(any(is.nan(d)))
   expect_false(any(is.infinite(d)))
-  ggml_quantize_free()
 })
 
 test_that("IQ2_XS handles all-zero input (memset(L,0) above guard)", {
@@ -160,5 +151,9 @@ test_that("IQ2_XS handles all-zero input (memset(L,0) above guard)", {
   expect_length(d, n)
   expect_false(any(is.nan(d)))
   expect_false(any(is.infinite(d)))
-  ggml_quantize_free()
 })
+
+# Grid tables are freed once here, not per test: ggml_quantize_free() drops
+# every IQ grid, so freeing between tests forced the expensive IQ1_S/IQ1_M
+# 2048-point grid (shared by both types) to be rebuilt four times.
+ggml_quantize_free()

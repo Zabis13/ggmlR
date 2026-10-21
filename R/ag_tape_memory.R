@@ -44,14 +44,12 @@
 
 # Address of an object, used only to tell shared storage from distinct storage.
 #
-# tracemem() returns "<0x...>" and is available in base R (lobstr is not a
-# dependency). It marks the object for copy tracing, which costs nothing here:
-# the objects are snapshots that the tape does not write to. On a build without
-# memory profiling tracemem() errors, so the fallback treats every object as
-# distinct -- that over-counts shared storage rather than hiding it, which is
-# the safe direction for a memory report.
+# Read in C (lobstr is not a dependency). tracemem() was used before, but it
+# errors on R builds without memory profiling (CRAN's r-devel fedora flavour),
+# which silently disabled deduplication there, and it marks user objects for
+# copy tracing as a side effect.
 .ag_obj_addr <- function(x) {
-  tryCatch(tracemem(x), error = function(e) NA_character_)
+  .Call("R_ggmlr_obj_addr", x, PACKAGE = "ggmlR")
 }
 
 # Bytes held by a set of objects, counting shared storage once.

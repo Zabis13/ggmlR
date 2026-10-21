@@ -116,7 +116,7 @@ test_that("fit_resamples() runs over cv folds (classification)", {
     workflows::add_model(spec) |>
     workflows::add_formula(Species ~ .)
 
-  folds <- rsample::vfold_cv(iris, v = 3L)
+  folds <- rsample::vfold_cv(iris, v = 2L)
   res <- tune::fit_resamples(wf, resamples = folds)
 
   metrics <- tune::collect_metrics(res)
@@ -140,7 +140,7 @@ test_that("fit_resamples() runs over cv folds (regression)", {
     workflows::add_model(spec) |>
     workflows::add_formula(mpg ~ .)
 
-  folds <- rsample::vfold_cv(mtcars, v = 3L)
+  folds <- rsample::vfold_cv(mtcars, v = 2L)
   res <- tune::fit_resamples(wf, resamples = folds)
 
   metrics <- tune::collect_metrics(res)
@@ -172,13 +172,11 @@ test_that("tune_grid() tunes hidden_units + epochs (classification)", {
     workflows::add_model(spec) |>
     workflows::add_formula(Species ~ .)
 
-  grid <- dials::grid_regular(
-    dials::hidden_units(range = c(8L, 16L)),
-    dials::epochs(range = c(3L, 5L)),
-    levels = 2L
-  )
+  # Two grid points (not the full 2x2 regular grid) keep the fit count low
+  # while still giving show_best() a choice between candidates.
+  grid <- data.frame(hidden_units = c(8L, 16L), epochs = c(3L, 5L))
 
-  folds <- rsample::vfold_cv(iris, v = 3L)
+  folds <- rsample::vfold_cv(iris, v = 2L)
   res <- tune::tune_grid(wf, resamples = folds, grid = grid)
 
   metrics <- tune::collect_metrics(res)
@@ -209,7 +207,7 @@ test_that("tune_grid() tunes epochs (regression)", {
     workflows::add_formula(mpg ~ .)
 
   grid <- dials::grid_regular(dials::epochs(range = c(3L, 5L)), levels = 2L)
-  folds <- rsample::vfold_cv(mtcars, v = 3L)
+  folds <- rsample::vfold_cv(mtcars, v = 2L)
   res <- tune::tune_grid(wf, resamples = folds, grid = grid)
 
   metrics <- tune::collect_metrics(res)

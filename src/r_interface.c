@@ -1325,6 +1325,15 @@ SEXP R_ggml_set_omp_threads(SEXP n_threads) {
     return R_NilValue;
 }
 
+// Address of an R object as "<0x...>", used by ag_tape_memory() to tell shared
+// storage from distinct storage. Replaces tracemem(), which errors on R builds
+// without memory profiling and marks the object for copy tracing.
+SEXP R_ggmlr_obj_addr(SEXP x) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "<%p>", (void *) x);
+    return mkString(buf);
+}
+
 static const R_CallMethodDef CallEntries[] = {
     // Context management
     {"R_ggml_init",    (DL_FUNC) &R_ggml_init,    2},
@@ -2061,6 +2070,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_gguf_tensor_names",                     (DL_FUNC) &R_gguf_tensor_names,                      1},
     {"R_gguf_tensor_info",                      (DL_FUNC) &R_gguf_tensor_info,                       2},
     {"R_gguf_tensor_data",                      (DL_FUNC) &R_gguf_tensor_data,                       2},
+
+    {"R_ggmlr_obj_addr",                        (DL_FUNC) &R_ggmlr_obj_addr,                         1},
 
     {NULL, NULL, 0}
 };
