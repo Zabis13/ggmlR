@@ -3324,6 +3324,25 @@ SEXP R_ggml_leaf_alias(SEXP ctx_ptr, SEXP src_ptr) {
     return R_MakeExternalPtr(t, R_NilValue, R_NilValue);
 }
 
+// Bind a view to its source's buffer if nothing has yet (ggml_backend_view_init).
+// For views built in a context that ggml_backend_alloc_ctx_tensors() would skip
+// -- one holding nothing that needs memory, e.g. only ggml_cpy() nodes into
+// existing tensors -- where Vulkan would otherwise drop the node silently.
+// A tensor that is not a view, or is already bound, is left as it is.
+SEXP R_ggml_view_bind(SEXP t_ptr) {
+    struct ggml_tensor * t = (struct ggml_tensor *) r_ptr_required(t_ptr, "tensor");
+    if (t->view_src == NULL || t->buffer != NULL) {
+        return t_ptr;
+    }
+    if (t->view_src->buffer == NULL || t->view_src->data == NULL) {
+        error("ggml view bind: the source of '%s' has no backend memory", t->name);
+    }
+    if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
+        error("ggml view bind: failed to bind '%s' to its source buffer", t->name);
+    }
+    return t_ptr;
+}
+
 // AdamW step node: updates a, m and v IN PLACE when the graph runs; the result
 // is a view of a. Every precondition is checked here as an R error, because
 // ggml_opt_step_adamw() and its kernels GGML_ASSERT/ABORT on them, which would

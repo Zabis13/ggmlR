@@ -1061,6 +1061,7 @@ SEXP R_ggml_set_name(SEXP tensor_ptr, SEXP name);
 SEXP R_ggml_set_param(SEXP tensor_ptr);
 SEXP R_ggml_opt_step_adamw(SEXP ctx_ptr, SEXP a_ptr, SEXP grad_ptr, SEXP m_ptr, SEXP v_ptr, SEXP params_ptr);
 SEXP R_ggml_leaf_alias(SEXP ctx_ptr, SEXP src_ptr);
+SEXP R_ggml_view_bind(SEXP t_ptr);
 SEXP R_ggml_graph_dump(SEXP graph_ptr);
 SEXP R_ggml_set_loss(SEXP tensor_ptr);
 SEXP R_ggml_set_input(SEXP tensor_ptr);
@@ -1621,6 +1622,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_set_param",          (DL_FUNC) &R_ggml_set_param,          1},
     {"R_ggml_opt_step_adamw",     (DL_FUNC) &R_ggml_opt_step_adamw,     6},
     {"R_ggml_leaf_alias",         (DL_FUNC) &R_ggml_leaf_alias,         2},
+    {"R_ggml_view_bind",          (DL_FUNC) &R_ggml_view_bind,          1},
     {"R_ggml_graph_dump",         (DL_FUNC) &R_ggml_graph_dump,         1},
     {"R_ggml_set_loss",           (DL_FUNC) &R_ggml_set_loss,           1},
     {"R_ggml_set_input",          (DL_FUNC) &R_ggml_set_input,          1},

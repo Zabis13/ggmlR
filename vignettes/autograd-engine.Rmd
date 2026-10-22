@@ -22,6 +22,10 @@ tensors. Gradients are computed via reverse-mode AD on a tape recorded inside
 
 ```{r}
 library(ggmlR)
+# ag_device()/ag_dtype() are package-level state; start from a known one
+# rather than whatever ran before in the same session.
+ag_device("cpu")
+ag_dtype("f32")
 ```
 
 ---
@@ -47,13 +51,15 @@ with_grad_tape({
   loss <- ag_mean(ag_mul(h, h))                  # scalar MSE-like
 })
 
-grads <- backward(loss)   # returns named list of gradients
+grads <- backward(loss)
 
-cat("dL/dW:\n"); print(grads[["W"]])
-cat("dL/db:\n"); print(grads[["b"]])
+cat("dL/dW:\n"); print(W$grad)
+cat("dL/db:\n"); print(b$grad)
 ```
 
-`backward()` returns gradients keyed by the parameter's variable name.
+`backward()` accumulates each gradient into the parameter's `$grad`. It also
+returns an environment keyed by tensor id, which is what an optimizer's
+`$step()` takes.
 
 ---
 
@@ -148,7 +154,7 @@ with_grad_tape({
   loss <- ag_mse_loss(att, ag_tensor(matrix(0, d_model, seq_len)))
 })
 g_att <- backward(loss)
-cat("gradient tensors:", length(g_att), "\n")
+cat("dL/dq:", paste(dim(q$grad), collapse = " x "), "\n")
 ```
 
 - Projections are not included: apply `W_q`, `W_k`, `W_v` before the call and
@@ -307,7 +313,7 @@ predict_cm <- function(mod, x_cm, chunk = 64L) {
 
 probs <- predict_cm(model, x_vl)          # [3, 30]
 preds <- apply(probs, 2, which.max)
-truth <- apply(y_vl, 1, which.max)
+truth <- apply(y_vl, 2, which.max)
 cat(sprintf("Val accuracy: %.4f\n", mean(preds == truth)))
 ```
 

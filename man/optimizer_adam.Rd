@@ -47,6 +47,14 @@ An optimizer environment with \code{step(grads)}, \code{zero_grad()},
   the same device and dtype; CPU <-> GPU in f32 continues within float
   tolerance; across f16 and f32 it cannot be exact. Only read saved states
   you trust (\code{readRDS}).
+
+  On the GPU the step always runs in F32, whatever \code{\link{ag_dtype}}
+  is: the moments are F32, the gradient is converted to F32 before it is
+  squared, and a weight held in f16 has an F32 master copy that the step
+  updates and then copies into the f16 weight, so updates smaller than the
+  f16 spacing still accumulate. \code{state()} includes these master
+  weights, and \code{load_state()} installs them as the parameter values;
+  load the optimizer state after the model's own weights.
 }
 \description{
 Create an Adam optimizer

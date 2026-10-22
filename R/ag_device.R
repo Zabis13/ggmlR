@@ -1232,10 +1232,55 @@ GGML_PREC_F32 <- 10L
   .ag_defer_suspend(.ag_adam_step_device_impl(env, i, p, g))
 }
 
+# F32 master copy of a resident weight, for the device Adam step.
+#
+# Adam's state and arithmetic must be F32 whatever ag_dtype() says. Under f16
+# the step used to run entirely in the weight's type: (1 - beta2) * g^2
+# underflowed to 0 for |g| below ~8e-3, eps = 1e-8 is 0 in f16, and m / 0 made
+# the weight Inf at the first step (measured: every non-finite weight sat on an
+# element with v == 0). Converting the f16 weight to F32 each step would not be
+# enough either: an update smaller than the weight's f16 spacing is rounded
+# away when the result goes back to f16, so small updates never accumulate.
+#
+# So a weight that is not F32 gets a persistent F32 master, kept on the
+# parameter (p$master) because it is a property of the weight, not of one
+# optimizer: the step updates the master and copies it into the working weight;
+# .ag_data_write_resident() writes through to it, so a value installed from
+# outside (load_state, a state dict) reaches both. An F32 weight is its own
+# master and nothing changes for it. NULL when the weight is not resident.
+.ag_master_of <- function(p) {
+  wh <- .ag_handle_of(p)
+  if (is.null(wh) || !.ag_handle_live(wh)) return(NULL)
+  if (ggml_tensor_type(wh$ptr) == GGML_TYPE_F32) return(wh)
+  mh <- p$master
+  if (.ag_is_handle(mh) && .ag_handle_live(mh)) return(mh)
+  # First step, or the persistent pool was reset since: seed from the working
+  # weight -- the best value there is when no master exists.
+  val <- .ag_as_matrix(wh)
+  mh  <- .ag_handle(.ag_r_to_gpu(val, dtype = "f32", scope = "persistent"),
+                    dim(val), scope = "persistent")
+  p$master <- mh
+  mh
+}
+
+# The master of p when it is a separate tensor (the weight is not F32), else NULL.
+.ag_master_separate <- function(p) {
+  mh <- p$master
+  wh <- .ag_handle_of(p)
+  if (.ag_is_handle(mh) && .ag_handle_live(mh) && !is.null(wh) &&
+      ggml_tensor_type(wh$ptr) != GGML_TYPE_F32) mh else NULL
+}
+
+# A gradient operand as F32, cast in the graph when it is not.
+.ag_f32_operand <- function(ctx, ptr) {
+  if (ggml_tensor_type(ptr) == GGML_TYPE_F32) ptr else ggml_cast(ctx, ptr, GGML_TYPE_F32)
+}
+
 .ag_adam_step_device_impl <- function(env, i, p, g) {
   m  <- env$m[[i]]
   v  <- env$v[[i]]
   wh <- .ag_handle_of(p)
+  mw <- .ag_master_of(p)                  # F32: the weight itself, or its master
   sh <- .ag_dim(m)
 
   b1 <- env$beta1; b2 <- env$beta2
@@ -1261,18 +1306,21 @@ GGML_PREC_F32 <- 10L
   # enters a new graph as a leaf alias (.ag_graph_operand), not as its node, so
   # nothing re-runs from m and v. The copies below only start once all three
   # results are computed.
+  # Everything below is F32 (see .ag_master_of): m, v and the master are F32
+  # tensors, and the gradient is cast before it is squared or scaled.
   new_m <- .ag_run_op(function(ctx, ptrs)
                         ggml_add(ctx,
                                  ggml_scale(ctx, ptrs[[1L]], b1),
-                                 ggml_scale(ctx, ptrs[[2L]], 1 - b1)),
-                      inputs = list(m, g), out_shape = sh,
+                                 ggml_scale(ctx, .ag_f32_operand(ctx, ptrs[[2L]]), 1 - b1)),
+                      inputs = list(m, g), out_shape = sh, dtype = "f32",
                       scope = "pass", resident = TRUE)
 
   new_v <- .ag_run_op(function(ctx, ptrs)
                         ggml_add(ctx,
                                  ggml_scale(ctx, ptrs[[1L]], b2),
-                                 ggml_scale(ctx, ggml_sqr(ctx, ptrs[[2L]]), 1 - b2)),
-                      inputs = list(v, g), out_shape = sh,
+                                 ggml_scale(ctx, ggml_sqr(ctx, .ag_f32_operand(ctx, ptrs[[2L]])),
+                                            1 - b2)),
+                      inputs = list(v, g), out_shape = sh, dtype = "f32",
                       scope = "pass", resident = TRUE)
 
   # w <- w - lr * (m/bc1) / (sqrt(v/bc2) + eps). The division by bc1 is folded
@@ -1284,7 +1332,7 @@ GGML_PREC_F32 <- 10L
                         ggml_sqrt(ctx, ggml_scale(ctx, ptrs[[3L]], 1 / bc2)), 1, eps)
                ggml_sub(ctx, ptrs[[1L]], ggml_div(ctx, num, den))
              },
-             inputs = list(wh, new_m, new_v), out_shape = sh,
+             inputs = list(mw, new_m, new_v), out_shape = sh, dtype = "f32",
              scope = "pass", resident = TRUE)
 
   # ggml_dup with the destination through `out =`. Three other ways to write
@@ -1295,10 +1343,13 @@ GGML_PREC_F32 <- 10L
   #   `inputs`                  dst becomes an ordinary operand: "leaf_0 (copy
   #                             of node_2) has no backend buffer".
   #   returning ptrs[[1]]       no node to execute; the weight never changes.
+  # The copy into the working weight converts F32 -> its type (ggml_cpy does).
   cpy <- function(src, dst)
     .ag_run_op(function(ctx, ptrs) ggml_dup(ctx, ptrs[[1L]]),
-               inputs = list(src), out_shape = sh, scope = "pass", out = dst)
-  cpy(new_w, wh)
+               inputs = list(src), out_shape = sh, dtype = "f32",
+               scope = "pass", out = dst)
+  cpy(new_w, mw)
+  if (!identical(mw$ptr, wh$ptr)) cpy(new_w, wh)
   cpy(new_m, m)
   cpy(new_v, v)
 
@@ -1395,16 +1446,22 @@ GGML_PREC_F32 <- 10L
   # Resolve every operand up front and refuse the whole step, not part of it,
   # if anything is ineligible: a half-applied step would advance some
   # parameters by t and leave others behind.
+  # The kernel is F32-only. The step runs on the F32 master (.ag_master_of; the
+  # weight itself when it is F32) and an F32 copy of the gradient, and the
+  # result is copied into a working weight of another type afterwards -- the
+  # same contract as the per-op path.
   ops <- lapply(items, function(it) {
     wh <- .ag_handle_of(it$p)
-    list(i = it$i, p = it$p, w = wh, g = it$g,
+    mw <- if (is.null(wh)) NULL else .ag_master_of(it$p)
+    list(i = it$i, p = it$p, w = wh, mw = mw, g = it$g,
          m = env$m[[it$i]], v = env$v[[it$i]])
   })
   ok <- vapply(ops, function(o) {
-    hs <- list(o$w, o$g, o$m, o$v)
+    hs <- list(o$w, o$mw, o$g, o$m, o$v)
     all(vapply(hs, function(h) !is.null(h) && .ag_handle_live(h), logical(1))) &&
-      all(vapply(hs, function(h) ggml_tensor_type(h$ptr) == GGML_TYPE_F32,
-                 logical(1)))
+      all(vapply(list(o$mw, o$m, o$v), function(h) ggml_tensor_type(h$ptr) == GGML_TYPE_F32,
+                 logical(1))) &&
+      ggml_tensor_type(o$g$ptr) %in% c(GGML_TYPE_F32, GGML_TYPE_F16)
   }, logical(1))
   if (!all(ok)) return(invisible(FALSE))
 
@@ -1419,9 +1476,23 @@ GGML_PREC_F32 <- 10L
     # then drops it silently (measured: weights never moved, launch counted).
     # Two descriptors per parameter: the step node and the leaf alias of its
     # gradient (.ag_graph_operand); overflowing a context aborts R in ggml.
-    ctx <- .ag_ctx_ensure(2L * length(chunk) + 4L, scope = "pass")
-    nodes <- lapply(chunk, function(o)
-      ggml_opt_step_adamw(ctx, o$w$ptr, .ag_graph_operand(o$g, ctx), o$m$ptr, o$v$ptr, hp$ptr))
+    # Up to four descriptors per parameter: the gradient's leaf alias, its F32
+    # cast, the step node and the copy into a non-F32 working weight.
+    ctx <- .ag_ctx_ensure(4L * length(chunk) + 4L, scope = "pass")
+    nodes <- lapply(chunk, function(o) {
+      step <- ggml_opt_step_adamw(ctx, o$mw$ptr,
+                                  .ag_f32_operand(ctx, .ag_graph_operand(o$g, ctx)),
+                                  o$m$ptr, o$v$ptr, hp$ptr)
+      # The copy reads the step node, so it runs after the step has written the
+      # master: the dependency is in the graph, not in launch order.
+      if (identical(o$mw$ptr, o$w$ptr)) step else ggml_cpy(ctx, step, o$w$ptr)
+    })
+    # The casts need memory; the copies are views of the working weights that
+    # need their buffer bound. ggml_backend_alloc_ctx_tensors() returns early,
+    # binding nothing, when a context holds no tensor needing memory (F32
+    # gradients), so the views are bound explicitly after it.
+    .ag_ctx_flush(ctx, scope = "pass")
+    for (nd in nodes) .Call("R_ggml_view_bind", nd, PACKAGE = "ggmlR")
 
     ctx_graph <- ggml_init(.ag_graph_ctx_bytes(), no_alloc = TRUE)
     if (is.null(ctx_graph))
@@ -1708,6 +1779,7 @@ GGML_PREC_F32 <- 10L
   if (is.vector(value) && !is.list(value)) value <- matrix(value, ncol = 1L)
   t$data     <- value
   t$data_gen <- NULL
+  t$master   <- NULL   # residency is dropped below; a master would be stale
   if (!is.null(t$ptr)) {
     t$ptr       <- NULL
     t$ptr_pending <- FALSE
@@ -1765,6 +1837,7 @@ GGML_PREC_F32 <- 10L
          " (current is ", .ag_scope_gen(.ag_handle_scope(h)), ").",
          call. = FALSE)
   t$ptr       <- h$ptr
+  t$master    <- NULL     # a new value: an F32 master of the old one is stale
   # Pending state travels with the pointer: a handle rebuilt from the tensor
   # (.ag_handle_of) must still know it is an uncomputed node of the current
   # queue, or .ag_graph_operand would alias memory that holds nothing yet.
@@ -1813,6 +1886,11 @@ GGML_PREC_F32 <- 10L
          paste(t$shape, collapse = "x"), ").", call. = FALSE)
 
   .ag_xfer_up(t$ptr, as.numeric(value), "write_resident")
+  # An F32 master of a lower-precision weight (.ag_master_of) gets the value
+  # too, unrounded: the next device Adam step must continue from what was just
+  # installed, not from the master's previous value.
+  if (.ag_is_handle(t$master) && .ag_handle_live(t$master))
+    .ag_xfer_up(t$master$ptr, as.numeric(value), "write_resident master")
   t$data     <- NULL
   t$data_gen <- NULL
   invisible(t)

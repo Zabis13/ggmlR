@@ -363,7 +363,7 @@ test_that("checkpoints move between the per-op and fused paths", {
   }
 })
 
-test_that("non-F32 weights fall back to the per-op step instead of failing", {
+test_that("f16 weights take the fused step through an F32 master", {
   skip_if_no_gpu()
   ag_device("gpu")
   old <- ag_dtype("f16")
@@ -377,7 +377,9 @@ test_that("non-F32 weights fall back to the per-op step instead of failing", {
     for (k in 1:3) { W$grad <- matrix(0.1, 3L, 4L); opt$step() }
     launches(reset = TRUE)
   })
-  expect_true(is.na(cnt["adam step"]))     # refused, all-or-nothing
+  # The kernel is F32-only; the step runs on the master and an F32 gradient,
+  # so an f16 weight no longer forces the per-op path.
+  expect_identical(unname(cnt["adam step"]), 3)
   expect_true(all(is.finite(as_mat(W))))
   expect_false(isTRUE(all.equal(as_mat(W), w0)))
 })

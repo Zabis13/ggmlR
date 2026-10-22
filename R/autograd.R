@@ -1157,7 +1157,8 @@ backward <- function(loss) {
   d <- .ag_data(p)
   z <- matrix(0.0, nrow(d), ncol(d))
   if (!isTRUE(resident)) return(z)
-  ptr <- .ag_r_to_gpu(z, scope = "persistent")
+  # F32 whatever ag_dtype() is: Adam's moments underflow in f16 (see .ag_master_of).
+  ptr <- .ag_r_to_gpu(z, dtype = "f32", scope = "persistent")
   .ag_handle(ptr, dim(z), scope = "persistent")
 }
 
@@ -1205,7 +1206,10 @@ backward <- function(loss) {
 AG_OPT_STATE_FORMAT  <- "ggmlR.ag_opt_state"
 AG_OPT_STATE_VERSION <- 1L
 
-.ag_opt_state <- function(env, type, slot_names, hyper) {
+# `master = TRUE` (Adam) also records the F32 master of every resident weight
+# that is not F32 (.ag_master_of), NULL for the others. It is an optional field,
+# not a slot: states without it (older ones, SGD) load as before.
+.ag_opt_state <- function(env, type, slot_names, hyper, master = FALSE) {
   if (env$accum_count > 0L)
     warning("optimizer state(): taken mid-accumulation (", env$accum_count, " of ",
             env$accumulate_steps, " backward passes); the accumulated gradients ",
@@ -1226,6 +1230,10 @@ AG_OPT_STATE_VERSION <- 1L
        names       = names(env$params),
        slots       = stats::setNames(lapply(slot_names, function(s) lapply(env[[s]], grab)),
                                      slot_names),
+       master      = if (isTRUE(master)) lapply(env$params, function(p) {
+                       mh <- .ag_master_separate(p)
+                       if (is.null(mh)) NULL else .ag_as_matrix(mh)
+                     }),
        hyper       = hyper)
 }
 
@@ -1260,6 +1268,21 @@ AG_OPT_STATE_VERSION <- 1L
       if (!all(is.finite(v))) fail("slot '", s, "' of parameter ", i, " is not finite")
     }
   }
+  if (!is.null(state$master)) {
+    if (!is.list(state$master) || length(state$master) != n)
+      fail("state has master weights for ", length(state$master),
+           " parameters, optimizer has ", n)
+    for (i in seq_len(n)) {
+      v <- state$master[[i]]
+      if (is.null(v)) next
+      d <- as.integer(.ag_sel_dim(env$params[[i]]))
+      if (!is.numeric(v) || !identical(as.integer(dim(v)), d))
+        fail("master weight of parameter ", i, " has shape ",
+             paste(dim(v) %||% length(v), collapse = "x"), ", expected ",
+             paste(d, collapse = "x"))
+      if (!all(is.finite(v))) fail("master weight of parameter ", i, " is not finite")
+    }
+  }
   int_ok <- function(x) is.numeric(x) && length(x) == 1L && !is.na(x) && x >= 0 && x == round(x)
   if (!int_ok(state$t) || !int_ok(state$accum_count)) fail("t / accum_count are not counts")
 
@@ -1292,6 +1315,19 @@ AG_OPT_STATE_VERSION <- 1L
       } else {
         env[[s]][[i]] <- matrix(as.numeric(v), nrow(v), ncol(v))
       }
+    }
+  }
+  # Master weights become the parameter values. On a resident weight that is
+  # not F32 the master is created first, so the write below reaches it
+  # unrounded (.ag_data_write_resident writes through) while the working
+  # weight gets the rounded value; anywhere else the value is installed as is.
+  if (!is.null(state$master)) {
+    for (i in seq_len(n)) {
+      v <- state$master[[i]]
+      if (is.null(v)) next
+      p <- env$params[[i]]
+      .ag_master_of(p)
+      .ag_opt_store_weight(p, matrix(as.numeric(v), nrow(v), ncol(v)))
     }
   }
   if (!is.null(env$t)) env$t <- as.integer(state$t)
@@ -1446,6 +1482,14 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
 #'   the same device and dtype; CPU <-> GPU in f32 continues within float
 #'   tolerance; across f16 and f32 it cannot be exact. Only read saved states
 #'   you trust (\code{readRDS}).
+#'
+#'   On the GPU the step always runs in F32, whatever \code{\link{ag_dtype}}
+#'   is: the moments are F32, the gradient is converted to F32 before it is
+#'   squared, and a weight held in f16 has an F32 master copy that the step
+#'   updates and then copies into the f16 weight, so updates smaller than the
+#'   f16 spacing still accumulate. \code{state()} includes these master
+#'   weights, and \code{load_state()} installs them as the parameter values;
+#'   load the optimizer state after the model's own weights.
 #' @export
 #' @examples
 #' \donttest{
@@ -1516,8 +1560,11 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
         # upload of the gradient against downloading the weight and both moments
         # and sending the weight back, which is what the host branch would cost
         # now that all three live on the device.
+        # Uploaded as F32: the step works in F32, and rounding a host gradient
+        # to f16 on the way would lose what the cast was meant to keep.
         gh <- if (.ag_is_handle(g)) g else
-                .ag_handle(.ag_r_to_gpu(g, scope = "pass"), dim(g), scope = "pass")
+                .ag_handle(.ag_r_to_gpu(g, dtype = "f32", scope = "pass"), dim(g),
+                           scope = "pass")
         dev_items[[length(dev_items) + 1L]] <- list(i = i, p = p, g = gh)
         next
       }
@@ -1569,7 +1616,8 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
 
   # Checkpoint support (see .ag_opt_state): m, v, t and accum_count.
   env$state <- function() .ag_opt_state(env, "adam", c("m", "v"),
-    list(lr = env$lr, beta1 = env$beta1, beta2 = env$beta2, eps = env$eps))
+    list(lr = env$lr, beta1 = env$beta1, beta2 = env$beta2, eps = env$eps),
+    master = TRUE)
   env$load_state <- function(state) .ag_opt_load_state(env, state, "adam", c("m", "v"),
     list(lr = env$lr, beta1 = env$beta1, beta2 = env$beta2, eps = env$eps))
 
