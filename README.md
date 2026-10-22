@@ -1687,8 +1687,11 @@ for (batch in data_batches) {
 All 15 ONNX Model Zoo models below load, run, and are checked value by value
 against ONNX Runtime with `inst/scripts/ref_check_vs_onnxruntime.sh`, which runs
 each model through both implementations and diffs the outputs rather than their
-length. All 15 match bit for bit (`max|d| = 0`) on both CPU and Vulkan,
-including the quantised detector MaskRCNN-12-int8.
+length. On the CPU all 15 agree within 1e-3 (worst `max|d|` about 2e-5), and the
+quantised detector MaskRCNN-12-int8 matches bit for bit (`max|d| = 0`) on both
+CPU and Vulkan. On Vulkan five transformer models (XCiT, CaiT, BERT, RoBERTa,
+GPT-NeoX) land between 1e-3 and 7e-3: float sums over long reductions taken in a
+different order, not a wrong operator.
 
 | Model | Nodes | Key ops |
 |---|---|---|

@@ -25,7 +25,7 @@
 
 # ggmlR 0.8.6
 
-* **ONNX inference matches ONNX Runtime bit for bit on all 15 reference models**, MaskRCNN-12-int8 included (`max|d| = 0`, was 14/15).
+* **All 15 reference ONNX models agree with ONNX Runtime** (CPU within 1e-3, was 14/15); MaskRCNN-12-int8 matches bit for bit (`max|d| = 0`).
 * New integer-accumulator `QLinearMatMul` kernel, alongside the existing `QLinearConv` one. Scoped to 2-D A x B.
 * New `ONNX_INJECT_NODES` / `ONNX_INJECT_DIR`: replace a node's output with a reference dump mid-run, to tell one amplified divergence from several independent ones.
 

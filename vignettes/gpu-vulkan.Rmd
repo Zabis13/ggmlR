@@ -221,8 +221,11 @@ for (i in seq_len(100L)) {
 }
 ```
 
-All 15 reference ONNX Model Zoo models match ONNX Runtime bit for bit
-(`max|d| = 0`) on Vulkan as well as on the CPU. See
+Against ONNX Runtime on the 15 reference ONNX Model Zoo models, the quantised
+MaskRCNN-12-int8 matches bit for bit (`max|d| = 0`) on Vulkan as on the CPU.
+The others agree within 1e-3 on Vulkan, except five transformer models (XCiT,
+CaiT, BERT, RoBERTa, GPT-NeoX) at 1e-3 to 7e-3, from long float reductions
+summed in a different order. See
 `vignette("onnx-import")` for which operators run on the GPU.
 
 ---
