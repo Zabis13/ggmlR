@@ -95,6 +95,16 @@ cat("Active device:", device, "\n")
 After `ag_device("gpu")`, all subsequent `ag_param` and `ag_tensor` calls
 allocate on the GPU.  Switch back with `ag_device("cpu")`.
 
+### 3.1 What stays on the GPU during training
+
+Weights, Adam moments, gradients and forward activations stay in device
+buffers across a training step, so a step makes 4 host/device crossings
+instead of 10, and the Adam update does not touch the host at all. This is the
+default and changes nothing numerically. Transformers train on the GPU too:
+`ag_flash_attention()` computes all heads in one fused op and its gradient in
+one more, on both CPU and Vulkan. See `vignette("autograd-engine")`,
+sections 3.1 and 11.
+
 ---
 
 ## 4. Mixed precision (f16 / bf16)
@@ -163,9 +173,43 @@ model <- ggml_fit(model, x_train, y_train, epochs = 50L,
                   batch_size = 32L, verbose = 0L)
 ```
 
+### 7.1 Precision of predictions on Vulkan
+
+On a Vulkan device with fp16 support, matrix multiplies keep their tiles in
+f16 by default. A single row goes through an exact f32 kernel, larger batches
+through the tiled one, so predictions carry a relative error around 1e-3 that
+depends on the batch size. Training is not hurt by noise of that size;
+comparisons against a reference, tests and reproducible evaluation are.
+
+`predict_precision = "f32"` in `ggml_compile()` applies to every prediction of
+the model; `matmul_precision = "f32"` applies to one `ggml_predict()` (or a
+trainer's `$predict()`) call and wins over the model's setting. The result then
+matches the CPU to about 1e-6. Training graphs are not affected. The f32 tiles
+cost throughput — about a seventh of the f16 speed for large multiplies on an
+RX 9070 under RADV; `inst/examples/benchmark_coopmat.R` measures it on your
+device. The CPU backend is exact either way.
+
+```{r}
+p_def <- ggml_predict(model, x_train, batch_size = 32L)
+p_f32 <- ggml_predict(model, x_train, batch_size = 32L,
+                      matmul_precision = "f32")
+cat(sprintf("max |default - f32|: %.2e\n", max(abs(p_def - p_f32))))
+```
+
 ---
 
-## 8. ONNX inference on GPU
+## 8. State-space models on the GPU
+
+`ggml_ssm_conv()` and `ggml_ssm_scan()` have Vulkan backward shaders, so a
+Mamba block trains entirely on the GPU — for `d_state` 128 or 256 and Mamba-2
+shapes; other shapes compute the backward on the CPU. The backward kernels of
+the RWKV ops and `ggml_gated_linear_attn()` are CPU-only.
+`inst/examples/mamba_train_demo.R` trains a block end to end; the Vulkan
+backward shaders brought it from 21.7 s to 7.7 s.
+
+---
+
+## 9. ONNX inference on GPU
 
 ```{r, eval = FALSE}
 # Weights loaded to GPU once at load time
@@ -177,9 +221,13 @@ for (i in seq_len(100L)) {
 }
 ```
 
+All 15 reference ONNX Model Zoo models match ONNX Runtime bit for bit
+(`max|d| = 0`) on Vulkan as well as on the CPU. See
+`vignette("onnx-import")` for which operators run on the GPU.
+
 ---
 
-## 9. Build configuration
+## 10. Build configuration
 
 Vulkan support is compiled in automatically when `libvulkan-dev` and `glslc`
 are detected at install time.  SIMD (AVX2/AVX512) for the CPU fallback

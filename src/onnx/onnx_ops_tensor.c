@@ -2074,11 +2074,21 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         if (!a) return -1;
 
         /* mode attribute */
+        /* onnx_attr_str() blanks the buffer when the attribute is absent;
+         * the ONNX default mode is "nearest". */
         char mode_str[32] = "nearest";
-        onnx_attr_str(n, "mode", mode_str, sizeof(mode_str));
+        if (onnx_attr_str(n, "mode", mode_str, sizeof(mode_str)) <= 0)
+            strcpy(mode_str, "nearest");
         enum ggml_scale_mode mode = GGML_SCALE_MODE_NEAREST;
         if (strcmp(mode_str, "linear") == 0 || strcmp(mode_str, "bilinear") == 0)
             mode = GGML_SCALE_MODE_BILINEAR;
+        else if (strcmp(mode_str, "nearest") != 0) {
+            /* cubic and anything unknown used to run as nearest; refuse by
+             * name rather than return a silently different result. */
+            fprintf(stderr, "[onnx] %s %s: mode='%s' not supported\n",
+                    op, n->outputs[0], mode_str);
+            return -1;
+        }
 
         /* Target sizes: from "sizes" input (input 3) or "scales" input (input 2).
          * Resize: inputs = [X, roi, scales, sizes]

@@ -126,6 +126,192 @@ score2 <- ggml_evaluate(model2, x_val, y_val, batch_size = 16L)
 cat(sprintf("Reloaded model accuracy: %.4f\n", score2$accuracy))
 ```
 
+Only the weights are saved, not the optimizer state. On load, every saved
+tensor is checked by name and size against the layer it fills, so a file from
+another architecture stops with the layer named. Files are written in format 3,
+and `ggml_load_model()` refuses a format newer than it knows.
+
+### 1.6 Embedding as the first layer
+
+`ggml_layer_embedding()` can open a sequential model: give it `input_shape =`
+the sequence length, and the input is a matrix of token indices, one row per
+sample. Indices are 0-based, `0 .. vocab_size - 1`; NA, fractions and
+out-of-vocabulary indices are errors, not silently clamped.
+
+```{r}
+set.seed(3)
+vocab <- 20L; seq_len <- 6L
+tok <- matrix(sample(0:(vocab - 1L), 200L * seq_len, replace = TRUE),
+              200L, seq_len)
+lab   <- as.integer(rowMeans(tok < 10L) > 0.5)   # mostly low tokens?
+y_tok <- cbind(1 - lab, lab) * 1.0
+
+model_emb <- ggml_model_sequential() |>
+  ggml_layer_embedding(vocab_size = vocab, dim = 8L, input_shape = seq_len) |>
+  ggml_layer_flatten() |>
+  ggml_layer_dense(2L, activation = "softmax") |>
+  ggml_compile(optimizer = "adam", loss = "categorical_crossentropy")
+
+model_emb <- ggml_fit(model_emb, tok, y_tok,
+                      epochs = 30L, batch_size = 20L, verbose = 0L)
+cat(sprintf("embedding model accuracy: %.4f\n",
+            tail(model_emb$history$train_accuracy, 1)))
+```
+
+### 1.7 Training from a generator
+
+With `generator =`, `ggml_fit()` pulls batches from a function instead of
+slicing a matrix held in memory, so only the current batch is resident. The
+function takes no arguments and returns `list(x, y)` with exactly `batch_size`
+rows, or `NULL` to end the epoch. A finite generator has to rewind itself
+before returning `NULL`, or the next epoch gets nothing:
+
+```{r}
+make_gen <- function(x, y, bs) {
+  pos <- 0L
+  function() {
+    if (pos + bs > nrow(x)) { pos <<- 0L; return(NULL) }   # rewind, end epoch
+    i <- pos + seq_len(bs)
+    pos <<- pos + bs
+    list(x[i, , drop = FALSE], y[i, , drop = FALSE])
+  }
+}
+
+model_gen <- ggml_model_sequential() |>
+  ggml_layer_dense(32L, activation = "relu", input_shape = 4L) |>
+  ggml_layer_dense(3L,  activation = "softmax") |>
+  ggml_compile(optimizer = "adam", loss = "categorical_crossentropy")
+
+model_gen <- ggml_fit(model_gen, generator = make_gen(x_tr, y_tr, 24L),
+                      epochs = 50L, batch_size = 24L, verbose = 0L)
+```
+
+A generator that never returns `NULL` — augmentation, a simulator — needs
+`steps_per_epoch` to say where an epoch ends:
+
+```{r}
+sampler <- function() {
+  i <- sample(nrow(x_tr), 24L)
+  list(x_tr[i, , drop = FALSE], y_tr[i, , drop = FALSE])
+}
+
+model_gen <- ggml_fit(model_gen, generator = sampler, steps_per_epoch = 5L,
+                      epochs = 50L, batch_size = 24L, verbose = 0L)
+cat(sprintf("generator model, val accuracy: %.4f\n",
+            ggml_evaluate(model_gen, x_val, y_val, batch_size = 10L)$accuracy))
+```
+
+`validation_generator` and `validation_steps` validate the same way. The
+arguments that need the whole data set — `validation_split`,
+`validation_data`, `class_weight`, `sample_weight` — are rejected with a
+generator rather than ignored.
+
+### 1.8 Your own training loop: `ggml_trainer()`
+
+When progress is not counted in passes over a data set — reinforcement
+learning, curricula — `ggml_trainer()` returns a context that keeps the
+weights, the Adam moments and the graph alive, and you step it yourself.
+`$step(x, y)` runs one forward and backward pass and returns the loss;
+`$eval(x, y)` measures without training. Both take batches of exactly
+`batch_size` rows; `$predict(x)` takes any number.
+
+A step normalizes each batch by its own statistics and does not update the
+running ones a sequential batch norm predicts with, so a model with batch norm
+warns when the trainer is created. `$calibrate_bn(x)` sets them from
+representative inputs; call it before predicting, snapshotting or saving.
+
+```{r}
+set.seed(5)
+model_tr <- ggml_model_sequential() |>
+  ggml_layer_dense(32L, activation = "relu", input_shape = 4L) |>
+  ggml_layer_batch_norm() |>
+  ggml_layer_dense(3L,  activation = "softmax") |>
+  ggml_compile(optimizer = "adam", loss = "categorical_crossentropy")
+
+tr <- ggml_trainer(model_tr, batch_size = 30L)
+
+for (i in seq_len(300L)) {
+  b    <- sample(nrow(x_tr), 30L)
+  loss <- tr$step(x_tr[b, , drop = FALSE], y_tr[b, , drop = FALSE])
+}
+cat(sprintf("last step loss: %.4f   val loss: %.4f\n",
+            loss, tr$eval(x_val, y_val)))
+
+tr$calibrate_bn(x_tr)
+p_tr <- tr$predict(x_val)
+cat(sprintf("trainer val accuracy: %.4f\n",
+            mean(apply(p_tr, 1, which.max) == apply(y_val, 1, which.max))))
+```
+
+For target networks, `$snapshot()` returns an independent model that later
+steps do not move, and `$update_target(target, tau)` moves it towards the
+current weights (`tau = 1` is a hard copy, a small `tau` the Polyak average):
+
+```{r}
+target <- tr$snapshot()
+b <- sample(nrow(x_tr), 30L)
+tr$step(x_tr[b, , drop = FALSE], y_tr[b, , drop = FALSE])
+tr$update_target(target, tau = 0.1)
+ggml_snapshot_free(target)
+
+model_tr <- tr$model()   # weights back into a model object
+tr$free()
+```
+
+With `ggml_trainer(loss_mask = )` the loss becomes a weighted MSE and
+`$step()` takes a `sample_weight`, so only the outputs whose label is known
+are trained — one action of a Q-network, say.
+
+### 1.9 Fine-tuning: freezing layers and batch-norm statistics
+
+`ggml_freeze_weights()` marks layers as not trainable — by index (`from`,
+`to`), by `layer_names`, or by `prefix`, which selects every layer whose name
+starts with it (a whole block, say `prefix = "block1_"`).
+`ggml_unfreeze_weights()` undoes it. A name or prefix that matches no layer
+stops with an error rather than being ignored.
+
+Freezing a batch-norm layer stops `gamma` and `beta` only.
+`ggml_freeze_bn_stats()` also fixes its running statistics: training then
+normalizes with the stored statistics, as prediction does, and they are no
+longer recalibrated — the usual setting for fine-tuning on small batches.
+
+```{r}
+# `model` from 1.2: dense, batch norm, dropout, dense, dense
+model_ft <- ggml_freeze_weights(model, from = 1L, to = 2L)
+model_ft <- ggml_freeze_bn_stats(model_ft)
+model_ft <- ggml_fit(model_ft, x_tr, y_tr,
+                     epochs = 20L, batch_size = 32L, verbose = 0L)
+
+tryCatch(ggml_freeze_weights(model, prefix = "encoder_"),
+         error = function(e) cat("Error:", conditionMessage(e), "\n"))
+```
+
+### 1.10 Weight decay and prediction precision
+
+`weight_decay` in `ggml_compile()` (and `ggml_trainer()`) is decoupled weight
+decay, AdamW-style, for `"adam"` and `"sgd"`; frozen weights are not decayed.
+
+On a Vulkan device with fp16 support, matrix multiplies keep their tiles in
+f16 by default, so predictions carry a relative error around 1e-3 that depends
+on the batch size. `predict_precision = "f32"` makes every prediction match
+the CPU to about 1e-6; `matmul_precision` does the same for one
+`ggml_predict()` or `$predict()` call. Training is unaffected.
+
+```{r}
+model_wd <- ggml_model_sequential() |>
+  ggml_layer_dense(32L, activation = "relu", input_shape = 4L) |>
+  ggml_layer_dense(3L,  activation = "softmax") |>
+  ggml_compile(optimizer = "adam", loss = "categorical_crossentropy",
+               weight_decay = 0.01, predict_precision = "f32")
+
+model_wd <- ggml_fit(model_wd, x_tr, y_tr,
+                     epochs = 100L, batch_size = 32L, verbose = 0L)
+p_wd <- ggml_predict(model_wd, x_val, batch_size = 10L)
+p_16 <- ggml_predict(model_wd, x_val, batch_size = 10L,
+                     matmul_precision = "default")   # this call only
+cat(sprintf("max |f32 - default|: %.2e (0 on the CPU)\n", max(abs(p_wd - p_16))))
+```
+
 ---
 
 ## 2. Functional API
@@ -138,7 +324,7 @@ Use `ggml_input()` to declare inputs, pipe through layers, then call `ggml_model
 ```{r}
 inp  <- ggml_input(shape = 4L)
 
-h    <- inp |> ggml_layer_dense(32L, activation = "relu") |> ggml_layer_batch_norm()
+h    <- inp |> ggml_layer_dense(32L, activation = "relu") |> ggml_layer_rms_norm()
 h    <- h   |> ggml_layer_dense(16L, activation = "relu")
 out  <- h   |> ggml_layer_dense(3L,  activation = "softmax")
 
@@ -152,6 +338,11 @@ model_fn <- ggml_fit(model_fn, x_tr, y_tr,
 score_fn <- ggml_evaluate(model_fn, x_val, y_val, batch_size = 16L)
 cat(sprintf("Functional model accuracy: %.4f\n", score_fn$accuracy))
 ```
+
+Normalization in the functional API is per-sample RMS normalization
+(`ggml_layer_rms_norm()`), with no batch statistics. A functional
+`ggml_layer_batch_norm()` is the same layer under an older name, not the
+mean/variance batch norm of the sequential model in 1.2.
 
 ### 2.2 Multi-input model — mtcars regression
 
@@ -577,9 +768,10 @@ After calling `ag_device()` and `ag_dtype()`, all subsequent `ag_param` and
 | Multi-output | `outputs = list(...)`, `loss =` per head | manual |
 | Attention | `ggml_layer_attention()`, `ggml_attention()` | `ag_multihead_attention()` |
 | Compile | `ggml_compile()` | manual optimizer |
-| Train | `ggml_fit()` | `with_grad_tape` + `backward` + `opt$step` |
+| Train | `ggml_fit()` (data or `generator =`), `ggml_trainer()` for your own loop | `with_grad_tape` + `backward` + `opt$step` |
+| Fine-tune | `ggml_freeze_weights()`, `ggml_freeze_bn_stats()` | — |
 | Evaluate | `ggml_evaluate()` | manual loop |
 | Predict | `ggml_predict()` | manual forward |
-| Save / load | `ggml_save_model()` / `ggml_load_model()` | — |
+| Save / load | `ggml_save_model()` / `ggml_load_model()` | `ag_save_model()` / `ag_load_model()`, `ag_state_dict()` / `ag_load_state_dict()` |
 | Callbacks | `ggml_callback_early_stopping()`, `ggml_schedule_*` | `lr_scheduler_*`, `clip_grad_norm` |
 | Device | automatic | `ag_device()` / `ag_dtype()` |

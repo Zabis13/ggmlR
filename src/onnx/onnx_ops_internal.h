@@ -78,6 +78,14 @@ void                cval_put(onnx_ggml_ctx_t *c, const char *name,
 int                 cval_get(onnx_ggml_ctx_t *c, const char *name,
                              int64_t *out, int max_n);
 
+/* Whether (int64_t)v is defined: float -> int64 conversion of a value outside
+ * [-2^63, 2^63) or of NaN is undefined behaviour.  Both bounds are exact in
+ * float, and NaN fails both comparisons.  Float constants that fail this are
+ * simply not registered as cvals (e.g. -FLT_MAX as a Clip bound). */
+static inline int onnx_f32_fits_i64(float v) {
+    return v >= -0x1p63f && v < 0x1p63f;
+}
+
 struct ggml_tensor *get_input(onnx_ggml_ctx_t *c, const onnx_node_t *n, int idx);
 
 struct ggml_tensor *onnx_reshape_nd(struct ggml_context *ctx,

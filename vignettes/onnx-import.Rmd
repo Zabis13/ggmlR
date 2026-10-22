@@ -30,10 +30,10 @@ library(ggmlR)
 ```{r, eval=FALSE}
 model <- onnx_load("path/to/model.onnx")
 
-# Model summary (layers, ops, parameters)
+# Model summary (IR and opset version, node count, operators used)
 onnx_summary(model)
 
-# Input tensor info (name, shape, dtype)
+# Input names and shapes (-1 for a dynamic dimension)
 onnx_inputs(model)
 ```
 
@@ -41,24 +41,54 @@ onnx_inputs(model)
 
 ## 2. Run inference
 
-Inputs are named R arrays in NCHW order (matching the ONNX model's expected
-layout).
+The simplest entry point is `predict()`. It takes an array in the shape the
+ONNX file declares, with samples in the first dimension, splits it into the
+batch size the model was loaded with, and returns the output in the declared
+shape too:
 
 ```{r, eval=FALSE}
-# Random image batch — replace with real data
-input <- array(runif(1 * 3 * 224 * 224), dim = c(1L, 3L, 224L, 224L))
+# Random image batch, [N, C, H, W] as declared — replace with real data
+x <- array(runif(8 * 3 * 224 * 224), dim = c(8L, 3L, 224L, 224L))
 
-result <- onnx_run(model, list(input_name = input))
-
-cat("Output shape:", paste(dim(result[[1]]), collapse = " x "), "\n")
+probs <- predict(model, x)   # [8, 1000] for a classifier
 ```
 
-For models with multiple inputs, pass a named list:
+### The lower-level `onnx_run()`
+
+`onnx_run()` takes a named list (names from `onnx_inputs()`) and passes each
+element to the model as `as.numeric(x)`. ONNX tensors are **row-major**: the
+last declared axis varies fastest. An R array is column-major, so an array
+with `dim = c(1, 3, 224, 224)` would reach the model with its axes scrambled.
+Lay the data out in storage order — the declared shape reversed — or
+rearrange it with `aperm()`:
+
+```{r, eval=FALSE}
+# A 224 x 224 x 3 image (H, W, C) for a model declared as [1, 3, 224, 224]
+img <- array(runif(224 * 224 * 3), dim = c(224L, 224L, 3L))
+
+# Storage order of [1, 3, 224, 224] is (W, H, C, N): W fastest
+input <- aperm(img, c(2, 1, 3))
+
+result <- onnx_run(model, list(input_name = input))
+```
+
+The outputs come back the same way: `dim` describes the buffer in storage
+order, the reverse of the declared shape. A detector output declared
+`[nbox, 4]` arrives with `dim = c(4, nbox)` — one box per column, so ordinary
+R indexing is correct. Trailing unit axes are dropped, so an output declared
+`[1, 1000]` arrives as a plain vector of 1000 with no `dim`.
+
+```{r, eval=FALSE}
+cat("Output dim (storage order):", paste(dim(result[[1]]), collapse = " x "), "\n")
+```
+
+For models with multiple inputs, pass one element per input. A single token
+sequence (batch 1) needs no rearranging:
 
 ```{r, eval=FALSE}
 result <- onnx_run(model, list(
-  input_ids      = array(as.integer(tokens), dim = c(1L, length(tokens))),
-  attention_mask = array(1L, dim = c(1L, length(tokens)))
+  input_ids      = as.numeric(tokens),
+  attention_mask = rep(1, length(tokens))
 ))
 ```
 
@@ -110,20 +140,68 @@ result <- onnx_run(model_fp16, list(input = input))
 
 ## 6. Supported operators
 
-ggmlR supports 50+ ONNX operators, including:
+ggmlR supports 90+ ONNX operators. Every operator runs on the CPU backend;
+the **GPU** column says where it runs when a Vulkan device is available:
 
-- **Convolution:** Conv, ConvTranspose, MaxPool, AveragePool, GlobalAveragePool
-- **Linear:** Gemm, MatMul, Linear
-- **Activations:** Relu, Sigmoid, Tanh, Gelu, HardSigmoid, Mish, Clip, Elu
-- **Normalization:** BatchNormalization, LayerNormalization, GroupNormalization
-- **Shape ops:** Reshape, Transpose, Flatten, Squeeze, Unsqueeze, Concat, Split, Slice, Gather, ScatterElements
-- **Elementwise:** Add, Sub, Mul, Div, Pow, Sqrt, Exp, Log, Abs, Neg
-- **Reduction:** ReduceMean, ReduceSum, ReduceMax
-- **Attention:** Attention (fused), MultiHeadAttention
-- **Quantized:** QLinearConv, QLinearMatMul, DynamicQuantizeLinear
-- **Other:** Cast, Pad, Resize, Dropout (identity at inference), LSTM, GRU, Einsum
+- **Yes**: the operator runs on Vulkan.
+- **Yes\***: runs on Vulkan, with the condition given in the notes; otherwise
+  that node falls back to the CPU.
+- **Host**: evaluated while the graph is built or between graph segments, so
+  no device kernel is involved.
+- **CPU + GPU path**: a CPU graph node whose kernel hands the work to a Vulkan
+  kernel when one is available.
 
-Custom fused ops: **RelPosBias2D** (BoTNet).
+An operator not listed here, or a form of one the notes exclude, is not
+mapped: ggmlR prints `unsupported op '<name>'` (or the specific reason) to the
+console, and the model outputs that depend on that node are not built —
+`onnx_run()` returns them empty. See [Debugging tips](#debugging-tips).
+
+| Category | Operator | CPU | GPU | Notes |
+|---|---|---|---|---|
+| Elementwise | Add, Sub, Mul, Div | Yes | Yes | NumPy broadcasting |
+| Elementwise | Mod, Pow | Yes | Yes | Pow with an integer exponent 1–8 is unrolled into multiplications |
+| Elementwise | Min, Max | Yes | Yes | |
+| Elementwise | Neg, Abs, Sqrt, Exp, Log, Floor, Ceil | Yes | Yes | |
+| Elementwise | Sin, Cos, Erf | Yes | Yes | |
+| Elementwise | Clip | Yes | Yes | |
+| Activation | Relu, LeakyRelu, PRelu, Elu | Yes | Yes | |
+| Activation | Sigmoid, HardSigmoid, HardSwish, Tanh | Yes | Yes | |
+| Activation | Gelu, Silu | Yes | Yes | |
+| Activation | Softmax | Yes | Yes | |
+| Comparison / logic | Equal, Less, LessOrEqual, Greater, GreaterOrEqual | Yes | Yes | |
+| Comparison / logic | Not, And, Or, Xor, Where | Yes | Yes | |
+| Linear algebra | MatMul, Gemm | Yes | Yes | MatMul is batched |
+| Linear algebra | Einsum | Yes | Yes | only `bqc,bchw->bqhw` (a batched matmul); other equations are not mapped |
+| Convolution | Conv | Yes | Yes | 1D / 2D, grouped, depthwise; `auto_pad` SAME_UPPER / SAME_LOWER |
+| Convolution | ConvTranspose | Yes | Yes | 1D / 2D |
+| Pooling | MaxPool, AveragePool | Yes | Yes | `auto_pad` SAME_UPPER / SAME_LOWER |
+| Pooling | GlobalAveragePool | Yes | Yes | |
+| Normalization | BatchNormalization, LayerNormalization, GroupNormalization | Yes | Yes | |
+| Normalization | InstanceNormalization, RMSNormalization | Yes | Yes | |
+| Reduction | ReduceMean, ReduceSum, ReduceMax, ReduceMin | Yes | Yes | |
+| Reduction | CumSum | Yes | Yes | |
+| Shape / layout | Reshape, Flatten, Squeeze, Unsqueeze, Transpose | Yes | Yes | views or copies |
+| Shape / layout | Slice, Split, Concat, Expand, Tile, Pad | Yes | Yes | |
+| Shape / layout | Identity, Dropout | Yes | Yes | Dropout is the identity at inference |
+| Constants | Shape, Constant, EyeLike | Yes | Host | Constant: TensorProto or scalar `value_float` / `value_int` |
+| Constants | ConstantOfShape | Yes | Host | fill value INT64, INT32, DOUBLE or FLOAT |
+| Constants | Range | Yes | Yes | |
+| Type | Cast | Yes | Yes | |
+| Indexing | Gather, GatherND | Yes | Yes | |
+| Indexing | ScatterElements | Yes | Yes\* | `reduction` "none" or "add"; "add" on the GPU needs `VK_EXT_shader_atomic_float` |
+| Indexing | ScatterND | Yes | Yes | `reduction` "none" only |
+| Indexing | TopK | Yes | Yes\* | any axis up to rank 4; K within the GPU top-k pipelines; output shape depends on data, so the graph is split here |
+| Resampling | Resize, Upsample | Yes | Yes\* | modes "nearest" and "linear" (bilinear); "cubic" and other modes are not mapped; F32 input on the GPU |
+| Quantized | QuantizeLinear, DequantizeLinear | Yes | Yes | |
+| Quantized | QLinearConv, QLinearMatMul | Yes | Yes | exact integer accumulator reproducing ONNX Runtime's int16 pair saturation; QLinearConv takes `auto_pad` |
+| Quantized | QLinearAdd, QLinearSigmoid, QLinearConcat | Yes | Yes | |
+| Detection | NonZero | Yes | Host | output shape depends on data; the graph is split here |
+| Detection | NonMaxSuppression | Yes | CPU + GPU path | output shape depends on data; the graph is split here |
+| Detection | RoiAlign | Yes | CPU + GPU path | malformed ROIs or batch indices stay on the CPU kernel |
+
+Fused pattern: **RelPosBias2D** (BoTNet) is not an ONNX operator. The
+importer recognises the relative-position-bias subgraph and replaces it with
+a single fused op that runs on both CPU and Vulkan.
 
 ---
 
@@ -149,18 +227,25 @@ For full working examples with real ONNX Zoo models see:
 
 ## 8. Debugging tips
 
-If a model fails to load or produces wrong results:
+If a model's outputs come back empty or wrong:
 
-1. **Check operator support** — print the model's op list with Python's
-   `onnx` package and compare against the table above.
+1. **Read the console messages.** A node that cannot be mapped does not
+   raise an R error. ggmlR prints the node and the reason —
+   `unsupported op '<name>'` for an operator missing from the table above, or
+   a specific form such as `mode='cubic' not supported` for Resize or an
+   Einsum equation other than `bqc,bchw->bqhw` — followed by the model outputs
+   that were never built because of it and the first failing node. Those
+   outputs come back empty from `onnx_run()`. `onnx_summary(model)$ops` lists
+   the model's operators.
 
-2. **Verify protobuf field numbers** — the built-in parser is hand-written;
-   an unexpected field can cause silent mis-parsing.
+2. **Check the input layout.** Wrong but plausible outputs most often mean
+   the input reached the model with its axes scrambled — see the row-major
+   note in section 2, or use `predict()`.
 
-3. **NaN tracing** — use the eval callback for per-node inspection rather
-   than a post-compute scan (which aliases buffers and gives false readings).
-
-4. **Repeated-run aliasing** — `ggml_backend_sched` aliases intermediate
-   buffers over weight buffers. ggmlR calls `sched_alloc_and_load()` before
-   each compute to reset allocation. If you see correct results on the first
-   run but garbage on subsequent runs, this is the cause.
+3. **Trace a divergence from ONNX Runtime.** Set
+   `ONNX_INJECT_NODES=<name>[,<name>...]` and `ONNX_INJECT_DIR=<dir>` to
+   replace each named node's output, right after it is computed, with the
+   reference dump `<dir>/<name>.ort.bin` (flat little-endian f32). If a later
+   disagreement disappears, it was the earlier one amplified; if it stays,
+   the two are independent. Only f32 tensors are injected, and a size
+   mismatch is refused rather than padded or truncated.

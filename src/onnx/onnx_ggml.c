@@ -399,12 +399,22 @@ static int create_initializer_tensors(onnx_ggml_ctx_t *c) {
                     }
                     cval_put(c, init->name, vals, (int)n_elem);
                 } else if (init->data_type == ONNX_DTYPE_FLOAT) {
+                    /* All elements are checked before any is converted, and the
+                     * cval is registered whole or not at all; the float tensor
+                     * itself is already in the graph either way. */
                     float tmp_f32;
-                    for (int64_t j = 0; j < n_elem; j++) {
+                    int fits = 1;
+                    for (int64_t j = 0; j < n_elem && fits; j++) {
                         memcpy(&tmp_f32, (const char *)src + j * sizeof(float), sizeof(float));
-                        vals[j] = (int64_t)tmp_f32;
+                        fits = onnx_f32_fits_i64(tmp_f32);
                     }
-                    cval_put(c, init->name, vals, (int)n_elem);
+                    if (fits) {
+                        for (int64_t j = 0; j < n_elem; j++) {
+                            memcpy(&tmp_f32, (const char *)src + j * sizeof(float), sizeof(float));
+                            vals[j] = (int64_t)tmp_f32;
+                        }
+                        cval_put(c, init->name, vals, (int)n_elem);
+                    }
                 }
             }
         }

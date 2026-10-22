@@ -153,12 +153,15 @@ void main() {
     // 128 is ROI_ALIGN_MAX_SAMPLES in roi_align.h, repeated as a literal
     // because GLSL cannot include that header. The three copies must agree.
     //
-    // Written as !(x <= CAP) rather than (x > CAP) so a non-finite roi_h,
-    // which reaches int(ceil()) as undefined, is caught rather than passed.
+    // As in roi_align.c, the adaptive quotient is capped while still a float:
+    // int() of a non-finite or out-of-range value is undefined, and q <= CAP
+    // is false for NaN. The clamps below still bound an explicit ratio.
+    const float q_h = ceil(roi_h / float(p.oh));
+    const float q_w = ceil(roi_w / float(p.ow));
     int sr_h = p.sampling_ratio > 0 ? p.sampling_ratio
-                                    : int(ceil(roi_h / float(p.oh)));
+                                    : (q_h <= 128.0 ? int(q_h) : 128);
     int sr_w = p.sampling_ratio > 0 ? p.sampling_ratio
-                                    : int(ceil(roi_w / float(p.ow)));
+                                    : (q_w <= 128.0 ? int(q_w) : 128);
     if (!(sr_h <= 128)) { sr_h = 128; }
     if (!(sr_w <= 128)) { sr_w = 128; }
 

@@ -448,6 +448,20 @@ bool ggml_vk_roi_align_run(
         }
     }
 
+    // The shader converts the batch index with uint() and does not clamp it;
+    // the CPU kernel clamps it into [0, N). An index outside [0, N), or NaN,
+    // would be an undefined conversion and an out-of-bounds read on the GPU,
+    // so such input stays on the CPU kernel, which applies its clamp.
+    for (unsigned int i = 0; i < num_rois; i++) {
+        const float bf = batch_indices[i];
+        if (!(bf >= 0.0f && bf < (float)N)) {
+            GGML_LOG_INFO("%s: ROI %u has batch index %g outside [0, %u) "
+                          "-- staying on the CPU kernel.\n",
+                          __func__, i, (double)bf, N);
+            return false;
+        }
+    }
+
     const size_t x_bytes    = (size_t)W * H * C * N * sizeof(float);
     const size_t rois_bytes = (size_t)4 * num_rois * sizeof(float);
     const size_t bi_bytes   = (size_t)num_rois * sizeof(float);

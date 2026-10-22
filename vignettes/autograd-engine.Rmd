@@ -75,6 +75,8 @@ cat("dL/db:\n"); print(grads[["b"]])
 | `ag_slice_rows(x, from, n)` | Rows `from+1..from+n` (0-based `from`); gradient zero outside |
 | `ag_concat_rows(a, b)` | `rbind(a, b)`, same number of columns; gradient split back by rows |
 | `ag_softmax_cross_entropy_loss(logits, y)` | Fused softmax + cross-entropy |
+| `ag_multihead_attention(...)` | Multi-head attention module, one head at a time |
+| `ag_flash_attention(q, k, v, n_heads)` | All heads in one fused op, gradient in one more (section 3.1) |
 
 ---
 
@@ -123,6 +125,42 @@ model_ln <- ag_sequential(
 )
 cat("LayerNorm model parameters:", length(model_ln$parameters()), "\n")
 ```
+
+### 3.1 Fused attention
+
+`ag_flash_attention()` computes every head in a single
+`ggml_flash_attn_ext()` call and its gradient in a single
+`ggml_flash_attn_back()`, so the tape holds one node where a per-head loop
+records dozens. `q`, `k` and `v` are `[d_model, seq]`, with rows split into
+`n_heads` contiguous blocks — the same head layout `ag_multihead_attention()`
+uses.
+
+```{r}
+set.seed(2)
+d_model <- 16L; seq_len <- 8L; n_heads <- 4L
+
+q <- ag_param(matrix(runif(d_model * seq_len, -1, 1), d_model, seq_len))
+k <- ag_param(matrix(runif(d_model * seq_len, -1, 1), d_model, seq_len))
+v <- ag_param(matrix(runif(d_model * seq_len, -1, 1), d_model, seq_len))
+
+with_grad_tape({
+  att  <- ag_flash_attention(q, k, v, n_heads = n_heads, causal = TRUE)
+  loss <- ag_mse_loss(att, ag_tensor(matrix(0, d_model, seq_len)))
+})
+g_att <- backward(loss)
+cat("gradient tensors:", length(g_att), "\n")
+```
+
+- Projections are not included: apply `W_q`, `W_k`, `W_v` before the call and
+  `W_o` after it.
+- `k` and `v` may have a different sequence length from `q`
+  (cross-attention), as long as they match each other.
+- `causal = TRUE` lets query `j` attend to keys `1..j`. A custom `mask` is
+  `[seq_kv, seq_q]` — keys index the **rows**, queries the columns, the
+  transpose of the usual convention — either logical (`TRUE` = attend) or
+  numeric (`0` / `-Inf`). The same mask is applied to the gradient.
+- On the attention core alone (forward and backward, CPU backend) the fused op
+  is 15–36× faster than the per-head loop, depending on size.
 
 ---
 
@@ -443,10 +481,7 @@ buffers to the host first, which needs about twice their device size.
 
 ## 12. Data-parallel training
 
-For multi-GPU or faster single-GPU training see `dp_train()`:
-
-```{r}
-# Full example: inst/examples/dp_train_demo.R
-```
+For multi-GPU or faster single-GPU training see `dp_train()`; a full example
+is in `inst/examples/dp_train_demo.R`.
 
 See also `vignette("data-parallel-training", package = "ggmlR")`.

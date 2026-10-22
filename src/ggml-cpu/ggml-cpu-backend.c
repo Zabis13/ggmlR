@@ -213,16 +213,37 @@ typedef pthread_t ggml_thread_t;
 #include <TargetConditionals.h>
 #endif
 
+// Table entries must match the typedefs exactly: calling a function through a
+// pointer of a different type is undefined behaviour (clang
+// -fsanitize=function). These thunks have the typedef signatures and call the
+// concretely typed functions directly.
+#define GGML_CPU_FROM_FLOAT_THUNK(fn) \
+    static void fn##_from_float(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) { fn(x, y, k); }
+#define GGML_CPU_VEC_DOT_THUNK(fn) \
+    static void fn##_vec_dot(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x, size_t bx, \
+                             const void * GGML_RESTRICT y, size_t by, int nrc) { fn(n, s, bs, x, bx, y, by, nrc); }
+
+GGML_CPU_FROM_FLOAT_THUNK(ggml_cpu_fp32_to_fp32)
+GGML_CPU_FROM_FLOAT_THUNK(ggml_cpu_fp32_to_fp16)
+GGML_CPU_FROM_FLOAT_THUNK(ggml_cpu_fp32_to_bf16)
+GGML_CPU_FROM_FLOAT_THUNK(ggml_cpu_fp32_to_i32)
+GGML_CPU_VEC_DOT_THUNK(ggml_vec_dot_f32)
+GGML_CPU_VEC_DOT_THUNK(ggml_vec_dot_f16)
+GGML_CPU_VEC_DOT_THUNK(ggml_vec_dot_bf16)
+
+#undef GGML_CPU_FROM_FLOAT_THUNK
+#undef GGML_CPU_VEC_DOT_THUNK
+
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
-        .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp32,
-        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .from_float               = ggml_cpu_fp32_to_fp32_from_float,
+        .vec_dot                  = ggml_vec_dot_f32_vec_dot,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
     [GGML_TYPE_F16] = {
-        .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp16,
-        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f16,
+        .from_float               = ggml_cpu_fp32_to_fp16_from_float,
+        .vec_dot                  = ggml_vec_dot_f16_vec_dot,
         .vec_dot_type             = GGML_TYPE_F16,
         .nrows                    = 1,
     },
@@ -388,8 +409,8 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q8_K,
     },
     [GGML_TYPE_BF16] = {
-        .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_bf16,
-        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_bf16,
+        .from_float               = ggml_cpu_fp32_to_bf16_from_float,
+        .vec_dot                  = ggml_vec_dot_bf16_vec_dot,
         .vec_dot_type             = GGML_TYPE_BF16,
         .nrows                    = 1,
     },
@@ -406,7 +427,7 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
     },
     [GGML_TYPE_I32] = {
-        .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
+        .from_float               = ggml_cpu_fp32_to_i32_from_float,
     },
 };
 

@@ -614,9 +614,11 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         const onnx_attr_t *vf_attr = onnx_node_find_attr(n, "value_float");
         if (vf_attr) {
             out = make_scalar(c, vf);
-            /* cval for scalar float (cast to int64) */
-            int64_t cv = (int64_t)vf;
-            cval_put(c, n->outputs[0], &cv, 1);
+            /* cval for scalar float (cast to int64), only when representable */
+            if (onnx_f32_fits_i64(vf)) {
+                int64_t cv = (int64_t)vf;
+                cval_put(c, n->outputs[0], &cv, 1);
+            }
         } else {
             out = make_scalar(c, (float)vi);
             /* cval for scalar int */
@@ -807,7 +809,9 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                 }
                 /* Only exponents small enough to be worth unrolling, and only
                  * exact integers: 2.5 is not 2. */
-                if (got && bv == (double)(int64_t)bv && bv >= 1 && bv <= 8) {
+                /* Range first: (int64_t) of NaN or of an out-of-range value is
+                 * undefined, so the conversion only runs inside [1, 8]. */
+                if (got && bv >= 1 && bv <= 8 && bv == (double)(int64_t)bv) {
                     exp_i = (int64_t)bv;
                     is_int_exp = 1;
                 }
@@ -1227,10 +1231,12 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                 c->const_fill_done[c->n_const_fills] = NULL;
                 c->n_const_fills++;
             }
-            /* cval propagation: all elements = fill_val (cast to int64) */
+            /* cval propagation: all elements = fill_val (cast to int64), only
+             * when representable (e.g. not -inf or -FLT_MAX in a mask fill);
+             * the float constant above is filled either way. */
             int64_t total_elems = ne[0];
             for (int d = 1; d < ndims; d++) total_elems *= ne[d];
-            if (total_elems <= ONNX_MAX_DIMS) {
+            if (total_elems <= ONNX_MAX_DIMS && onnx_f32_fits_i64(fill_val)) {
                 int64_t cvals[ONNX_MAX_DIMS];
                 for (int j = 0; j < (int)total_elems; j++)
                     cvals[j] = (int64_t)fill_val;

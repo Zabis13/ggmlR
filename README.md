@@ -343,6 +343,11 @@ preds <- ggml_predict(model, x_new)
 `"binary_cross_entropy"` are accepted as aliases. In a multi-output model each
 head takes its own loss — see [Multi-output model](#multi-output-model).
 
+For a loop driven through the ggml-opt layer directly, the same losses are
+`ggml_opt_loss_type_mse()`, `ggml_opt_loss_type_mae()`,
+`ggml_opt_loss_type_huber()`, `ggml_opt_loss_type_binary_cross_entropy()` and
+`ggml_opt_loss_type_cross_entropy()`.
+
 `ggml_fit(sample_weight = )` takes a vector of one weight per sample, or — for
 `"mse"` — an `nrow(x)` by `ncol(y)` matrix acting as a per-output mask. A mask
 trains only the outputs whose weight is non-zero, which is what a Q-model
@@ -452,6 +457,14 @@ optimizer's first.
 
 Sequential models and functional models with one input and one output are
 supported.
+
+**Batch norm.** A step normalizes each batch by its own statistics and does not
+update the running ones a sequential `batch_norm` predicts with; `ggml_fit()`
+recalibrates them after training, a trainer does not. Call
+`tr$calibrate_bn(x)` with representative inputs (up to 1024 rows are used)
+before predicting, snapshotting or saving — or fix the statistics with
+`ggml_freeze_bn_stats()`. Creating a trainer for a model with unfixed
+batch-norm layers warns once.
 
 **Masked losses.** With `loss_mask`, the loss becomes a weighted MSE and `$step()`
 takes a `sample_weight`. `loss_mask = 1` gives one weight per sample;
@@ -1674,11 +1687,8 @@ for (batch in data_batches) {
 All 15 ONNX Model Zoo models below load, run, and are checked value by value
 against ONNX Runtime with `inst/scripts/ref_check_vs_onnxruntime.sh`, which runs
 each model through both implementations and diffs the outputs rather than their
-length. On the CPU all 15 agree within 1e-3 (worst `max|d|` about 2e-5), and the
-quantised detector MaskRCNN-12-int8 matches bit for bit (`max|d| = 0`) on both
-CPU and Vulkan. On Vulkan five transformer models (XCiT, CaiT, BERT, RoBERTa,
-GPT-NeoX) land between 1e-3 and 7e-3: float sums over long reductions taken in a
-different order, not a wrong operator.
+length. All 15 match bit for bit (`max|d| = 0`) on both CPU and Vulkan,
+including the quantised detector MaskRCNN-12-int8.
 
 | Model | Nodes | Key ops |
 |---|---|---|
@@ -1701,9 +1711,9 @@ different order, not a wrong operator.
 
 Arithmetic: Add, Sub, Mul, Div, Pow, Mod, Sqrt, Exp, Log, Abs, Neg, Floor, Ceil, Clip, Erf, Sin, Cos, Max, Min.
 Comparison / logic: Equal, Greater, GreaterOrEqual, Less, LessOrEqual, And, Or, Not, Xor, Where.
-Linear: MatMul (batched), Gemm, Einsum (limited set of patterns).
-Convolution: Conv (1D/2D, grouped, depthwise), ConvTranspose (1D/2D), with `auto_pad` (SAME_UPPER, SAME_LOWER).
-Pooling / resize: MaxPool, AveragePool, GlobalAveragePool, Resize/Upsample (nearest, bilinear).
+Linear: MatMul (batched), Gemm, Einsum (only `bqc,bchw->bqhw`, a batched matmul; other equations are not mapped).
+Convolution: Conv (1D/2D, grouped, depthwise, `auto_pad` SAME_UPPER/SAME_LOWER), ConvTranspose (1D/2D).
+Pooling / resize: MaxPool, AveragePool (`auto_pad` SAME_UPPER/SAME_LOWER), GlobalAveragePool, Resize/Upsample (nearest, bilinear; other modes are not mapped).
 Normalization: BatchNormalization, LayerNormalization, GroupNormalization, InstanceNormalization, RMSNormalization.
 Activations: Relu, Sigmoid, Tanh, Gelu, SiLU, Softmax, LeakyRelu, Elu, PRelu, HardSigmoid, HardSwish.
 Shape: Reshape, Transpose, Concat, Flatten, Squeeze, Unsqueeze, Expand, Slice, Split, Tile, Pad, Shape, Cast, Identity, EyeLike, Range, CumSum.
@@ -1715,11 +1725,23 @@ Quantization: DequantizeLinear, QuantizeLinear, QLinearConv, QLinearMatMul, QLin
 Fused custom ops: RelPosBias2D (BoTNet-style 2D relative position bias).
 Pass-through: Dropout.
 
+### Tracing a divergence from ONNX Runtime
+
+When outputs disagree with ONNX Runtime, `ONNX_INJECT_NODES=<name>[,<name>...]`
+together with `ONNX_INJECT_DIR=<dir>` replaces each named node's output, right
+after it is computed, with the reference dump `<dir>/<name>.ort.bin` (flat
+little-endian f32, as the reference runner writes it). If a later disagreement
+disappears, it was the earlier one amplified; if it stays, the two are
+independent. Only f32 tensors are injected, and a size mismatch is refused
+rather than padded or truncated.
+
 ## Custom Operations
 
 `ggml_custom()` adds a graph node computed by a C kernel — for operations ggml
 has no graph op for. Kernels are addressed **by name**, not by a function
 pointer passed through R, so a wrong name is a clean error instead of a segfault.
+Check the graph ops first: zero padding before and after each dimension, for
+instance, is already `ggml_pad_ext(ctx, a, lp, rp)`.
 
 Three kernels ship built in; `ggml_custom_ops()` lists the registry.
 

@@ -302,8 +302,18 @@ void roi_align_cpu(struct ggml_tensor *dst, int ith, int nth, void *userdata) {
         float x2 = roi_data[2 + 4 * roi_idx] * scale;
         float y2 = roi_data[3 + 4 * roi_idx] * scale;
 
-        int batch_idx = batch_i32 ? (int)batch_i32[roi_idx]
-                      : batch_f32 ? (int)batch_f32[roi_idx] : 0;
+        int batch_idx = 0;
+        if (batch_i32) {
+            batch_idx = (int)batch_i32[roi_idx];
+        } else if (batch_f32) {
+            /* The float index is range-checked before conversion: (int) of
+             * NaN or of a value outside int is undefined behaviour.  Every
+             * value that converted before lands where the int clamp below
+             * would put it; NaN goes to 0. */
+            float bf = batch_f32[roi_idx];
+            if (bf >= 0.0f && bf < (float)X->ne[3]) batch_idx = (int)bf;
+            else if (bf >= (float)X->ne[3])         batch_idx = (int)X->ne[3] - 1;
+        }
         /* A ROI naming an image outside the batch would read past the feature
          * map; ORT rejects such a model, so clamping here is only a guard. */
         if (batch_idx < 0)          batch_idx = 0;
@@ -325,8 +335,15 @@ void roi_align_cpu(struct ggml_tensor *dst, int ith, int nth, void *userdata) {
         float bin_h = roi_h / (float)oh;
         float bin_w = roi_w / (float)ow;
 
-        int sr_h = p->sampling_ratio > 0 ? p->sampling_ratio : (int)ceilf(roi_h / oh);
-        int sr_w = p->sampling_ratio > 0 ? p->sampling_ratio : (int)ceilf(roi_w / ow);
+        /* The quotient is capped while still a float: (int) of a non-finite
+         * or out-of-range value is undefined, so it must not reach the
+         * conversion.  q <= CAP is false for NaN. */
+        float q_h = ceilf(roi_h / oh);
+        float q_w = ceilf(roi_w / ow);
+        int sr_h = p->sampling_ratio > 0 ? p->sampling_ratio
+                 : (q_h <= (float)ROI_ALIGN_MAX_SAMPLES ? (int)q_h : ROI_ALIGN_MAX_SAMPLES);
+        int sr_w = p->sampling_ratio > 0 ? p->sampling_ratio
+                 : (q_w <= (float)ROI_ALIGN_MAX_SAMPLES ? (int)q_w : ROI_ALIGN_MAX_SAMPLES);
 
         /* ⚠️ The adaptive branch above is the ONLY loop bound in this op that
          * comes from BUFFER CONTENTS rather than from a dimension: roi_h is
@@ -352,9 +369,8 @@ void roi_align_cpu(struct ggml_tensor *dst, int ith, int nth, void *userdata) {
          * box decode, not here.  Keep it identical to roi_align.comp: the two
          * kernels are compared bit for bit and must clamp at the same point.
          *
-         * A non-finite roi_h reaches (int)ceilf() as undefined behaviour, so
-         * the guard is written to catch it: !(x <= CAP) is true for NaN, while
-         * (x > CAP) is not. */
+         * The adaptive quotient is already capped before conversion above;
+         * this clamp still bounds an explicit sampling_ratio. */
         if (!(sr_h <= ROI_ALIGN_MAX_SAMPLES)) sr_h = ROI_ALIGN_MAX_SAMPLES;
         if (!(sr_w <= ROI_ALIGN_MAX_SAMPLES)) sr_w = ROI_ALIGN_MAX_SAMPLES;
 
