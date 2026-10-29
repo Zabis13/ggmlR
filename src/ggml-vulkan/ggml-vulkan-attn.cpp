@@ -1157,9 +1157,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             const uint32_t kda = (dst->src[3]->ne[0] == (int64_t)S_v) ? 1 : 0;
             uint32_t si;
             switch (S_v) {
-                case 32:  si = 0; break;
-                case 64:  si = 1; break;
-                case 128: si = 2; break;
+                case 16:  si = 0; break;
+                case 32:  si = 1; break;
+                case 64:  si = 2; break;
+                case 128: si = 3; break;
                 default: return nullptr;
             }
             return ctx->device->pipeline_gated_delta_net[si][kda];

@@ -137,6 +137,8 @@ static void ggml_compute_forward_dup_flt(
                 }
             }
         } else {
+            //printf("%s: this is not optimal - fix me\n", __func__);
+
             size_t id = 0;
             dst_t * dst_ptr = (dst_t *) dst->data;
 
@@ -224,6 +226,7 @@ static void ggml_compute_forward_dup_flt(
                 }
             }
         }
+
     } else {
         for (int64_t i04 = 0; i04 < ne04; i04++) {
             for (int64_t i03 = 0; i03 < ne03; i03++) {
@@ -1862,7 +1865,7 @@ void ggml_compute_forward_repeat(
             {
                 ggml_compute_forward_repeat_f32(params, dst);
             } break;
-        // TODO: templateify the implemenation and support for I64
+        // TODO: templateify the implementation and support for I64
         //       ref https://github.com/ggml-org/llama.cpp/pull/14274#discussion_r2169492225
         //case GGML_TYPE_I64:
         //    {
@@ -4381,6 +4384,7 @@ static void ggml_compute_forward_rms_norm_f32(
                 const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03 + i04*nb04);
 
                 ggml_float sum = 0.0;
+                // worth switching to explicit SIMD?
                 for (int64_t i00 = 0; i00 < ne00; i00++) {
                     sum += (ggml_float)(x[i00] * x[i00]);
                 }

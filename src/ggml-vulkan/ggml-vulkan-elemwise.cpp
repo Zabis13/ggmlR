@@ -845,6 +845,7 @@ static void ggml_vk_ssm_conv(ggml_backend_vk_context * ctx, vk_context& subctx, 
     // Fusion modes: 0 = ssm_conv, 1 = ssm_conv+silu, 2 = ssm_conv+add(bias)+silu.
     ggml_tensor * dst = conv;
     const ggml_tensor * bias = nullptr;
+
     if (ctx->num_additional_fused_ops == 1) {
         dst = cgraph->nodes[node_idx + 1]; // silu
     } else if (ctx->num_additional_fused_ops == 2) {
@@ -2477,8 +2478,50 @@ static void ggml_vk_mean(ggml_backend_vk_context * ctx, vk_context& subctx, cons
 }
 
 static void ggml_vk_cumsum(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
-    vk_op_sum_rows_push_constants p = vk_op_sum_rows_push_constants_init(src0, dst, src0->ne[0]);
-    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_CUMSUM, p);
+    vk_op_sum_rows_push_constants pc = vk_op_sum_rows_push_constants_init(src0, dst, src0->ne[0]);
+    // Use the single pass shader when the rows are small or there are enough rows to fill the GPU.
+    // For fewer, larger rows, use the multipass shader to spread each row across SMs.
+    if (dst->ne[0] <= 4096 || ggml_nrows(dst) >= ctx->device->shader_core_count) {
+        ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_CUMSUM, pc);
+        return;
+    }
+
+    // First pass computes partial sums within a block, and stores the last partial
+    // to the temp buffer. Second pass sums the block partials from the temp buffer
+    // and adds that to the result of the first pass.
+    vk_pipeline pipeline1 = ctx->device->pipeline_cumsum_multipass1_f32;
+    vk_pipeline pipeline2 = ctx->device->pipeline_cumsum_multipass2_f32;
+    GGML_ASSERT(pipeline1 != nullptr && pipeline2 != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline1, 1);
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline2, 1);
+
+    std::array<uint32_t, 3> elements;
+
+    elements[0] = dst->ne[0];
+    elements[1] = (uint32_t)ggml_nrows(dst);
+    elements[2] = 1;
+
+    size_t temp_size = sizeof(float) * elements[0] * ggml_nrows(dst);
+
+    if (ctx->prealloc_size_split_k < temp_size) {
+        ctx->prealloc_size_split_k = temp_size;
+        ggml_vk_preallocate_buffers(ctx, subctx);
+    }
+
+    vk_subbuffer src_buf = ggml_vk_tensor_subbuffer(ctx, src0);
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
+    vk_subbuffer temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_split_k, 0);
+
+    if (ctx->prealloc_split_k_need_sync) {
+        ggml_vk_sync_buffers(ctx, subctx);
+    }
+
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline1, {src_buf, dst_buf, temp_buf}, pc, elements);
+    ggml_vk_sync_buffers(ctx, subctx);
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline2, {src_buf, dst_buf, temp_buf}, pc, elements);
+
+    ctx->prealloc_split_k_need_sync = true;
 }
 
 static void ggml_vk_argmax(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {

@@ -26,6 +26,7 @@ order: \code{[d_k | d_v | d_q | d_g | d_state]}.
 \code{\link{ggml_gated_linear_attn}}
 
 Other state-space: 
+\code{\link{ggml_gated_delta_net}()},
 \code{\link{ggml_gated_linear_attn}()},
 \code{\link{ggml_rwkv_output}()},
 \code{\link{ggml_rwkv_wkv6}()},

@@ -30,6 +30,8 @@ extern "C" {
 
 void ggml_print_backtrace(void);
 
+uint64_t ggml_graph_next_uid(void);
+
 #ifndef MIN
 #    define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
@@ -365,9 +367,6 @@ struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph, int i0, int i1);
 
 // ggml-alloc.c: true if the operation can reuse memory from its sources
 GGML_API bool ggml_op_can_inplace(enum ggml_op op);
-
-// monotonically increasing unique id for compute graphs (0 is reserved as "unset")
-GGML_API uint64_t ggml_graph_next_uid(void);
 
 
 // Memory allocation

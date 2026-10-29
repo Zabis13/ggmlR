@@ -35,6 +35,7 @@ takes its inputs: \code{[d_k | d_v | d_r | d_tf | d_td | d_state]}.
 \code{\link{ggml_rwkv_wkv6}}
 
 Other state-space: 
+\code{\link{ggml_gated_delta_net}()},
 \code{\link{ggml_gated_linear_attn}()},
 \code{\link{ggml_gated_linear_attn_back}()},
 \code{\link{ggml_rwkv_output}()},

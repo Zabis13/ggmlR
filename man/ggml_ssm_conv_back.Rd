@@ -42,6 +42,7 @@ convolution from being run once per input.
 \code{\link{ggml_ssm_conv}}
 
 Other state-space: 
+\code{\link{ggml_gated_delta_net}()},
 \code{\link{ggml_gated_linear_attn}()},
 \code{\link{ggml_gated_linear_attn_back}()},
 \code{\link{ggml_rwkv_output}()},

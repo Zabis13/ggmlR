@@ -6089,6 +6089,70 @@ SEXP R_ggml_ssm_scan(SEXP ctx_ptr, SEXP s_ptr, SEXP x_ptr, SEXP dt_ptr,
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+// Gated delta net (Qwen3-Next / Kimi linear attention).
+// q, k: [S_k, H_k, n_tokens, n_seqs], v: [S_v, H_v, n_tokens, n_seqs], S_k == S_v
+// g: [1 or S_v, H_v, n_tokens, n_seqs], beta: [1, H_v, n_tokens, n_seqs]
+// state: S_v*S_v*H_v*n_seqs elements (s0)
+// result: [S_v*H_v, n_tokens*n_seqs + K*S_v*n_seqs] -- outputs then K state snapshots.
+// The builder only GGML_ASSERTs, which would take R down, so the contract is
+// checked here first.
+SEXP R_ggml_gated_delta_net(SEXP ctx_ptr, SEXP q_ptr, SEXP k_ptr, SEXP v_ptr,
+                            SEXP g_ptr, SEXP beta_ptr, SEXP state_ptr, SEXP K_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) r_ptr_required(ctx_ptr, "context");
+    struct ggml_tensor * q     = (struct ggml_tensor *) r_ptr_required(q_ptr,     "q tensor");
+    struct ggml_tensor * k     = (struct ggml_tensor *) r_ptr_required(k_ptr,     "k tensor");
+    struct ggml_tensor * v     = (struct ggml_tensor *) r_ptr_required(v_ptr,     "v tensor");
+    struct ggml_tensor * g     = (struct ggml_tensor *) r_ptr_required(g_ptr,     "g tensor");
+    struct ggml_tensor * beta  = (struct ggml_tensor *) r_ptr_required(beta_ptr,  "beta tensor");
+    struct ggml_tensor * state = (struct ggml_tensor *) r_ptr_required(state_ptr, "state tensor");
+    const int K = asInteger(K_sexp);
+    if (K == NA_INTEGER || K < 1) {
+        error("K must be a positive integer");
+    }
+
+    struct ggml_tensor * all[6] = { q, k, v, g, beta, state };
+    const char * names[6] = { "q", "k", "v", "g", "beta", "state" };
+    for (int i = 0; i < 6; i++) {
+        if (all[i]->type != GGML_TYPE_F32) {
+            error("gated_delta_net: %s must be F32", names[i]);
+        }
+        if (all[i]->ne[4] != 1) {
+            error("gated_delta_net: %s must be at most 4D", names[i]);
+        }
+    }
+    if (!ggml_is_contiguous_rows(q) || !ggml_is_contiguous_rows(k) || !ggml_is_contiguous_rows(v)) {
+        error("gated_delta_net: q, k and v need contiguous rows");
+    }
+    if (!ggml_is_contiguous(g) || !ggml_is_contiguous(beta) || !ggml_is_contiguous(state)) {
+        error("gated_delta_net: g, beta and state must be contiguous");
+    }
+
+    const int64_t S_v = v->ne[0];
+    const int64_t H_v = v->ne[1];
+    if (q->ne[0] != S_v || k->ne[0] != S_v) {
+        error("gated_delta_net: q and k need S_k == S_v (%lld)", (long long) S_v);
+    }
+    if (!ggml_are_same_shape(q, k) || q->ne[1] < 1 || H_v % q->ne[1] != 0 ||
+        q->ne[2] != v->ne[2] || q->ne[3] != v->ne[3]) {
+        error("gated_delta_net: q, k must be [S_v, H_k, n_tokens, n_seqs] with H_v %% H_k == 0");
+    }
+    if ((g->ne[0] != 1 && g->ne[0] != S_v) || g->ne[1] != H_v || g->ne[2] != v->ne[2] || g->ne[3] != v->ne[3]) {
+        error("gated_delta_net: g must be [1 or S_v, H_v, n_tokens, n_seqs]");
+    }
+    if (beta->ne[0] != 1 || beta->ne[1] != H_v || beta->ne[2] != v->ne[2] || beta->ne[3] != v->ne[3]) {
+        error("gated_delta_net: beta must be [1, H_v, n_tokens, n_seqs]");
+    }
+    if (ggml_nelements(state) != S_v * S_v * H_v * v->ne[3]) {
+        error("gated_delta_net: state must hold S_v * S_v * H_v * n_seqs elements");
+    }
+
+    struct ggml_tensor * result = ggml_gated_delta_net_ext(ctx, q, k, v, g, beta, state, K);
+    if (result == NULL) {
+        error("Failed to create gated_delta_net operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // RWKV-6 WKV recurrence.
 // k, v, r, td: [S, H, n_tokens], tf: [S, H], state: [S*S*H, n_seqs]
 // result: [S*H, n_tokens + S*n_seqs] -- outputs then the final state.

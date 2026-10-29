@@ -38,6 +38,7 @@ computation.  \code{k} must be the same tensor the op was built with, since
 }
 \seealso{
 Other state-space: 
+\code{\link{ggml_gated_delta_net}()},
 \code{\link{ggml_gated_linear_attn}()},
 \code{\link{ggml_gated_linear_attn_back}()},
 \code{\link{ggml_rwkv_wkv6}()},

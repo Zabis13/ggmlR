@@ -29,13 +29,15 @@ extern "C" {
 // FP16 to FP32 conversion
 
 // 16-bit float
-// on Arm, we use __fp16
+// on Arm, we use __fp16, which requires the IEEE fp16 format: implied on
+// AArch64, selected by -mfp16-format=ieee on 32 bit Arm, where the compiler
+// may otherwise reject the type
 // on x86, we use uint16_t
 //
 // for old CUDA compilers (<= 11), we use uint16_t: ref https://github.com/ggml-org/llama.cpp/pull/10616
 // for     MUSA compilers        , we use uint16_t: ref https://github.com/ggml-org/llama.cpp/pull/11843
 //
-#if defined(__ARM_NEON) && !(defined(__CUDACC__) && __CUDACC_VER_MAJOR__ <= 11) && !defined(__MUSACC__)
+#if defined(__ARM_NEON) && defined(__ARM_FP16_FORMAT_IEEE) && !(defined(__CUDACC__) && __CUDACC_VER_MAJOR__ <= 11) && !defined(__MUSACC__)
     #define GGML_CPU_COMPUTE_FP16_TO_FP32(x) neon_compute_fp16_to_fp32(x)
     #define GGML_CPU_COMPUTE_FP32_TO_FP16(x) neon_compute_fp32_to_fp16(x)
 
@@ -136,6 +138,16 @@ extern float ggml_table_f32_ue4m3[1 << 8];
 #define GGML_CPU_UE4M3_TO_FP32(x) ggml_table_f32_ue4m3[(uint8_t)(x)]
 #else
 #define GGML_CPU_UE4M3_TO_FP32(x) ggml_ue4m3_to_fp32(x)
+#endif
+
+// Pre AVX512 CPUs (AVX2 with F16C, such as i5-8th gen or i7-4790)
+// do not produce codegen as checks below don't test for __F16C__
+// but this check does.
+#if defined(__F16C__)
+// force FP16 -> FP32 conversion to use LUT instead
+// see: https://github.com/ggml-org/llama.cpp/issues/30342
+//#define GGML_CPU_FP16_TO_FP32(x) GGML_CPU_COMPUTE_FP16_TO_FP32(x)
+#define GGML_CPU_FP32_TO_FP16(x) GGML_CPU_COMPUTE_FP32_TO_FP16(x)
 #endif
 
 // On ARM NEON, it's quicker to directly convert x -> x instead of calling into ggml_lookup_fp16_to_fp32,
@@ -326,7 +338,7 @@ inline static float ggml_lookup_fp16_to_fp32(ggml_fp16_t f) {
     #define GGML_F16_VEC_REDUCE         GGML_F32Cx4_REDUCE
 #endif
 
-#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_FMA)
+#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_FMA) && defined(__ARM_FP16_FORMAT_IEEE)
 
 #define GGML_SIMD
 
@@ -490,12 +502,50 @@ do {                                                                  \
 
 // F16 AVX512
 
-// F16 AVX
+#if defined(__AVX512FP16__)
+
+#define GGML_F16_STEP 128
+#define GGML_F16_EPR  32
+
+#define GGML_F16x32              __m512h
+#define GGML_F16x32_ZERO         _mm512_setzero_ph()
+#define GGML_F16x32_SET1(x)      _mm512_set1_ph(__extension__(_Float16)(x))
+#define GGML_F16x32_LOAD(x)      _mm512_loadu_ph(x)
+#define GGML_F16x32_STORE(x, y)  _mm512_storeu_ph(x, y)
+#define GGML_F16x32_FMA(a, b, c) _mm512_fmadd_ph(b, c, a)
+#define GGML_F16x32_ADD          _mm512_add_ph
+#define GGML_F16x32_MUL          _mm512_mul_ph
+#define GGML_F16x32_REDUCE(res, x)                                     \
+do {                                                                   \
+    int offset = GGML_F16_ARR >> 1;                                    \
+    for (int i = 0; i < offset; ++i) {                                 \
+        x[i] = _mm512_add_ph(x[i], x[offset+i]);                       \
+    }                                                                  \
+    offset >>= 1;                                                      \
+    for (int i = 0; i < offset; ++i) {                                 \
+        x[i] = _mm512_add_ph(x[i], x[offset+i]);                       \
+    }                                                                  \
+    offset >>= 1;                                                      \
+    for (int i = 0; i < offset; ++i) {                                 \
+        x[i] = _mm512_add_ph(x[i], x[offset+i]);                       \
+    }                                                                  \
+    res = (ggml_float) _mm512_reduce_add_ph(x[0]);                     \
+} while (0)
+
+#define GGML_F16_VEC                GGML_F16x32
+#define GGML_F16_VEC_ZERO           GGML_F16x32_ZERO
+#define GGML_F16_VEC_SET1           GGML_F16x32_SET1
+#define GGML_F16_VEC_LOAD(p, i)     GGML_F16x32_LOAD(p)
+#define GGML_F16_VEC_STORE(p, r, i) GGML_F16x32_STORE(p, r[i])
+#define GGML_F16_VEC_FMA            GGML_F16x32_FMA
+#define GGML_F16_VEC_ADD            GGML_F16x32_ADD
+#define GGML_F16_VEC_MUL            GGML_F16x32_MUL
+#define GGML_F16_VEC_REDUCE         GGML_F16x32_REDUCE
+
+#else // Fallback FP16 <-> FP32
 
 #define GGML_F16_STEP 64
 #define GGML_F16_EPR  16
-
-// AVX512 has FP16 extension (AVX512_FP16) but I don't have it on my machine so I use FP32 instead
 
 #define GGML_F32Cx16             __m512
 #define GGML_F32Cx16_ZERO        _mm512_setzero_ps()
@@ -536,6 +586,8 @@ do {                                                              \
 #define GGML_F16_VEC_MUL            GGML_F32Cx16_MUL
 
 #define GGML_F16_VEC_REDUCE         GGML_F32Cx16_REDUCE
+
+#endif // __AVX512FP16__
 #elif defined(__AVX__)
 
 #define GGML_SIMD
@@ -676,6 +728,14 @@ static inline void __avx_f32cx8_store(ggml_fp16_t *x, __m256 y) {
           vec_extract(x[0], 2) +               \
           vec_extract(x[0], 3);                \
 }
+#define GGML_F32x4_REDUCE_4(res, s0, s1, s2, s3)        \
+{                                                       \
+    vector float v = vec_add(vec_add(s0, s1),           \
+                             vec_add(s2, s3));          \
+    v = vec_add(v, vec_sld(v, v, 8));                   \
+    v = vec_add(v, vec_sld(v, v, 4));                   \
+    res += (ggml_float) vec_extract(v, 0);              \
+}
 
 #define GGML_F32_VEC        GGML_F32x4
 #define GGML_F32_VEC_ZERO   GGML_F32x4_ZERO
@@ -711,6 +771,29 @@ static inline unsigned char ggml_endian_byte(int i) {
     vec_xst(vec_pack_to_short_fp32(r[i - GGML_ENDIAN_BYTE(1)],  \
                                    r[i - GGML_ENDIAN_BYTE(0)]), \
             0, p - GGML_F16_EPR)
+
+//BF16 POWER9
+#define GGML_BF16_STEP 16
+#define GGML_BF16_EPR  8
+
+#define GGML_BF16x8         vector unsigned short
+#define GGML_BF16x8_ZERO    vec_splats((unsigned short)0)
+#define GGML_BF16x8_LOAD(p) vec_xl(0, (const unsigned short *)(p))
+
+#define GGML_BF16_VEC          GGML_BF16x8
+#define GGML_BF16_VEC_ZERO     GGML_BF16x8_ZERO
+#define GGML_BF16_VEC_LOAD     GGML_BF16x8_LOAD
+#if defined(__LITTLE_ENDIAN__)
+#define GGML_BF16_TO_F32_LO(v) ((vector float) vec_mergel(GGML_BF16_VEC_ZERO, (v)))
+#define GGML_BF16_TO_F32_HI(v) ((vector float) vec_mergeh(GGML_BF16_VEC_ZERO, (v)))
+#else
+#define GGML_BF16_TO_F32_LO(v) ((vector float) vec_mergel((v), GGML_BF16_VEC_ZERO))
+#define GGML_BF16_TO_F32_HI(v) ((vector float) vec_mergeh((v), GGML_BF16_VEC_ZERO))
+#endif
+#define GGML_BF16_FMA_LO(acc, x, y) \
+    (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_LO(x), GGML_BF16_TO_F32_LO(y))
+#define GGML_BF16_FMA_HI(acc, x, y) \
+    (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_HI(x), GGML_BF16_TO_F32_HI(y))
 
 #elif defined(__wasm_simd128__)
 
@@ -1065,25 +1148,12 @@ static inline void __lasx_f32cx8_store(ggml_fp16_t * x, __m256 y) {
 #define GGML_F16_EPR  4
 
 static inline __m128 __lsx_f16x4_load(const ggml_fp16_t * x) {
-    float tmp[4];
-
-    tmp[0] = GGML_CPU_FP16_TO_FP32(x[0]);
-    tmp[1] = GGML_CPU_FP16_TO_FP32(x[1]);
-    tmp[2] = GGML_CPU_FP16_TO_FP32(x[2]);
-    tmp[3] = GGML_CPU_FP16_TO_FP32(x[3]);
-
-    return (__m128)__lsx_vld(tmp, 0);
+    return __lsx_vfcvtl_s_h(__lsx_vld((const void *)x, 0));
 }
 
 static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
-    float arr[4];
-
-    __lsx_vst(y, arr, 0);
-
-    x[0] = GGML_CPU_FP32_TO_FP16(arr[0]);
-    x[1] = GGML_CPU_FP32_TO_FP16(arr[1]);
-    x[2] = GGML_CPU_FP32_TO_FP16(arr[2]);
-    x[3] = GGML_CPU_FP32_TO_FP16(arr[3]);
+    __m128i a = __lsx_vfcvt_h_s(y, y);
+    memcpy(x, &a, sizeof(ggml_fp16_t) * 4);
 }
 
 #define GGML_F32Cx4             __m128
@@ -1140,6 +1210,14 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
     float32x4_t tmp = x[0] + vec_reve(x[0]);        \
     res = tmp[0] + tmp[1];                          \
 }
+#define GGML_F32x4_REDUCE_4(res, s0, s1, s2, s3) \
+{                                                \
+    float32x4_t v = vec_add(vec_add(s0, s1),     \
+                            vec_add(s2, s3));    \
+    v = vec_add(v, vec_sld(v, v, 8));            \
+    v = vec_add(v, vec_sld(v, v, 4));            \
+    res += (ggml_float)vec_extract(v, 0);        \
+}
 
 #define GGML_F32_VEC        GGML_F32x4
 #define GGML_F32_VEC_ZERO   GGML_F32x4_ZERO
@@ -1155,6 +1233,24 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 #define GGML_F16_STEP GGML_F32_STEP
 #define GGML_F16_EPR  GGML_F32_EPR
 
+static inline uint32x4_t __lzs_f32cx4_to_f16(float32x4_t v_f) {
+    float32x4_t v_base = vec_mul(vec_mul(vec_abs(v_f), vec_splats(0x1.0p+112f)), vec_splats(0x1.0p-110f));
+
+    const uint32x4_t v_w      = (uint32x4_t)v_f;
+    const uint32x4_t v_shl1_w = vec_add(v_w, v_w);
+    const uint32x4_t v_sign   = vec_and(v_w, vec_splats(UINT32_C(0x80000000)));
+    const uint32x4_t v_bias   = vec_max(vec_and(v_shl1_w, vec_splats(UINT32_C(0xFF000000))), vec_splats(UINT32_C(0x71000000)));
+
+    v_base = vec_add((float32x4_t)vec_add(vec_sr(v_bias, 1), vec_splats(UINT32_C(0x07800000))), v_base);
+
+    const uint32x4_t v_bits    = (uint32x4_t)v_base;
+    const uint32x4_t v_nonsign = vec_add(vec_and(vec_sr(v_bits, 13), vec_splats(UINT32_C(0x00007C00))),
+                                         vec_and(v_bits, vec_splats(UINT32_C(0x00000FFF))));
+    const uint32x4_t v_is_nan  = (uint32x4_t)vec_cmpgt(v_shl1_w, vec_splats(UINT32_C(0xFF000000)));
+
+    return vec_or(vec_sr(v_sign, 16), vec_sel(v_nonsign, vec_splats(UINT32_C(0x7E00)), v_is_nan));
+}
+
 static inline float32x4_t __lzs_f16cx4_load(const ggml_fp16_t * x) {
     float tmp[4];
 
@@ -1168,15 +1264,9 @@ static inline float32x4_t __lzs_f16cx4_load(const ggml_fp16_t * x) {
 }
 
 static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
-    float arr[4];
-
-    // note: keep type-cast here to prevent compiler bugs
-    // see: https://github.com/ggml-org/llama.cpp/issues/12846
-    vec_xst(v_y, 0, (float *)(arr));
-
-    for (int i = 0; i < 4; i++) {
-        x[i] = GGML_CPU_FP32_TO_FP16(arr[i]);
-    }
+    const uint32x4_t v_h = __lzs_f32cx4_to_f16(v_y);
+    const uint64_t   tmp = ((uint64x2_t)vec_pack(v_h, v_h))[0];
+    memcpy(x, &tmp, sizeof(tmp));
 }
 
 #define GGML_F16_VEC                GGML_F32x4
@@ -1188,6 +1278,24 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
 #define GGML_F16_VEC_ADD            GGML_F32x4_ADD
 #define GGML_F16_VEC_MUL            GGML_F32x4_MUL
 #define GGML_F16_VEC_REDUCE         GGML_F32x4_REDUCE
+
+// BF16 s390x
+#define GGML_BF16_STEP 16
+#define GGML_BF16_EPR  8
+
+#define GGML_BF16x8         __vector unsigned short
+#define GGML_BF16x8_ZERO    vec_splats((unsigned short)0)
+#define GGML_BF16x8_LOAD(p) vec_xl(0, (const unsigned short *)(p))
+
+#define GGML_BF16_VEC      GGML_BF16x8
+#define GGML_BF16_VEC_ZERO GGML_BF16x8_ZERO
+#define GGML_BF16_VEC_LOAD GGML_BF16x8_LOAD
+#define GGML_BF16_TO_F32_LO(v) ((float32x4_t) vec_mergel((v), GGML_BF16_VEC_ZERO))
+#define GGML_BF16_TO_F32_HI(v) ((float32x4_t) vec_mergeh((v), GGML_BF16_VEC_ZERO))
+#define GGML_BF16_FMA_LO(acc, x, y) \
+    (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_LO(x), GGML_BF16_TO_F32_LO(y))
+#define GGML_BF16_FMA_HI(acc, x, y) \
+    (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_HI(x), GGML_BF16_TO_F32_HI(y))
 
 #elif defined(__riscv_v_intrinsic)
 

@@ -109,7 +109,7 @@ const bool stride_in_bounds = (s0 == 1) && (s1 == 1);
 const bool stride_in_bounds = true;
 #endif
 
-uint32_t       tid    = gl_LocalInvocationID.x;
+uint32_t       tid     = gl_LocalInvocationID.x;
 const uint32_t WG_SIZE = gl_WorkGroupSize.x;
 
 uint splitWork(uint work_size, uint block_size) {

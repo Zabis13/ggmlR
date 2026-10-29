@@ -5332,6 +5332,52 @@ ggml_ssm_scan_state <- function(ctx, result, s, ids) {
                         sne[1] * sne[2] * sne[3] * n_seqs * fsz)
 }
 
+#' Gated Delta Net (Linear Attention Recurrence)
+#'
+#' The gated delta rule used by linear-attention layers such as Qwen3-Next
+#' and Kimi (KDA). For each head the recurrent state \code{S} (\code{S_v x S_v})
+#' is decayed by the gate, corrected towards \code{v} along \code{k} with step
+#' \code{beta}, and read out with \code{q} (scaled by \code{1/sqrt(S_v)}).
+#'
+#' @section Shapes:
+#' \itemize{
+#'   \item \code{q}, \code{k} — \code{[S_v, H_k, n_tokens, n_seqs]}, rows contiguous;
+#'     \code{H_v} must be a multiple of \code{H_k}
+#'   \item \code{v} — \code{[S_v, H_v, n_tokens, n_seqs]}, rows contiguous
+#'   \item \code{g} — \code{[1, H_v, n_tokens, n_seqs]} (scalar gate) or
+#'     \code{[S_v, H_v, n_tokens, n_seqs]} (KDA), contiguous
+#'   \item \code{beta} — \code{[1, H_v, n_tokens, n_seqs]}, contiguous
+#'   \item \code{state} — initial state, \code{S_v * S_v * H_v * n_seqs} elements
+#' }
+#' All inputs are F32. The Vulkan backend runs \code{S_v} of 16, 32, 64 or 128;
+#' other sizes fall back to the CPU.
+#'
+#' @section Packed result:
+#' A 2D tensor \code{[S_v * H_v, n_tokens * n_seqs + K * S_v * n_seqs]}: the
+#' outputs (\code{S_v * H_v * n_tokens * n_seqs} elements) followed by \code{K}
+#' state snapshots, most recent first (slot 0 is the final state, slot \code{s}
+#' the state \code{s} tokens before the end). Slots older than the sequence are
+#' left untouched.
+#'
+#' @section Inference only:
+#' \code{GGML_OP_GATED_DELTA_NET} has no backward pass in ggml.
+#'
+#' @param ctx GGML context
+#' @param q Queries
+#' @param k Keys
+#' @param v Values
+#' @param g Gate (log-decay), scalar per head or per channel (KDA)
+#' @param beta Update step per head
+#' @param state Initial recurrent state
+#' @param K Number of state snapshots kept after the outputs
+#' @return The packed result tensor
+#' @export
+#' @family state-space
+ggml_gated_delta_net <- function(ctx, q, k, v, g, beta, state, K = 1L) {
+  .Call("R_ggml_gated_delta_net", ctx, q, k, v, g, beta, state, as.integer(K),
+        PACKAGE = "ggmlR")
+}
+
 #' RWKV-6 WKV Recurrence
 #'
 #' The weighted key-value recurrence of RWKV-6: a linear-attention-style scan

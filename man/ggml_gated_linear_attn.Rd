@@ -51,6 +51,7 @@ node.  It has no backward pass either, so it is inference-only.
 \code{\link{ggml_rwkv_wkv7}}, \code{\link{ggml_rwkv_output}}
 
 Other state-space: 
+\code{\link{ggml_gated_delta_net}()},
 \code{\link{ggml_gated_linear_attn_back}()},
 \code{\link{ggml_rwkv_output}()},
 \code{\link{ggml_rwkv_wkv6}()},

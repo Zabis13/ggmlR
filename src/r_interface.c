@@ -330,6 +330,7 @@ extern SEXP R_ggml_rwkv_wkv6_back(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP
 extern SEXP R_ggml_rwkv_wkv7_back(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_gated_linear_attn_back(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_ssm_scan(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ggml_gated_delta_net(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_rwkv_wkv6(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_rwkv_wkv7(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_gated_linear_attn(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
@@ -2102,6 +2103,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_rwkv_wkv7_back",                   (DL_FUNC) &R_ggml_rwkv_wkv7_back,                    9},
     {"R_ggml_gated_linear_attn_back",           (DL_FUNC) &R_ggml_gated_linear_attn_back,            8},
     {"R_ggml_ssm_scan",                         (DL_FUNC) &R_ggml_ssm_scan,                          9},
+    {"R_ggml_gated_delta_net",                  (DL_FUNC) &R_ggml_gated_delta_net,                   8},
     {"R_ggml_rwkv_wkv6",                        (DL_FUNC) &R_ggml_rwkv_wkv6,                         7},
     {"R_ggml_rwkv_wkv7",                        (DL_FUNC) &R_ggml_rwkv_wkv7,                         8},
     {"R_ggml_gated_linear_attn",                (DL_FUNC) &R_ggml_gated_linear_attn,                 7},

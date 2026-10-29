@@ -3132,10 +3132,6 @@ extern "C" {
         struct ggml_tensor *  grad,
         struct ggml_tensor *  sgd_params); // alpha, weight decay
 
-    //
-    // automatic differentiation
-    //
-
     // build forward multiple tensors and select one of them for computing
     // this is useful for creating graphs that have constant topology but compute different things based on the input
     // ref: https://github.com/ggml-org/llama.cpp/pull/18550
