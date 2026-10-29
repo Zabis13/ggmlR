@@ -569,7 +569,8 @@ SEXP R_ggml_new_tensor_1d(SEXP ctx_ptr, SEXP type, SEXP ne0) {
     
     // Проверка доступной памяти
     size_t type_size = ggml_type_size(dtype);
-    size_t needed = n0 * type_size + ggml_tensor_overhead() + 256;
+    // no_alloc: в контексте только метаданные, данные лягут в backend-буфер
+    size_t needed = (ggml_get_no_alloc(ctx) ? 0 : n0 * type_size) + ggml_tensor_overhead() + 256;
     size_t available = ggml_get_mem_size(ctx) - ggml_used_mem(ctx);
     
     if (needed > available) {
@@ -598,7 +599,8 @@ SEXP R_ggml_new_tensor_2d(SEXP ctx_ptr, SEXP type, SEXP ne0, SEXP ne1) {
     
     // Проверка доступной памяти
     size_t type_size = ggml_type_size(dtype);
-    size_t needed = n0 * n1 * type_size + ggml_tensor_overhead() + 256;
+    // no_alloc: в контексте только метаданные, данные лягут в backend-буфер
+    size_t needed = (ggml_get_no_alloc(ctx) ? 0 : n0 * n1 * type_size) + ggml_tensor_overhead() + 256;
     size_t available = ggml_get_mem_size(ctx) - ggml_used_mem(ctx);
     
     if (needed > available) {
@@ -795,7 +797,7 @@ SEXP R_ggml_cpu_mul(SEXP a_ptr, SEXP b_ptr) {
 // ============================================================================
 
 SEXP R_ggml_version(void) {
-    return mkString("0.11.0");
+    return mkString(GGML_VERSION);
 }
 
 SEXP R_ggml_test(void) {

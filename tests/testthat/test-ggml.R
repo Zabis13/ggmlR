@@ -1,5 +1,5 @@
 test_that("ggml_version works", {
-  expect_equal(ggml_version(), "0.11.0")
+  expect_equal(ggml_version(), "0.27.0")
 })
 
 test_that("ggml_test works", {
