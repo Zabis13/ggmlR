@@ -116,6 +116,28 @@ extern "C" {
 // defined in ggml-cpu.c, initialized in ggml_cpu_init()
 extern float ggml_table_f32_f16[1 << 16];
 
+// precomputed f32 table for e8m0 half (1 KB)
+// defined in ggml-cpu.c, initialized in ggml_cpu_init()
+extern float ggml_table_f32_e8m0_half[1 << 8];
+
+// precomputed f32 table for ue4m3 (1 KB)
+// defined in ggml-cpu.c, initialized in ggml_cpu_init()
+extern float ggml_table_f32_ue4m3[1 << 8];
+
+// Use lookup table for E8M0 on x86 (faster than bit manipulation)
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+#define GGML_CPU_E8M0_TO_FP32_HALF(x) ggml_table_f32_e8m0_half[(uint8_t)(x)]
+#else
+#define GGML_CPU_E8M0_TO_FP32_HALF(x) GGML_E8M0_TO_FP32_HALF(x)
+#endif
+
+// Use lookup table for UE4M3 on x86 and ARM (faster than bit manipulation)
+#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__ARM_NEON)
+#define GGML_CPU_UE4M3_TO_FP32(x) ggml_table_f32_ue4m3[(uint8_t)(x)]
+#else
+#define GGML_CPU_UE4M3_TO_FP32(x) ggml_ue4m3_to_fp32(x)
+#endif
+
 // On ARM NEON, it's quicker to directly convert x -> x instead of calling into ggml_lookup_fp16_to_fp32,
 // so we define GGML_CPU_FP16_TO_FP32 and GGML_CPU_FP32_TO_FP16 elsewhere for NEON.
 // This is also true for POWER9.
@@ -1205,6 +1227,33 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
 #define GGML_F32_ARR (GGML_F32_STEP/GGML_F32_EPR)
 #define GGML_F16_ARR (GGML_F16_STEP/GGML_F16_EPR)
 #endif
+
+// GGML_F16_DOT_*
+// like GGML_F16_* but for dot products which need F32 accumulation on AVX512-FP16
+
+#if defined(__AVX512FP16__)
+
+#define GGML_F16_DOT_STEP           GGML_F32_STEP
+#define GGML_F16_DOT_EPR            GGML_F32_EPR
+#define GGML_F16_DOT_ARR            GGML_F32_ARR
+#define GGML_F16_DOT_VEC            GGML_F32x16
+#define GGML_F16_DOT_VEC_ZERO       GGML_F32x16_ZERO
+#define GGML_F16_DOT_VEC_LOAD(p, i) _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(p)))
+#define GGML_F16_DOT_VEC_FMA        GGML_F32x16_FMA
+#define GGML_F16_DOT_VEC_REDUCE     GGML_F32x16_REDUCE
+
+#else
+
+#define GGML_F16_DOT_STEP           GGML_F16_STEP
+#define GGML_F16_DOT_EPR            GGML_F16_EPR
+#define GGML_F16_DOT_ARR            GGML_F16_ARR
+#define GGML_F16_DOT_VEC            GGML_F16_VEC
+#define GGML_F16_DOT_VEC_ZERO       GGML_F16_VEC_ZERO
+#define GGML_F16_DOT_VEC_LOAD       GGML_F16_VEC_LOAD
+#define GGML_F16_DOT_VEC_FMA        GGML_F16_VEC_FMA
+#define GGML_F16_DOT_VEC_REDUCE     GGML_F16_VEC_REDUCE
+
+#endif // defined(__AVX512FP16__)
 
 #ifdef __cplusplus
 }

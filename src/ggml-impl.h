@@ -160,6 +160,18 @@ static inline float ggml_get_op_params_f32(const struct ggml_tensor * tensor, ui
     return ((const float *)(tensor->op_params))[i];
 }
 
+// [TAG_GGML_PREC]
+// - GGML_OP_MUL_MAT
+//   0 - acc
+//   1 - hint
+//   2 - src0 precision
+//   3 - src1 precision
+//
+// - GGML_OP_MUL_MAT_ID
+//   0 - acc
+//   1 - hint
+//   2 - src0 precision
+//   3 - src1 precision
 static inline void ggml_set_op_params_i32(struct ggml_tensor * tensor, uint32_t i, int32_t value) {
     assert(i < GGML_MAX_OP_PARAMS / sizeof(int32_t));
     ((int32_t *)(tensor->op_params))[i] = value;
@@ -677,6 +689,9 @@ static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const in
 
         struct ggml_tensor * node = cgraph->nodes[node_idxs[i]];
         if (node->op != ops[i]) {
+            return false;
+        }
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             return false;
         }
         if (i < num_ops - 1 && !ggml_node_has_n_uses(cgraph, node_idxs[i], 1)) {

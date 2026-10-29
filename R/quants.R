@@ -202,6 +202,19 @@ dequantize_row_q1_0 <- function(raw_data, n_elements) {
   .Call("R_dequantize_row_q1_0", raw_data, as.numeric(n_elements))
 }
 
+#' Dequantize Q2_0 Data
+#'
+#' Converts Q2_0 quantized data back to float values.
+#'
+#' @param raw_data Raw vector of Q2_0 quantized data
+#' @param n_elements Number of dequantized elements (must be multiple of 64)
+#' @return Numeric vector of dequantized values
+#' @export
+#' @family quantization
+dequantize_row_q2_0 <- function(raw_data, n_elements) {
+  .Call("R_dequantize_row_q2_0", raw_data, as.numeric(n_elements))
+}
+
 #' Dequantize NVFP4 Data
 #'
 #' Converts NVFP4 quantized data back to float values.
@@ -444,6 +457,25 @@ quantize_q1_0 <- function(src_data, n_rows, n_per_row, imatrix = NULL) {
         as.numeric(n_per_row), imatrix)
 }
 
+#' Quantize Data (Q2_0)
+#'
+#' Quantizes float data to Q2_0 format: 2 bits per weight, blocks of 64 with
+#' one FP16 scale \code{d} (the block's largest absolute value). The 2-bit codes
+#' decode to \code{-d, 0, d, 2d}; since \code{d} is the block maximum, this
+#' quantizer only produces \code{-d, 0} and \code{d}.
+#'
+#' @param src_data Numeric vector of float values to quantize
+#' @param n_rows Number of rows
+#' @param n_per_row Number of elements per row (must be multiple of 64)
+#' @param imatrix Optional importance matrix (currently ignored)
+#' @return Raw vector of quantized data
+#' @export
+#' @family quantization
+quantize_q2_0 <- function(src_data, n_rows, n_per_row, imatrix = NULL) {
+  .Call("R_quantize_q2_0", as.numeric(src_data), as.numeric(n_rows),
+        as.numeric(n_per_row), imatrix)
+}
+
 #' Quantize Data (NVFP4)
 #'
 #' Quantizes float data to NVFP4 format (NVIDIA FP4 with UE4M3 per-sub-block scale).
@@ -640,6 +672,19 @@ quantize_row_mxfp4_ref <- function(src_data, n_elements) {
 #' @family quantization
 quantize_row_q1_0_ref <- function(src_data, n_elements) {
   .Call("R_quantize_row_q1_0_ref", as.numeric(src_data), as.numeric(n_elements))
+}
+
+#' Quantize Row to Q2_0 (Reference)
+#'
+#' Basic row-level Q2_0 quantization.
+#'
+#' @param src_data Numeric vector of float values to quantize
+#' @param n_elements Number of elements to quantize (must be multiple of 64)
+#' @return Raw vector of quantized data
+#' @export
+#' @family quantization
+quantize_row_q2_0_ref <- function(src_data, n_elements) {
+  .Call("R_quantize_row_q2_0_ref", as.numeric(src_data), as.numeric(n_elements))
 }
 
 #' Quantize Row to NVFP4 (Reference)

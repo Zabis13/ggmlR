@@ -33,4 +33,3 @@ void main() {
         data_d[get_doffset() + dst_idx(i00, i01, i02, i03, i04)] = D_TYPE(FLOAT_TYPE(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03, i04)]));
     }
 }
-

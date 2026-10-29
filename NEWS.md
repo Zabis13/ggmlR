@@ -1,3 +1,11 @@
+# ggmlR 0.8.9
+
+* Synced with ggml 0.27.0 (was 0.11.0), keeping ggmlR's 5D tensors and its own kernels:
+  * New ops for DeepSeek V4 / DSA (lightning indexer, hyper-connections, sparse flash attention), 3D convolution, and the Q2_0 quantization type.
+  * Vulkan: all unary ops run through one strided kernel (views with permuted axes are now computed correctly), fused unary × mul and RMS norm × mul, `pool_2d` on large inputs (past the 65535-workgroup limit), and Q2_0 / TQ1_0 / TQ2_0 / IQ4_XS matrix–vector kernels.
+  * CPU: tiled K-quant matmul (with `--with-simd`), BF16 unary/GLU ops, fused RMS norm × mul.
+  * GGUF reader and backend scheduler from 0.27; the scheduler no longer rewrites the user's graph, so a graph can be computed repeatedly.
+
 # ggmlR 0.8.8.1
 
 * `ag_tape_memory()` now deduplicates shared storage on R builds without memory profiling (it relied on `tracemem()`, which errors there), fixing two test failures on CRAN's r-devel fedora flavour.

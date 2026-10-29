@@ -12,7 +12,7 @@
 [![cgvR](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FcgvR&query=%24%5B0%5D.downloads&label=cgvR&color=blue)](https://CRAN.R-project.org/package=cgvR)
 [![AV1R](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fcranlogs.r-pkg.org%2Fdownloads%2Ftotal%2Flast-month%2FAV1R&query=%24%5B0%5D.downloads&label=AV1R&color=blue)](https://CRAN.R-project.org/package=AV1R)
 
-A native R package for building, training, and deploying neural networks. Backed by the [ggml](https://github.com/ggml-org/ggml) C library, designed primarily for **Vulkan GPU acceleration** with full CPU fallback — no Python, no TensorFlow, everything runs inside your R session.
+A native R package for building, training, and deploying neural networks. Backed by the [ggml](https://github.com/ggml-org/ggml) C library (synced with ggml 0.27.0), designed primarily for **Vulkan GPU acceleration** with full CPU fallback — no Python, no TensorFlow, everything runs inside your R session.
 
 > **GPU-first design**: when a Vulkan-capable GPU is available (NVIDIA, AMD, Intel, ARM Mali, Qualcomm Adreno), all operations run on GPU automatically. On machines without a GPU the package falls back to CPU transparently — no code changes needed.
 
@@ -2106,6 +2106,20 @@ cost depends on the device and driver: on an RX 9070 under RADV the f32 tiles
 ran at about a seventh of the f16 ones for large multiplies
 (`inst/examples/benchmark_coopmat.R` measures it on yours). The CPU backend is
 exact either way.
+
+## Upstream ggml version
+
+ggmlR 0.8.9 is synced with **ggml 0.27.0** (`ggml_version()`). Upstream code is taken function by function; where ggmlR has its own behaviour, ours is kept: 5D tensors (`ne[4]`) in CPU and Vulkan kernels, the backward kernels upstream lacks (`ggml_flash_attn_back()`, norm/GELU backward), first-index tie-breaking in argsort / top-k / argmax, and the ONNX-specific ops.
+
+What came with 0.27:
+
+- **New ops** — DeepSeek V4 / DSA: `ggml_lightning_indexer()`, hyper-connections `ggml_dsv4_hc_pre()` / `_post()` / `_comb()`, and a sparse K/V bound for flash attention `ggml_flash_attn_ext_set_n_kv_max()`. Also `ggml_conv_3d()`, `ggml_conv_3d_direct()`, `ggml_im2col_3d()`, `ggml_col2im_1d()`, `ggml_set_rows()`, `ggml_swiglu_clamp()`, `ggml_xielu()`, `ggml_expm1()`, `ggml_trunc()`, `ggml_round_even()`.
+- **Graph hints** — `ggml_mul_mat_set_hint()` (e.g. `GGML_HINT_SRC0_IS_HADAMARD`), `ggml_rope_set_offset()` for partial RoPE, `ggml_graph_order()` to add a tensor to a graph without computing it.
+- **Quantization** — new Q2_0 type (`quantize_q2_0()`, `dequantize_row_q2_0()`), with CPU and Vulkan kernels.
+- **Vulkan** — all unary ops go through one strided kernel, so views with permuted axes are computed correctly (previously only contiguous tensors were); fused unary × mul (`gelu`/`sigmoid`/`silu`/`softplus`) and RMS norm × mul; `pool_2d` on inputs past the 65535-workgroup limit; matrix–vector kernels for Q2_0, TQ1_0, TQ2_0 and IQ4_XS; asynchronous 2D tensor transfers.
+- **CPU** — tiled K-quant / IQ-quant matmul (only with `--with-simd`; disable with `GGML_CPU_TILED_MM=0`), BF16 unary and GLU ops, fused RMS norm × mul (disable with `GGML_CPU_DISABLE_FUSION=1`), `ggml_cpu_has_sme2()`. Weight repacking is compiled but left off.
+- **GGUF and backend** — GGUF reader from 0.27 with `gguf_load_raw()` (load from memory) and `gguf_tensor_ne()`; backend scheduler and allocator from 0.27. ggmlR's scheduler additionally restores the graph it was given, so the same graph can be computed repeatedly.
+- **Behaviour change** — `ggml_clamp()` now returns a new tensor; `ggml_clamp_inplace()` keeps the former in-place behaviour.
 
 ## System Requirements
 

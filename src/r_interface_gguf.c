@@ -3,6 +3,7 @@
 #include <R.h>
 #include <Rinternals.h>
 #include <string.h>
+#include <limits.h>
 #include "ggml.h"
 #include "gguf.h"
 #include "r_ptr_check.h"
@@ -24,6 +25,22 @@ static void gguf_finalizer(SEXP ptr) {
     }
 }
 
+/* ── shared: wrap a gguf_context (+ optional ggml_context) ──── */
+
+static SEXP gguf_wrap(struct gguf_context *gf, struct ggml_context *ggml_ctx) {
+    /* wrap gguf_context as externalptr, store ggml_context in tag for cleanup */
+    SEXP tag = R_NilValue;
+    if (ggml_ctx) {
+        tag = PROTECT(R_MakeExternalPtr(ggml_ctx, R_NilValue, R_NilValue));
+    }
+
+    SEXP ptr = PROTECT(R_MakeExternalPtr(gf, tag, R_NilValue));
+    R_RegisterCFinalizerEx(ptr, gguf_finalizer, TRUE);
+
+    UNPROTECT(ggml_ctx ? 2 : 1);
+    return ptr;
+}
+
 /* ── R_gguf_load(path) ─────────────────────────────────────── */
 
 SEXP R_gguf_load(SEXP r_path, SEXP r_meta_only) {
@@ -43,17 +60,31 @@ SEXP R_gguf_load(SEXP r_path, SEXP r_meta_only) {
         Rf_error("Failed to load GGUF file: %s", path);
     }
 
-    /* wrap gguf_context as externalptr, store ggml_context in tag for cleanup */
-    SEXP tag = R_NilValue;
-    if (ggml_ctx) {
-        tag = PROTECT(R_MakeExternalPtr(ggml_ctx, R_NilValue, R_NilValue));
+    return gguf_wrap(gf, ggml_ctx);
+}
+
+/* ── R_gguf_load_buffer(raw) ───────────────────────────────── */
+
+/* ggml 0.27: parse a GGUF image held in an R raw vector. The reader copies
+   everything it keeps (metadata, and tensor data unless meta_only), so the
+   raw vector is not referenced after return. */
+SEXP R_gguf_load_buffer(SEXP r_raw, SEXP r_meta_only) {
+    if (TYPEOF(r_raw) != RAWSXP) Rf_error("Expected a raw vector");
+    if (XLENGTH(r_raw) == 0) Rf_error("Empty GGUF buffer");
+    int meta_only = (Rf_asLogical(r_meta_only) == TRUE);
+
+    struct ggml_context *ggml_ctx = NULL;
+    struct gguf_init_params params = {
+        .no_alloc = meta_only ? true : false,
+        .ctx      = meta_only ? NULL : &ggml_ctx,
+    };
+
+    struct gguf_context *gf = gguf_init_from_buffer(RAW(r_raw), (size_t) XLENGTH(r_raw), params);
+    if (!gf) {
+        Rf_error("Failed to parse GGUF buffer");
     }
 
-    SEXP ptr = PROTECT(R_MakeExternalPtr(gf, tag, R_NilValue));
-    R_RegisterCFinalizerEx(ptr, gguf_finalizer, TRUE);
-
-    UNPROTECT(ggml_ctx ? 2 : 1);
-    return ptr;
+    return gguf_wrap(gf, ggml_ctx);
 }
 
 /* ── R_gguf_free(ptr) ──────────────────────────────────────── */
@@ -212,6 +243,38 @@ SEXP R_gguf_tensor_names(SEXP r_ptr) {
     return result;
 }
 
+/* ── shape from the gguf header (ggml 0.27 gguf_get_tensor_ne) ─ */
+
+/* Integer vector ne[0..n_dims-1], trailing unit dims dropped (as ggml_n_dims
+   does for a materialized tensor), at least one element. */
+static SEXP gguf_shape_sexp(const struct gguf_context *gf, int64_t tid) {
+    const int64_t *ne = gguf_get_tensor_ne(gf, tid);
+
+    int n_dims = GGML_MAX_DIMS;
+    while (n_dims > 1 && ne[n_dims - 1] == 1) n_dims--;
+
+    SEXP shape = PROTECT(Rf_allocVector(INTSXP, n_dims));
+    for (int d = 0; d < n_dims; d++) {
+        if (ne[d] > INT_MAX) Rf_error("Tensor dimension %d exceeds INT_MAX", d);
+        INTEGER(shape)[d] = (int)ne[d];
+    }
+    UNPROTECT(1);
+    return shape;
+}
+
+/* ── R_gguf_tensor_ne(ptr, name) ───────────────────────────── */
+
+SEXP R_gguf_tensor_ne(SEXP r_ptr, SEXP r_name) {
+    struct gguf_context *gf = (struct gguf_context *)r_ptr_freeable(r_ptr, "GGUF context");
+    if (!gf) Rf_error("GGUF context already freed");
+
+    const char *name = CHAR(STRING_ELT(r_name, 0));
+    int64_t tid = gguf_find_tensor(gf, name);
+    if (tid < 0) Rf_error("Tensor '%s' not found", name);
+
+    return gguf_shape_sexp(gf, tid);
+}
+
 /* ── R_gguf_tensor_info(ptr, name) ─────────────────────────── */
 
 SEXP R_gguf_tensor_info(SEXP r_ptr, SEXP r_name) {
@@ -224,9 +287,8 @@ SEXP R_gguf_tensor_info(SEXP r_ptr, SEXP r_name) {
        - full load (tag holds a ggml_context): read shape/type/size from the
          materialized ggml_tensor (exact, includes per-dim shape).
        - meta_only (no_alloc, tag == NULL): no ggml tensors exist, so read what
-         the gguf API exposes directly — name, type, size_bytes. The GGUF tensor
-         shape (ne) is NOT exposed by the public gguf API without allocating
-         tensors, so `shape` is returned as NA in this mode. */
+         the gguf API exposes directly — name, shape (gguf_get_tensor_ne, ggml
+         0.27), type, size_bytes. */
     SEXP tag = R_ExternalPtrTag(r_ptr);
 
     SEXP result = PROTECT(Rf_allocVector(VECSXP, 4));
@@ -261,7 +323,7 @@ SEXP R_gguf_tensor_info(SEXP r_ptr, SEXP r_name) {
         if (tid < 0) Rf_error("Tensor '%s' not found", name);
 
         SET_VECTOR_ELT(result, 0, Rf_mkString(name));
-        SET_VECTOR_ELT(result, 1, Rf_ScalarInteger(NA_INTEGER)); /* shape n/a */
+        SET_VECTOR_ELT(result, 1, gguf_shape_sexp(gf, tid));
         SET_VECTOR_ELT(result, 2,
             Rf_mkString(ggml_type_name(gguf_get_tensor_type(gf, tid))));
         SET_VECTOR_ELT(result, 3,

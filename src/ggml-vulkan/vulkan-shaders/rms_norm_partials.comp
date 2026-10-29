@@ -10,10 +10,18 @@
 #define BLOCK_SIZE 128
 
 layout (constant_id = 1) const bool do_multiply = false;
+#if RMS_NORM_ADD_FUSION
+layout (constant_id = 2) const bool do_post_multiply = false;
+#endif
 
 layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 3, std430) readonly buffer PartialsBuf {float partial_sums[];};
+
+#if RMS_NORM_ADD_FUSION
+layout (binding = 4) readonly buffer C {float data_c[];};
+layout (binding = 5) readonly buffer E {float data_e[];};
+#endif
 
 shared FLOAT_TYPE sumsh[BLOCK_SIZE];
 
@@ -41,7 +49,7 @@ void main() {
 
     uint32_t a_offset = samp4*stride_sample4 + samp*stride_sample + channel*stride_channel + row*stride_row + get_aoffset();
     uint32_t b_offset = src1_idx(0, row, channel, samp, samp4) + get_boffset();
-    uint32_t d_offset = ((samp*nchannels + channel)*nrows + row)*ncols + get_doffset();
+    uint32_t d_offset = ((samp_flat*nchannels + channel)*nrows + row)*ncols + get_doffset();
 
     FLOAT_TYPE sum = FLOAT_TYPE(0.0f); // partial sum for thread in warp
 
@@ -61,9 +69,23 @@ void main() {
 
     if (do_multiply) {
         if (ncols > p.ne10) {
-            data_d[d_offset + col] = D_TYPE(scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + fastmod(col, p.ne10)]));
+            FLOAT_TYPE value = scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + fastmod(col, p.ne10)]);
+#if RMS_NORM_ADD_FUSION
+            value += FLOAT_TYPE(data_c[d_offset + col]);
+            if (do_post_multiply) {
+                value *= FLOAT_TYPE(data_e[0]);
+            }
+#endif
+            data_d[d_offset + col] = D_TYPE(value);
         } else {
-            data_d[d_offset + col] = D_TYPE(scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + col]));
+            FLOAT_TYPE value = scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + col]);
+#if RMS_NORM_ADD_FUSION
+            value += FLOAT_TYPE(data_c[d_offset + col]);
+            if (do_post_multiply) {
+                value *= FLOAT_TYPE(data_e[0]);
+            }
+#endif
+            data_d[d_offset + col] = D_TYPE(value);
         }
     } else {
         data_d[d_offset + col] = D_TYPE(scale * FLOAT_TYPE(data_a[a_offset + col]));

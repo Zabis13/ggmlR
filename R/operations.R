@@ -236,6 +236,43 @@ ggml_mul_mat <- function(ctx, a, b) {
   .Call("R_ggml_mul_mat", ctx, a, b, PACKAGE = "ggmlR")
 }
 
+#' Matrix Multiplication Hints
+#'
+#' Hint values for \code{\link{ggml_mul_mat_set_hint}}.
+#' \itemize{
+#'   \item \code{GGML_HINT_NONE}: no hint (default)
+#'   \item \code{GGML_HINT_SRC0_IS_HADAMARD}: the first operand is the
+#'     normalized Walsh-Hadamard matrix \eqn{H_n / \sqrt{n}}
+#' }
+#' @name mul_mat_hints
+#' @rdname mul_mat_hints
+#' @export
+GGML_HINT_NONE <- 0L
+
+#' @rdname mul_mat_hints
+#' @export
+GGML_HINT_SRC0_IS_HADAMARD <- 1L
+
+#' Set a Matrix Multiplication Hint (Graph)
+#'
+#' Marks an existing \code{ggml_mul_mat()} node with a hint about its first
+#' operand. With \code{GGML_HINT_SRC0_IS_HADAMARD} both backends replace the
+#' product with a fast Walsh-Hadamard transform of \code{b} and never read
+#' \code{a}: the CPU for any power-of-two row length, Vulkan for row length
+#' 64, 128, 256 or 512 (other lengths fall back to a plain matmul there). The
+#' hint is a promise: if \code{a} is not the normalized Hadamard matrix, the
+#' result differs from the plain product. Requires F32 \code{b} and result.
+#' Modifies the node in place and returns it.
+#'
+#' @param a MUL_MAT node: the result of \code{ggml_mul_mat()}
+#' @param hint One of \code{GGML_HINT_NONE}, \code{GGML_HINT_SRC0_IS_HADAMARD}
+#' @return \code{a}
+#' @seealso \code{\link{mul_mat_hints}}
+#' @export
+ggml_mul_mat_set_hint <- function(a, hint) {
+  .Call("R_ggml_mul_mat_set_hint", a, as.integer(hint), PACKAGE = "ggmlR")
+}
+
 # ============================================================================
 # In-place Operations (Memory-efficient, 2-3x savings for inference)
 # ============================================================================
@@ -1795,10 +1832,10 @@ ggml_scale_bias <- function(ctx, a, s, b) {
 #' Creates a graph node for clamping values to a range: clamp(x, min, max)
 #'
 #' @section Inference only:
-#' \code{GGML_OP_CLAMP} has no backward pass, and the node it builds is a view
-#' of its input.  A graph containing it therefore cannot be differentiated: the
-#' backward pass aborts with \emph{"inplace operations are currently not
-#' supported"} rather than returning an error.  This matters inside
+#' \code{GGML_OP_CLAMP} has no backward pass.  A graph that needs a gradient
+#' through it therefore cannot be differentiated: the backward pass aborts with
+#' \emph{"unsupported ggml op for backward pass: CLAMP"} rather than returning
+#' an error.  This matters inside
 #' \code{\link{ggml_layer_custom}}, whose gradients flow only through
 #' operations that implement a backward pass.
 #'
@@ -1815,6 +1852,20 @@ ggml_scale_bias <- function(ctx, a, s, b) {
 #' @export
 ggml_clamp <- function(ctx, a, min_val, max_val) {
   .Call("R_ggml_clamp", ctx, a, as.numeric(min_val), as.numeric(max_val), PACKAGE = "ggmlR")
+}
+
+#' Clamp In Place (Graph)
+#'
+#' Like \code{\link{ggml_clamp}}, but the result is a view of \code{a}: the
+#' clamped values overwrite \code{a}'s memory instead of going to a new tensor.
+#' Since ggml 0.27 \code{ggml_clamp} returns a new tensor; this is the former
+#' behaviour.
+#'
+#' @inheritParams ggml_clamp
+#' @return View of \code{a} with values clamped to [min_val, max_val]
+#' @export
+ggml_clamp_inplace <- function(ctx, a, min_val, max_val) {
+  .Call("R_ggml_clamp_inplace", ctx, a, as.numeric(min_val), as.numeric(max_val), PACKAGE = "ggmlR")
 }
 
 #' Floor (Graph)
@@ -1851,6 +1902,149 @@ ggml_ceil <- function(ctx, a) {
 #' @export
 ggml_round <- function(ctx, a) {
   .Call("R_ggml_round", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Round Half to Even (Graph)
+#'
+#' Creates a graph node for element-wise rounding with ties to the even
+#' neighbour (banker's rounding): \code{round_even(2.5) = 2}. Unlike
+#' \code{\link{ggml_round}}, which sends ties away from zero.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @return Tensor representing the round_even operation
+#' @export
+ggml_round_even <- function(ctx, a) {
+  .Call("R_ggml_round_even", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Truncate (Graph)
+#'
+#' Creates a graph node for element-wise truncation toward zero: trunc(x)
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @return Tensor representing the trunc operation
+#' @export
+ggml_trunc <- function(ctx, a) {
+  .Call("R_ggml_trunc", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' Exponential Minus One (Graph)
+#'
+#' Creates a graph node for element-wise \eqn{e^x - 1}, accurate for small
+#' \eqn{|x|} where \code{exp(x) - 1} loses precision to cancellation.
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @return Tensor representing the expm1 operation
+#' @export
+ggml_expm1 <- function(ctx, a) {
+  .Call("R_ggml_expm1", ctx, a, PACKAGE = "ggmlR")
+}
+
+#' xIELU Activation (Graph)
+#'
+#' Creates a graph node for the xIELU activation:
+#' \eqn{a_p x^2 + \beta x} for \eqn{x > 0}, and
+#' \eqn{a_n (e^{\min(x, \epsilon)} - 1 - x) + \beta x} otherwise, with
+#' \eqn{a_p = \mathrm{softplus}(\alpha_p)} and
+#' \eqn{a_n = \beta + \mathrm{softplus}(\alpha_n)} (the raw parameters are
+#' transformed when the node is built, as in ggml).
+#'
+#' @param ctx GGML context
+#' @param a Input tensor
+#' @param alpha_n,alpha_p Raw (pre-softplus) negative and positive slopes
+#' @param beta,eps Linear coefficient and the clamp for the negative branch
+#' @return Tensor representing the xielu operation
+#' @export
+ggml_xielu <- function(ctx, a, alpha_n, alpha_p, beta, eps) {
+  .Call("R_ggml_xielu", ctx, a, as.numeric(alpha_n), as.numeric(alpha_p),
+        as.numeric(beta), as.numeric(eps), PACKAGE = "ggmlR")
+}
+
+#' DSA Lightning Indexer (Graph)
+#'
+#' Scores every key position for every query token as used by DeepSeek sparse
+#' attention: \eqn{s[k, t] = \sum_h \max(q_{h,t} \cdot k_k, 0)\, w[h, t] + m[k, t]}.
+#'
+#' @param ctx GGML context
+#' @param q Queries, F32 \code{[n_embd, n_head, n_batch, ne3]}
+#' @param k Keys \code{[n_embd, 1, n_kv, ne3]} (F32, F16, BF16 or a
+#'   Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/IQ4_NL quant type)
+#' @param weights Per-head weights, F32 \code{[n_head, n_batch, 1, ne3]},
+#'   already scaled
+#' @param mask Additive mask, F16 \code{[n_kv, n_batch, 1, ne33]};
+#'   \code{ne3} must be a multiple of \code{ne33}
+#' @return F32 tensor \code{[n_kv, n_batch, 1, ne3]}
+#' @export
+ggml_lightning_indexer <- function(ctx, q, k, weights, mask) {
+  .Call("R_ggml_lightning_indexer", ctx, q, k, weights, mask, PACKAGE = "ggmlR")
+}
+
+#' DeepSeek V4 Hyper-Connection Combination Matrix (Graph)
+#'
+#' Builds the per-token \eqn{4 \times 4} stream-mixing matrix of DeepSeek V4
+#' hyper-connections. With 0-based indices: logits
+#' \code{mixes[8 + dst + 4 * src, t] * scale[2] + base[8 + dst + 4 * src]}; a
+#' softmax over \code{dst} with \code{eps} added to each entry; then each
+#' \code{dst} row divided by \code{eps} plus its sum over \code{src}; and for
+#' iterations 1 to \code{n_iter - 1}, each \code{src} column divided by
+#' \code{eps} plus its sum over \code{dst}, followed by the row step again
+#' (Sinkhorn style).
+#'
+#' @param ctx GGML context
+#' @param mixes F32 \code{[24, n_tokens]} (\eqn{(2 + hc) hc} with \eqn{hc = 4})
+#' @param scale F32 vector of length \eqn{\ge 3}
+#' @param base F32 vector of length 24
+#' @param eps Added to every entry after the softmax
+#' @param n_iter Number of normalisation iterations (positive)
+#' @return F32 tensor \code{[4, 4, n_tokens]} indexed \code{[dst, src, t]}
+#' @export
+ggml_dsv4_hc_comb <- function(ctx, mixes, scale, base, eps, n_iter) {
+  .Call("R_ggml_dsv4_hc_comb", ctx, mixes, scale, base, as.numeric(eps),
+        as.integer(n_iter), PACKAGE = "ggmlR")
+}
+
+#' DeepSeek V4 Hyper-Connection Pre-Mix (Graph)
+#'
+#' Collapses the hyper-connection streams into one: with \code{weights},
+#' \code{result[i, t] = sum_h x[i, h, t] * weights[h, t]}; with \code{gate}
+#' (the per-element gated form), \code{result[i, t] = scale * sum_h x[i, h, t]
+#' * sigmoid(gate[i, h, t])}. Give exactly one of \code{weights} and \code{gate}.
+#'
+#' @param ctx GGML context
+#' @param x F32 \code{[n_embd, hc, n_tokens]}
+#' @param weights F32 \code{[hc, n_tokens]}, or \code{NULL} when \code{gate} is used
+#' @param gate F32 with the shape of \code{x}, or \code{NULL}
+#' @param scale Output scale for the gated form
+#' @return F32 tensor \code{[n_embd, n_tokens]}
+#' @export
+ggml_dsv4_hc_pre <- function(ctx, x, weights = NULL, gate = NULL, scale = 1) {
+  if (is.null(weights) == is.null(gate)) {
+    stop("ggml_dsv4_hc_pre: give exactly one of `weights` and `gate`")
+  }
+  gated <- !is.null(gate)
+  .Call("R_ggml_dsv4_hc_pre", ctx, x, if (gated) gate else weights,
+        as.numeric(scale), gated, PACKAGE = "ggmlR")
+}
+
+#' DeepSeek V4 Hyper-Connection Post-Mix (Graph)
+#'
+#' Expands a layer output back into the streams:
+#' \code{result[i, dst, t] = x[i, t] * post[dst, t] + sum_src residual[i, src, t]
+#' * comb[dst, src, t]}; with \code{comb = NULL} the identity mix
+#' \code{x[i, t] * post[dst, t] + residual[i, dst, t]}.
+#'
+#' @param ctx GGML context
+#' @param x F32 \code{[n_embd, n_tokens]}
+#' @param residual F32 \code{[n_embd, hc, n_tokens]}
+#' @param post F32 \code{[hc, n_tokens]}
+#' @param comb F32 \code{[hc, hc, n_tokens]} or \code{NULL}
+#' @return F32 tensor \code{[n_embd, hc, n_tokens]}
+#' @export
+ggml_dsv4_hc_post <- function(ctx, x, residual, post, comb = NULL) {
+  .Call("R_ggml_dsv4_hc_post", ctx, x, residual, post, comb, PACKAGE = "ggmlR")
 }
 
 # ============================================================================
@@ -2090,6 +2284,22 @@ ggml_swiglu_split <- function(ctx, a, b) {
   .Call("R_ggml_swiglu_split", ctx, a, b, PACKAGE = "ggmlR")
 }
 
+#' SwiGLU with Clamped Inputs (Graph)
+#'
+#' SwiGLU whose inputs are clamped before they meet: the gate from above, the
+#' value from both sides, \code{silu(min(a, limit)) * clamp(b, -limit, limit)}.
+#'
+#' @param ctx GGML context
+#' @param a Gate tensor, or, when \code{b} is NULL, a tensor whose first half
+#'   along dim 0 is the gate and second half the value
+#' @param b Value tensor (same shape as \code{a}), or NULL
+#' @param limit Clamp bound (positive)
+#' @return Tensor; same shape as \code{a}, or half its dim 0 when \code{b} is NULL
+#' @export
+ggml_swiglu_clamp <- function(ctx, a, b = NULL, limit) {
+  .Call("R_ggml_swiglu_clamp", ctx, a, b, as.numeric(limit), PACKAGE = "ggmlR")
+}
+
 # ============================================================================
 # Row Operations
 # ============================================================================
@@ -2127,6 +2337,27 @@ ggml_swiglu_split <- function(ctx, a, b) {
 #' @export
 ggml_get_rows <- function(ctx, a, b) {
   .Call("R_ggml_get_rows", ctx, a, b, PACKAGE = "ggmlR")
+}
+
+#' Set Rows by Index (Graph)
+#'
+#' Writes the rows of \code{b} into the rows of \code{a} named by \code{c}:
+#' row \code{i} of \code{b} goes to row \code{c[i]} of \code{a} (0-based),
+#' converted to the type of \code{a}. The inverse of \code{\link{ggml_get_rows}}.
+#' Rows of \code{a} not named in \code{c} keep their values; overlapping
+#' destinations give an undefined result.
+#'
+#' @param ctx GGML context
+#' @param a Destination tensor \code{[n_embd, ne1, ne2, ne3]}
+#' @param b F32 source rows \code{[n_embd, n_rows, ne2, ne3]}
+#' @param c I32 or I64 row indices \code{[n_rows, ne11, ne12]}, each in
+#'   \code{[0, ne1)}; broadcast over \code{b} when \code{ne2 \%\% ne11 == 0}
+#'   and \code{ne3 \%\% ne12 == 0}
+#' @return A view of \code{a} holding the result
+#' @seealso \code{\link{ggml_get_rows}}
+#' @export
+ggml_set_rows <- function(ctx, a, b, c) {
+  .Call("R_ggml_set_rows", ctx, a, b, c, PACKAGE = "ggmlR")
 }
 
 #' Scatter elements into a copy of a tensor (ONNX ScatterElements)
@@ -2396,6 +2627,24 @@ ggml_rope_ext <- function(ctx, a, b, c = NULL,
         PACKAGE = "ggmlR")
 }
 
+#' Partial RoPE Offset (Graph)
+#'
+#' Restricts an existing RoPE node to the dims \code{[n_offs, n_offs + n_dims)}
+#' of each row; the dims before and after are passed through unrotated.
+#' Modifies the node in place and returns it. Errors when \code{n_offs + n_dims}
+#' exceeds the row length \code{ne[0]}.
+#'
+#' @param a RoPE node: the result of \code{ggml_rope()}, \code{ggml_rope_ext()},
+#'   \code{ggml_rope_multi()} or a RoPE backward node
+#'   (not vision RoPE)
+#' @param n_offs Number of leading dims to leave unrotated (non-negative, even)
+#' @return \code{a}
+#' @export
+ggml_rope_set_offset <- function(a, n_offs) {
+  .Call("R_ggml_rope_set_offset", a, as.integer(n_offs), PACKAGE = "ggmlR")
+}
+
+
 #' Extended RoPE Inplace (Graph)
 #'
 #' Creates a graph node for extended RoPE, modifying input tensor in place.
@@ -2521,6 +2770,25 @@ ggml_flash_attn_ext <- function(ctx, q, k, v, mask = NULL,
                                 scale, max_bias = 0.0, logit_softcap = 0.0) {
   .Call("R_ggml_flash_attn_ext", ctx, q, k, v, mask,
         as.numeric(scale), as.numeric(max_bias), as.numeric(logit_softcap),
+        PACKAGE = "ggmlR")
+}
+
+#' Sparse K/V Bound for Flash Attention (Graph)
+#'
+#' Declares that every row of the mask of an existing
+#' \code{ggml_flash_attn_ext()} node has at most \code{n_kv_max} finite
+#' entries (the rest are \code{-Inf}). The Vulkan backend may then gather only
+#' those K/V positions instead of scanning the whole sequence; the CPU backend
+#' ignores the bound. \code{0} disables it. The bound is a promise: rows with
+#' more finite entries give wrong results on Vulkan.
+#' Modifies the node in place and returns it.
+#'
+#' @param a FLASH_ATTN_EXT node: the result of \code{ggml_flash_attn_ext()}
+#' @param n_kv_max Upper bound on finite mask entries per row (non-negative)
+#' @return \code{a}
+#' @export
+ggml_flash_attn_ext_set_n_kv_max <- function(a, n_kv_max) {
+  .Call("R_ggml_flash_attn_ext_set_n_kv_max", a, as.integer(n_kv_max),
         PACKAGE = "ggmlR")
 }
 
@@ -3725,8 +3993,9 @@ ggml_win_unpart <- function(ctx, a, w0, h0, w) {
 #' @param a Input tensor
 #' @param op Pool operation constant (see details)
 #' @param k0 Kernel size (window size)
-#' @param s0 Stride (default = k0 for non-overlapping windows)
-#' @param p0 Padding (default 0)
+#' @param s0 Stride; must equal \code{k0} (the default): non-overlapping
+#'   windows only
+#' @param p0 Padding; must be 0 (the default)
 #' @return Pooled tensor with reduced dimensions
 #'
 #' @details
@@ -3754,9 +4023,20 @@ ggml_win_unpart <- function(ctx, a, w0, h0, w) {
 #' }
 #' @export
 ggml_pool_1d <- function(ctx, a, op, k0, s0 = k0, p0 = 0L) {
-  .Call("R_ggml_pool_1d", ctx, a, as.integer(op),
+  .Call("R_ggml_pool_1d", ctx, a, .ggml_pool_op(op),
         as.integer(k0), as.integer(s0), as.integer(p0),
         PACKAGE = "ggmlR")
+}
+
+# ggml has only max and avg pooling; anything else (a string such as "sum", NA)
+# used to coerce to NA and silently run as avg in C.
+.ggml_pool_op <- function(op) {
+  if (!is.numeric(op) || length(op) != 1L || is.na(op) ||
+      !(op %in% c(GGML_OP_POOL_MAX, GGML_OP_POOL_AVG))) {
+    stop("op must be GGML_OP_POOL_MAX (0) or GGML_OP_POOL_AVG (1); ggml has no other pooling",
+         call. = FALSE)
+  }
+  as.integer(op)
 }
 
 #' 2D Pooling (Graph)
@@ -3775,10 +4055,108 @@ ggml_pool_1d <- function(ctx, a, op, k0, s0 = k0, p0 = 0L) {
 #' @return Pooled tensor
 #' @export
 ggml_pool_2d <- function(ctx, a, op, k0, k1, s0 = k0, s1 = k1, p0 = 0, p1 = 0) {
-  .Call("R_ggml_pool_2d", ctx, a, as.integer(op),
+  .Call("R_ggml_pool_2d", ctx, a, .ggml_pool_op(op),
         as.integer(k0), as.integer(k1),
         as.integer(s0), as.integer(s1),
         as.numeric(p0), as.numeric(p1),
+        PACKAGE = "ggmlR")
+}
+
+#' Column to 1D Signal (Graph)
+#'
+#' Inverse of a 1D im2col: scatter-adds the columns of a GEMM result back into
+#' a 1D signal, as in a transposed convolution computed by matrix multiply.
+#'
+#' @param ctx GGML context
+#' @param a Column tensor \code{[K * oc, T_in]}: 2D, contiguous, F32/F16/BF16
+#'   (no batch dimension)
+#' @param s0 Stride
+#' @param oc Output channels
+#' @param p0 Padding cropped from both ends
+#' @return Tensor \code{[T_out, oc]}, \code{T_out = (T_in - 1) * s0 + K - 2 * p0}
+#' @export
+ggml_col2im_1d <- function(ctx, a, s0, oc, p0 = 0L) {
+  .Call("R_ggml_col2im_1d", ctx, a, as.integer(s0), as.integer(oc), as.integer(p0),
+        PACKAGE = "ggmlR")
+}
+
+# stride / padding / dilation of the 3D ops: a scalar applies to all three
+# axes, otherwise one value per axis in the order width, height, depth.
+.conv3d_arg <- function(x, name) {
+  x <- as.integer(x)
+  if (length(x) == 1L) x <- rep(x, 3L)
+  if (length(x) != 3L || anyNA(x)) {
+    stop(sprintf("'%s' must be one integer or three (width, height, depth)", name), call. = FALSE)
+  }
+  x
+}
+
+#' 3D Image to Column (Graph)
+#'
+#' Unfolds 3D patches of the input into columns, the first step of a 3D
+#' convolution computed by matrix multiply (see \code{\link{ggml_conv_3d}}).
+#'
+#' @param ctx GGML context
+#' @param a Kernel tensor \code{[KW, KH, KD, IC * OC]}; only its shape is used
+#' @param b Input tensor \code{[IW, IH, ID, IC * N]}
+#' @param IC Number of input channels
+#' @param s Stride: one value for all axes or \code{c(width, height, depth)}
+#' @param p Padding, same form as \code{s}
+#' @param d Dilation, same form as \code{s}
+#' @param dst_type Output type, \code{GGML_TYPE_F16} (default) or \code{GGML_TYPE_F32}
+#' @return Tensor \code{[KW * KH * KD * IC, OW, OH, OD * N]}
+#' @seealso \code{\link{ggml_conv_3d}}, \code{\link{ggml_im2col}}
+#' @export
+ggml_im2col_3d <- function(ctx, a, b, IC, s = 1L, p = 0L, d = 1L, dst_type = GGML_TYPE_F16) {
+  .Call("R_ggml_im2col_3d", ctx, a, b, as.integer(IC),
+        .conv3d_arg(s, "s"), .conv3d_arg(p, "p"), .conv3d_arg(d, "d"),
+        as.integer(dst_type), PACKAGE = "ggmlR")
+}
+
+#' 3D Convolution (Graph)
+#'
+#' 3D convolution built from \code{\link{ggml_im2col_3d}} and a matrix
+#' multiply. The kernel type sets the im2col type, so an F16 kernel computes
+#' in F16.
+#'
+#' @param ctx GGML context
+#' @param a Kernel tensor \code{[KW, KH, KD, IC * OC]}
+#' @param b Input tensor \code{[IW, IH, ID, IC * N]}
+#' @param IC Number of input channels
+#' @param s Stride: one value for all axes or \code{c(width, height, depth)}
+#' @param p Padding, same form as \code{s}
+#' @param d Dilation, same form as \code{s}
+#' @return Tensor \code{[OW, OH, OD, OC * N]}
+#' @seealso \code{\link{ggml_conv_3d_direct}}
+#' @export
+ggml_conv_3d <- function(ctx, a, b, IC, s = 1L, p = 0L, d = 1L) {
+  .Call("R_ggml_conv_3d", ctx, a, b, as.integer(IC),
+        .conv3d_arg(s, "s"), .conv3d_arg(p, "p"), .conv3d_arg(d, "d"),
+        PACKAGE = "ggmlR")
+}
+
+#' Direct 3D Convolution (Graph)
+#'
+#' 3D convolution as a single op (\code{GGML_OP_CONV_3D}), without the
+#' im2col buffer of \code{\link{ggml_conv_3d}}. Same layout and result.
+#'
+#' @param ctx GGML context
+#' @param a Kernel tensor \code{[KW, KH, KD, IC * OC]}
+#' @param b Input tensor \code{[IW, IH, ID, IC * N]}
+#' @param s Stride: one value for all axes or \code{c(width, height, depth)}
+#' @param p Padding, same form as \code{s}
+#' @param d Dilation, same form as \code{s}
+#' @param n_channels Number of input channels (IC)
+#' @param n_batch Batch size (N)
+#' @param n_channels_out Number of output channels (OC)
+#' @return F32 tensor \code{[OW, OH, OD, OC * N]}
+#' @seealso \code{\link{ggml_conv_3d}}
+#' @export
+ggml_conv_3d_direct <- function(ctx, a, b, s = 1L, p = 0L, d = 1L,
+                                n_channels, n_batch, n_channels_out) {
+  .Call("R_ggml_conv_3d_direct", ctx, a, b,
+        .conv3d_arg(s, "s"), .conv3d_arg(p, "p"), .conv3d_arg(d, "d"),
+        as.integer(n_channels), as.integer(n_batch), as.integer(n_channels_out),
         PACKAGE = "ggmlR")
 }
 
@@ -4265,6 +4643,17 @@ ggml_cpu_has_sme <- function() {
   .Call("R_ggml_cpu_has_sme", PACKAGE = "ggmlR")
 }
 
+#' CPU Feature Detection - SME2 (ARM)
+#'
+#' Check if the CPU supports ARM SME2 (Scalable Matrix Extension 2).
+#'
+#' @return Logical indicating SME2 support
+#' @export
+#' @family cpu_features
+ggml_cpu_has_sme2 <- function() {
+  .Call("R_ggml_cpu_has_sme2", PACKAGE = "ggmlR")
+}
+
 #' CPU Feature Detection - RISC-V Vector
 #'
 #' Check if the CPU supports RISC-V Vector extension.
@@ -4368,6 +4757,7 @@ ggml_cpu_features <- function() {
     sve = ggml_cpu_has_sve(),
     sve_cnt = ggml_cpu_get_sve_cnt(),
     sme = ggml_cpu_has_sme(),
+    sme2 = ggml_cpu_has_sme2(),
     # Other
     riscv_v = ggml_cpu_has_riscv_v(),
     rvv_vlen = ggml_cpu_get_rvv_vlen(),
@@ -4418,6 +4808,45 @@ ggml_is_contiguous_1 <- function(tensor) {
 #' @family tensor_layout
 ggml_is_contiguous_2 <- function(tensor) {
   .Call("R_ggml_is_contiguous_2", tensor, PACKAGE = "ggmlR")
+}
+
+#' Check Tensor Contiguity (dims < 1)
+#'
+#' Check whether the first 1 dimension(s) of a tensor are packed (dims
+#' \code{0 .. 1 - 1} in ggml order); the higher dimensions may have any stride.
+#'
+#' @param tensor Tensor pointer
+#' @return Logical indicating contiguity for dims < 1
+#' @export
+#' @family tensor_layout
+ggml_is_contiguous_to_1 <- function(tensor) {
+  .Call("R_ggml_is_contiguous_to_1", tensor, PACKAGE = "ggmlR")
+}
+
+#' Check Tensor Contiguity (dims < 2)
+#'
+#' Check whether the first 2 dimension(s) of a tensor are packed (dims
+#' \code{0 .. 2 - 1} in ggml order); the higher dimensions may have any stride.
+#'
+#' @param tensor Tensor pointer
+#' @return Logical indicating contiguity for dims < 2
+#' @export
+#' @family tensor_layout
+ggml_is_contiguous_to_2 <- function(tensor) {
+  .Call("R_ggml_is_contiguous_to_2", tensor, PACKAGE = "ggmlR")
+}
+
+#' Check Tensor Contiguity (dims < 3)
+#'
+#' Check whether the first 3 dimension(s) of a tensor are packed (dims
+#' \code{0 .. 3 - 1} in ggml order); the higher dimensions may have any stride.
+#'
+#' @param tensor Tensor pointer
+#' @return Logical indicating contiguity for dims < 3
+#' @export
+#' @family tensor_layout
+ggml_is_contiguous_to_3 <- function(tensor) {
+  .Call("R_ggml_is_contiguous_to_3", tensor, PACKAGE = "ggmlR")
 }
 
 #' Check If Tensor is Contiguously Allocated
@@ -4835,13 +5264,20 @@ ggml_ssm_scan_back <- function(ctx, s, x, dt, A, B, C, ids, grad) {
 #' @param B Input projection, \code{[d_state, n_group, n_seq_tokens, n_seqs]}
 #' @param C Output projection, same shape as \code{B}
 #' @param ids Sequence-to-state mapping, \code{[n_seqs]} I32, 0-based
-#' @return A flat tensor: outputs followed by final states
+#' @param K Number of state snapshots kept after the outputs (ggml 0.27):
+#'   slot 0 is the final state, slot \code{k} the state \code{k} tokens before
+#'   the end, each slot a block of \code{[d_state, head_dim, n_head, n_seqs]}.
+#'   Slots older than the sequence are left untouched. \code{K > 1} needs a
+#'   Mamba-2 \code{A} and is for inference only (the backward needs
+#'   \code{K = 1}).
+#' @return A flat tensor: outputs followed by the \code{K} state snapshots
+#'   (with \code{K = 1}, the final states)
 #' @seealso \code{\link{ggml_ssm_scan_output}}, \code{\link{ggml_ssm_scan_state}},
 #'   \code{\link{ggml_ssm_conv}}
 #' @export
 #' @family state-space
-ggml_ssm_scan <- function(ctx, s, x, dt, A, B, C, ids) {
-  .Call("R_ggml_ssm_scan", ctx, s, x, dt, A, B, C, ids, PACKAGE = "ggmlR")
+ggml_ssm_scan <- function(ctx, s, x, dt, A, B, C, ids, K = 1L) {
+  .Call("R_ggml_ssm_scan", ctx, s, x, dt, A, B, C, ids, as.integer(K), PACKAGE = "ggmlR")
 }
 
 #' Views Into a Packed ssm_scan Result

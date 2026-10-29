@@ -68,7 +68,10 @@ cases <- list(
   list("mxfp4", qfn(quantize_mxfp4), dequantize_row_mxfp4, MAX_QUANTIZATION_TOTAL_ERROR_FP4, NA),
   list("nvfp4", qfn(quantize_nvfp4), dequantize_row_nvfp4, MAX_QUANTIZATION_TOTAL_ERROR_FP4, NA),
 
-  list("q1_0", qfn(quantize_q1_0), dequantize_row_q1_0, MAX_QUANTIZATION_TOTAL_ERROR_BINARY, NA)
+  list("q1_0", qfn(quantize_q1_0), dequantize_row_q1_0, MAX_QUANTIZATION_TOTAL_ERROR_BINARY, NA),
+  # upstream test-quantize-fns.cpp holds Q2_0 to the ternary threshold
+  list("q2_0", qfn(quantize_q2_0), dequantize_row_q2_0, MAX_QUANTIZATION_TOTAL_ERROR_TERNARY, NA),
+  list("q2_0_ref", qref(quantize_row_q2_0_ref), dequantize_row_q2_0, MAX_QUANTIZATION_TOTAL_ERROR_TERNARY, NA)
 )
 
 for (case in cases) {

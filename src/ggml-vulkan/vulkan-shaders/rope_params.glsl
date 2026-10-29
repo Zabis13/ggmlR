@@ -1,12 +1,11 @@
 #if !defined(GGML_ROPE_PARAMS)
 #define GGML_ROPE_PARAMS
 
-#include "rte.glsl"
-
 struct rope_params {
     uint rope_mode;
     uint nrows;
     uint n_dims;
+    uint n_offs;
     float freq_scale;
     float freq_base;
     float ext_factor;
@@ -18,6 +17,7 @@ struct rope_params {
     uint is_imrope;
     uint is_back;
     uint set_rows_stride;
+
     uint ne00;
     uint ne01;
     uint ne02;
@@ -27,6 +27,9 @@ struct rope_params {
     uint nb11;
     uint nb12;
     uint nb13;
+
+    uint a_offset;
+    uint d_offset;
 };
 
 #endif // !defined(GGML_ROPE_PARAMS)

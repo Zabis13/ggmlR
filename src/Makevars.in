@@ -2,7 +2,7 @@ CXX_STD = CXX17
 
 # Base include paths and defines
 GGML_CPPFLAGS = -I. -Iggml-cpu -Iggml-cpu/arch/x86 \
-  -DGGML_VERSION='"0.9.5"' -DGGML_COMMIT='"ggmlR"' \
+  -DGGML_VERSION='"0.27.0"' -DGGML_COMMIT='"ggmlR"' \
   -DGGML_USE_CPU -D_GNU_SOURCE
 
 # Vulkan flags (set by configure --with-vulkan)
@@ -64,6 +64,7 @@ GGML_OBJECTS = \
   ggml-cpu/vec.o \
   ggml-cpu/binary-ops.o ggml-cpu/unary-ops.o ggml-cpu/repack.o \
   ggml-cpu/quants.o ggml-cpu/hbm.o \
+  ggml-cpu/tiled/tiled.o ggml-cpu/tiled/tiled-kernel.o \
   onnx/qconv_i32.o onnx/qmatmul_i32.o \
   @X86_OBJECTS@
 

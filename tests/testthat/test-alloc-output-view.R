@@ -18,7 +18,7 @@ alloc_view_out <- function(be) {
   g <- ggml_init(1e7, no_alloc = TRUE)
   on.exit(ggml_free(g), add = TRUE, after = FALSE)
   y  <- ggml_add(g, x, x)               # 2x
-  v  <- ggml_clamp(g, y, 0, 100)        # output view of y, with consumers
+  v  <- ggml_clamp_inplace(g, y, 0, 100) # output view of y, with consumers
   z  <- ggml_scale(g, v, 2)
   z2 <- ggml_scale(g, v, 3)
   u  <- ggml_add(g, z, z2)              # z, z2 are outputs -> u needs new memory

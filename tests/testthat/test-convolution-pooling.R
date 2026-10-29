@@ -235,3 +235,34 @@ test_that("pooling constants are defined correctly", {
   expect_equal(GGML_OP_POOL_MAX, 0L)
   expect_equal(GGML_OP_POOL_AVG, 1L)
 })
+
+test_that("ggml_conv_1d keeps samples and channels apart for a batch > 1", {
+  # 0.11 read the [OC, N*OL] product as [N, OC, OL], mixing samples and channels
+  # whenever N > 1 (ggml 0.27 fix). Small integers stay exact through the F16
+  # im2col buffer.
+  K <- 3; IC <- 3; OC <- 4; L <- 12; N <- 3; p0 <- 1
+  set.seed(7)
+  w <- sample(-3:3, K * IC * OC, replace = TRUE)
+  x <- sample(-3:3, L * IC * N, replace = TRUE)
+  ctx <- ggml_init(16 * 1024 * 1024)
+  on.exit(ggml_free(ctx))
+  kernel <- ggml_new_tensor_3d(ctx, GGML_TYPE_F32, K, IC, OC)
+  input  <- ggml_new_tensor_3d(ctx, GGML_TYPE_F32, L, IC, N)
+  ggml_set_f32(kernel, w)
+  ggml_set_f32(input, x)
+  out <- ggml_conv_1d(ctx, kernel, input, s0 = 1, p0 = p0, d0 = 1)
+  ggml_graph_compute(ctx, ggml_build_forward_expand(ctx, out))
+
+  OL <- L + 2 * p0 - K + 1
+  wa <- array(w, c(K, IC, OC)); xa <- array(x, c(L, IC, N))
+  ref <- array(0, c(OL, OC, N))
+  for (n in 1:N) for (oc in 1:OC) for (ol in 1:OL) {
+    s <- 0
+    for (ic in 1:IC) for (k in 1:K) {
+      i <- ol + k - 1 - p0
+      if (i >= 1 && i <= L) s <- s + wa[k, ic, oc] * xa[i, ic, n]
+    }
+    ref[ol, oc, n] <- s
+  }
+  expect_equal(ggml_get_f32(out), as.vector(ref))
+})

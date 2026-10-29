@@ -44,6 +44,62 @@ SEXP R_ggml_vk_prec32_count(void) {
 #endif
 }
 
+// Number of HC_POST_GATE fusions (scale->sigmoid->scale->DSV4_HC_POST) dispatched
+// (ggml-vulkan-graph.cpp). Test hook. 0 without Vulkan.
+#ifdef GGML_USE_VULKAN
+extern uint64_t ggml_vk_hc_post_gate_fusion_count(void);
+extern int ggml_vk_test_fused_output_overlaps(struct ggml_cgraph * cgraph, int node_idx, int n_nodes, int mode);
+#endif
+SEXP R_ggml_vk_hc_post_gate_count(void) {
+#ifdef GGML_USE_VULKAN
+    return ScalarReal((double) ggml_vk_hc_post_gate_fusion_count());
+#else
+    return ScalarReal(0.0);
+#endif
+}
+
+// Number of SSM_CONV(+ADD)+SILU fusions dispatched. Test hook. 0 without Vulkan.
+#ifdef GGML_USE_VULKAN
+extern uint64_t ggml_vk_ssm_conv_fusion_count(void);
+#endif
+SEXP R_ggml_vk_ssm_conv_fusion_count(void) {
+#ifdef GGML_USE_VULKAN
+    return ScalarReal((double) ggml_vk_ssm_conv_fusion_count());
+#else
+    return ScalarReal(0.0);
+#endif
+}
+
+// Number of UNARY+MUL fusions (gelu/sigmoid/silu/softplus_mul) dispatched. Test hook. 0 without Vulkan.
+#ifdef GGML_USE_VULKAN
+extern uint64_t ggml_vk_unary_mul_fusion_count(void);
+#endif
+SEXP R_ggml_vk_unary_mul_fusion_count(void) {
+#ifdef GGML_USE_VULKAN
+    return ScalarReal((double) ggml_vk_unary_mul_fusion_count());
+#else
+    return ScalarReal(0.0);
+#endif
+}
+
+// Test hook: does a fused pattern's output overlap one of its external inputs?
+// node_idx is 0-based; mode (see ggml_vk_test_fused_output_overlaps) moves the
+// output onto an input for the call. NA without Vulkan.
+SEXP R_ggml_vk_test_fused_overlap(SEXP graph_ptr, SEXP node_idx, SEXP n_nodes, SEXP mode) {
+    struct ggml_cgraph * graph = (struct ggml_cgraph *) r_ptr_required(graph_ptr, "graph");
+    const int i = asInteger(node_idx);
+    const int n = asInteger(n_nodes);
+    if (i < 0 || n < 1 || i + n > ggml_graph_n_nodes(graph)) {
+        Rf_error("node range [%d, %d) is outside the graph", i, i + n);
+    }
+#ifdef GGML_USE_VULKAN
+    return ScalarLogical(ggml_vk_test_fused_output_overlaps(graph, i, n, asInteger(mode)));
+#else
+    (void) mode;
+    return ScalarLogical(NA_LOGICAL);
+#endif
+}
+
 SEXP R_ggml_vk_hard_exit_available(void) {
 #if defined(GGML_USE_VULKAN) && defined(GGML_VK_HARD_EXIT)
     return ScalarLogical(TRUE);

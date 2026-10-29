@@ -35,6 +35,7 @@ Other cpu_features:
 \code{\link{ggml_cpu_has_matmul_int8}()},
 \code{\link{ggml_cpu_has_neon}()},
 \code{\link{ggml_cpu_has_sme}()},
+\code{\link{ggml_cpu_has_sme2}()},
 \code{\link{ggml_cpu_has_sse3}()},
 \code{\link{ggml_cpu_has_ssse3}()},
 \code{\link{ggml_cpu_has_sve}()},

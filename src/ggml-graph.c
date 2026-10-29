@@ -748,6 +748,11 @@ static void ggml_compute_backward(
             // its own slice, so the recurrence is replayed once rather than
             // once per input. src[6] is `ids`, which is integer and has no
             // gradient.
+            //
+            // The backward knows a single state slot only; the K > 1 snapshots
+            // (ggml_ssm_scan_ext) serve inference rollback, not training.
+            GGML_ASSERT(ggml_get_op_params_i32(tensor, 0) == 1 &&
+                        "ggml_ssm_scan backward needs K == 1 (no gradient through state snapshots)");
             const struct ggml_tensor * s   = tensor->src[0];
             const struct ggml_tensor * xx  = tensor->src[1];
             const struct ggml_tensor * dtt = tensor->src[2];
@@ -1211,6 +1216,12 @@ void ggml_build_forward_expand(struct ggml_cgraph * cgraph, struct ggml_tensor *
     ggml_build_forward_impl(cgraph, tensor, true, true);
 }
 
+// ggml 0.27: add the tensor and its parents without marking them for compute;
+// the flag is set later, when a computing node reaches them.
+void ggml_build_forward_order(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor) {
+    ggml_build_forward_impl(cgraph, tensor, true, false);
+}
+
 void ggml_build_backward_expand(
         struct ggml_context *  ctx,
         struct ggml_cgraph  *  cgraph,
@@ -1293,7 +1304,7 @@ void ggml_build_backward_expand(
         }
 
         // inplace operations are currently not supported
-        GGML_ASSERT(!node->view_src || node->op == GGML_OP_CPY || node->op == GGML_OP_VIEW ||
+        GGML_ASSERT(!node->view_src || node->op == GGML_OP_CPY || node->op == GGML_OP_SET_ROWS || node->op == GGML_OP_VIEW ||
             node->op == GGML_OP_RESHAPE || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE);
 
         const size_t ihash = ggml_hash_find(&cgraph->visited_hash_set, node);
@@ -1403,6 +1414,7 @@ struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t siz
         /*.use_counts   =*/ use_counts_ptr,
         /*.hash_table   =*/ { hash_size, hash_used, hash_keys_ptr },
         /*.order        =*/ GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT,
+        /*.uid          =*/ 0,
     };
 
     ggml_hash_set_reset(&cgraph->visited_hash_set);
@@ -1430,6 +1442,7 @@ struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1)
         /*.use_counts       =*/ cgraph0->use_counts,
         /*.visited_hash_set =*/ cgraph0->visited_hash_set,
         /*.order            =*/ cgraph0->order,
+        /*.uid              =*/ 0
     };
 
     return cgraph;
@@ -1652,6 +1665,10 @@ static int ggml_node_list_find_tensor(const struct ggml_cgraph * cgraph,
     return -1;
 }
 
+static bool ggml_is_constant(const struct ggml_tensor * tensor) {
+    return tensor->buffer != NULL && ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS && (tensor->flags & GGML_TENSOR_FLAG_PARAM) == 0;
+}
+
 bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
                                 const int *                node_idxs,
                                 int                        count,
@@ -1697,10 +1714,11 @@ bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
             return false;
         }
 
-        // if node is a view, check if the view_src and all it's parent view_srcs are within the subgraph
+        // if node is a view, check if the view_src and all its parent view_srcs are within the subgraph.
+        // external view sources are allowed only for weight tensors, which are constant for this graph execution.
         struct ggml_tensor * view_src = node->view_src;
         while (view_src) {
-            if (ggml_node_list_find_tensor(cgraph, node_idxs, count, view_src) == -1) {
+            if (ggml_node_list_find_tensor(cgraph, node_idxs, count, view_src) == -1 && !ggml_is_constant(view_src)) {
                 return false;
             }
             view_src = view_src->view_src;

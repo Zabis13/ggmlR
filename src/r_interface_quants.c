@@ -11,8 +11,19 @@
 // These convert quantized blocks back to float arrays
 // ============================================================================
 
+// ggmlR: element counts must be a whole number of quant blocks. The kernels
+// only assert it in debug builds (a release build drops or leaves uninitialised
+// the tail) and ggml_row_size() aborts the R session, so check it here.
+static void r_quant_check_blocks(enum ggml_type type, int64_t n, const char * what) {
+    const int64_t bs = ggml_blck_size(type);
+    if (bs > 0 && n % bs != 0) {
+        Rf_error("%s (%lld) must be a multiple of the %s block size %lld",
+                 what, (long long) n, ggml_type_name(type), (long long) bs);
+    }
+}
+
 // Helper macro for dequantize functions
-#define IMPL_DEQUANTIZE_ROW(type_name, block_type) \
+#define IMPL_DEQUANTIZE_ROW(type_name, block_type, ggml_type) \
 SEXP R_dequantize_row_##type_name(SEXP raw_data, SEXP n_elements) { \
     if (TYPEOF(raw_data) != RAWSXP) { \
         Rf_error("raw_data must be a raw vector"); \
@@ -20,6 +31,12 @@ SEXP R_dequantize_row_##type_name(SEXP raw_data, SEXP n_elements) { \
     int64_t k = (int64_t)Rf_asReal(n_elements); \
     if (k <= 0) { \
         Rf_error("n_elements must be positive"); \
+    } \
+    r_quant_check_blocks(ggml_type, k, "n_elements"); \
+    if ((size_t) Rf_xlength(raw_data) < ggml_row_size(ggml_type, k)) { \
+        Rf_error("raw_data too short: %lld bytes, %lld elements need %lld", \
+                 (long long) Rf_xlength(raw_data), (long long) k, \
+                 (long long) ggml_row_size(ggml_type, k)); \
     } \
     const block_type *x = (const block_type *)RAW(raw_data); \
     SEXP result = PROTECT(Rf_allocVector(REALSXP, k)); \
@@ -33,41 +50,43 @@ SEXP R_dequantize_row_##type_name(SEXP raw_data, SEXP n_elements) { \
 }
 
 // Basic quantization types
-IMPL_DEQUANTIZE_ROW(q4_0, block_q4_0)
-IMPL_DEQUANTIZE_ROW(q4_1, block_q4_1)
-IMPL_DEQUANTIZE_ROW(q5_0, block_q5_0)
-IMPL_DEQUANTIZE_ROW(q5_1, block_q5_1)
-IMPL_DEQUANTIZE_ROW(q8_0, block_q8_0)
+IMPL_DEQUANTIZE_ROW(q4_0, block_q4_0, GGML_TYPE_Q4_0)
+IMPL_DEQUANTIZE_ROW(q4_1, block_q4_1, GGML_TYPE_Q4_1)
+IMPL_DEQUANTIZE_ROW(q5_0, block_q5_0, GGML_TYPE_Q5_0)
+IMPL_DEQUANTIZE_ROW(q5_1, block_q5_1, GGML_TYPE_Q5_1)
+IMPL_DEQUANTIZE_ROW(q8_0, block_q8_0, GGML_TYPE_Q8_0)
 
 // K-quants
-IMPL_DEQUANTIZE_ROW(q2_K, block_q2_K)
-IMPL_DEQUANTIZE_ROW(q3_K, block_q3_K)
-IMPL_DEQUANTIZE_ROW(q4_K, block_q4_K)
-IMPL_DEQUANTIZE_ROW(q5_K, block_q5_K)
-IMPL_DEQUANTIZE_ROW(q6_K, block_q6_K)
-IMPL_DEQUANTIZE_ROW(q8_K, block_q8_K)
+IMPL_DEQUANTIZE_ROW(q2_K, block_q2_K, GGML_TYPE_Q2_K)
+IMPL_DEQUANTIZE_ROW(q3_K, block_q3_K, GGML_TYPE_Q3_K)
+IMPL_DEQUANTIZE_ROW(q4_K, block_q4_K, GGML_TYPE_Q4_K)
+IMPL_DEQUANTIZE_ROW(q5_K, block_q5_K, GGML_TYPE_Q5_K)
+IMPL_DEQUANTIZE_ROW(q6_K, block_q6_K, GGML_TYPE_Q6_K)
+IMPL_DEQUANTIZE_ROW(q8_K, block_q8_K, GGML_TYPE_Q8_K)
 
 // Ternary quants
-IMPL_DEQUANTIZE_ROW(tq1_0, block_tq1_0)
-IMPL_DEQUANTIZE_ROW(tq2_0, block_tq2_0)
+IMPL_DEQUANTIZE_ROW(tq1_0, block_tq1_0, GGML_TYPE_TQ1_0)
+IMPL_DEQUANTIZE_ROW(tq2_0, block_tq2_0, GGML_TYPE_TQ2_0)
 
 // IQ quants
-IMPL_DEQUANTIZE_ROW(iq2_xxs, block_iq2_xxs)
-IMPL_DEQUANTIZE_ROW(iq2_xs, block_iq2_xs)
-IMPL_DEQUANTIZE_ROW(iq2_s, block_iq2_s)
-IMPL_DEQUANTIZE_ROW(iq3_xxs, block_iq3_xxs)
-IMPL_DEQUANTIZE_ROW(iq3_s, block_iq3_s)
-IMPL_DEQUANTIZE_ROW(iq4_nl, block_iq4_nl)
-IMPL_DEQUANTIZE_ROW(iq4_xs, block_iq4_xs)
-IMPL_DEQUANTIZE_ROW(iq1_s, block_iq1_s)
-IMPL_DEQUANTIZE_ROW(iq1_m, block_iq1_m)
+IMPL_DEQUANTIZE_ROW(iq2_xxs, block_iq2_xxs, GGML_TYPE_IQ2_XXS)
+IMPL_DEQUANTIZE_ROW(iq2_xs, block_iq2_xs, GGML_TYPE_IQ2_XS)
+IMPL_DEQUANTIZE_ROW(iq2_s, block_iq2_s, GGML_TYPE_IQ2_S)
+IMPL_DEQUANTIZE_ROW(iq3_xxs, block_iq3_xxs, GGML_TYPE_IQ3_XXS)
+IMPL_DEQUANTIZE_ROW(iq3_s, block_iq3_s, GGML_TYPE_IQ3_S)
+IMPL_DEQUANTIZE_ROW(iq4_nl, block_iq4_nl, GGML_TYPE_IQ4_NL)
+IMPL_DEQUANTIZE_ROW(iq4_xs, block_iq4_xs, GGML_TYPE_IQ4_XS)
+IMPL_DEQUANTIZE_ROW(iq1_s, block_iq1_s, GGML_TYPE_IQ1_S)
+IMPL_DEQUANTIZE_ROW(iq1_m, block_iq1_m, GGML_TYPE_IQ1_M)
 
 // MXFP4
-IMPL_DEQUANTIZE_ROW(mxfp4, block_mxfp4)
+IMPL_DEQUANTIZE_ROW(mxfp4, block_mxfp4, GGML_TYPE_MXFP4)
 
 // Q1_0 and NVFP4 (new in ggml-0.11.0)
-IMPL_DEQUANTIZE_ROW(q1_0, block_q1_0)
-IMPL_DEQUANTIZE_ROW(nvfp4, block_nvfp4)
+IMPL_DEQUANTIZE_ROW(q1_0, block_q1_0, GGML_TYPE_Q1_0)
+// Q2_0 (new in ggml-0.27.0)
+IMPL_DEQUANTIZE_ROW(q2_0, block_q2_0, GGML_TYPE_Q2_0)
+IMPL_DEQUANTIZE_ROW(nvfp4, block_nvfp4, GGML_TYPE_NVFP4)
 
 // ============================================================================
 // Quantize Functions (with importance matrix support)
@@ -85,6 +104,7 @@ SEXP R_quantize_##type_name(SEXP src_data, SEXP n_rows, SEXP n_per_row, SEXP ima
     if (nrows <= 0 || npr <= 0) { \
         Rf_error("n_rows and n_per_row must be positive"); \
     } \
+    r_quant_check_blocks(ggml_type, npr, "n_per_row"); \
     int64_t total = nrows * npr; \
     if (Rf_length(src_data) < total) { \
         Rf_error("src_data too short: need %lld elements", (long long)total); \
@@ -155,6 +175,7 @@ IMPL_QUANTIZE(mxfp4, GGML_TYPE_MXFP4)
 
 // Q1_0 and NVFP4
 IMPL_QUANTIZE(q1_0, GGML_TYPE_Q1_0)
+IMPL_QUANTIZE(q2_0, GGML_TYPE_Q2_0)
 IMPL_QUANTIZE(nvfp4, GGML_TYPE_NVFP4)
 
 // ============================================================================
@@ -172,6 +193,7 @@ SEXP R_quantize_row_##type_name##_ref(SEXP src_data, SEXP n_elements) { \
     if (k <= 0) { \
         Rf_error("n_elements must be positive"); \
     } \
+    r_quant_check_blocks(ggml_type, k, "n_elements"); \
     if (Rf_length(src_data) < k) { \
         Rf_error("src_data too short"); \
     } \
@@ -222,6 +244,7 @@ IMPL_QUANTIZE_ROW_REF(mxfp4, block_mxfp4, GGML_TYPE_MXFP4)
 
 // Q1_0 and NVFP4
 IMPL_QUANTIZE_ROW_REF(q1_0, block_q1_0, GGML_TYPE_Q1_0)
+IMPL_QUANTIZE_ROW_REF(q2_0, block_q2_0, GGML_TYPE_Q2_0)
 IMPL_QUANTIZE_ROW_REF(nvfp4, block_nvfp4, GGML_TYPE_NVFP4)
 
 // ============================================================================

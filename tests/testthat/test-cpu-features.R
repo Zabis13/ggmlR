@@ -26,6 +26,7 @@ test_that("ARM feature detection functions work", {
   expect_type(ggml_cpu_has_sve(), "logical")
   expect_type(ggml_cpu_get_sve_cnt(), "integer")
   expect_type(ggml_cpu_has_sme(), "logical")
+  expect_type(ggml_cpu_has_sme2(), "logical")
 })
 
 test_that("Other architecture feature detection works", {

@@ -1,0 +1,442 @@
+---
+title: "Writing Vulkan Shaders"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{13. Writing Vulkan Shaders}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+# Vignette code is executed locally (NOT_CRAN=true) but not on CRAN, where
+# the CPU fallback would multi-thread and trip the "CPU time > elapsed" NOTE.
+knitr::opts_chunk$set(eval = identical(Sys.getenv("NOT_CRAN"), "true"))
+```
+
+This vignette is for contributors. It shows how a new GPU kernel is added to
+ggmlR's Vulkan backend, walking through a real one, and lists the kernels
+ggmlR ships on top of upstream ggml, with where each of them runs.
+
+Every operation in ggmlR has a CPU kernel. A Vulkan shader is an optional
+second implementation: when the backend reports that it cannot run a node
+(`supports_op` returns `FALSE`), the scheduler runs that node on the CPU
+instead. So a new op can be added CPU-only first and get its shader later,
+without breaking anything in between.
+
+---
+
+## 1. Before the shader: the op itself
+
+A shader computes an existing ggml op. The op has to exist first:
+
+1. **enum** `GGML_OP_<NAME>` in both `src/ggml.h` and `inst/include/ggml.h`,
+   appended **at the end** of the enum: op numbers are stored in GGUF files and
+   used by downstream packages (llamaR, sd2R), so inserting in the middle
+   breaks them.
+2. Name and symbol tables in `src/ggml-core.c`, and the two
+   `static_assert(GGML_OP_COUNT == N)` there.
+3. Constructor `ggml_<name>()` in `src/ggml-ops-builders.c`.
+4. CPU kernel in `src/ggml-cpu/ops-*.cpp`, declared in `ops.h` and dispatched
+   from `ggml-cpu-backend.c` (compute and `n_tasks`).
+5. For a differentiable op, a `case` in `src/ggml-graph.c`; without it there
+   is no gradient, however correct the kernel is.
+6. R wrapper and `.Call` registration in `src/r_interface.c`.
+
+At this point the op works everywhere; on a Vulkan device it simply runs on
+the CPU.
+
+---
+
+## 2. Worked example: `GELU_BACK`
+
+`GGML_OP_GELU_BACK` is a ggmlR extension (upstream ggml has no GELU gradient).
+It takes the incoming gradient `g` and the forward input `x` and returns
+`g * gelu'(x)`, element by element. It has its own `.comp` file and touches
+every place a standalone op needs. All paths below are relative to
+`src/ggml-vulkan/`.
+
+### Step 1. The shader: `vulkan-shaders/gelu_back.comp`
+
+```glsl
+#version 450
+
+#include "generic_head.glsl"
+#include "types.glsl"
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer G {A_TYPE data_g[];};
+layout (binding = 1) readonly buffer X {B_TYPE data_x[];};
+layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
+
+void main() {
+    const float GELU_COEF_A    = 0.044715f;
+    const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
+
+    const uint i = gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
+
+    if (i >= p.KX) {
+        return;
+    }
+
+    const float xi = float(data_x[i]);
+    const float u  = SQRT_2_OVER_PI*xi*(1.0f + GELU_COEF_A*xi*xi);
+    const float th = 1.0f - 2.0f / (exp(2.0f*u) + 1.0f);
+
+    const float dg = 0.5f*(1.0f + th) +
+                     0.5f*xi*(1.0f - th*th)*SQRT_2_OVER_PI*(1.0f + 3.0f*GELU_COEF_A*xi*xi);
+
+    data_d[i] = D_TYPE(float(data_g[i]) * dg);
+}
+```
+
+- `generic_head.glsl` declares the push constants `p.KX`, `p.KY`,
+  `p.param1` … `p.param4`. Here `p.KX` is the element count.
+- `A_TYPE`, `B_TYPE`, `D_TYPE` are not GLSL types: the generator substitutes
+  them per variant (step 2).
+- Bindings are numbered in the order of the sources, destination last:
+  `src0` → 0, `src1` → 1, `dst` → 2.
+- The index `z*262144 + y*512 + x` matches a dispatch grid of
+  512 × 512 × N, which keeps each grid dimension under the 65 535-workgroup
+  limit of NVIDIA drivers. A grid over the limit stops the computation:
+  `ggml_vk_dispatch_pipeline()` checks it with `GGML_ASSERT`.
+
+### Step 2. Generator: `vulkan-shaders/vulkan-shaders-gen.cpp`
+
+One `string_to_spv()` line per type variant:
+
+```cpp
+string_to_spv("gelu_back_f32",  "gelu_back.comp",   {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}});
+```
+
+Shaders are compiled to SPIR-V by `R CMD INSTALL`: `configure` builds
+`vulkan-shaders-gen`, which runs `glslc` on every `.comp` file and writes the
+bytecode into `generated/`. A `glslc` from the Vulkan SDK is recommended;
+older distribution packages may not support every extension the shaders use.
+
+### Step 3. Pipeline field: `ggml-vulkan-device.cpp`
+
+In `struct vk_device_struct`:
+
+```cpp
+vk_pipeline pipeline_gelu_back_f32;
+```
+
+### Step 4. Pipeline creation: `ggml-vulkan-shaders.cpp`
+
+In `ggml_vk_load_shaders()`:
+
+```cpp
+ggml_vk_create_pipeline(device, device->pipeline_gelu_back_f32, "gelu_back_f32",
+                        gelu_back_f32_len, gelu_back_f32_data, "main",
+                        3,                              // number of bindings
+                        sizeof(vk_op_push_constants),   // push-constant size
+                        {512, 1, 1},                    // workgroup denominators
+                        {}, 1);
+```
+
+The binding count must match the shader, and the push-constant size must match
+the struct the dispatcher fills in (step 6). Push constants are limited to
+256 bytes.
+
+### Step 5. Pipeline selection: `ggml-vulkan-attn.cpp`
+
+In `ggml_vk_op_get_pipeline()`, return the pipeline for the types you support
+and `nullptr` for everything else:
+
+```cpp
+case GGML_OP_GELU_BACK:
+    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        return ctx->device->pipeline_gelu_back_f32;
+    }
+    return nullptr;
+```
+
+### Step 6. Dispatcher: `ggml-vulkan-elemwise.cpp`
+
+A small function fills the push constants and hands off to the generic
+`ggml_vk_op_f32()`:
+
+```cpp
+static void ggml_vk_gelu_back(ggml_backend_vk_context * ctx, vk_context& subctx,
+                              const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst,
+        GGML_OP_GELU_BACK, { (uint32_t)ggml_nelements(src0), 0, 0.0f, 0.0f, 0.0f, 0.0f });
+}
+```
+
+`ggml_vk_op_f32()` also decides the dispatch grid in a `switch (op)`. The
+`default` branch launches `ggml_nelements(src0)` invocations along x only. For
+an element-wise shader that indexes with `z*262144 + y*512 + x`, add the op to
+the element-wise case list there (next to `GGML_OP_UNARY`), which builds the
+512 × 512 × N grid; otherwise tensors above 512 × 65 535 elements exceed the
+x limit.
+
+### Step 7. Graph dispatch: `ggml-vulkan-graph.cpp`, `ggml_vk_build_graph()`
+
+```cpp
+case GGML_OP_GELU_BACK:
+    ggml_vk_gelu_back(ctx, compute_ctx, src0, src1, node);
+    break;
+```
+
+### Step 8. `supports_op`: `ggml-vulkan-graph.cpp`
+
+In `ggml_backend_vk_device_supports_op_impl()` (the public `supports_op` is a
+thin wrapper around it):
+
+```cpp
+case GGML_OP_GELU_BACK:
+    return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+```
+
+This is the most important step. Return `true` only for inputs the shader
+really handles: types, contiguity, and dimension 4 (ggmlR tensors are 5D,
+upstream shaders index only four dimensions, so many cases add
+`op->ne[4] == 1`). Anything rejected here runs on the CPU and stays correct;
+anything accepted wrongly produces wrong numbers without an error.
+
+### Step 9. Check it against the CPU
+
+Build the same graph on both backends and compare. The tensors are allocated
+on the backend and filled with `ggml_backend_tensor_set_data()`;
+`ggml_set_f32()` would write into host memory that a GPU buffer never sees.
+
+```{r}
+library(ggmlR)
+
+run_gelu_back <- function(x, dy, backend = c("cpu", "vulkan")) {
+  backend <- match.arg(backend)
+
+  ctx <- ggml_init(16 * 1024 * 1024)
+  ggml_set_no_alloc(ctx, TRUE)
+  on.exit(ggml_free(ctx), add = TRUE)
+
+  if (backend == "vulkan") {
+    b <- ggml_vulkan_init(0L)
+  } else {
+    b <- ggml_backend_cpu_init()
+    ggml_backend_cpu_set_n_threads(b, 2L)
+  }
+  on.exit(ggml_backend_free(b), add = TRUE)
+
+  g <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, length(dy))
+  x_t <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, length(x))
+  ggml_set_input(g)
+  ggml_set_input(x_t)
+
+  out <- ggml_gelu_back(ctx, g, x_t)
+  ggml_set_output(out)
+
+  # Does this device run the node itself, or would it fall back to the CPU?
+  on_device <- ggml_backend_dev_supports_op(ggml_backend_get_device(b), out)
+
+  buf <- ggml_backend_alloc_ctx_tensors(ctx, b)
+  ggml_backend_tensor_set_data(g, dy)
+  ggml_backend_tensor_set_data(x_t, x)
+  ggml_backend_graph_compute(b, ggml_build_forward_expand(ctx, out))
+
+  list(value = ggml_backend_tensor_get_data(out), on_device = on_device)
+}
+
+set.seed(1)
+x  <- rnorm(10000, sd = 3)
+dy <- rnorm(10000)
+
+cpu <- run_gelu_back(x, dy, "cpu")
+cpu$on_device
+
+if (ggml_vulkan_available()) {
+  gpu <- run_gelu_back(x, dy, "vulkan")
+  print(gpu$on_device)                # TRUE: the shader runs, not a fallback
+  max(abs(gpu$value - cpu$value))     # float32 rounding only
+}
+```
+
+Test with several sizes, including one above 512 × 65 535 elements for an
+element-wise shader, and with non-contiguous inputs (a `ggml_view` or
+`ggml_permute`) if `supports_op` accepts them. `tests/testthat/test-gelu-backward.R`
+is the full version of this check.
+
+---
+
+## 3. Kernels that are not graph ops
+
+Some ggmlR kernels are not ggml ops at all. They are dispatched directly
+from C (`ggml-vulkan-umap.cpp`, `ggml-vulkan-sparse.cpp`) through a
+`ggml_vk_<name>_run()` function, called from an R entry point in
+`src/r_interface_vulkan.c` or from the ONNX loader. The shader, generator line,
+pipeline field and pipeline creation are the same as steps 1–4; steps 5–8 are
+replaced by the `_run()` function, which requests descriptor sets, uploads the
+buffers, dispatches and reads back. Such a kernel has no automatic CPU
+fallback: the R or C caller decides what to do when the `_run()` function
+returns `false`.
+
+---
+
+## 4. Every op: CPU and Vulkan
+
+**Every op below has a CPU kernel**, so every op runs on a machine without a
+GPU. The "Vulkan" column says when the node runs on the GPU instead; when the
+condition does not hold, the scheduler runs that node on the CPU. Shader names
+are files in `src/ggml-vulkan/vulkan-shaders/` without `.comp`. Kernels marked
+★ are ggmlR's own (upstream ggml has no Vulkan kernel for them, or ggmlR
+replaces upstream's).
+
+The conditions are a summary of `ggml_backend_vk_device_supports_op_impl()`;
+the source is the authority. "F32" means the inputs and output are float32;
+"contiguous" means no strides other than the packed ones.
+
+### Element-wise arithmetic and copies
+
+| Op | Shader(s) | Vulkan |
+|---|---|---|
+| `ADD`, `SUB`, `MUL`, `DIV` | `add`, `sub`, `mul`, `div`; `multi_add` for fused chains | F32/F16 in any mix; 5D |
+| `ADD1` | `add1` | F32+F32, F16+F32, F16+F16 |
+| `ADD_ID` | `add_id` | F32 with I32 ids |
+| `ACC` | `acc` | F32 |
+| `SET` | `acc` | F32 or I32, all types equal |
+| `SCALE` | `scale` | F32, contiguous |
+| `SQR`, `SQRT`, `SIN`, `COS`, `CLAMP`, `LEAKY_RELU` | `unary` | F32 or F16, output type = input type |
+| `LOG` | `log` | F32 or F16, output type = input type |
+| `DUP`, `CPY`, `CONT` | `copy`, `contig_copy`, `copy_transpose`, `copy_transpose_02`, `copy_to_quant`, `copy_from_quant` | F32/F16/BF16 and most quant types (Q1_0, Q2_0, Q4_0–Q8_0, IQ4_NL) |
+| `CAST_NUMERIC` ★ | `copy` (via the CPY path) | contiguous; F32↔I32, F32↔F16, F32↔BF16 |
+| `REPEAT` | `repeat` | 2- or 4-byte types |
+| `REPEAT_BACK` | `repeat_back` | F32 |
+| `CONCAT` | `concat` | all inputs one type: 1-, 2-, 4- or 8-byte types, or a quant type with packed rows |
+| `FILL` | `fill` | F32 or F16 |
+| `ARANGE` | `arange` | F32 |
+| `TRI` | `tri` | F32 or F16 |
+| `DIAG` | `diag` | F32 or F16 |
+| `DIAG_MASK_INF` | `diag_mask_inf` | F32, contiguous |
+| `ROLL` | `roll` | F32 |
+| `PAD` | `pad` | F32; `ne[4] == 1` |
+| `PAD_REFLECT_1D` | `pad_reflect_1d` | F32; `ne[4] == 1` |
+| `UPSCALE` | `upscale` | F32; antialias only with bilinear |
+| `NONE`, `RESHAPE`, `VIEW`, `PERMUTE`, `TRANSPOSE` | none (metadata only) | always |
+
+### Activations
+
+| Op | Shader(s) | Vulkan |
+|---|---|---|
+| `UNARY`: `ABS`, `SGN`, `NEG`, `STEP`, `TANH`, `ELU`, `RELU`, `SIGMOID`, `GELU`, `GELU_ERF`, `GELU_QUICK`, `SILU`, `HARDSWISH`, `HARDSIGMOID`, `EXP`, `EXPM1`, `SOFTPLUS`, `XIELU`, `FLOOR`, `CEIL`, `ROUND`, `ROUND_EVEN` ★, `TRUNC` | `unary`; `snake` for the fused snake activation | all 23: F32 or F16, output type = input type; strided views supported |
+| `GLU`: `REGLU`, `GEGLU`, `SWIGLU`, `SWIGLU_OAI`, `GEGLU_ERF`, `GEGLU_QUICK`, `SWIGLU_CLAMP` | `reglu`, `geglu`, `swiglu`, `swiglu_oai`, `geglu_erf`, `geglu_quick`, `swiglu_clamp` | all 7; dimension 4 must fold into dimension 3 |
+| `SILU_BACK` | `silu_back` | F32, contiguous |
+| `GELU_BACK` ★ | `gelu_back` | F32, contiguous |
+
+### Reductions, normalisation, sorting
+
+| Op | Shader(s) | Vulkan |
+|---|---|---|
+| `SUM`, `SUM_ROWS`, `MEAN` | `sum_rows` | F32, rows contiguous |
+| `CUMSUM` | `cumsum`, `cumsum_multipass1`, `cumsum_multipass2` | F32, rows contiguous; device with full subgroup arithmetic |
+| `ARGMAX` | `argmax` | F32, contiguous |
+| `COUNT_EQUAL` | `count_equal` | I32, contiguous |
+| `ARGSORT` | `argsort`, `argsort_large` | contiguous; row length limited without the Vulkan memory model |
+| `TOP_K` | `topk_argsort`, `topk_nary_search`, `topk_radix_select`; `topk_moe` when fused | contiguous; row length within the available pipelines |
+| `NORM` | `norm` | F32, rows contiguous |
+| `NORM_BACK` ★ | `norm_back` | F32, contiguous |
+| `RMS_NORM` | `rms_norm`, `rms_norm_partials` | always |
+| `RMS_NORM_BACK` | `rms_norm_back` | F32, contiguous |
+| `L2_NORM` | `l2_norm` | F32, rows contiguous |
+| `GROUP_NORM` | `group_norm` | contiguous |
+| `SOFT_MAX` | `soft_max`, `soft_max_large1/2/3` | F32, contiguous; mask F32 or F16 |
+| `SOFT_MAX_BACK` | `soft_max_back` | F32, contiguous |
+
+### Matrix multiplication and attention
+
+| Op | Shader(s) | Vulkan |
+|---|---|---|
+| `MUL_MAT` | `mul_mm`, `mul_mm_cm2`, `mul_mmq`, `mul_mat_vec`, `mul_mat_vecq`, `mul_mat_vec_<quant>`, `mul_mat_vec_nc`, `mul_mat_vec_p021`, `mul_mat_split_k_reduce`, `quantize_q8_1`, `dequant_<quant>`, `fwht` (Hadamard hint) | F32/F16/BF16 and all quant types the device has pipelines for |
+| `MUL_MAT_ID` | as `MUL_MAT`, plus `count_experts` | as `MUL_MAT`; id tensor ≤ 65 536 per dimension |
+| `OUT_PROD` ★ | `out_prod` (tiled) | F32, rows contiguous |
+| `GET_ROWS` | `get_rows`, `get_rows_quant` | F32/F16/BF16 and all quant types; 5D |
+| `GET_ROWS_BACK` ★ | `get_rows_back` | F32 with I32 indices, contiguous; float atomics |
+| `SET_ROWS` | `copy_to_quant` (set-rows variants) | source F32/F16, I32 or I64 indices; F32/F16/BF16/Q1_0/Q2_0/Q4_0–Q8_0/IQ4_NL destination |
+| `FLASH_ATTN_EXT` | `flash_attn`, `flash_attn_cm1`, `flash_attn_cm2`, `flash_attn_split_k_reduce`, `flash_attn_mask_opt`, `flash_attn_sparse_compact`, `flash_attn_decode_phase_1/2` | Q F32; head sizes multiple of 8; K/V F32, F16, Q4_0, Q8_0 and others, plus Q4_K ★ (not on coopmat2) |
+| `FLASH_ATTN_BACK` ★ | `flash_attn_back` | F32, contiguous; K/V length ≤ 1024; float atomics |
+| `ROPE` | `rope_norm`, `rope_neox`, `rope_multi`, `rope_vision` | rows contiguous; `ne[4] == 1` |
+| `ROPE_BACK` | same as `ROPE` | always |
+| `LIGHTNING_INDEXER` | `lightning_indexer` | F16-capable device; Q head size 128; supported K types |
+| `DSV4_HC_PRE`, `DSV4_HC_POST`, `DSV4_HC_COMB` | `dsv4_hc_pre`, `dsv4_hc_post`, `dsv4_hc_comb` | F32; 4 hyper-connections |
+
+### Convolution and pooling
+
+| Op | Shader(s) | Vulkan |
+|---|---|---|
+| `IM2COL` | `im2col` | F32 input; F32 or F16 output |
+| `IM2COL_3D` | `im2col_3d` | F32 input; F32 or F16 output |
+| `IM2COL_BACK` ★ | `im2col_back` | F32, contiguous |
+| `COL2IM_1D` | `col2im_1d` | F32/F16/BF16, contiguous; `ne[4] == 1` |
+| `CONV_2D`, `CONV_TRANSPOSE_2D` | `conv2d_mm` | F32 or F16 kernel, F32 input, packed rows, channels matching |
+| `CONV_3D` | `conv3d_mm` | F32 or F16 kernel, contiguous; `ne[4] == 1` |
+| `CONV_2D_DW` | `conv2d_dw` | F32 or F16 kernel, F32 input |
+| `CONV_TRANSPOSE_1D` | `conv_transpose_1d` | F32 |
+| `POOL_1D` | `pool1d` | F32, contiguous; `ne[4] == 1` |
+| `POOL_2D` | `pool2d` | F32, contiguous |
+| `TIMESTEP_EMBEDDING` | `timestep_embedding` | F32 |
+
+### Sequence models
+
+| Op | Shader(s) | Vulkan |
+|---|---|---|
+| `SSM_CONV` | `ssm_conv` | F32 |
+| `SSM_SCAN` | `ssm_scan` | F32, not quantized; supported state sizes |
+| `SSM_CONV_BACK` ★ | `ssm_conv_back` | F32, rows contiguous; kernel width ≤ 8 |
+| `SSM_SCAN_BACK` ★ | `ssm_scan_back` | Mamba-2 layout; `d_state` 128 or 256; float atomics; scratch ≤ ¼ of VRAM |
+| `RWKV_WKV6`, `RWKV_WKV7` | `wkv6`, `wkv7` | always |
+| `GATED_LINEAR_ATTN` | `gla` | F32, head size 64; `ne[4] == 1` |
+| `GATED_DELTA_NET` | `gated_delta_net` | F32; state size 16, 32, 64 or 128 |
+| `SOLVE_TRI` | `solve_tri` | F32; size limited by shared memory |
+
+### Training
+
+| Op | Shader(s) | Vulkan |
+|---|---|---|
+| `CROSS_ENTROPY_LOSS` | `cross_entropy_loss` | F32, contiguous, scalar result |
+| `CROSS_ENTROPY_LOSS_BACK` ★ | `cross_entropy_loss_back` | F32, contiguous, matching shapes |
+| `OPT_STEP_ADAMW` | `opt_step_adamw` | F32, contiguous |
+| `OPT_STEP_SGD` | `opt_step_sgd` | F32, contiguous |
+
+### ONNX
+
+| Op | Shader(s) | Vulkan |
+|---|---|---|
+| `SCATTER_ELEMENTS` ★ | `scatter_elements` | F32 output; `reduction = add` needs float atomics |
+| `REL_POS_BIAS` ★ | `rel_pos_bias` | F32, contiguous |
+| `QCONV_I32` ★ | `qconv_i32` | int8 `QLinearConv`: contiguous, I32 bias, output grid within workgroup limits |
+| `QMATMUL_I32` ★ | `qmatmul_i32` | int8 `QLinearMatMul`, 2-D, contiguous; `M·N·K` ≤ `GGMLR_QI32_MAX_WORK`; off with `GGMLR_ONNX_GPU_QMATMUL=0` |
+
+### CPU only
+
+No Vulkan kernel; these always run on the CPU, also when a GPU is present:
+`DIAG_MASK_ZERO`, `POOL_2D_BACK`, `WIN_PART`, `WIN_UNPART`, `GET_REL_POS`,
+`ADD_REL_POS`, `RWKV_WKV6_BACK`, `RWKV_WKV7_BACK`, `GATED_LINEAR_ATTN_BACK`,
+and the user callbacks `MAP_CUSTOM1/2/3` and `CUSTOM`.
+
+### Additions inside shared shaders
+
+| Feature | Shader | Runs on Vulkan when |
+|---|---|---|
+| `ROUND_EVEN` unary (ONNX `QuantizeLinear` rounding) | `unary.comp` | as other unary ops |
+| NaN-preserving `CLAMP` | `unary.comp` | as other unary ops |
+| Q4_K keys/values in flash attention | `flash_attn_dequant.glsl`, `fa_types.glsl` | scalar and coopmat1 paths; not on coopmat2 |
+| 5D indexing (`ne[4]`) in binary ops, `get_rows`, `rms_norm`, unary × mul fusion | several | always |
+| Subgroup-shuffle Q4_K/Q5_K/Q6_K matmul | `mul_mmq` variants | wavefront-64 GPUs (RDNA), large batches |
+
+### Direct-dispatch kernels
+
+| Kernel | Shader | Used by | CPU alternative |
+|---|---|---|---|
+| UMAP SGD | `umap_sgd.comp` | single-cell UMAP, `sgd_backend = "gpu"` | C SGD (the default, `sgd_backend = "cpu"`) |
+| k-nearest neighbours | `knn_tiled.comp`, `pairwise_dist.comp` | single-cell UMAP graph | kd-tree on the CPU |
+| Sparse log-normalisation | `sparse_lognorm.comp` | single-cell normalisation (sparse `dgCMatrix`) | CPU path |
+| Double-precision matmul | `matmul_f64.comp` | `ggml_matmul_f64()` | R's `%*%` (also used when the GPU has no FP64) |
+| RoIAlign | `roi_align.comp` | ONNX `RoiAlign` (Mask R-CNN) | C implementation |
+| Non-max suppression | `nms.comp` | ONNX `NonMaxSuppression` | C implementation |
+
+See `vignette("single-cell-seurat", package = "ggmlR")` and
+`vignette("onnx-import", package = "ggmlR")` for the user-facing side of the
+last two tables.

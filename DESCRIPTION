@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.8.8.1
+Version: 0.8.9
 Authors@R: c(
     person("Yuri", "Baramykov",
         email = "lbsbmsu@mail.ru",
@@ -26,7 +26,7 @@ Description: Provides 'R' bindings to the 'GGML' tensor library for machine
     'PyTorch'-style 'autograd' engine for building, training, and deploying
     neural networks. Key capabilities include high-performance 5D tensor
     operations, 'f16' precision, and efficient quantization. It supports
-    native 'ONNX' model import (50+ operators) and 'GGUF' weight loading
+    native 'ONNX' model import (90+ operators) and 'GGUF' weight loading
     from the 'llama.cpp' and 'Hugging Face' ecosystems. Designed for
     zero-overhead inference via dedicated weight buffering, it integrates
     seamlessly as a 'parsnip' engine for 'tidymodels' and provides

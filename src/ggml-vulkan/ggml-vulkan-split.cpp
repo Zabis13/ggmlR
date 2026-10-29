@@ -408,9 +408,11 @@ static size_t ggml_backend_vk_split_buffer_type_get_alloc_size(
 static const ggml_backend_buffer_type_i ggml_backend_vk_split_buffer_type_interface = {
     /* .get_name         = */ ggml_backend_vk_split_buffer_type_name,
     /* .alloc_buffer     = */ ggml_backend_vk_split_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n   = */ nullptr,
     /* .get_alignment    = */ ggml_backend_vk_split_buffer_type_get_alignment,
     /* .get_max_size     = */ ggml_backend_vk_split_buffer_type_get_max_size,
     /* .get_alloc_size   = */ ggml_backend_vk_split_buffer_type_get_alloc_size,
+    /* .get_alloc_size_n = */ nullptr,
     /* .is_host          = */ NULL,
 };
 
@@ -695,7 +697,7 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
         // Warm-up copy (first submit pays one-off costs) + correctness copy.
         {
             std::lock_guard<std::recursive_mutex> guard(dst->mutex);
-            vk_context subctx = ggml_vk_create_temporary_context(dst->transfer_queue.cmd_pool);
+            vk_context subctx = ggml_vk_create_temporary_context(dst->transfer_queue->cmd_pool);
             ggml_vk_ctx_begin(dst, subctx);
             ggml_vk_buffer_copy_async(subctx, dst_local, 0, imported, 0, bytes);
             ggml_vk_ctx_end(subctx);
@@ -729,7 +731,7 @@ static int ggml_vk_p2p_selftest_impl(int src_dev, int dst_dev, size_t bytes, int
         double gbps = 0.0;
         if (!loopback) {
             std::lock_guard<std::recursive_mutex> guard(dst->mutex);
-            vk_context subctx = ggml_vk_create_temporary_context(dst->transfer_queue.cmd_pool);
+            vk_context subctx = ggml_vk_create_temporary_context(dst->transfer_queue->cmd_pool);
             ggml_vk_ctx_begin(dst, subctx);
             for (int i = 0; i < iters; i++) {
                 ggml_vk_buffer_copy_async(subctx, dst_local, 0, imported, 0, bytes);

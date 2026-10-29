@@ -144,7 +144,8 @@ layer_pair_energy <- ggml_layer_custom(
   output_shape = 4L,
   forward      = function(ctx, x) {
     sq <- ggml_sqr(ctx, x)                       # (8, batch)
-    ggml_pool_1d(ctx, sq, op = "sum", k0 = 2L, s0 = 2L)
+    # ggml pools only by max or avg: the sum of a pair is twice its mean
+    ggml_scale(ctx, ggml_pool_1d(ctx, sq, GGML_OP_POOL_AVG, k0 = 2L, s0 = 2L), 2)
   }
 )
 

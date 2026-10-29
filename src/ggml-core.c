@@ -328,6 +328,17 @@ void ggml_log_callback_default(enum ggml_log_level level, const char * text, voi
 #endif
 
 
+// the thread sanitizer does not intercept vm_allocate and vm_deallocate, so it produces false positives
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define GGML_TSAN_ENABLED 1
+#endif
+#else
+#if defined(__SANITIZE_THREAD__)
+#define GGML_TSAN_ENABLED 1
+#endif
+#endif
+
 void * ggml_aligned_malloc(size_t size) {
 #if defined(__s390x__)
     const int alignment = 256;
@@ -345,7 +356,7 @@ void * ggml_aligned_malloc(size_t size) {
     void * aligned_memory = NULL;
   #ifdef GGML_USE_CPU_HBM
     int result = hbw_posix_memalign(&aligned_memory, alignment, size);
-  #elif TARGET_OS_OSX
+  #elif TARGET_OS_OSX && !defined(GGML_TSAN_ENABLED)
     GGML_UNUSED(alignment);
     kern_return_t alloc_status = vm_allocate((vm_map_t) mach_task_self(), (vm_address_t *) &aligned_memory, size, VM_FLAGS_ANYWHERE);
     int result = EFAULT;
@@ -392,7 +403,7 @@ void ggml_aligned_free(void * ptr, size_t size) {
     if (ptr != NULL) {
         hbw_free(ptr);
     }
-#elif TARGET_OS_OSX
+#elif TARGET_OS_OSX && !defined(GGML_TSAN_ENABLED)
     if (ptr != NULL) {
         vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)ptr, size);
     }
@@ -525,7 +536,11 @@ const char * ggml_commit(void) {
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 static int64_t timer_freq, timer_start;
-void ggml_time_init(void) {
+static BOOL CALLBACK ggml_time_init_once(PINIT_ONCE once, PVOID param, PVOID *ctx) {
+    UNUSED(once);
+    UNUSED(param);
+    UNUSED(ctx);
+
     LARGE_INTEGER t;
     QueryPerformanceFrequency(&t);
     timer_freq = t.QuadPart;
@@ -535,6 +550,12 @@ void ggml_time_init(void) {
     // We subtract the program start time to reduce the likelihood of that happening.
     QueryPerformanceCounter(&t);
     timer_start = t.QuadPart;
+
+    return TRUE;
+}
+void ggml_time_init(void) {
+    static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
+    InitOnceExecuteOnce(&once, ggml_time_init_once, NULL, NULL);
 }
 int64_t ggml_time_ms(void) {
     LARGE_INTEGER t;
@@ -600,18 +621,15 @@ FILE * ggml_fopen(const char * fname, const char * mode) {
     // convert fname (UTF-8)
     wchar_t * wfname = ggml_mbstowcs(fname);
     if (wfname) {
-        // convert mode (ANSI)
-        wchar_t * wmode = GGML_MALLOC((strlen(mode) + 1) * sizeof(wchar_t));
-        wchar_t * wmode_p = wmode;
-        do {
-            *wmode_p++ = (wchar_t)*mode;
-        } while (*mode++);
-
-        // open file
-        file = _wfopen(wfname, wmode);
+        // convert mode (UTF-8)
+        wchar_t * wmode = ggml_mbstowcs(mode);
+        if (wmode) {
+            // open file
+            file = _wfopen(wfname, wmode);
+            GGML_FREE(wmode);
+        }
 
         GGML_FREE(wfname);
-        GGML_FREE(wmode);
     }
 
     return file;
@@ -633,6 +651,7 @@ FILE * ggml_fopen(const char * fname, const char * mode) {
 
 GGML_TO_FLOAT_THUNK(ggml_fp16_to_fp32_row)
 GGML_TO_FLOAT_THUNK(dequantize_row_q1_0)
+GGML_TO_FLOAT_THUNK(dequantize_row_q2_0)
 GGML_TO_FLOAT_THUNK(dequantize_row_q4_0)
 GGML_TO_FLOAT_THUNK(dequantize_row_q4_1)
 GGML_TO_FLOAT_THUNK(dequantize_row_q5_0)
@@ -659,6 +678,7 @@ GGML_TO_FLOAT_THUNK(dequantize_row_tq1_0)
 GGML_TO_FLOAT_THUNK(dequantize_row_tq2_0)
 GGML_FROM_FLOAT_THUNK(ggml_fp32_to_fp16_row)
 GGML_FROM_FLOAT_THUNK(quantize_row_q1_0_ref)
+GGML_FROM_FLOAT_THUNK(quantize_row_q2_0_ref)
 GGML_FROM_FLOAT_THUNK(quantize_row_q4_0_ref)
 GGML_FROM_FLOAT_THUNK(quantize_row_q4_1_ref)
 GGML_FROM_FLOAT_THUNK(quantize_row_q5_0_ref)
@@ -736,6 +756,14 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = true,
         .to_float                 = dequantize_row_q1_0_to_float,
         .from_float_ref           = quantize_row_q1_0_ref_from_float,
+    },
+    [GGML_TYPE_Q2_0] = {
+        .type_name                = "q2_0",
+        .blck_size                = QK2_0,
+        .type_size                = sizeof(block_q2_0),
+        .is_quantized             = true,
+        .to_float                 = dequantize_row_q2_0_to_float,
+        .from_float_ref           = quantize_row_q2_0_ref_from_float,
     },
     [GGML_TYPE_Q4_0] = {
         .type_name                = "q4_0",
@@ -1095,6 +1123,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "IM2COL",
     "IM2COL_BACK",
     "IM2COL_3D",
+    "COL2IM_1D",
     "CONV_2D",
     "CONV_3D",
     "CONV_2D_DW",
@@ -1159,9 +1188,13 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "QCONV_I32",
     // DIVERGENCE from upstream: ONNX QLinearMatMul, see ggml_qmatmul_i32().
     "QMATMUL_I32",
+    "LIGHTNING_INDEXER",
+    "DSV4_HC_COMB",
+    "DSV4_HC_PRE",
+    "DSV4_HC_POST",
 };
 
-static_assert(GGML_OP_COUNT == 108, "GGML_OP_COUNT != 108");
+static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1223,6 +1256,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "im2col(x)",
     "im2col_back(x)",
     "im2col_3d(x)",
+    "col2im_1d(x)",
     "conv_2d(x)",
     "conv_3d(x)",
     "conv_2d_dw(x)",
@@ -1287,9 +1321,13 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "qconv_i32(x, w)",
     // DIVERGENCE from upstream: ONNX QLinearMatMul, see ggml_qmatmul_i32().
     "qmatmul_i32(a, b)",
+    "lightning_indexer(q, k, weights, mask)",
+    "dsv4_hc_comb(mixes, scale, base)",
+    "dsv4_hc_pre(x, weights)",
+    "dsv4_hc_post(x, residual, post, comb)",
 };
 
-static_assert(GGML_OP_COUNT == 108, "GGML_OP_COUNT != 108");
+static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -1328,9 +1366,10 @@ static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "SWIGLU_OAI",
     "GEGLU_ERF",
     "GEGLU_QUICK",
+    "SWIGLU_CLAMP",
 };
 
-static_assert(GGML_GLU_OP_COUNT == 6, "GGML_GLU_OP_COUNT != 6");
+static_assert(GGML_GLU_OP_COUNT == 7, "GGML_GLU_OP_COUNT != 7");
 
 
 static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");

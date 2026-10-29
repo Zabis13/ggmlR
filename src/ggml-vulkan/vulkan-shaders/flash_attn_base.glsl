@@ -24,6 +24,8 @@ const bool USE_MASK_OPT    = (Flags & 1) != 0;
 const bool MASK_ENABLE     = (Flags & 2) != 0;
 const bool LOGIT_SOFTCAP   = (Flags & 4) != 0;
 const bool OLD_AMD_WINDOWS = (Flags & 8) != 0;
+// Sparse: gather binding-7 indices instead of scanning [0,KV); p.split_kv = n_kv_max.
+const bool USE_SPARSE      = (Flags & 16) != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
@@ -82,277 +84,35 @@ layout (binding = 5) writeonly buffer OV4 {D_TYPEV4 data_ov4[];};
 
 layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 
+layout (binding = 7) readonly buffer SP {int32_t data_sparse[];};
+
 #define MASK_OPT_ALL_NEG_INF 1
 #define MASK_OPT_ALL_ZERO 2
 
 #define BINDING_IDX_K 0
 #define BINDING_IDX_V 1
-#if defined(DATA_A_F32)
-layout (binding = 1) readonly buffer K_PACKED {vec4 k_data_packed[];} k_packed;
-layout (binding = 2) readonly buffer V_PACKED {vec4 v_data_packed[];} v_packed;
-#elif defined(A_TYPE_PACKED16)
-layout (binding = 1) readonly buffer K_PACKED16 {A_TYPE_PACKED16 k_data_packed16[];} k_packed;
-layout (binding = 2) readonly buffer V_PACKED16 {A_TYPE_PACKED16 v_data_packed16[];} v_packed;
-#endif
 
-#if defined(A_TYPE_PACKED32)
-layout (binding = 1) readonly buffer K_PACKED32 {A_TYPE_PACKED32 k_data_packed32[];} k_packed32;
-layout (binding = 2) readonly buffer V_PACKED32 {A_TYPE_PACKED32 v_data_packed32[];} v_packed32;
-#endif
+#include "fa_types.glsl"
 
-#ifndef BLOCK_SIZE
-#define BLOCK_SIZE 1
-#endif
-
-#if defined(DATA_A_F32)
-#undef BLOCK_SIZE
-#define BLOCK_SIZE 4
-#define BLOCK_BYTE_SIZE 16
-
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    // iqs is currently always zero in the flash attention shaders
-    if (binding_idx == BINDING_IDX_K) {
-        return FLOAT_TYPEV4(k_packed.k_data_packed[a_offset + ib]);
-    } else {
-        return FLOAT_TYPEV4(v_packed.v_data_packed[a_offset + ib]);
-    }
-}
-#endif
-
-#if defined(DATA_A_Q4_0)
-#define BLOCK_BYTE_SIZE 18
-#elif defined(DATA_A_Q4_1)
-#define BLOCK_BYTE_SIZE 20
-#endif
-
-#if defined(DATA_A_Q4_0) || defined(DATA_A_Q4_1)
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    if (binding_idx == BINDING_IDX_K) {
-        uint vui_lo = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
-#ifdef DATA_A_Q4_1
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * nibbles + FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].m);
+#if defined(BFLOAT16)
+#define O_TYPE float
+#define O_TYPEV4 vec4
 #else
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (nibbles - FLOAT_TYPE(8.0f));
-#endif
-    } else {
-        uint vui_lo = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
-#ifdef DATA_A_Q4_1
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * nibbles + FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].m);
-#else
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (nibbles - FLOAT_TYPE(8.0f));
-#endif
-    }
-}
+#define O_TYPE FLOAT_TYPE
+#define O_TYPEV4 FLOAT_TYPEV4
 #endif
 
-#if defined(DATA_A_Q5_0)
-#define BLOCK_BYTE_SIZE 22
-#elif defined(DATA_A_Q5_1)
-#define BLOCK_BYTE_SIZE 24
-#endif
-
-#if defined(DATA_A_Q5_0) || defined(DATA_A_Q5_1)
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    if (binding_idx == BINDING_IDX_K) {
-        uint vui_lo = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-#ifdef DATA_A_Q5_1
-        uint qh = k_packed.k_data_packed16[a_offset + ib].qh;
-#else
-        uint qh = uint(k_packed.k_data_packed16[a_offset + ib].qh[0]) | (uint(k_packed.k_data_packed16[a_offset + ib].qh[1]) << 16);
-#endif
-        FLOAT_TYPEV4 hb = FLOAT_TYPEV4((qh >> iqs) & 1, (qh >> (iqs + 1)) & 1, (qh >> (iqs + 2)) & 1, (qh >> (iqs + 3)) & 1) * FLOAT_TYPE(16.0f);
-
-        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
-#ifdef DATA_A_Q5_1
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (nibbles + hb) + FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].m);
-#else
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * (nibbles + hb - FLOAT_TYPE(16.0f));
-#endif
-    } else {
-        uint vui_lo = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-#ifdef DATA_A_Q5_1
-        uint qh = v_packed.v_data_packed16[a_offset + ib].qh;
-#else
-        uint qh = uint(v_packed.v_data_packed16[a_offset + ib].qh[0]) | (uint(v_packed.v_data_packed16[a_offset + ib].qh[1]) << 16);
-#endif
-        FLOAT_TYPEV4 hb = FLOAT_TYPEV4((qh >> iqs) & 1, (qh >> (iqs + 1)) & 1, (qh >> (iqs + 2)) & 1, (qh >> (iqs + 3)) & 1) * FLOAT_TYPE(16.0f);
-
-        FLOAT_TYPEV4 nibbles = FLOAT_TYPEV4(vui_lo & 0xF, (vui_lo >> 8) & 0xF, vui_hi & 0xF, (vui_hi >> 8) & 0xF);
-#ifdef DATA_A_Q5_1
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (nibbles + hb) + FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].m);
-#else
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * (nibbles + hb - FLOAT_TYPE(16.0f));
-#endif
-    }
-}
-#endif
-
-#if defined(DATA_A_IQ4_NL)
-#define BLOCK_BYTE_SIZE 18
-
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    if (binding_idx == BINDING_IDX_K) {
-        uint vui_lo = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(k_packed.k_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(
-            kvalues_iq4nl[vui_lo & 0xF],
-            kvalues_iq4nl[(vui_lo >> 8) & 0xF],
-            kvalues_iq4nl[vui_hi & 0xF],
-            kvalues_iq4nl[(vui_hi >> 8) & 0xF]);
-    } else {
-        uint vui_lo = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 0]);
-        uint vui_hi = uint(v_packed.v_data_packed16[a_offset + ib].qs[(iqs & 0xF) / 2 + 1]);
-        uint shift = (iqs & 0x10) >> 2;
-        vui_lo >>= shift;
-        vui_hi >>= shift;
-
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(
-            kvalues_iq4nl[vui_lo & 0xF],
-            kvalues_iq4nl[(vui_lo >> 8) & 0xF],
-            kvalues_iq4nl[vui_hi & 0xF],
-            kvalues_iq4nl[(vui_hi >> 8) & 0xF]);
-    }
-}
-#endif
-
-#if defined(DATA_A_Q8_0)
-#define BLOCK_BYTE_SIZE 34
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    if (binding_idx == BINDING_IDX_K) {
-        const i8vec2 v0 = unpack8(int32_t(k_packed.k_data_packed16[a_offset + ib].qs[iqs / 2])).xy; // vec4 used due to #12147
-        const i8vec2 v1 = unpack8(int32_t(k_packed.k_data_packed16[a_offset + ib].qs[iqs / 2 + 1])).xy;
-
-        return FLOAT_TYPE(k_packed.k_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(v0.x, v0.y, v1.x, v1.y);
-    } else {
-        const i8vec2 v0 = unpack8(int32_t(v_packed.v_data_packed16[a_offset + ib].qs[iqs / 2])).xy; // vec4 used due to #12147
-        const i8vec2 v1 = unpack8(int32_t(v_packed.v_data_packed16[a_offset + ib].qs[iqs / 2 + 1])).xy;
-
-        return FLOAT_TYPE(v_packed.v_data_packed16[a_offset + ib].d) * FLOAT_TYPEV4(v0.x, v0.y, v1.x, v1.y);
-    }
-}
-#endif
-
-#if defined(DATA_A_Q4_K)
-#define BLOCK_BYTE_SIZE 144
-
-// Dequantize 4 consecutive elements from a Q4_K block.
-// iqs: element index within block (multiple of 4, range [0, 252]).
-//
-// Q4_K layout (256 elements, qs[128 uint8]):
-//   8 sub-blocks of 32 elements with 8 6-bit (sc, min) pairs in scales[12 uint8].
-//   The key: each 64-element group shares 32 uint8 bytes of qs[].
-//     Elements group*64+0  .. group*64+31  → lower nibbles of qs[group*32 .. group*32+31]
-//     Elements group*64+32 .. group*64+63  → upper nibbles of qs[group*32 .. group*32+31]
-//   Sub-block index: is = iqs/32 (0..7), maps to (group=is/2, half=is%2).
-//   4 consecutive elements at iqs all share the same group and half (since iqs is mult of 4).
-//   Their uint8 byte indices: group*32 + (iqs%32), +1, +2, +3
-//   Nibble shift: half==0 → 0, half==1 → 4
-// NOTE: the Q4_K block is accessed directly out of the SSBO (k_packed/v_packed)
-// rather than being passed by value. Passing A_TYPE_PACKED16 by value makes a
-// local copy whose f16vec2 'dm' field would require the float16 extension, which
-// is not requested in the _fp32 (non-FLOAT16) variants. Indexing each field in
-// buffer storage (no whole-struct temporary) is legal without the extension.
-// Per-field accessors select the K or V buffer; Q4_K bit logic below unchanged.
-#define Q4K_SCALES(bi, ao, ib, i) (((bi) == BINDING_IDX_K) ? uint(k_packed.k_data_packed16[(ao) + (ib)].scales[(i)]) : uint(v_packed.v_data_packed16[(ao) + (ib)].scales[(i)]))
-#define Q4K_DM(bi, ao, ib)        (((bi) == BINDING_IDX_K) ? vec2(k_packed.k_data_packed16[(ao) + (ib)].dm)          : vec2(v_packed.v_data_packed16[(ao) + (ib)].dm))
-#define Q4K_QS(bi, ao, ib, i)     (((bi) == BINDING_IDX_K) ? uint(k_packed.k_data_packed16[(ao) + (ib)].qs[(i)])     : uint(v_packed.v_data_packed16[(ao) + (ib)].qs[(i)]))
-
-FLOAT_TYPEV4 dequantize4_q4k(uint a_offset, uint ib, uint binding_idx, uint iqs) {
-    const uint is    = iqs / 32u;        // sub-block index 0..7
-    const uint group = is / 2u;          // 64-element group 0..3
-    const uint nibhalf = is % 2u;        // 0 = lower nibbles, 1 = upper nibbles
-    const uint shift = nibhalf * 4u;     // 0 or 4
-
-    // Position within the 32-byte qs region for this group
-    const uint pos_in_group = iqs % 32u;  // 0..28 (multiple of 4)
-
-    // --- Reconstruct 6-bit scale and 6-bit min for sub-block 'is' ---
-    // (same bit-field layout as dequant_funcs.glsl DATA_A_Q4_K)
-    // In packed16 view: scales_u8[i] = (blk.scales[i/2] >> ((i%2)*8)) & 0xFF
-    const uint scidx0  = (is < 4u) ? is       : (is + 4u);
-    const uint scidx1  = (is < 4u) ? is       : (is - 4u);
-    const uint scmask1 = (is < 4u) ? 0x30u    : 0xC0u;
-    const uint scshift1= (is < 4u) ? 0u       : 2u;
-    const uint mbidx0  = is + 4u;
-    const uint mbidx1  = (is < 4u) ? (is + 4u): is;
-    const uint mbmask0 = (is < 4u) ? 0x0Fu    : 0xF0u;
-    const uint mbshift0= (is < 4u) ? 0u       : 4u;
-    const uint mbmask1 = (is < 4u) ? 0x30u    : 0xC0u;
-    const uint mbshift1= (is < 4u) ? 0u       : 2u;
-
-    #define SC_U8(i) ((Q4K_SCALES(binding_idx, a_offset, ib, (i)/2u) >> (((i) % 2u) * 8u)) & 0xFFu)
-    const uint sc   = (SC_U8(scidx0) & 0xFu) | ((SC_U8(scidx1) & scmask1) >> scshift1);
-    const uint mval = ((SC_U8(mbidx0) & mbmask0) >> mbshift0) | ((SC_U8(mbidx1) & mbmask1) >> mbshift1);
-    #undef SC_U8
-
-    const vec2 dm = Q4K_DM(binding_idx, a_offset, ib);
-    const FLOAT_TYPE d = FLOAT_TYPE(dm.x * float(sc));
-    const FLOAT_TYPE m = FLOAT_TYPE(-dm.y * float(mval));
-
-    // --- Decode 4 nibble values from qs ---
-    // uint8 indices of the 4 bytes: base, base+1, base+2, base+3
-    // where base = group*32 + pos_in_half
-    // In packed16 view: blk.qs[u16_idx] holds qs_u8[2*u16_idx] in bits 0..7
-    //                                    and qs_u8[2*u16_idx+1] in bits 8..15
-    const uint base_u8 = group * 32u + pos_in_group;
-    // base_u8 is always even (group*32 is mult of 32, pos_in_group is mult of 4)
-    // so blk.qs[base_u8/2] holds bytes base_u8 and base_u8+1
-    //    blk.qs[base_u8/2+1] holds bytes base_u8+2 and base_u8+3
-    const uint w0 = Q4K_QS(binding_idx, a_offset, ib, base_u8 / 2u);
-    const uint w1 = Q4K_QS(binding_idx, a_offset, ib, base_u8 / 2u + 1u);
-
-    const FLOAT_TYPE e0 = FLOAT_TYPE((w0        >> shift) & 0xFu);   // byte base_u8+0
-    const FLOAT_TYPE e1 = FLOAT_TYPE((w0 >> 8u  >> shift) & 0xFu);   // byte base_u8+1
-    const FLOAT_TYPE e2 = FLOAT_TYPE((w1        >> shift) & 0xFu);   // byte base_u8+2
-    const FLOAT_TYPE e3 = FLOAT_TYPE((w1 >> 8u  >> shift) & 0xFu);   // byte base_u8+3
-
-    return FLOAT_TYPEV4(fma(d, e0, m), fma(d, e1, m), fma(d, e2, m), fma(d, e3, m));
-}
-
-FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
-    return dequantize4_q4k(a_offset, ib, binding_idx, iqs);
-}
-#endif
+// These can't be `const` globals because GLSL forbids function calls in global
+// const initializers, even when the spec constants would let the driver fold
+// them. Macros expand at the use site and fold after specialization.
+#define BLOCK_SIZE_K fa_block_elems(FaTypeK)
+#define BLOCK_SIZE_V fa_block_elems(FaTypeV)
+// F16 reads f16 elements directly from the binding; everything else routes
+// through dequantize4 / the MMQ helpers to unpack from the packed block layout.
+#define USE_DECODE_K (FaTypeK != GGML_TYPE_F16)
+#define USE_DECODE_V (FaTypeV != GGML_TYPE_F16)
 
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
-
-// Bias applied to softmax to stay in fp16 range.
-// Based on ggml-cuda issue https://github.com/ggml-org/llama.cpp/issues/18606
-const float FATTN_KQ_MAX_OFFSET = 3.0f*0.6931f;
-
-// Store the output when doing grouped query attention.
-// Rows index by Q's dimension 2, and the first N rows are valid.
-void gqaStore(const in uint32_t r, const in uint32_t c, const in FLOAT_TYPEV4 elems, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
-{
-    uint32_t offset = (iq2 + r) * HSV / 4 + c;
-    data_ov4[o_offset + offset] = D_TYPEV4(elems);
-}
 
 
 // Store column zero. This is used to save per-row m and L values for split_k.
@@ -388,7 +148,7 @@ ACC_TYPE perElemOpGetSink(const in uint32_t r, const in uint32_t c, const in ACC
 
 uint32_t i, N, KV, split_k_index, Tr, start_j, end_j,
          gqa_iq1, iq2, iq3, rk2, rk3, rv2, rv3, ik2, ik3, iv2, iv3,
-         q_stride, k_stride, v_stride, m_stride;
+         q_stride, k_stride, v_stride, m_stride, sparse_base;
 
 void init_indices()
 {
@@ -452,4 +212,43 @@ void init_indices()
     // that prevents the compiler from folding the "&" through the select
     // and breaking the alignment detection.
     m_stride = (p.gqa_ratio > 1) ? (p.gqa_ratio >> 16) : KV;
+
+    // Sparse: the tile shares one mask row (gqa heads, or Br==1). split_k
+    // partitions the n_kv_max blocks.
+    if (USE_SPARSE) {
+        uint32_t qrow = (p.gqa_ratio > 1) ? gqa_iq1 : (i * Br);
+        sparse_base = (((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 + qrow) * p.split_kv;
+
+        uint32_t total_blocks = CEIL_DIV(p.split_kv, Bc);
+        uint32_t per_blocks   = CEIL_DIV(total_blocks, p.k_num);
+        start_j = min(split_k_index * per_blocks, total_blocks);
+        end_j   = min((split_k_index + 1) * per_blocks, total_blocks);
+    }
+}
+
+// Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).
+bool fa_kv_index(uint lin, out uint kv_col) {
+    if (USE_SPARSE) {
+        if (lin >= p.split_kv) {
+            kv_col = 0;
+            return false;
+        }
+        int idx = data_sparse[sparse_base + lin];
+        kv_col = idx >= 0 ? uint(idx) : 0;
+        return idx >= 0;
+    }
+    kv_col = lin;
+    return !KV_bounds_check || lin < KV;
+}
+
+// Bias applied to softmax to stay in fp16 range.
+// Based on ggml-cuda issue https://github.com/ggml-org/llama.cpp/issues/18606
+const float FATTN_KQ_MAX_OFFSET = 3.0f*0.6931f;
+
+// Store the output when doing grouped query attention.
+// Rows index by Q's dimension 2, and the first N rows are valid.
+void gqaStore(const in uint32_t r, const in uint32_t c, const in O_TYPEV4 elems, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
+{
+    uint32_t offset = (iq2 + r) * HSV / 4 + c;
+    data_ov4[o_offset + offset] = D_TYPEV4(elems);
 }

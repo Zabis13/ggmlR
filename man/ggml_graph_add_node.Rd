@@ -18,6 +18,7 @@ ggml_graph_add_node(graph, tensor)
 Adds \code{tensor} to \code{graph} as a node, without expanding its
 dependencies.  For the usual case -- adding a tensor together with everything
 it depends on -- use \code{\link{ggml_graph_expand}}.
+The node is marked for computation (in the C API that is left to the caller).
 }
 \seealso{
 \code{\link{ggml_graph_expand}}

@@ -5,17 +5,16 @@
 //
 // cache line
 //
-
-#if defined(__cpp_lib_hardware_interference_size)
-#define CACHE_LINE_SIZE std::hardware_destructive_interference_size
-#else
+// TODO: rework CACHE_LINE_SIZE so std::hardware_destructive_interference_size
+// can be used consistently between C and C++ TUs; the previous macro form
+// diverged based on include order and undersized the work buffer.
+// ref: https://github.com/ggml-org/llama.cpp/pull/28882
 #if defined(__POWER9_VECTOR__)
 #define CACHE_LINE_SIZE 128
 #elif defined(__VXE__) || defined(__VXE2__)
 #define CACHE_LINE_SIZE 256
 #else
 #define CACHE_LINE_SIZE 64
-#endif
 #endif
 
 static const size_t CACHE_LINE_SIZE_F32 = CACHE_LINE_SIZE/sizeof(float);
@@ -45,6 +44,7 @@ void ggml_compute_forward_silu_back(const struct ggml_compute_params * params, s
 void ggml_compute_forward_gelu_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_norm(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_rms_norm(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_rms_norm_mul_fused(const struct ggml_compute_params * params, struct ggml_tensor * dst_rms_norm, struct ggml_tensor * dst_mul);
 void ggml_compute_forward_rms_norm_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_norm_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_group_norm(const struct ggml_compute_params * params, struct ggml_tensor * dst);
@@ -70,6 +70,7 @@ void ggml_compute_forward_conv_transpose_1d(const struct ggml_compute_params * p
 void ggml_compute_forward_im2col(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_im2col_back_f32(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_im2col_3d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_col2im_1d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_conv_2d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_conv_3d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_conv_transpose_2d(const struct ggml_compute_params * params, struct ggml_tensor * dst);
@@ -119,6 +120,10 @@ void ggml_compute_forward_cross_entropy_loss_back(const struct ggml_compute_para
 void ggml_compute_forward_opt_step_adamw(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_mul_mat(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_fwht(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_lightning_indexer(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_dsv4_hc_comb(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_dsv4_hc_pre(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_dsv4_hc_post(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_opt_step_sgd(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 #ifdef __cplusplus
 }

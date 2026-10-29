@@ -172,13 +172,12 @@ test_that("metadata and tensor info are available with meta_only = TRUE", {
   nms <- gguf_tensor_names(g)
   expect_true("w" %in% nms)
 
-  # tensor_info works under meta_only: name/type/size from the gguf API.
-  # shape is NA because the public gguf API does not expose per-dim ne
-  # without allocating tensors.
+  # tensor_info works under meta_only: name/shape/type/size from the gguf
+  # API (shape via gguf_get_tensor_ne, ggml 0.27).
   info <- gguf_tensor_info(g, "w")
   expect_equal(info$name, "w")
   expect_equal(info$type, "f32")
-  expect_true(is.na(info$shape))
+  expect_identical(info$shape, 4L)
   gguf_free(g)
 })
 
@@ -216,4 +215,49 @@ test_that("default load (meta_only = FALSE) still returns tensor data", {
   d <- gguf_tensor_data(g, "w")
   expect_equal(as.numeric(d), c(1, 2, 3, 4), tolerance = 1e-5)
   gguf_free(g)
+})
+
+# --- ggml 0.27: gguf_get_tensor_ne, gguf_init_from_buffer -------------------
+
+test_that("gguf_tensor_ne reads the header shape, with or without data", {
+  tmp <- tempfile(fileext = ".gguf")
+  on.exit(unlink(tmp))
+  create_test_gguf(tmp)
+
+  for (meta_only in c(FALSE, TRUE)) {
+    g <- gguf_load(tmp, meta_only = meta_only)
+    expect_identical(gguf_tensor_ne(g, "w"), 4L)
+    expect_identical(gguf_tensor_ne(g, "w"), gguf_tensor_info(g, "w")$shape)
+    expect_error(gguf_tensor_ne(g, "missing"), "not found")
+    gguf_free(g)
+  }
+})
+
+test_that("gguf_load_raw parses an in-memory image like the file", {
+  tmp <- tempfile(fileext = ".gguf")
+  on.exit(unlink(tmp))
+  create_test_gguf(tmp)
+  bytes <- readBin(tmp, "raw", file.info(tmp)$size)
+
+  g <- gguf_load_raw(bytes)
+  rm(bytes); gc()   # the gguf object must not depend on the raw vector
+  expect_s3_class(g, "gguf")
+  expect_true(is.na(g$path))
+  expect_equal(g$version, 3L)
+  expect_equal(g$n_tensors, 1L)
+  expect_equal(gguf_metadata(g)[["test.key"]], "hello")
+  expect_equal(as.vector(gguf_tensor_data(g, "w")), c(1, 2, 3, 4))
+  expect_output(print(g), "<memory>")
+  gguf_free(g)
+
+  gm <- gguf_load_raw(readBin(tmp, "raw", file.info(tmp)$size), meta_only = TRUE)
+  expect_identical(gguf_tensor_ne(gm, "w"), 4L)
+  expect_error(gguf_tensor_data(gm, "w"), "meta_only=TRUE")
+  gguf_free(gm)
+})
+
+test_that("gguf_load_raw rejects input that is not a GGUF image", {
+  expect_error(gguf_load_raw(1:10), "raw vector")
+  expect_error(gguf_load_raw(raw(0)), "Empty")
+  expect_error(gguf_load_raw(as.raw(1:64)), "Failed to parse")
 })

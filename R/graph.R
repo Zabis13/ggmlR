@@ -168,6 +168,22 @@ ggml_graph_expand <- function(graph, tensor) {
   invisible(.Call("R_ggml_graph_expand", graph, tensor, PACKAGE = "ggmlR"))
 }
 
+#' Add a Tensor to a Graph Without Computing It
+#'
+#' Adds \code{tensor} and its parents to \code{graph} in dependency order, like
+#' \code{\link{ggml_graph_expand}}, but without marking them for computation.
+#' They are computed only once a node added with \code{ggml_graph_expand} (or
+#' \code{\link{ggml_build_forward_expand}}) reaches them. Use it to fix where
+#' nodes appear in the graph without forcing them to run.
+#'
+#' @param graph Graph pointer
+#' @param tensor Tensor to add
+#' @return \code{NULL}, invisibly
+#' @export
+ggml_graph_order <- function(graph, tensor) {
+  invisible(.Call("R_ggml_graph_order", graph, tensor, PACKAGE = "ggmlR"))
+}
+
 #' Compute Computation Graph
 #' 
 #' Executes the computation graph using CPU backend
@@ -669,6 +685,7 @@ ggml_graph_clear <- function(graph) {
 #' Adds \code{tensor} to \code{graph} as a node, without expanding its
 #' dependencies.  For the usual case -- adding a tensor together with everything
 #' it depends on -- use \code{\link{ggml_graph_expand}}.
+#' The node is marked for computation (in the C API that is left to the caller).
 #'
 #' @param graph Graph to add to
 #' @param tensor Tensor to append

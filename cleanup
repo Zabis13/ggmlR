@@ -9,6 +9,7 @@ rm -f inst/lib/*.a
 rm -f src/ggml-cpu/*.o
 rm -f src/onnx/*.o
 rm -f src/ggml-cpu/arch/x86/*.o
+rm -f src/ggml-cpu/tiled/*.o
 rm -f src/ggml-cpu/arch/arm/*.o
 rm -f src/ggml-cpu/llamafile/*.o
 rm -f src/ggml-cpu/amx/*.o

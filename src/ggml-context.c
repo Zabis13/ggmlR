@@ -223,6 +223,7 @@ enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype) {
         case GGML_FTYPE_MOSTLY_Q4_0:          wtype = GGML_TYPE_Q4_0;  break;
         case GGML_FTYPE_MOSTLY_Q4_1:          wtype = GGML_TYPE_Q4_1;  break;
         case GGML_FTYPE_MOSTLY_Q1_0:          wtype = GGML_TYPE_Q1_0;  break;
+        case GGML_FTYPE_MOSTLY_Q2_0:          wtype = GGML_TYPE_Q2_0;  break;
         case GGML_FTYPE_MOSTLY_Q5_0:          wtype = GGML_TYPE_Q5_0;  break;
         case GGML_FTYPE_MOSTLY_Q5_1:          wtype = GGML_TYPE_Q5_1;  break;
         case GGML_FTYPE_MOSTLY_Q8_0:          wtype = GGML_TYPE_Q8_0;  break;
@@ -259,14 +260,14 @@ bool ggml_is_transposed(const struct ggml_tensor * tensor) {
     return tensor->nb[0] > tensor->nb[1];
 }
 
-static bool ggml_is_contiguous_n(const struct ggml_tensor * tensor, int n) {
+static bool ggml_is_contiguous_m_n(const struct ggml_tensor * tensor, int m, int n) {
     size_t next_nb = ggml_type_size(tensor->type);
     if (tensor->ne[0] != ggml_blck_size(tensor->type) && tensor->nb[0] != next_nb) {
         return false;
     }
     next_nb *= tensor->ne[0]/ggml_blck_size(tensor->type);
-    for (int i = 1; i < GGML_MAX_DIMS; i++) {
-        if (i > n) {
+    for (int i = 1; i < n; i++) {
+        if (i > m) {
             if (tensor->ne[i] != 1 && tensor->nb[i] != next_nb) {
                 return false;
             }
@@ -284,15 +285,27 @@ bool ggml_is_contiguous(const struct ggml_tensor * tensor) {
 }
 
 bool ggml_is_contiguous_0(const struct ggml_tensor * tensor) {
-    return ggml_is_contiguous_n(tensor, 0);
+    return ggml_is_contiguous_m_n(tensor, 0, GGML_MAX_DIMS);
 }
 
 bool ggml_is_contiguous_1(const struct ggml_tensor * tensor) {
-    return ggml_is_contiguous_n(tensor, 1);
+    return ggml_is_contiguous_m_n(tensor, 1, GGML_MAX_DIMS);
 }
 
 bool ggml_is_contiguous_2(const struct ggml_tensor * tensor) {
-    return ggml_is_contiguous_n(tensor, 2);
+    return ggml_is_contiguous_m_n(tensor, 2, GGML_MAX_DIMS);
+}
+
+bool ggml_is_contiguous_to_1(const struct ggml_tensor * tensor) {
+    return ggml_is_contiguous_m_n(tensor, 0, 1);
+}
+
+bool ggml_is_contiguous_to_2(const struct ggml_tensor * tensor) {
+    return ggml_is_contiguous_m_n(tensor, 0, 2);
+}
+
+bool ggml_is_contiguous_to_3(const struct ggml_tensor * tensor) {
+    return ggml_is_contiguous_m_n(tensor, 0, 3);
 }
 
 bool ggml_is_contiguously_allocated(const struct ggml_tensor * tensor) {
@@ -558,6 +571,15 @@ static struct ggml_tensor * ggml_new_tensor_impl(
     if (view_src != NULL && view_src->view_src != NULL) {
         view_offs += view_src->view_offs;
         view_src   = view_src->view_src;
+    }
+
+    // validate number of elements to fit in int64_t
+    int64_t current_nelements = ne[0];
+    for (int i = 1; i < n_dims; i++) {
+        if (ne[i] > 1) {
+            GGML_ASSERT(INT64_MAX / ne[i] > current_nelements);
+            current_nelements *= ne[i];
+        }
     }
 
     size_t data_size = ggml_row_size(type, ne[0]);

@@ -29,9 +29,36 @@ gguf_load <- function(path, meta_only = FALSE) {
   ), class = "gguf")
 }
 
+#' Load a GGUF Image from Memory
+#'
+#' Parses a GGUF file already read into an R raw vector (e.g. downloaded, or
+#' extracted from an archive) without writing it to disk. Everything the
+#' result needs is copied, so \code{raw} may be discarded afterwards. The
+#' result is the same \code{"gguf"} object as from \code{\link{gguf_load}},
+#' with \code{path = NA}.
+#'
+#' @param raw A raw vector holding the complete GGUF image.
+#' @param meta_only If \code{TRUE}, read only the header and metadata, as in
+#'   \code{\link{gguf_load}}. Default \code{FALSE}.
+#' @return An object of class \code{"gguf"}.
+#' @export
+gguf_load_raw <- function(raw, meta_only = FALSE) {
+  if (!is.raw(raw)) stop("Expected a raw vector")
+  ptr <- .Call("R_gguf_load_buffer", raw, as.logical(meta_only))
+  info <- .Call("R_gguf_info", ptr)
+  structure(list(
+    ptr       = ptr,
+    path      = NA_character_,
+    version   = info$version,
+    n_tensors = info$n_tensors,
+    n_kv      = info$n_kv,
+    meta_only = isTRUE(meta_only)
+  ), class = "gguf")
+}
+
 #' @export
 print.gguf <- function(x, ...) {
-  cat(sprintf("GGUF file: %s\n", basename(x$path)))
+  cat(sprintf("GGUF file: %s\n", if (is.na(x$path)) "<memory>" else basename(x$path)))
   cat(sprintf("  Version:  %d\n", x$version))
   cat(sprintf("  Tensors:  %d\n", x$n_tensors))
   cat(sprintf("  Metadata: %d key-value pairs\n", x$n_kv))
@@ -61,14 +88,24 @@ gguf_tensor_names <- function(x) {
   .Call("R_gguf_tensor_names", x$ptr)
 }
 
+#' Get Tensor Shape
+#'
+#' Returns the shape of a tensor as stored in the GGUF header, innermost
+#' dimension first (ggml \code{ne} order), with trailing unit dimensions
+#' dropped. Works with \code{meta_only = TRUE} objects as well.
+#'
+#' @param x A \code{gguf} object.
+#' @param name Tensor name (character).
+#' @return An integer vector.
+#' @export
+gguf_tensor_ne <- function(x, name) {
+  if (!inherits(x, "gguf")) stop("Expected a gguf object")
+  .Call("R_gguf_tensor_ne", x$ptr, as.character(name))
+}
+
 #' Get Tensor Info
 #'
 #' Returns name, shape, type, and size in bytes for a single tensor.
-#'
-#' When the file was opened with \code{meta_only = TRUE}, the per-dimension
-#' \code{shape} is \code{NA} (the public GGUF API does not expose tensor
-#' dimensions without allocating tensors); \code{name}, \code{type} and
-#' \code{size_bytes} are still returned.
 #'
 #' @param x A \code{gguf} object.
 #' @param name Tensor name (character).

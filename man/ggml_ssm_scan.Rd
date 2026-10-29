@@ -4,7 +4,7 @@
 \alias{ggml_ssm_scan}
 \title{Selective State-Space Scan (Mamba / Mamba-2)}
 \usage{
-ggml_ssm_scan(ctx, s, x, dt, A, B, C, ids)
+ggml_ssm_scan(ctx, s, x, dt, A, B, C, ids, K = 1L)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -22,9 +22,17 @@ ggml_ssm_scan(ctx, s, x, dt, A, B, C, ids)
 \item{C}{Output projection, same shape as \code{B}}
 
 \item{ids}{Sequence-to-state mapping, \code{[n_seqs]} I32, 0-based}
+
+\item{K}{Number of state snapshots kept after the outputs (ggml 0.27):
+slot 0 is the final state, slot \code{k} the state \code{k} tokens before
+the end, each slot a block of \code{[d_state, head_dim, n_head, n_seqs]}.
+Slots older than the sequence are left untouched. \code{K > 1} needs a
+Mamba-2 \code{A} and is for inference only (the backward needs
+\code{K = 1}).}
 }
 \value{
-A flat tensor: outputs followed by final states
+A flat tensor: outputs followed by the \code{K} state snapshots
+  (with \code{K = 1}, the final states)
 }
 \description{
 The recurrent core of a Mamba block: a linear state-space recurrence whose

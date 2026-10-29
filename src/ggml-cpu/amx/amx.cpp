@@ -207,9 +207,11 @@ ggml_backend_buffer_type_t ggml_backend_amx_buffer_type() {
         /* .iface = */ {
                         /* .get_name         = */ ggml_backend_amx_buffer_type_get_name,
                         /* .alloc_buffer     = */ ggml_backend_amx_buffer_type_alloc_buffer,
+                        /* .alloc_buffer_n   = */ nullptr,
                         /* .get_alignment    = */ ggml_backend_amx_buffer_type_get_alignment,
                         /* .get_max_size     = */ nullptr,  // defaults to SIZE_MAX
                         /* .get_alloc_size   = */ ggml_backend_amx_buffer_type_get_alloc_size,
+                        /* .get_alloc_size_n = */ nullptr,
                         /* .is_host          = */ nullptr,
                         },
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),

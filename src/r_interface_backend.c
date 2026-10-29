@@ -3,6 +3,7 @@
 
 #include <R.h>
 #include <Rinternals.h>
+#include <string.h>
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
@@ -925,7 +926,17 @@ static SEXP r_meta_make_tensor_info(const struct ggml_tensor * t) {
 // something unparseable: MIRRORED, n_segments = 1, ne is the original shape
 // repeated for every device.
 static struct ggml_backend_meta_split_state r_meta_default_split_state(const struct ggml_tensor * t, size_t n_devs) {
-    struct ggml_backend_meta_split_state ret = { GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, 1 };
+    // Fields are set by name, not positionally: ggml 0.27 inserted nr[16]
+    // (per-segment repeat count) between ne[] and n_segments, which shifted a
+    // positional initializer's n_segments into nr[0]. ggml multiplies every
+    // ne by nr[s], so each segment must repeat at least once.
+    struct ggml_backend_meta_split_state ret;
+    memset(&ret, 0, sizeof(ret));
+    ret.axis       = GGML_BACKEND_SPLIT_AXIS_MIRRORED;
+    ret.n_segments = 1;
+    for (size_t s = 0; s < sizeof(ret.nr) / sizeof(ret.nr[0]); s++) {
+        ret.nr[s] = 1;
+    }
     for (size_t d = 0; d < n_devs && d < (size_t) GGML_BACKEND_META_MAX_DEVICES; d++) {
         // For MIRRORED the per-device ne is just the tensor's own ne[axis],
         // but axis is meaningless for mirrored; ggml only inspects axis here.
@@ -994,7 +1005,10 @@ static struct ggml_backend_meta_split_state r_meta_split_state_trampoline(const 
         }
         if (n_segments_sxp != R_NilValue && (Rf_isInteger(n_segments_sxp) || Rf_isReal(n_segments_sxp))) {
             int ns = Rf_asInteger(n_segments_sxp);
-            if (ns >= 1) {
+            // nr[] has one slot per segment, so more segments than that would
+            // be read past its end.
+            const int ns_max = (int) (sizeof(ret.nr) / sizeof(ret.nr[0]));
+            if (ns >= 1 && ns <= ns_max) {
                 ret.n_segments = (uint32_t) ns;
             }
         }

@@ -317,3 +317,18 @@ test_that("different quant sizes comparison", {
   # Q8 should be larger than Q4
  expect_gt(length(q8), length(q4))
 })
+
+# The kernels only assert block alignment in debug builds, and ggml_row_size()
+# aborts the R session; the wrappers must turn both into ordinary R errors.
+test_that("quant wrappers reject partial blocks and short raw input", {
+  x <- runif(64, -1, 1)
+  expect_error(quantize_row_q4_0_ref(x, 48), "multiple of the q4_0 block size 32")
+  expect_error(quantize_q4_0(x, 1, 48, NULL), "multiple of the q4_0 block size 32")
+  expect_error(quantize_q2_0(x, 1, 32, NULL), "multiple of the q2_0 block size 64")
+
+  q <- quantize_row_q4_0_ref(x, 64)
+  expect_error(dequantize_row_q4_0(q, 48), "multiple of the q4_0 block size 32")
+  expect_error(dequantize_row_q4_0(q, 128), "raw_data too short")
+  expect_error(dequantize_row_q4_0(q[1:10], 32), "raw_data too short")
+  expect_length(dequantize_row_q4_0(q, 64), 64)
+})

@@ -123,3 +123,79 @@ for (axis in 0:4) {
     })
   })
 }
+
+# ---- row norms: every row along ne[0] is normalised, in all ne[4] slices -----
+# The CPU kernels used to stop at ne[3]: with ne[4] > 1 the slices past the
+# first were never written and came back as uninitialised memory.
+
+norm_5d_ref <- function(x, ne0, op, eps) {
+  m <- matrix(x, nrow = ne0)
+  scale <- switch(op,
+    rms_norm = 1 / sqrt(colMeans(m^2) + eps),
+    l2_norm  = 1 / pmax(sqrt(colSums(m^2)), eps),
+    norm     = { m <- sweep(m, 2, colMeans(m)); 1 / sqrt(colMeans(m^2) + eps) })
+  as.vector(sweep(m, 2, scale, "*"))
+}
+
+NE_NORM <- c(16L, 3L, 2L, 2L, 3L)
+X_NORM  <- rnorm(prod(NE_NORM))
+
+for (opname in c("norm", "rms_norm", "l2_norm")) {
+  local({
+    op <- opname
+    test_that(paste("5D", op, "normalises every ne[4] slice"), {
+      env <- new.env(parent = emptyenv())
+      res <- run_5d(
+        build_fn = function(ctx) {
+          a <- ggml_new_tensor(ctx, GGML_TYPE_F32, 5L, NE_NORM)
+          env$a <- a
+          switch(op,
+            norm     = ggml_norm(ctx, a, eps = 1e-6),
+            rms_norm = ggml_rms_norm(ctx, a, eps = 1e-6),
+            l2_norm  = ggml_l2_norm(ctx, a, eps = 1e-6))
+        },
+        set_fn = function() ggml_backend_tensor_set_data(env$a, X_NORM),
+        n_out = length(X_NORM)
+      )
+      expect_equal(res, norm_5d_ref(X_NORM, NE_NORM[1], op, 1e-6), tolerance = 1e-5)
+    })
+  })
+}
+
+# Backward norms and group_norm: ne[3] and ne[4] are both plain batch axes, so
+# the 5D result must match the same data run as 4D with ne[3]*ne[4] folded.
+
+DZ_NORM <- rnorm(prod(NE_NORM))
+NE_FOLD <- c(NE_NORM[1:3], NE_NORM[4] * NE_NORM[5])
+
+run_norm_shape <- function(op, ne) {
+  env <- new.env(parent = emptyenv())
+  run_5d(
+    build_fn = function(ctx) {
+      a <- ggml_new_tensor(ctx, GGML_TYPE_F32, length(ne), ne)
+      b <- ggml_new_tensor(ctx, GGML_TYPE_F32, length(ne), ne)
+      env$a <- a; env$b <- b
+      switch(op,
+        rms_norm_back = ggml_rms_norm_back(ctx, a, b, eps = 1e-6),
+        norm_back     = ggml_norm_back(ctx, a, b, eps = 1e-6),
+        group_norm    = ggml_group_norm(ctx, b, n_groups = 2L, eps = 1e-6))
+    },
+    set_fn = function() {
+      ggml_backend_tensor_set_data(env$a, DZ_NORM)
+      ggml_backend_tensor_set_data(env$b, X_NORM)
+    },
+    n_out = length(X_NORM)
+  )
+}
+
+for (opname in c("rms_norm_back", "norm_back", "group_norm")) {
+  local({
+    op <- opname
+    test_that(paste("5D", op, "matches the folded 4D result"), {
+      res5 <- run_norm_shape(op, NE_NORM)
+      res4 <- run_norm_shape(op, NE_FOLD)
+      expect_true(all(is.finite(res5)))
+      expect_equal(res5, res4, tolerance = 1e-6)
+    })
+  })
+}

@@ -1,6 +1,8 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_control_flow_attributes : require
 
+#include "utils.glsl"
+
 layout (push_constant) uniform parameter
 {
     uint ne;
@@ -9,7 +11,7 @@ layout (push_constant) uniform parameter
     uint ne10; uint ne11; uint ne12; uint ne13; uint ne14;
     uint nb10; uint nb11; uint nb12; uint nb13; uint nb14;
     uint misalign_offsets;
-    float param1; float param2;
+    float param1; float param2; float param3; float param4;
 
     uint ne0_0123mp; uint ne0_0123L;
     uint ne0_012mp;  uint ne0_012L;
@@ -37,14 +39,6 @@ uint get_idx() {
 
 uint get_aoffset() { return p.misalign_offsets >> 16; }
 uint get_doffset() { return p.misalign_offsets & 0xFFFF; }
-
-// see init_fastdiv_values in ggml-vulkan.cpp
-uint fastdiv(uint n, uint mp, uint L) {
-    uint msbs, lsbs;
-    // msbs = mulhi(n, mp)
-    umulExtended(n, mp, msbs, lsbs);
-    return (msbs + n) >> L;
-}
 
 uint src0_idx(uint idx) {
     const uint i04 = fastdiv(idx, p.ne0_0123mp, p.ne0_0123L);

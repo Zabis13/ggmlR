@@ -27,9 +27,10 @@ GGML_OP_POOL_AVG
 
 \item{k0}{Kernel size (window size)}
 
-\item{s0}{Stride (default = k0 for non-overlapping windows)}
+\item{s0}{Stride; must equal \code{k0} (the default): non-overlapping
+windows only}
 
-\item{p0}{Padding (default 0)}
+\item{p0}{Padding; must be 0 (the default)}
 }
 \value{
 Pooled tensor with reduced dimensions

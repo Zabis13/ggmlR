@@ -25,6 +25,9 @@ Other tensor_layout:
 \code{\link{ggml_is_contiguous_2}()},
 \code{\link{ggml_is_contiguous_channels}()},
 \code{\link{ggml_is_contiguous_rows}()},
+\code{\link{ggml_is_contiguous_to_1}()},
+\code{\link{ggml_is_contiguous_to_2}()},
+\code{\link{ggml_is_contiguous_to_3}()},
 \code{\link{ggml_is_contiguously_allocated}()}
 }
 \concept{tensor_layout}
