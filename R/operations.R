@@ -2348,11 +2348,12 @@ ggml_get_rows <- function(ctx, a, b) {
 #' destinations give an undefined result.
 #'
 #' @param ctx GGML context
-#' @param a Destination tensor \code{[n_embd, ne1, ne2, ne3]}
-#' @param b F32 source rows \code{[n_embd, n_rows, ne2, ne3]}
-#' @param c I32 or I64 row indices \code{[n_rows, ne11, ne12]}, each in
-#'   \code{[0, ne1)}; broadcast over \code{b} when \code{ne2 \%\% ne11 == 0}
-#'   and \code{ne3 \%\% ne12 == 0}
+#' @param a Destination tensor \code{[n_embd, ne1, ne2, ne3, ne4]}
+#' @param b F32 or F16 source rows \code{[n_embd, n_rows, ne2, ne3, ne4]}
+#' @param c I32 or I64 row indices \code{[n_rows, ne11, ne12, 1, ne4]}, each
+#'   in \code{[0, ne1)}; broadcast over \code{b} when
+#'   \code{ne2 \%\% ne11 == 0} and \code{ne3 \%\% ne12 == 0}; \code{ne4} must
+#'   match in all three tensors
 #' @return A view of \code{a} holding the result
 #' @seealso \code{\link{ggml_get_rows}}
 #' @export

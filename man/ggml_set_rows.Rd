@@ -9,13 +9,14 @@ ggml_set_rows(ctx, a, b, c)
 \arguments{
 \item{ctx}{GGML context}
 
-\item{a}{Destination tensor \code{[n_embd, ne1, ne2, ne3]}}
+\item{a}{Destination tensor \code{[n_embd, ne1, ne2, ne3, ne4]}}
 
-\item{b}{F32 source rows \code{[n_embd, n_rows, ne2, ne3]}}
+\item{b}{F32 or F16 source rows \code{[n_embd, n_rows, ne2, ne3, ne4]}}
 
-\item{c}{I32 or I64 row indices \code{[n_rows, ne11, ne12]}, each in
-\code{[0, ne1)}; broadcast over \code{b} when \code{ne2 \%\% ne11 == 0}
-and \code{ne3 \%\% ne12 == 0}}
+\item{c}{I32 or I64 row indices \code{[n_rows, ne11, ne12, 1, ne4]}, each
+in \code{[0, ne1)}; broadcast over \code{b} when
+\code{ne2 \%\% ne11 == 0} and \code{ne3 \%\% ne12 == 0}; \code{ne4} must
+match in all three tensors}
 }
 \value{
 A view of \code{a} holding the result

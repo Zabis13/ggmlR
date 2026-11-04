@@ -957,6 +957,16 @@ static void ggml_compute_forward_set_rows_impl(
 
     ggml_from_float_t const from_float = ggml_get_type_traits_cpu(dst->type)->from_float;
 
+    // DIVERGENCE from upstream: ne[4] is traversed (upstream is 4D). Same
+    // indexing as the SET_ROWS branch of copy_to_quant.comp: the index row is
+    // read from src1 at (i10, i11, i12, 0, i04); ggml_set_rows() asserts the
+    // three tensors agree on ne[4].
+    const int64_t ne04 = src0->ne[4];
+    const size_t  nb04 = src0->nb[4];
+    const size_t  nb14 = src1->nb[4];
+    const size_t  nb4  = dst->nb[4];
+
+    for (int64_t i04 = 0; i04 < ne04; ++i04) {
     for (int64_t i03 = 0; i03 < ne03; ++i03) {
         for (int64_t i02 = 0; i02 < ne02; ++i02) {
             for (int64_t i = ir0; i < ir1; ++i) {
@@ -964,33 +974,29 @@ static void ggml_compute_forward_set_rows_impl(
                 const int64_t i11 = i02%ne11;
                 const int64_t i10 = i;
 
-                const int64_t i1 = *(idx_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+                const int64_t i1 = *(idx_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12 + i04*nb14);
 
                 GGML_ASSERT(i1 >= 0 && i1 < ne1);
 
+                const char * src_row = (const char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03 + i04*nb04;
+                      char * dst_row = (char *)        dst->data + i1*nb1  + i02*nb2  + i03*nb3  + i04*nb4;
+
                 if constexpr (std::is_same_v<src_t, float>) {
-                    from_float(
-                            (const float *) ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
-                                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3), nc);
+                    from_float((const float *) src_row, dst_row, nc);
                 } else if constexpr (std::is_same_v<src_t, ggml_fp16_t>) {
                     if (dst->type == GGML_TYPE_F16) {
-                        memcpy(
-                                            ((char *)  dst->data + i1*nb1  + i02*nb2  + i03*nb3),
-                                            ((char *) src0->data +  i*nb01 + i02*nb02 + i03*nb03),
-                                            rs);
+                        memcpy(dst_row, src_row, rs);
                     } else {
                         float * wdata = (float *) params->wdata + (nc + CACHE_LINE_SIZE_F32) * ith;
-                        ggml_fp16_to_fp32_row(
-                                (const ggml_fp16_t *) ((char *) src0->data + i*nb01 + i02*nb02 + i03*nb03),
-                                wdata, nc);
-                        from_float(wdata,
-                                ((char *) dst->data + i1*nb1 + i02*nb2 + i03*nb3), nc);
+                        ggml_fp16_to_fp32_row((const ggml_fp16_t *) src_row, wdata, nc);
+                        from_float(wdata, dst_row, nc);
                     }
                 } else {
                     GGML_ABORT("src0->type = %d (%s) not supported", src0->type, ggml_type_name(src0->type));
                 }
             }
         }
+    }
     }
 }
 

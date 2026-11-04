@@ -2182,6 +2182,10 @@ struct ggml_tensor * ggml_set_rows(
     GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
     GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
     GGML_ASSERT(c->ne[3] == 1);
+    // DIVERGENCE from upstream (4D): no broadcast over ne[4] in the CPU kernel
+    // or copy_to_quant.comp, so all three must agree on it
+    GGML_ASSERT(a->ne[4] == b->ne[4]);
+    GGML_ASSERT(c->ne[4] == b->ne[4]);
     GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16);
     GGML_ASSERT(c->type == GGML_TYPE_I64 || c->type == GGML_TYPE_I32);
 

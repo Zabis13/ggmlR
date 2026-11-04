@@ -4343,8 +4343,8 @@ SEXP R_ggml_set_rows(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr) {
     if (ctx == NULL || a == NULL || b == NULL || c == NULL) {
         error("Invalid pointer");
     }
-    if (b->type != GGML_TYPE_F32) {
-        error("ggml_set_rows: source b must be F32");
+    if (b->type != GGML_TYPE_F32 && b->type != GGML_TYPE_F16) {
+        error("ggml_set_rows: source b must be F32 or F16");
     }
     if (c->type != GGML_TYPE_I32 && c->type != GGML_TYPE_I64) {
         error("ggml_set_rows: row indices c must be I32 or I64");
@@ -4357,6 +4357,9 @@ SEXP R_ggml_set_rows(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP c_ptr) {
     }
     if (c->ne[3] != 1 || b->ne[2] % c->ne[1] != 0 || b->ne[3] % c->ne[2] != 0) {
         error("ggml_set_rows: c must broadcast over b (b ne[2] %% c ne[1] == 0, b ne[3] %% c ne[2] == 0, c ne[3] == 1)");
+    }
+    if (a->ne[4] != b->ne[4] || c->ne[4] != b->ne[4]) {
+        error("ggml_set_rows: a, b and c must agree in ne[4] (no broadcast over it)");
     }
     if (!ggml_is_contiguous_rows(a) || !ggml_is_contiguous_rows(b)) {
         error("ggml_set_rows: a and b must have contiguous rows");

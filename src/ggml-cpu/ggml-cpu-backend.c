@@ -2446,11 +2446,13 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
         case GGML_OP_OUT_PROD:
+        // every thread takes a row range and its own F16->F32 scratch row in
+        // wdata, so the work buffer must be sized for all of them (as 0.27)
+        case GGML_OP_SET_ROWS:
             {
                 n_tasks = n_threads;
             } break;
         case GGML_OP_GET_ROWS:
-        case GGML_OP_SET_ROWS:
         case GGML_OP_SCATTER_ELEMENTS:
             {
                 // FIXME: get_rows can use additional threads, but the cost of launching additional threads
@@ -2524,11 +2526,15 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_GATED_LINEAR_ATTN_BACK:
         case GGML_OP_SSM_SCAN:
         case GGML_OP_LIGHTNING_INDEXER:
+            {
+                n_tasks = n_threads;
+            } break;
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_GATED_LINEAR_ATTN:
         case GGML_OP_RWKV_WKV7:
             {
-                n_tasks = n_threads;
+                const int64_t n_heads = node->src[1]->ne[1];
+                n_tasks = MIN(n_threads, n_heads);
             } break;
         case GGML_OP_WIN_PART:
         case GGML_OP_WIN_UNPART:

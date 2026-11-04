@@ -45,3 +45,5 @@ vk_layer_settings.txt
 # inst/scripts/ref_check_vs_onnxruntime.sh, tens of megabytes
 inst/scripts/ref_data/
 inst/scripts/ref_depth/
+
+.claude/
