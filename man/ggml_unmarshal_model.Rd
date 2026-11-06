@@ -10,7 +10,9 @@ ggml_unmarshal_model(x, backend = NULL)
 \item{x}{A \code{"ggmlR_marshaled"} container.}
 
 \item{backend}{Backend selection passed through to
-\code{\link{ggml_load_model}}. Default \code{"auto"}.}
+\code{\link{ggml_load_model}}. Default \code{NULL}: a model trained
+on the CPU loads on the CPU; one trained on the GPU loads with
+\code{"auto"} (GPU if available, else CPU).}
 }
 \value{
 A compiled ggmlR model object (sequential or functional).

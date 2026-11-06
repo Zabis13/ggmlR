@@ -2712,7 +2712,8 @@ nn_fill_labels_idx <- function(y_ggml, ne_label, labels_tensors, offs, widths, s
 #'   \code{FALSE} for time series or exactly reproducible runs.
 #' @param callbacks List of callback objects, e.g.
 #'   \code{\link{ggml_callback_early_stopping}} or an LR scheduler.  Each is a
-#'   list with \code{on_epoch_begin(epoch, logs, state)} and/or
+#'   list with any of \code{on_train_begin(logs, state)} (once per fit, before
+#'   the first epoch), \code{on_epoch_begin(epoch, logs, state)} and/or
 #'   \code{on_epoch_end(epoch, logs, state)}; setting \code{state$stop <- TRUE}
 #'   stops training.  \code{logs} holds \code{train_loss},
 #'   \code{train_accuracy}, \code{val_loss} and \code{val_accuracy}, and for a
@@ -3076,6 +3077,7 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
       cb_state$nepoch <- as.integer(epochs)
 
       epochs_run <- 0L
+      .ggml_cb_train_begin(callbacks, cb_state)
       for (ep in seq_len(epochs)) {
         logs <- list()
         for (cb in callbacks) {
@@ -3244,6 +3246,7 @@ ggml_fit.ggml_functional_model <- function(model, x, y,
     if (shuffle_all) perm <- sample(perm)
 
     epochs_run <- 0L
+    .ggml_cb_train_begin(callbacks, cb_state)
     for (ep in seq_len(epochs)) {
       logs <- list()
       for (cb in callbacks) {

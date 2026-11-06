@@ -2,6 +2,7 @@
 #include <Rinternals.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
@@ -2265,6 +2266,33 @@ SEXP R_ggml_backend_tensor_set(SEXP tensor_ptr, SEXP data_sexp, SEXP offset_sexp
 
         ggml_backend_tensor_set(tensor, buffer, offset, size);
         free(buffer);
+    } else if (tensor->type == GGML_TYPE_F64 && TYPEOF(data_sexp) == REALSXP) {
+        int n = length(data_sexp);
+        ggml_backend_tensor_set(tensor, REAL(data_sexp), offset, n * sizeof(double));
+    } else if (tensor->type == GGML_TYPE_F64 || tensor->type == GGML_TYPE_I64) {
+        // F64 from integer/logical, and I64 from any numeric. Range and
+        // whole-number checks for I64 are done in R (nn_tensor_values);
+        // values here are exact integers within +-2^53.
+        int n = length(data_sexp);
+        const double * dx; const int * ix;
+        r_numeric_ptrs(data_sexp, &dx, &ix);
+        void * buffer = malloc(n * sizeof(int64_t));   // == sizeof(double)
+        if (buffer == NULL) {
+            error("Failed to allocate buffer");
+        }
+        if (tensor->type == GGML_TYPE_F64) {
+            double * b = (double *) buffer;
+            for (int i = 0; i < n; i++) {
+                b[i] = dx != NULL ? dx[i] : (ix[i] == NA_INTEGER ? R_NaN : (double) ix[i]);
+            }
+        } else {
+            int64_t * b = (int64_t *) buffer;
+            for (int i = 0; i < n; i++) {
+                b[i] = dx != NULL ? (int64_t) dx[i] : (int64_t) ix[i];
+            }
+        }
+        ggml_backend_tensor_set(tensor, buffer, offset, n * sizeof(int64_t));
+        free(buffer);
     } else if (TYPEOF(data_sexp) == RAWSXP) {
         // Raw bytes — pass through directly (for quantized types: Q4_K, Q8_0, etc.)
         size_t size = (size_t) length(data_sexp);
@@ -2360,6 +2388,34 @@ SEXP R_ggml_backend_tensor_get(SEXP tensor_ptr, SEXP offset_sexp, SEXP size_sexp
         }
 
         free(tmp);
+        UNPROTECT(1);
+        return result;
+    } else if (tensor->type == GGML_TYPE_F64) {
+        SEXP result = PROTECT(allocVector(REALSXP, n_elements));
+        ggml_backend_tensor_get(tensor, REAL(result), offset, n_elements * sizeof(double));
+        UNPROTECT(1);
+        return result;
+    } else if (tensor->type == GGML_TYPE_I64) {
+        // R has no int64: returned as double, exact for |v| <= 2^53
+        SEXP result = PROTECT(allocVector(REALSXP, n_elements));
+        double * r_data = REAL(result);
+        int64_t * buffer = (int64_t *) malloc(n_elements * sizeof(int64_t));
+        if (buffer == NULL) {
+            error("Failed to allocate buffer");
+        }
+        ggml_backend_tensor_get(tensor, buffer, offset, n_elements * sizeof(int64_t));
+
+        const int64_t exact = (int64_t) 1 << 53;
+        int64_t n_inexact = 0;
+        for (int64_t i = 0; i < n_elements; i++) {
+            if (buffer[i] > exact || buffer[i] < -exact) n_inexact++;
+            r_data[i] = (double) buffer[i];
+        }
+        free(buffer);
+        if (n_inexact > 0) {
+            warning("%lld I64 value(s) exceed 2^53 in magnitude and lose precision as double",
+                    (long long) n_inexact);
+        }
         UNPROTECT(1);
         return result;
     } else {
@@ -2731,6 +2787,50 @@ SEXP R_ggml_view_4d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0_sexp, SEXP ne1_sexp,
 
     if (result == NULL) {
         error("Failed to create view_4d");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+SEXP R_ggml_view_5d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0_sexp, SEXP ne1_sexp,
+                    SEXP ne2_sexp, SEXP ne3_sexp, SEXP ne4_sexp,
+                    SEXP nb1_sexp, SEXP nb2_sexp, SEXP nb3_sexp, SEXP nb4_sexp,
+                    SEXP offset_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+
+    int64_t ne0 = (int64_t) asReal(ne0_sexp);
+    int64_t ne1 = (int64_t) asReal(ne1_sexp);
+    int64_t ne2 = (int64_t) asReal(ne2_sexp);
+    int64_t ne3 = (int64_t) asReal(ne3_sexp);
+    int64_t ne4 = (int64_t) asReal(ne4_sexp);
+    size_t nb1 = (size_t) asReal(nb1_sexp);
+    size_t nb2 = (size_t) asReal(nb2_sexp);
+    size_t nb3 = (size_t) asReal(nb3_sexp);
+    size_t nb4 = (size_t) asReal(nb4_sexp);
+    size_t offset = (size_t) asReal(offset_sexp);
+
+    if (ne0 < 1 || ne1 < 1 || ne2 < 1 || ne3 < 1 || ne4 < 1) {
+        error("view_5d: every ne must be >= 1");
+    }
+    // last byte the view touches must lie inside the source tensor
+    // (rows of a quantized type are whole blocks; ggml_row_size covers both)
+    const size_t last = offset + ggml_row_size(a->type, ne0) + (size_t)(ne1 - 1) * nb1 +
+                        (size_t)(ne2 - 1) * nb2 + (size_t)(ne3 - 1) * nb3 +
+                        (size_t)(ne4 - 1) * nb4;
+    if (last > ggml_nbytes(a)) {
+        error("view_5d: view spans %zu bytes, source tensor has %zu", last, ggml_nbytes(a));
+    }
+
+    struct ggml_tensor * result = ggml_view_5d(ctx, a, ne0, ne1, ne2, ne3, ne4,
+                                               nb1, nb2, nb3, nb4, offset);
+
+    if (result == NULL) {
+        error("Failed to create view_5d");
     }
 
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
@@ -3611,12 +3711,26 @@ SEXP R_ggml_backend_cpu_set_n_threads(SEXP backend_ptr, SEXP n_threads_sexp) {
 // computed `n_nodes` nodes (n_nodes <= 0 removes the hook). The callback only
 // returns a flag -- it never raises an R error across the C boundary. Used by
 // the scheduler tests to drive an error return out of a compute.
-static int r_cpu_abort_after_limit = 0;
-static int r_cpu_abort_after_count = 0;
+//
+// n_nodes < 0: after |n_nodes| nodes call GGML_ABORT instead, which leaves
+// through Rf_error (a longjmp past every C++ destructor on the way). Only safe
+// with the backend at 1 thread: the callback runs on thread 0, and a longjmp
+// out of an OpenMP region would strand the other threads at the barrier.
+static int  r_cpu_abort_after_limit = 0;
+static int  r_cpu_abort_after_count = 0;
+static bool r_cpu_abort_after_fatal = false;
 
 static bool r_cpu_abort_after_cb(void * data) {
     (void) data;
-    return ++r_cpu_abort_after_count >= r_cpu_abort_after_limit;
+    if (++r_cpu_abort_after_count < r_cpu_abort_after_limit) {
+        return false;
+    }
+    if (r_cpu_abort_after_fatal) {
+        r_cpu_abort_after_fatal = false;   // one-shot: the hook stays set after the longjmp
+        r_cpu_abort_after_limit = INT_MAX;
+        GGML_ABORT("ggmlR test: forced abort after %d nodes", r_cpu_abort_after_count);
+    }
+    return true;
 }
 
 SEXP R_ggml_backend_cpu_abort_after(SEXP backend_ptr, SEXP n_nodes_sexp) {
@@ -3624,7 +3738,12 @@ SEXP R_ggml_backend_cpu_abort_after(SEXP backend_ptr, SEXP n_nodes_sexp) {
     if (backend == NULL) {
         error("Invalid backend pointer");
     }
-    r_cpu_abort_after_limit = asInteger(n_nodes_sexp);
+    int n = asInteger(n_nodes_sexp);
+    if (n == NA_INTEGER) {
+        error("n_nodes must not be NA");
+    }
+    r_cpu_abort_after_fatal = n < 0;
+    r_cpu_abort_after_limit = n < 0 ? -n : n;
     r_cpu_abort_after_count = 0;
     if (r_cpu_abort_after_limit > 0) {
         ggml_backend_cpu_set_abort_callback(backend, r_cpu_abort_after_cb, NULL);
@@ -5546,6 +5665,7 @@ static int r_abort_enabled = 0;
 /* Declared here rather than taken from r_ggml_compat.h: this file compiles
  * with -DR_GGML_IO_IMPL, which switches that header off entirely. */
 extern void (*r_ggml_abort_hook)(void);
+extern void (*r_ggml_unwind_hook)(void);
 
 // R-compatible abort callback
 static void r_ggml_abort_callback(const char * error_message) {
@@ -5553,6 +5673,7 @@ static void r_ggml_abort_callback(const char * error_message) {
      * Rf_error longjmps, so this is the last point at which any code runs;
      * ggml reaches here through its own abort callback and never touches
      * abort(), which is why the hook has to be called from both places. */
+    if (r_ggml_unwind_hook) r_ggml_unwind_hook();
     if (r_ggml_abort_hook) r_ggml_abort_hook();
     if (error_message != NULL) {
         Rf_error("GGML abort: %s", error_message);

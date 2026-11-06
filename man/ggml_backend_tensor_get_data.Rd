@@ -14,7 +14,9 @@ ggml_backend_tensor_get_data(tensor, offset = 0, n_elements = NULL)
 \item{n_elements}{Number of elements to retrieve (NULL for all)}
 }
 \value{
-R vector with tensor data
+R vector with tensor data: integer for \code{I32}, double otherwise.
+  \code{I64} values come back as doubles, with a warning when any exceeds
+  \eqn{2^{53}}{2^53} in magnitude (precision is lost there).
 }
 \description{
 Gets tensor data using the backend API. This works with tensors

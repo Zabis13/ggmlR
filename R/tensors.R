@@ -13,6 +13,9 @@
 #'   \item \code{GGML_TYPE_Q8_0}: 8-bit quantization type 0
 #'   \item \code{GGML_TYPE_I32}: 32-bit integer
 #'   \item \code{GGML_TYPE_BF16}: 16-bit brain float (bfloat16)
+#'   \item \code{GGML_TYPE_I64}: 64-bit integer (held in R as double, exact
+#'     for magnitudes up to 2^53)
+#'   \item \code{GGML_TYPE_F64}: 64-bit floating point
 #' }
 #' @export
 #' @examples
@@ -66,6 +69,14 @@ GGML_TYPE_I32  <- 26L
 #' @rdname GGML_TYPE_F32
 #' @export
 GGML_TYPE_BF16 <- 30L
+
+#' @rdname GGML_TYPE_F32
+#' @export
+GGML_TYPE_I64  <- 27L
+
+#' @rdname GGML_TYPE_F32
+#' @export
+GGML_TYPE_F64  <- 28L
 
 #' Create 1D Tensor
 #' @param ctx GGML context

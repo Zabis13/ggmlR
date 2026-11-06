@@ -10,7 +10,12 @@ ggml_vulkan_device_memory(device = 0L)
 \item{device}{Device index (0-based)}
 }
 \value{
-Named list with 'free' and 'total' memory in bytes
+Named list with 'free' and 'total' memory in bytes, and
+  'max_tensor_size': the largest single tensor in bytes the device can bind
+  (\code{NA} if unknown). Ops with a larger input or output do not run on
+  this device and fall back to CPU, so callers that split work (e.g. tiled
+  VAE decode) should keep every tensor below it, not only the total below
+  'free'.
 }
 \description{
 Returns free and total memory for the specified Vulkan device.

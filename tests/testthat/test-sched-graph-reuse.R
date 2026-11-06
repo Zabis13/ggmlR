@@ -225,3 +225,55 @@ for (abort_n in 1:2) {
     })
   })
 }
+
+# GGML_ABORT / GGML_ASSERT inside a compute leave through Rf_error -- a longjmp
+# that skips the C++ destructor restoring the caller's src pointers. Without the
+# unwind hook the graph kept the scheduler copies, and the same graph rerun
+# after tryCatch() computed garbage (the bug this file is about). n < 0 makes
+# the CPU abort callback call GGML_ABORT after |n| nodes; 1 thread, because the
+# longjmp must not leave an OpenMP region with other threads in it.
+for (abort_n in 1:2) {
+  local({
+    n <- abort_n
+    test_that(paste("GGML_ABORT after node", n, "leaves the graph clean"), {
+      skip_if_no_vk_sched()
+      e <- new_env()
+      ggml_backend_cpu_set_n_threads(e$cpu, 1L)
+      ctx_c <- ggml_init(1024 * 1024, no_alloc = TRUE)
+      xc <- ggml_new_tensor_1d(ctx_c, GGML_TYPE_F32, length(XC)); ggml_set_name(xc, "x_cpu")
+      buf_c <- ggml_backend_alloc_ctx_tensors(ctx_c, e$cpu)
+      ggml_backend_tensor_set_data(xc, XC)
+      on.exit({
+        cpu_abort_after(e$cpu, 0L)
+        ggml_backend_buffer_free(buf_c); ggml_free(ctx_c)
+        free_env(e)
+      })
+
+      g <- build_graph(e)
+      s <- ggml_scale(g$ctx, xc, 3)
+      gf <- ggml_build_forward_expand(g$ctx, s)   # node order: s, mm, r
+      ggml_graph_expand(gf, g$r)
+      g$gf <- gf
+
+      for (i in 1:3) {
+        ggml_backend_sched_reset(e$sched)
+        pin_cpu(e, g)
+        ggml_backend_sched_set_tensor_backend(e$sched, s, e$cpu)
+        expect_true(ggml_backend_sched_alloc_graph(e$sched, g$gf))
+
+        cpu_abort_after(e$cpu, -n)
+        expect_error(ggml_backend_sched_graph_compute(e$sched, g$gf), "forced abort")
+        expect_graph_clean(g)
+        expect_identical(src_name(s, 0L), "x_cpu")
+
+        # same graph, same allocation, as a caller retrying after tryCatch()
+        cpu_abort_after(e$cpu, 0L)
+        expect_identical(ggml_backend_sched_graph_compute(e$sched, g$gf), 0L)
+        expect_graph_clean(g)
+        expect_result(g)
+        expect_equal(ggml_backend_tensor_get_data(s), 3 * XC, tolerance = 1e-6)
+      }
+      ggml_free(g$ctx)
+    })
+  })
+}

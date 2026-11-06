@@ -860,6 +860,19 @@ y <- ggml_pp_forward(list(mk(0L, W1), mk(1L, W2)), x = as.numeric(X), out_shape 
 
 See `inst/examples/tp_dp_hybrid.R` and `inst/examples/pp_pipeline.R` for complete runnable demos.
 
+**Graph-level tensor parallelism (meta backend, experimental)** — `ggml_vulkan_split_mul_mat()` splits one matrix and gathers right away. ggml's *meta backend* (upstream since ggml 0.27) splits a whole graph instead: it wraps several devices into one backend, lays each weight out across them by a rule, runs every op on all devices at once on its own share, and inserts the cross-device reduction only where a result must be combined — a column-split layer followed by a row-split one (the Megatron MLP pattern) exchanges nothing in between. Without a backend-specific all-reduce (Vulkan has none) the reduction goes through host staging, like the rest of this section.
+
+```r
+# w1 [n_in, n_hidden] split by output features, w2 [n_hidden, n_out] by input
+# features: one reduction per MLP, after w2. Name the tensors with ggml_set_name().
+meta  <- ggml_meta_backend(c(0L, 1L), split = list(w1 = "rows", w2 = "cols"))
+sched <- ggml_backend_sched_new(list(meta, ggml_backend_cpu_init()))
+# allocate weights with ggml_backend_alloc_ctx_tensors(ctx, meta), build the
+# graph, then ggml_backend_sched_alloc_graph() / ggml_backend_sched_graph_compute()
+```
+
+Rules are `"mirror"` (default), `"rows"` (ggml `ne[1]`), `"cols"` (`ne[0]`), `"axis2"`/`"axis3"`, or `list(axis =, weights =)` for uneven shares; `split` may also be a `function(name, ne)`. The same device may be listed twice, which is how the tests exercise it on one GPU or on the CPU. The raw callback API is `ggml_backend_meta_device()`. Status: forward graphs are checked against the plain CPU on 2×CPU and 2× the same Vulkan device (`tests/testthat/test-meta-backend-compute.R`); not yet measured on real multi-GPU hardware, and not wired into `ggml_fit()`, autograd or ONNX.
+
 #### Benchmark: which split strategy to use
 
 Measured with `llamaR` (which links `libggml.a` statically) driving Qwen2.5-1.5B-Instruct Q4_K_M (Vulkan, host-staging cross-device transport) on two 4-GPU hosts, decode throughput, median of 3 runs of 128 tokens:
@@ -871,10 +884,10 @@ Measured with `llamaR` (which links `libggml.a` statically) driving Qwen2.5-1.5B
 |---|---|---|---:|---:|---|
 | Baseline | 1 | none | **419.7** | **516.9** | model fits in one card — fastest |
 | Pipeline (PP) | 2 | layer | 150.4 | 221.5 | layers spread across 2 GPUs |
-| Tensor (TP) | 2 | row | 150.4 | 223.2 | rows split, all-reduce per layer |
+| "Tensor" (row)¹ | 2 | row → layer | 150.4 | 223.2 | same as PP: layer split |
 | Pipeline (PP) | 4 | layer | 133.3 | 176.3 | more hops → slower |
-| Tensor (TP) | 4 | row | 130.0 | 176.6 | more hops → slower |
-| **TP=2 × DP=2** | 4 | row + replicas | **306** | **446** | 2 replicas × TP=2, run concurrently |
+| "Tensor" (row)¹ | 4 | row → layer | 130.0 | 176.6 | same as PP: layer split |
+| **"TP"=2 × DP=2**¹ | 4 | row → layer + replicas | **306** | **446** | 2 replicas × 2-GPU layer split, run concurrently |
 | **DP=4** | 4 | replicas | **975** | **1300** | 4 single-GPU replicas, run concurrently |
 
 Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM), showing how the pattern holds as GPU count doubles:
@@ -883,13 +896,15 @@ Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM),
 |---|---|---|---:|---|
 | Baseline | 1 | none | **684.9** | model fits in one card — fastest |
 | Pipeline (PP) | 2 | layer | 229.7 | layers spread across 2 GPUs |
-| Tensor (TP) | 2 | row | 231.3 | rows split, all-reduce per layer |
+| "Tensor" (row)¹ | 2 | row → layer | 231.3 | same as PP: layer split |
 | Pipeline (PP) | 4 | layer | 187.5 | more hops → slower |
-| Tensor (TP) | 4 | row | 191.0 | more hops → slower |
+| "Tensor" (row)¹ | 4 | row → layer | 191.0 | same as PP: layer split |
 | Pipeline (PP) | 8 | layer | 142.8 | 8-way split — slowest single-context |
-| Tensor (TP) | 8 | row | 137.1 | per-layer all-reduce across 8 cards |
-| **TP=2 × DP=4** | 8 | row + replicas | **897** | 4 replicas × TP=2, run concurrently |
+| "Tensor" (row)¹ | 8 | row → layer | 137.1 | same as PP: layer split |
+| **"TP"=2 × DP=4**¹ | 8 | row → layer + replicas | **897** | 4 replicas × 2-GPU layer split, run concurrently |
 | **DP=8** | 8 | replicas | **2290** | 8 single-GPU replicas, run concurrently |
+
+¹ These rows were run with llamaR's `split_mode = "row"`, which on Vulkan is **not** tensor parallelism: llama.cpp asks the backend registry for a split buffer type, the Vulkan registry does not expose one, and the loader silently falls back to an ordinary layer split. That is why the "row" numbers match the PP rows (150.4 vs 150.4 t/s on P100). A true tensor-parallel LLM run on Vulkan — llamaR's `split_mode = "tensor"`, through the meta backend described above — has not been measured yet.
 
 **Takeaway:** when a model **fits in one GPU**, data parallelism (DP — independent replicas) wins by a wide margin: DP=4 delivers ~2.3× the single-card throughput and ~7.5× any split mode. Splitting such a model across cards (PP/TP) only adds cross-device overhead — the ~1 GB/s host-staging transport dominates. **PP and TP earn their keep only when the model does not fit in one card** (e.g. a 30B+ model on 16 GB cards): there a split is the *only* way to run it at all, and PP minimizes cross-device hops (one activation copy per pass) while TP maximizes per-token parallelism at the cost of a per-layer all-reduce. Reproduce with `llamaR`'s `inst/examples/bench_pp_tp_dp.sh`.
 

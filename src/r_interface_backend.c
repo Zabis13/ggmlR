@@ -594,11 +594,16 @@ SEXP R_ggml_backend_tensor_get_async(SEXP backend_ptr, SEXP tensor_ptr, SEXP off
     size_t off = (size_t)asReal(offset);
     size_t sz = (size_t)asReal(size);
 
-    // Allocate R vector to receive data
-    size_t n_floats = sz / sizeof(float);
-    SEXP result = PROTECT(allocVector(REALSXP, n_floats));
-
-    ggml_backend_tensor_get_async(backend, tensor, REAL(result), off, sz);
+    // Raw bytes land in a double vector: ceil(sz/8) elements hold all sz bytes.
+    // (Was sz/sizeof(float) doubles: twice the length, the second half never
+    // written, and for sz < 4 a zero-length vector that the copy overran.)
+    // The tail past sz is zeroed so no uninitialised bytes reach R.
+    size_t n_doubles = (sz + sizeof(double) - 1) / sizeof(double);
+    SEXP result = PROTECT(allocVector(REALSXP, (R_xlen_t)n_doubles));
+    if (n_doubles > 0) {
+        memset(REAL(result), 0, n_doubles * sizeof(double));
+        ggml_backend_tensor_get_async(backend, tensor, REAL(result), off, sz);
+    }
 
     UNPROTECT(1);
     return result;

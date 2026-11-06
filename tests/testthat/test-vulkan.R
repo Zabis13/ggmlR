@@ -60,7 +60,8 @@ if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
   test_that("ggml_vulkan_device_memory returns memory info", {
     mem <- ggml_vulkan_device_memory(0)
     expect_type(mem, "list")
-    expect_named(mem, c("free", "total"))
+    # max_tensor_size: the limit supports_op applies (added with the 0.27 sync)
+    expect_named(mem, c("free", "total", "max_tensor_size"))
     expect_type(mem$free, "double")
     expect_type(mem$total, "double")
     expect_gte(mem$free, 0)

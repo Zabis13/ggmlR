@@ -8,7 +8,8 @@
 #' a default MLP built by \code{\link{ggml_default_mlp}} is used.
 #'
 #' @section Feature types:
-#' Only \code{numeric} features are supported. Convert factors with an mlr3
+#' \code{numeric}, \code{integer} and \code{logical} features are supported
+#' (logical as 1/0). Convert factors with an mlr3
 #' pipeline step such as \code{mlr3pipelines::po("encode")} before passing the
 #' task to this learner.
 #'
@@ -44,8 +45,10 @@
 #'     \code{model_fn}. Default \code{0.2}.}
 #'   \item{\code{callbacks}}{List of ggmlR callbacks (e.g.
 #'     \code{ggml_callback_early_stopping()}) passed through to
-#'     \code{\link{ggml_fit}}. Default empty list. Only honoured for sequential
-#'     models; functional-API fit silently ignores callbacks.}
+#'     \code{\link{ggml_fit}}. Default empty list. Honoured by sequential and
+#'     functional models (not by an autograd \code{model_fn}). Callback state
+#'     such as early-stopping patience resets at the start of every fit, so one
+#'     object can be shared across resampling folds.}
 #' }
 #'
 #' @section Predict types:
@@ -153,7 +156,7 @@
         id             = "regr.ggml",
         param_set      = ps,
         predict_types  = "response",
-        feature_types  = "numeric",
+        feature_types  = c("numeric", "integer", "logical"),
         properties     = c("marshal", "weights"),
         packages       = c("mlr3", "ggmlR"),
         label          = "ggmlR Neural Network",
@@ -167,6 +170,11 @@
     # (`weights_learner`) and legacy (`weights`) mlr3 API. Returns a numeric
     # vector aligned to the row order produced by `task$data()`, or NULL.
     .extract_weights = function(task) {
+      # mlr3 >= 1.0 decides via use_weights ("use" / "ignore") whether weights
+      # apply; .get_weights() returns them in weights_learner order, so the
+      # alignment to task$row_ids below is still needed.
+      if (is.function(private$.get_weights) &&
+          is.null(private$.get_weights(task))) return(NULL)
       wdt <- tryCatch(task$weights_learner, error = function(e) NULL)
       if (is.null(wdt) || nrow(wdt) == 0L) return(NULL)
       w <- wdt$weight[match(task$row_ids, wdt$row_id)]

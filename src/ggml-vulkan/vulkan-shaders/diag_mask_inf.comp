@@ -27,7 +27,12 @@ void main() {
 
     const uint i = row*p.ncols + col;
     if (col > p.n_past + row % p.rows_per_channel) {
+#ifdef MASK_ZERO
+        // ggmlR: GGML_OP_DIAG_MASK_ZERO -- same mask, value 0 instead of -inf
+        data_d[i] = D_TYPE(0.0);
+#else
         data_d[i] = D_TYPE(uintBitsToFloat(0xFF800000));
+#endif
     } else {
         data_d[i] = D_TYPE(data_a[i]);
     }

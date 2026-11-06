@@ -1110,6 +1110,26 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_OP_GLU: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ false);
             } break;
+            // DIVERGENCE (ggmlR-only ops), placed by analogy with their upstream
+            // counterparts. Element-wise, shape-preserving: like SILU_BACK / UNARY.
+            case GGML_OP_GELU_BACK:
+            case GGML_OP_CAST_NUMERIC: {
+                split_state = handle_generic(src_ss, /*scalar_only =*/ false);
+            } break;
+            // Mix data across rows/axes or have their own output layout: like
+            // SSM_SCAN / RWKV_WKV6 / GATED_LINEAR_ATTN / OUT_PROD -- every src
+            // must share one state and none may be split along an axis.
+            case GGML_OP_SSM_CONV_BACK:
+            case GGML_OP_SSM_SCAN_BACK:
+            case GGML_OP_RWKV_WKV6_BACK:
+            case GGML_OP_RWKV_WKV7_BACK:
+            case GGML_OP_GATED_LINEAR_ATTN_BACK:
+            case GGML_OP_QMATMUL_I32:
+            case GGML_OP_QCONV_I32:
+            case GGML_OP_REL_POS_BIAS:
+            case GGML_OP_SCATTER_ELEMENTS: {
+                split_state = handle_generic(src_ss, /*scalar_only =*/ true);
+            } break;
             default: {
                 GGML_ABORT("ggml op not implemented: %s", ggml_op_name(tensor->op));
                 split_state = {GGML_BACKEND_SPLIT_AXIS_UNKNOWN, {0}, {1}, 1};
@@ -1708,6 +1728,12 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
             const ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, 0);
             ggml_backend_tensor_get(simple_tensor, data, offset, size);
         } break;
+        // DIVERGENCE (ggmlR): name the case instead of a bare "fatal error".
+        case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+            GGML_ABORT("meta backend: tensor '%s' holds per-device partial sums (split state PARTIAL) and cannot be read; "
+                       "read a tensor computed from it instead -- the reduction runs before its first consumer, "
+                       "never after the last node of the graph", tensor->name);
+        }
         default: {
             GGML_ABORT("fatal error");
         }
@@ -2022,6 +2048,12 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
             const ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, 0);
             ggml_backend_tensor_get_async(simple_backend, simple_tensor, data, offset, size);
         } break;
+        // DIVERGENCE (ggmlR): name the case instead of a bare "fatal error".
+        case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+            GGML_ABORT("meta backend: tensor '%s' holds per-device partial sums (split state PARTIAL) and cannot be read; "
+                       "read a tensor computed from it instead -- the reduction runs before its first consumer, "
+                       "never after the last node of the graph", tensor->name);
+        }
         default: {
             GGML_ABORT("fatal error");
         }

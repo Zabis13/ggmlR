@@ -21,7 +21,7 @@ ggml_callback_early_stopping(
 \item{mode}{"min" (lower is better) or "max" (higher is better). "auto" infers from monitor name.}
 }
 \value{
-List with on_epoch_end function
+List with on_train_begin and on_epoch_end functions; the state resets at the start of every fit
 }
 \description{
 Stops training when the monitored metric does not improve.

@@ -324,3 +324,42 @@ test_that("autograd tradepath does NOT warn when task has no weights", {
 
   expect_no_warning(learner$train(task))
 })
+
+# ---------------------------------------------------------------------------
+# Repeated marshal: unmarshal must restore ag_rebuild_fn, otherwise the second
+# marshal (worker -> main -> save again) stops with "no rebuild function"
+# ---------------------------------------------------------------------------
+
+test_that("autograd learner survives marshal -> unmarshal twice", {
+  skip_if_no_mlr3()
+  cases <- list(
+    list(id = "classif.ggml", task = "iris",   builder = ag_classif_builder),
+    list(id = "regr.ggml",    task = "mtcars", builder = ag_regr_builder)
+  )
+  for (cs in cases) {
+    set.seed(9)
+    task <- mlr3::tsk(cs$task)
+    learner <- mlr3::lrn(cs$id)
+    learner$param_set$values$epochs        <- 5L
+    learner$param_set$values$batch_size    <- 16L
+    learner$param_set$values$learning_rate <- 0.01
+    learner$model_fn <- cs$builder
+    if (cs$id == "classif.ggml") learner$predict_type <- "prob"
+    learner$train(task)
+
+    pred_of <- function() {
+      p <- learner$predict(task)
+      if (cs$id == "classif.ggml") p$prob else p$response
+    }
+    p0 <- pred_of()
+
+    for (round in 1:2) {
+      learner$marshal()
+      expect_true(learner$marshaled)
+      learner$unmarshal()
+      expect_false(learner$marshaled)
+      expect_true(is.function(learner$model$ag_rebuild_fn))
+      expect_lt(max(abs(pred_of() - p0)), 1e-5)
+    }
+  }
+})

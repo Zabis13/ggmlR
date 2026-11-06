@@ -1230,6 +1230,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_silu_back_f32;
     vk_pipeline pipeline_gelu_back_f32;
     vk_pipeline pipeline_diag_mask_inf_f32;
+    vk_pipeline pipeline_diag_mask_zero_f32;   // ggmlR
+    vk_pipeline pipeline_win_part_f32;         // ggmlR
+    vk_pipeline pipeline_win_unpart_f32;       // ggmlR
     vk_pipeline pipeline_soft_max_f32, pipeline_soft_max_f32_f16;
     vk_pipeline pipeline_soft_max_f32_wg128, pipeline_soft_max_f32_f16_wg128;
     vk_pipeline pipeline_soft_max_f32_wg512, pipeline_soft_max_f32_f16_wg512;
@@ -1291,7 +1294,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_ssm_scan_back_f32_d128;
     vk_pipeline pipeline_ssm_scan_back_f32_d256;
     vk_pipeline pipeline_out_prod_f32;   // ggmlR: backward of mul_mat
-    vk_pipeline pipeline_cross_entropy_loss_back_f32;   // ggmlR
+    vk_pipeline pipeline_cross_entropy_loss_back_f32, pipeline_cross_entropy_loss_back_f32_wg512;
     vk_pipeline pipeline_flash_attn_back_f32;   // ggmlR: backward of flash attention
     vk_pipeline pipeline_im2col_back_f32;   // ggmlR: backward of convolution
     vk_pipeline pipeline_get_rows_back_f32;   // ggmlR: backward of embedding lookup
@@ -2271,6 +2274,18 @@ struct vk_op_diag_mask_push_constants {
     int32_t n_past;
 };
 
+// ggmlR: win_part.comp (GGML_OP_WIN_PART / WIN_UNPART)
+struct vk_op_win_part_push_constants {
+    uint32_t ne;        // dst elements
+    uint32_t C;
+    uint32_t W;         // image width / height: src for PART, dst for UNPART
+    uint32_t H;
+    uint32_t w;         // window size
+    uint32_t npx;       // windows along W
+    uint32_t a_offset;  // misalignment of src / dst, in elements
+    uint32_t d_offset;
+};
+
 struct vk_op_rope_push_constants {
     uint32_t rope_mode;
     uint32_t nrows;
@@ -2556,15 +2571,6 @@ struct vk_op_flash_attn_back_push_constants {
     uint32_t dq_off, dk_off, dv_off;
     float    scale;
     uint32_t has_mask;
-};
-
-// ggmlR extension: GGML_OP_CROSS_ENTROPY_LOSS_BACK on the GPU (no upstream
-// Vulkan shader). inv_nr is 1/nrows, folded in on the host so the shader does
-// not repeat the division per row.
-struct vk_op_cross_entropy_loss_back_push_constants {
-    uint32_t nc;
-    uint32_t nr;
-    float    inv_nr;
 };
 
 struct vk_op_conv2d_push_constants {

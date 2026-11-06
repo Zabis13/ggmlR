@@ -17,6 +17,9 @@ GGML_BACKEND_API bool ggml_backend_is_vk(ggml_backend_t backend);
 GGML_BACKEND_API int  ggml_backend_vk_get_device_count(void);
 GGML_BACKEND_API void ggml_backend_vk_get_device_description(int device, char * description, size_t description_size);
 GGML_BACKEND_API void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total);
+// ggmlR, not upstream: largest single tensor (bytes) the device can bind; ops
+// with a larger src/dst are refused by supports_op and fall back to CPU.
+GGML_BACKEND_API size_t ggml_backend_vk_get_device_max_tensor_size(int device);
 // ggmlR Tensor Parallelism (P2P), not upstream: enumerate device groups (LDA) and
 // probe peer memory access; writes a report and returns the number of groups.
 GGML_BACKEND_API int  ggml_backend_vk_get_device_groups(char * report, size_t report_size);

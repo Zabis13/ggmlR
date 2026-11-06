@@ -1,0 +1,59 @@
+#version 450
+
+// ggmlR: GGML_OP_WIN_PART / GGML_OP_WIN_UNPART (SAM-style window partition),
+// same indexing as ggml_compute_forward_win_part_f32 / _win_unpart_f32.
+//
+// WIN_PART   src [C, W, H]            -> dst [C, w, w, npx*npy], zero padding
+// WIN_UNPART src [C, w, w, npx*npy]   -> dst [C, W, H]
+//
+// One thread per dst element; both tensors contiguous. W, H are the image
+// sizes (src for PART, dst for UNPART).
+
+#include "types.glsl"
+
+layout (push_constant) uniform parameter
+{
+    uint ne;        // dst elements
+    uint C;
+    uint W;
+    uint H;
+    uint w;
+    uint npx;
+    uint a_offset;  // misalignment of src / dst, in elements
+    uint d_offset;
+} p;
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer X {A_TYPE data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
+
+void main() {
+    const uint i = gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
+    if (i >= p.ne) {
+        return;
+    }
+
+    const uint c = i % p.C;
+    uint t = i / p.C;
+
+#ifdef WIN_UNPART
+    const uint x = t % p.W;          // dst [C, W, H]
+    const uint y = t / p.W;
+    const uint win = (y / p.w) * p.npx + (x / p.w);
+    const uint j = ((win * p.w + (y % p.w)) * p.w + (x % p.w)) * p.C + c;
+    data_d[p.d_offset + i] = D_TYPE(data_a[p.a_offset + j]);
+#else
+    const uint i1 = t % p.w;         // dst [C, w, w, np]
+    t /= p.w;
+    const uint i2 = t % p.w;
+    const uint win = t / p.w;
+    const uint x = (win % p.npx) * p.w + i1;
+    const uint y = (win / p.npx) * p.w + i2;
+    if (x >= p.W || y >= p.H) {
+        data_d[p.d_offset + i] = D_TYPE(0.0);
+    } else {
+        data_d[p.d_offset + i] = D_TYPE(data_a[p.a_offset + (y * p.W + x) * p.C + c]);
+    }
+#endif
+}

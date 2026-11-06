@@ -121,6 +121,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             elements = { num_groups * (uint32_t)src0->ne[3], 1, 1 };
         } break;
     case GGML_OP_DIAG_MASK_INF:
+    case GGML_OP_DIAG_MASK_ZERO:   // ggmlR: same kernel, value 0
         elements = { (uint32_t)ggml_nrows(src0), (uint32_t)ne00, 1 };
         break;
     case GGML_OP_ROPE:
@@ -157,7 +158,13 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
 
             const uint32_t batch = src1->ne[is_2D ? 3 : 2];
 
-            elements = { OW * KW * KH, OH, batch * IC };
+            const uint32_t CHW = IC * KH * KW;
+            // Cap X workgroups to limit concurrent IC channel reads.
+            // The shader loops over X to cover the full CHW dimension.
+            // AMD prefers a lower limit
+            const uint32_t min_cap = ctx->device->vendor_id == VK_VENDOR_ID_AMD ? 512u : 4096u;
+            const uint32_t x_elements = std::min(CHW, std::max(min_cap, OW * KH * KW));
+            elements = { x_elements, OW, OH * batch };
             elements[1] = std::min(elements[1], ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
             elements[2] = std::min(elements[2], ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
         } break;
@@ -272,6 +279,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_TRI:
     case GGML_OP_DIAG:
     case GGML_OP_CLAMP:
+    case GGML_OP_LEAKY_RELU:
     case GGML_OP_PAD:
     case GGML_OP_PAD_REFLECT_1D:
     case GGML_OP_ROLL:
@@ -287,6 +295,8 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     // default {ne, 1, 1} grid trips the x workgroup limit above 512*65535 elements.
     case GGML_OP_SILU_BACK:
     case GGML_OP_GELU_BACK:
+    case GGML_OP_WIN_PART:         // ggmlR: win_part.comp, one thread per dst element
+    case GGML_OP_WIN_UNPART:
         {
             uint32_t ne = ggml_nelements(dst);
             if (op == GGML_OP_CPY && ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
@@ -389,13 +399,6 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             // batch-like and small while ne0/ne1 are the wide ones.
             elements = { (uint32_t)dst->ne[0], (uint32_t)dst->ne[1],
                          (uint32_t)(dst->ne[2] * dst->ne[3]) };
-        }
-        break;
-    case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
-        {
-            // One workgroup per row; the shader reduces each row in shared
-            // memory, so the grid is the row count rather than the element one.
-            elements = { (uint32_t)ggml_nrows(dst), 1, 1 };
         }
         break;
     default:
@@ -1211,25 +1214,6 @@ static void ggml_vk_flash_attn_back(ggml_backend_vk_context * ctx, vk_context& s
         {q_buf, k_buf, v_buf, m_buf, d_buf, dst_buf}, pc, elements);
 }
 
-// ggmlR extension: GGML_OP_CROSS_ENTROPY_LOSS_BACK on the GPU.
-//
-//     dst[row] = (softmax(logits[row]) - labels[row]) * grad[0] / nrows
-//
-// src[0] is the scalar loss gradient, src[1] the forward logits, src[2] the
-// labels -- the order ggml_cross_entropy_loss_back() records them in.
-static void ggml_vk_cross_entropy_loss_back(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
-    const ggml_tensor * grad  = dst->src[0];
-    const ggml_tensor * src0f = dst->src[1];
-    const ggml_tensor * src1f = dst->src[2];
-
-    const uint32_t nr = (uint32_t) ggml_nrows(src0f);
-
-    ggml_vk_op_f32<vk_op_cross_entropy_loss_back_push_constants>(ctx, subctx, grad, src0f, src1f, nullptr, dst, GGML_OP_CROSS_ENTROPY_LOSS_BACK, {
-        (uint32_t) src0f->ne[0],
-        nr,
-        1.0f / (float) nr,
-    });
-}
 
 static void ggml_vk_op_f32_opt_step_adamw(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst, const vk_op_push_constants&& pc) {
     const ggml_tensor * x = dst->src[0];
@@ -1978,6 +1962,29 @@ static void ggml_vk_diag_mask_inf(ggml_backend_vk_context * ctx, vk_context& sub
     ggml_vk_op_f32<vk_op_diag_mask_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_DIAG_MASK_INF, { (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], op_params[0] });
 }
 
+// ggmlR: DIAG_MASK_ZERO -- diag_mask_inf.comp built with MASK_ZERO.
+static void ggml_vk_diag_mask_zero(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    int32_t * op_params = (int32_t *)dst->op_params;
+    ggml_vk_op_f32<vk_op_diag_mask_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_DIAG_MASK_ZERO, { (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], op_params[0] });
+}
+
+// ggmlR: WIN_PART -- op_params = { npx, npy, w }; src [C, W, H] -> dst [C, w, w, npx*npy].
+static void ggml_vk_win_part(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    const int32_t * op_params = (const int32_t *)dst->op_params;
+    ggml_vk_op_f32<vk_op_win_part_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_WIN_PART, {
+        (uint32_t)ggml_nelements(dst), (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],
+        (uint32_t)op_params[2], (uint32_t)op_params[0], 0, 0 });
+}
+
+// ggmlR: WIN_UNPART -- op_params = { w }; src [C, w, w, np] -> dst [C, W, H].
+static void ggml_vk_win_unpart(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    const uint32_t w   = (uint32_t)((const int32_t *)dst->op_params)[0];
+    const uint32_t npx = ((uint32_t)dst->ne[1] + w - 1) / w;   // = (W + pad)/w, as the CPU kernel
+    ggml_vk_op_f32<vk_op_win_part_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_WIN_UNPART, {
+        (uint32_t)ggml_nelements(dst), (uint32_t)dst->ne[0], (uint32_t)dst->ne[1], (uint32_t)dst->ne[2],
+        w, npx, 0, 0 });
+}
+
 static void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst) {
     float * op_params = (float *)dst->op_params;
 
@@ -2071,8 +2078,20 @@ static void ggml_vk_soft_max_back(ggml_backend_vk_context * ctx, vk_context& sub
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_SOFT_MAX_BACK, { (uint32_t)src0->ne[0], (uint32_t)ggml_nrows(src0), op_params[0], op_params[1], 0.0f, 0.0f });
 }
 
+// Number of fused TOPK_MOE dispatches per topk_moe_mode (+ last slot: with the
+// extra SCALE fused). Read from R (R_ggml_vk_topk_moe_fusion_count) so a test
+// can tell the fused shader ran, not only that the numbers agree.
+static uint64_t ggml_vk_topk_moe_fusions[TOPK_MOE_COUNT + 1] = {};
+extern "C" uint64_t ggml_vk_topk_moe_fusion_count(int mode) {
+    return (mode >= 0 && mode <= (int) TOPK_MOE_COUNT) ? ggml_vk_topk_moe_fusions[mode] : 0;
+}
+
 static void ggml_vk_topk_moe(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cgraph * cgraph, int node_idx) {
     topk_moe_mode mode = ctx->fused_topk_moe_mode;
+    ggml_vk_topk_moe_fusions[mode]++;
+    if (ctx->fused_topk_moe_scale) {
+        ggml_vk_topk_moe_fusions[TOPK_MOE_COUNT]++;
+    }
     const bool has_bias = mode == TOPK_MOE_SIGMOID_NORM_BIAS || mode == TOPK_MOE_SQRT_SOFTPLUS_NORM_BIAS;
     ggml_tensor * logits = cgraph->nodes[node_idx + 0]->src[0];
     ggml_tensor * bias = mode == TOPK_MOE_SIGMOID_NORM_BIAS       ? cgraph->nodes[node_idx + 2]->src[1] :
@@ -2770,6 +2789,40 @@ static std::array<uint32_t, 3> ggml_vk_nrows_elements(uint32_t nr) {
         return { 512, CEIL_DIV(nr, 512), 1 };
     }
     return { nr, 1, 1 };
+}
+
+static void ggml_vk_cross_entropy_loss_back(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    const ggml_tensor * grad   = dst->src[0];
+    const ggml_tensor * logits = dst->src[1];
+    const ggml_tensor * labels = dst->src[2];
+
+    GGML_ASSERT(grad->type   == GGML_TYPE_F32);
+    GGML_ASSERT(logits->type == GGML_TYPE_F32);
+    GGML_ASSERT(labels->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type    == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_scalar(grad));
+    GGML_ASSERT(ggml_is_contiguous(grad));
+    GGML_ASSERT(ggml_is_contiguous(logits));
+    GGML_ASSERT(ggml_is_contiguous(labels));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_are_same_shape(logits, labels));
+    GGML_ASSERT(ggml_are_same_shape(logits, dst));
+
+    const uint32_t nclasses = (uint32_t)logits->ne[0];
+    const uint32_t nrows    = (uint32_t)ggml_nrows(logits);
+
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, grad, logits, labels, dst, GGML_OP_CROSS_ENTROPY_LOSS_BACK);
+    GGML_ASSERT(pipeline != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+
+    vk_subbuffer grad_buf   = ggml_vk_tensor_subbuffer(ctx, grad);
+    vk_subbuffer logits_buf = ggml_vk_tensor_subbuffer(ctx, logits);
+    vk_subbuffer labels_buf = ggml_vk_tensor_subbuffer(ctx, labels);
+    vk_subbuffer dst_buf    = ggml_vk_tensor_subbuffer(ctx, dst);
+
+    const vk_op_push_constants pc = { nclasses, nrows, 0.0f, 0.0f, 0.0f, 0.0f };
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { grad_buf, logits_buf, labels_buf, dst_buf }, pc, ggml_vk_nrows_elements(nrows));
 }
 
 static void ggml_vk_cross_entropy_loss(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {

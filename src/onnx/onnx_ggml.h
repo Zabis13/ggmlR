@@ -137,7 +137,8 @@ typedef struct {
      * own nms_params across. Measured: 128 inputs, all of them under 256 bytes,
      * 0.00 MB in total -- the graph aborted on slot exhaustion while moving
      * essentially no data. Hosting the params alone takes that split from 128
-     * to 86. */
+     * to 86. (Before ggml 0.27; since then split inputs grow on demand and
+     * do not abort, but each one is still a copy and a sync point.) */
     struct ggml_context  *ctx_host;
     ggml_backend_buffer_t host_buf;
 

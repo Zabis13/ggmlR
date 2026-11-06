@@ -903,31 +903,40 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_BACKENDS 16
 #endif
 
-// ggmlR: 128, not upstream's 64.
+// = upstream 0.27 (30). Since 0.27 split inputs grow on demand
+// (inputs_capacity), so this is no longer a hard limit -- only the initial
+// capacity of the input arrays and the factor in context_buffer_size
+// (graph_size * this * 2 * sizeof(ggml_tensor), per scheduler).
 //
-// ⚠️ DIVERGENCE FROM UPSTREAM, deliberate. MaskRCNN-12-int8 aborts at 64 before
-// it can run on the GPU at all: three consecutive 22-node CPU splits each want
-// exactly 64 inputs, because the detector's CPU-only custom ops (NMS, RoiAlign,
-// the quantised conv and matmul) sit in 80 per-class branches and every tensor
-// crossing back to the host costs a slot. Measured with GGML_SCHED_DEBUG_SPLITS.
+// History: ggmlR used 128 (upstream then had 64) because MaskRCNN-12-int8
+// aborted on slot exhaustion before 0.27. TODO 9.2a, measured 2026-11-06 with
+// 30 vs 128: MaskRCNN 51/51 detections both, VmPeak 7.97 GB vs 25.0 GB (the
+// context buffers are address space, not RSS: VmHWM 493 vs 494 MB), time within
+// noise; 15 ONNX benchmark models and llamaR (llama3-8b Q8_0, 56 tokens) also
+// unchanged. Script: inst/scripts/ab_sched_split_inputs.sh.
 //
-// The cost is real and everyone pays it: context_buffer is
-// graph_size * this * 2 * sizeof(ggml_tensor), so for MaskRCNN's 3001 nodes it
-// goes from 141 MB to 283 MB, and that allocation happens per scheduler, not
-// per model that needs the headroom.
-//
-// This is a workaround, not the fix. The right fix is for those custom ops to
-// become real GPU ops (supports_op == true), which stops them splitting the
-// graph in the first place; until then this buys enough headroom for the
-// detector to run and be measured. Override with -DGGML_SCHED_MAX_SPLIT_INPUTS.
-//
-// ggml 0.27: split inputs now grow on demand (inputs_capacity), so this is only
-// the initial capacity and the factor in context_buffer_size -- MaskRCNN no
-// longer depends on it to run. Kept at 128 until MaskRCNN is measured with
-// upstream's 30 (memory vs. a full context pool); see TODO 9.2a.
+// DIVERGENCE (ggmlR): the default can be overridden at run time with the
+// environment variable GGML_SCHED_MAX_SPLIT_INPUTS (1..4096), read once per
+// ggml_backend_sched_new() and kept in sched->max_split_inputs; at compile
+// time with -DGGML_SCHED_MAX_SPLIT_INPUTS.
 #ifndef GGML_SCHED_MAX_SPLIT_INPUTS
-#define GGML_SCHED_MAX_SPLIT_INPUTS 128
+#define GGML_SCHED_MAX_SPLIT_INPUTS 30
 #endif
+
+static int ggml_backend_sched_max_split_inputs_env(void) {
+    const char * s = getenv("GGML_SCHED_MAX_SPLIT_INPUTS");
+    if (s == NULL || *s == '\0') {
+        return GGML_SCHED_MAX_SPLIT_INPUTS;
+    }
+    char * end = NULL;
+    const long v = strtol(s, &end, 10);
+    if (end == s || *end != '\0' || v < 1 || v > 4096) {
+        GGML_LOG_WARN("%s: ignoring GGML_SCHED_MAX_SPLIT_INPUTS=\"%s\" (expected 1..4096), using %d\n",
+                      __func__, s, GGML_SCHED_MAX_SPLIT_INPUTS);
+        return GGML_SCHED_MAX_SPLIT_INPUTS;
+    }
+    return (int) v;
+}
 
 #ifndef GGML_SCHED_MAX_COPIES
 #define GGML_SCHED_MAX_COPIES 4
@@ -996,6 +1005,10 @@ struct ggml_backend_sched {
     char * context_buffer;
     size_t context_buffer_size;
 
+    // initial split/graph input capacity and context_buffer_size factor
+    // (GGML_SCHED_MAX_SPLIT_INPUTS, overridable by the environment variable)
+    int max_split_inputs;
+
     bool op_offload;
 
     int debug;
@@ -1046,8 +1059,8 @@ struct ggml_backend_sched_src_patch {
 #define tensor_id_copy(id, backend_id, copy_id) sched->hv_tensor_copies[(id) * sched->n_backends * sched->n_copies + (backend_id) * sched->n_copies + (copy_id)]
 #define tensor_copy(tensor, backend_id, copy_id) tensor_id_copy(hash_id(tensor), backend_id, copy_id)
 
-static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split * split) {
-    int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
+static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split * split, int initial_cap) {
+    int new_cap = initial_cap;
     if (split->inputs_capacity > 0) {
         new_cap = 2*split->inputs_capacity;
         GGML_LOG_DEBUG("%s: increasing split inputs capacity from %d to %d\n", __func__, split->inputs_capacity, new_cap);
@@ -1062,7 +1075,7 @@ static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split
 }
 
 static void ggml_backend_sched_graph_inputs_grow(ggml_backend_sched_t sched) {
-    int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
+    int new_cap = sched->max_split_inputs;
     if (sched->graph_inputs_capacity > 0) {
         new_cap = 2*sched->graph_inputs_capacity;
         GGML_LOG_DEBUG("%s: increasing graph inputs capacity from %d to %d\n", __func__, sched->graph_inputs_capacity, new_cap);
@@ -1289,13 +1302,42 @@ static void ggml_backend_sched_src_swap(ggml_backend_sched_t sched, bool to_copi
 
 // Restores the original src pointers on every way out of the scope, including
 // error returns and C++ exceptions thrown from a backend.
+//
+// ggmlR: GGML_ABORT / GGML_ASSERT / r_ggml_error leave through Rf_error, a
+// longjmp that skips this destructor and would leave the copies in the caller's
+// graph (the same graph, rerun after tryCatch, then computes garbage). Live
+// guards form a per-thread stack; r_ggml_unwind_hook walks it on the way out.
+// The graphs are still alive there -- the longjmp has not left the call yet.
+struct ggml_backend_sched_src_restore;
+static thread_local ggml_backend_sched_src_restore * g_sched_src_restore_top = nullptr;
+
+static void ggml_backend_sched_src_unwind(void);
+
 struct ggml_backend_sched_src_restore {
     ggml_backend_sched_t sched;
-    explicit ggml_backend_sched_src_restore(ggml_backend_sched_t s) : sched(s) {}
-    ~ggml_backend_sched_src_restore() { ggml_backend_sched_src_swap(sched, false); }
+    ggml_backend_sched_src_restore * prev;
+    explicit ggml_backend_sched_src_restore(ggml_backend_sched_t s) : sched(s), prev(g_sched_src_restore_top) {
+#ifdef GGML_R_PACKAGE
+        r_ggml_unwind_hook = ggml_backend_sched_src_unwind;
+#endif
+        g_sched_src_restore_top = this;
+    }
+    ~ggml_backend_sched_src_restore() {
+        g_sched_src_restore_top = prev;
+        ggml_backend_sched_src_swap(sched, false);
+    }
     ggml_backend_sched_src_restore(const ggml_backend_sched_src_restore &) = delete;
     ggml_backend_sched_src_restore & operator=(const ggml_backend_sched_src_restore &) = delete;
 };
+
+// Innermost first, as the destructors would have run; the guards themselves are
+// gone once the longjmp lands, so the stack is emptied here.
+static void ggml_backend_sched_src_unwind(void) {
+    for (ggml_backend_sched_src_restore * g = g_sched_src_restore_top; g != nullptr; g = g->prev) {
+        ggml_backend_sched_src_swap(g->sched, false);
+    }
+    g_sched_src_restore_top = nullptr;
+}
 
 // Leaves the journaled rewrites applied; every caller restores them before it
 // returns (ggml_backend_sched_src_restore).
@@ -1652,7 +1694,7 @@ static void ggml_backend_sched_split_graph_impl(ggml_backend_sched_t sched, stru
                         }
                         int n_inputs = split->n_inputs++;
                         if (n_inputs >= split->inputs_capacity) {
-                            ggml_backend_sched_split_inputs_grow(split);
+                            ggml_backend_sched_split_inputs_grow(split, sched->max_split_inputs);
                         }
                         split->inputs[n_inputs] = src;
                     }
@@ -1670,16 +1712,16 @@ static void ggml_backend_sched_split_graph_impl(ggml_backend_sched_t sched, stru
             for (int s = 0; s < sched->n_splits; s++) {
                 const int ni = sched->splits[s].n_inputs;
                 if (ni > worst) { worst = ni; worst_id = s; }
-                if (ni > GGML_SCHED_MAX_SPLIT_INPUTS / 2) n_big++;
+                if (ni > sched->max_split_inputs / 2) n_big++;
             }
             fprintf(stderr,
                 "[sched] %d splits over %d nodes; worst split %d has %d inputs "
                 "(limit %d); %d splits above half the limit\n",
                 sched->n_splits, graph->n_nodes, worst_id, worst,
-                GGML_SCHED_MAX_SPLIT_INPUTS, n_big);
+                sched->max_split_inputs, n_big);
             for (int s = 0; s < sched->n_splits; s++) {
                 const struct ggml_backend_sched_split * sp = &sched->splits[s];
-                if (sp->n_inputs <= GGML_SCHED_MAX_SPLIT_INPUTS / 2) continue;
+                if (sp->n_inputs <= sched->max_split_inputs / 2) continue;
                 /* List the inputs themselves, by size. Whether raising the
                  * limit is the right fix or the wrong one depends on WHAT is
                  * filling the slots: many tiny constants mean the graph is
@@ -2146,6 +2188,8 @@ ggml_backend_sched_t ggml_backend_sched_new(
     const char * GGML_SCHED_DEBUG = getenv("GGML_SCHED_DEBUG");
     sched->debug = GGML_SCHED_DEBUG ? atoi(GGML_SCHED_DEBUG) : 0;
 
+    sched->max_split_inputs = ggml_backend_sched_max_split_inputs_env();
+
     sched->debug_realloc = 0;
 #ifdef GGML_SCHED_NO_REALLOC
     sched->debug_realloc = 1;
@@ -2163,7 +2207,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->hv_tensor_copies      = (ggml_tensor **) malloc(sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
 
     const size_t ggml_sched_max_splits = graph_size; // at most there is one split for each node in the graph
-    const size_t nodes_size = graph_size + ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2;
+    const size_t nodes_size = graph_size + ggml_sched_max_splits*(size_t) sched->max_split_inputs*2;
     sched->node_backend_ids = (int *) calloc(nodes_size, sizeof(sched->node_backend_ids[0]));
     sched->leaf_backend_ids = (int *) calloc(nodes_size, sizeof(sched->leaf_backend_ids[0]));
     sched->prev_node_backend_ids = (int *) calloc(nodes_size, sizeof(sched->prev_node_backend_ids[0]));
@@ -2172,14 +2216,14 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->graph_size      = 0;
     sched->prev_graph_size = 0;
 
-    sched->context_buffer_size = ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2*sizeof(struct ggml_tensor) + ggml_graph_overhead_custom(graph_size, false);
+    sched->context_buffer_size = ggml_sched_max_splits*(size_t) sched->max_split_inputs*2*sizeof(struct ggml_tensor) + ggml_graph_overhead_custom(graph_size, false);
     sched->context_buffer = (char *) malloc(sched->context_buffer_size);
 
     const int initial_splits_capacity = 16;
     sched->splits = (ggml_backend_sched_split *) calloc(initial_splits_capacity, sizeof(sched->splits[0]));
     sched->splits_capacity = initial_splits_capacity;
 
-    sched->graph_inputs_capacity = GGML_SCHED_MAX_SPLIT_INPUTS;
+    sched->graph_inputs_capacity = sched->max_split_inputs;
     sched->graph_inputs = (struct ggml_tensor **) calloc(sched->graph_inputs_capacity, sizeof(struct ggml_tensor *));
 
     for (int b = 0; b < n_backends; b++) {

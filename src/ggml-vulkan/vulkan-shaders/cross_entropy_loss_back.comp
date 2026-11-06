@@ -1,87 +1,75 @@
 #version 450
 
-// ggmlR extension: GGML_OP_CROSS_ENTROPY_LOSS_BACK on the GPU. Upstream ggml
-// has no Vulkan shader for it, so a classification model's loss gradient left
-// the GPU on every training step.
-//
-// Matching ggml_compute_forward_cross_entropy_loss_back_f32:
-//     dst[row] = (softmax(src0f[row]) - src1f[row]) * grad[0] / nrows
-//
-// src0f are the logits, src1f the labels, and grad is the scalar gradient of
-// the loss node. One workgroup owns one row and does the softmax reduction in
-// shared memory, the same shape as soft_max.comp.
-//
-// The two passes over the row (max, then sum of exp) are the standard numerically
-// stable softmax: subtracting the row max keeps exp() from overflowing on large
-// logits, which is exactly the case where an untrained model starts out.
+#include "generic_head.glsl"
+#include "types.glsl"
 
 #extension GL_EXT_control_flow_attributes : enable
-
-layout (push_constant) uniform parameter {
-    uint nc;        // elements per row
-    uint nr;        // number of rows
-    float inv_nr;   // 1/nr, folded in on the host
-} p;
 
 layout(constant_id = 0) const uint BLOCK_SIZE = 32;
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-layout (binding = 0) readonly buffer G  { float grad[]; };    // scalar
-layout (binding = 1) readonly buffer S0 { float src0f[]; };   // logits
-layout (binding = 2) readonly buffer S1 { float src1f[]; };   // labels
-layout (binding = 3) writeonly buffer D { float dst[]; };
+layout (binding = 0) readonly buffer G {A_TYPE data_g[];};
+layout (binding = 1) readonly buffer X {B_TYPE data_x[];};
+layout (binding = 2) readonly buffer Y {B_TYPE data_y[];};
+layout (binding = 3) writeonly buffer D {D_TYPE data_d[];};
 
-shared float vals[BLOCK_SIZE];
+shared FLOAT_TYPE tmp[BLOCK_SIZE];
+
+FLOAT_TYPE wg_reduce_max(FLOAT_TYPE v) {
+    const uint tid = gl_LocalInvocationID.x;
+    tmp[tid] = v;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            tmp[tid] = max(tmp[tid], tmp[tid + s]);
+        }
+        barrier();
+    }
+    v = tmp[0];
+    barrier();
+    return v;
+}
+
+FLOAT_TYPE wg_reduce_sum(FLOAT_TYPE v) {
+    const uint tid = gl_LocalInvocationID.x;
+    tmp[tid] = v;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            tmp[tid] += tmp[tid + s];
+        }
+        barrier();
+    }
+    v = tmp[0];
+    barrier();
+    return v;
+}
 
 void main() {
-    const uint tid  = gl_LocalInvocationID.x;
-    const uint row  = gl_WorkGroupID.x;
+    const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint tid = gl_LocalInvocationID.x;
 
-    if (row >= p.nr) {
+    if (row >= p.KY) {
         return;
     }
 
-    const uint base = row * p.nc;
+    const uint off = row * p.KX;
+    const FLOAT_TYPE d_by_nrows = FLOAT_TYPE(data_g[0]) / FLOAT_TYPE(p.KY);
 
-    // --- row max, for numerical stability ---
-    float rmax = -1.0 / 0.0;   // -inf
-    for (uint c = tid; c < p.nc; c += BLOCK_SIZE) {
-        rmax = max(rmax, src0f[base + c]);
+    FLOAT_TYPE max_logit = FLOAT_TYPE(uintBitsToFloat(0xFF800000));
+    for (uint i = tid; i < p.KX; i += BLOCK_SIZE) {
+        max_logit = max(max_logit, FLOAT_TYPE(data_x[off + i]));
     }
-    vals[tid] = rmax;
-    barrier();
-    [[unroll]] for (uint s = BLOCK_SIZE / 2u; s > 0u; s >>= 1u) {
-        if (tid < s) {
-            vals[tid] = max(vals[tid], vals[tid + s]);
-        }
-        barrier();
-    }
-    const float row_max = vals[0];
-    barrier();
+    max_logit = wg_reduce_max(max_logit);
 
-    // --- sum of exp(x - max) ---
-    float rsum = 0.0;
-    for (uint c = tid; c < p.nc; c += BLOCK_SIZE) {
-        rsum += exp(src0f[base + c] - row_max);
+    FLOAT_TYPE sum_exp = FLOAT_TYPE(0.0f);
+    for (uint i = tid; i < p.KX; i += BLOCK_SIZE) {
+        sum_exp += exp(FLOAT_TYPE(data_x[off + i]) - max_logit);
     }
-    vals[tid] = rsum;
-    barrier();
-    [[unroll]] for (uint s = BLOCK_SIZE / 2u; s > 0u; s >>= 1u) {
-        if (tid < s) {
-            vals[tid] += vals[tid + s];
-        }
-        barrier();
-    }
-    const float row_sum = vals[0];
-    barrier();
+    const FLOAT_TYPE inv_sum = FLOAT_TYPE(1.0f) / wg_reduce_sum(sum_exp);
 
-    // --- (softmax - labels) * grad / nr ---
-    // grad is a scalar tensor; every row scales by the same value.
-    const float d_by_nr = grad[0] * p.inv_nr;
-    const float inv_sum = 1.0 / row_sum;
-
-    for (uint c = tid; c < p.nc; c += BLOCK_SIZE) {
-        const float sm = exp(src0f[base + c] - row_max) * inv_sum;
-        dst[base + c] = (sm - src1f[base + c]) * d_by_nr;
+    for (uint i = tid; i < p.KX; i += BLOCK_SIZE) {
+        const FLOAT_TYPE sm = exp(FLOAT_TYPE(data_x[off + i]) - max_logit) * inv_sum;
+        data_d[off + i] = D_TYPE((sm - FLOAT_TYPE(data_y[off + i])) * d_by_nrows);
     }
 }

@@ -14,9 +14,15 @@
 \alias{GGML_TYPE_Q6_K}
 \alias{GGML_TYPE_I32}
 \alias{GGML_TYPE_BF16}
+\alias{GGML_TYPE_I64}
+\alias{GGML_TYPE_F64}
 \title{GGML Data Types}
 \format{
 Integer constants
+
+An object of class \code{integer} of length 1.
+
+An object of class \code{integer} of length 1.
 
 An object of class \code{integer} of length 1.
 
@@ -64,6 +70,10 @@ GGML_TYPE_Q6_K
 GGML_TYPE_I32
 
 GGML_TYPE_BF16
+
+GGML_TYPE_I64
+
+GGML_TYPE_F64
 }
 \value{
 An integer constant representing a GGML data type
@@ -80,6 +90,9 @@ Constants representing different data types supported by GGML.
   \item \code{GGML_TYPE_Q8_0}: 8-bit quantization type 0
   \item \code{GGML_TYPE_I32}: 32-bit integer
   \item \code{GGML_TYPE_BF16}: 16-bit brain float (bfloat16)
+  \item \code{GGML_TYPE_I64}: 64-bit integer (held in R as double, exact
+    for magnitudes up to 2^53)
+  \item \code{GGML_TYPE_F64}: 64-bit floating point
 }
 }
 \examples{

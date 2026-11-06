@@ -107,11 +107,17 @@ int r_ggml_fputs(const char *s, FILE *stream) {
  * any dependency on whatever registered it. */
 void (*r_ggml_abort_hook)(void) = NULL;
 
+/* Undoes state that C++ destructors would have undone, had Rf_error not
+ * longjmp'd past them (see r_ggml_compat.h). Runs before r_ggml_abort_hook on
+ * every path that leaves through Rf_error. */
+void (*r_ggml_unwind_hook)(void) = NULL;
+
 /*
  * abort replacement
  * Uses R's error() which performs a longjmp back to R
  */
 void r_ggml_abort(const char *file, int line, const char *msg) {
+    if (r_ggml_unwind_hook) r_ggml_unwind_hook();
     if (r_ggml_abort_hook) r_ggml_abort_hook();
     Rf_error("ggml fatal error at %s:%d: %s", file, line, msg);
     /* Rf_error never returns, but compiler needs this for noreturn attribute */
@@ -122,6 +128,7 @@ void r_ggml_abort(const char *file, int line, const char *msg) {
  * _Exit/exit replacement
  */
 void r_ggml_exit(int status) {
+    if (r_ggml_unwind_hook) r_ggml_unwind_hook();
     Rf_error("ggml: exit called with status %d", status);
     /* Rf_error never returns */
     while(1) {}
@@ -136,6 +143,7 @@ void r_ggml_error(const char *format, ...) {
     char buf[512];
     vsnprintf(buf, sizeof(buf), format, args);
     va_end(args);
+    if (r_ggml_unwind_hook) r_ggml_unwind_hook();
     Rf_error("%s", buf);
     while(1) {}
 }

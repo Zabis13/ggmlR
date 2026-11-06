@@ -981,6 +981,7 @@ ggml_opt_get_lr <- function(lr_ud) {
 #'   Callers that append an explicit validation set to the data pass
 #'   \code{FALSE}, since there the split is positional and must be preserved.
 #' @param callbacks List of callback lists. Each element may have
+#'   `on_train_begin(logs, state)` (once, before the first epoch),
 #'   `on_epoch_begin(epoch, logs, state)` and/or `on_epoch_end(epoch, logs, state)`.
 #'   Built-in factories: `ggml_callback_early_stopping()`,
 #'   `ggml_schedule_step_decay()`, `ggml_schedule_cosine_decay()`,
@@ -1068,6 +1069,7 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
   # --- history ---
   hist <- vector("list", nepoch)
 
+  .ggml_cb_train_begin(callbacks, state)
   for (epoch in seq_len(nepoch)) {
     # Pick up a ggml_set_n_threads() issued after the scheduler was built --
     # the single C entry points sync once before their loop, an R loop has no
@@ -1188,7 +1190,8 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
 #'   train/validation split is taken, so the validation portion is a random
 #'   sample rather than the tail of the input.  Defaults to \code{shuffle}.
 #' @param callbacks List of callback lists, as for \code{ggml_fit_opt()}. Each
-#'   element may have `on_epoch_begin(epoch, logs, state)` and/or
+#'   element may have `on_train_begin(logs, state)` (once, before the first
+#'   epoch), `on_epoch_begin(epoch, logs, state)` and/or
 #'   `on_epoch_end(epoch, logs, state)`. `state` is a mutable environment with
 #'   `stop`, `lr_ud` and `nepoch`. `logs` carries the aggregate metrics
 #'   (`train_loss`, `train_accuracy`, `val_loss`, `val_accuracy`) and, for each
@@ -1332,6 +1335,7 @@ ggml_fit_opt_multi <- function(sched, ctx_compute, inputs, outputs, dataset,
   val_head_acc_mat  <- new_head_mat()
   epochs_run        <- 0L
 
+  .ggml_cb_train_begin(callbacks, state)
   for (epoch in seq_len(nepoch)) {
     # See ggml_fit_opt(): an R-side loop re-syncs the thread count itself.
     .ggml_sched_sync_threads(sched)

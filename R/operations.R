@@ -2883,6 +2883,35 @@ ggml_view_4d <- function(ctx, a, ne0, ne1, ne2, ne3, nb1, nb2, nb3, offset = 0) 
         as.numeric(offset), PACKAGE = "ggmlR")
 }
 
+#' 5D View with Byte Offset (Graph)
+#'
+#' Creates a 5D view of a tensor starting at a byte offset. The view shares
+#' memory with the source tensor. With strides that are not the natural
+#' contiguous ones it reorders axes without a copy -- e.g. swapping dims 3
+#' and 4, which \code{\link{ggml_permute}} cannot do (it only moves dims 0-3).
+#'
+#' @inheritParams ggml_view_4d
+#' @param ne4 Size of dimension 4
+#' @param nb4 Stride for dimension 4 (in bytes)
+#' @return View tensor
+#' @examples
+#' \donttest{
+#' ctx <- ggml_init(1024 * 1024)
+#' x <- ggml_new_tensor(ctx, GGML_TYPE_F32, 5L, c(4, 3, 2, 5, 6))
+#' nb <- ggml_tensor_nb(x)
+#' # dims 3 and 4 swapped: [4, 3, 2, 6, 5]
+#' v <- ggml_view_5d(ctx, x, 4, 3, 2, 6, 5, nb[2], nb[3], nb[5], nb[4])
+#' ggml_free(ctx)
+#' }
+#' @export
+ggml_view_5d <- function(ctx, a, ne0, ne1, ne2, ne3, ne4,
+                         nb1, nb2, nb3, nb4, offset = 0) {
+  .Call("R_ggml_view_5d", ctx, a, as.numeric(ne0), as.numeric(ne1),
+        as.numeric(ne2), as.numeric(ne3), as.numeric(ne4),
+        as.numeric(nb1), as.numeric(nb2), as.numeric(nb3), as.numeric(nb4),
+        as.numeric(offset), PACKAGE = "ggmlR")
+}
+
 # ============================================================================
 # Copy Operation
 # ============================================================================

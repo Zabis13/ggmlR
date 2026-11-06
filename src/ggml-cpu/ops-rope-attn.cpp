@@ -240,6 +240,14 @@ static void ggml_compute_forward_rope_flt(
 
     int64_t last_i2 = -1;
 
+    // ggmlR: GGML_MAX_DIMS == 5 — GGML_TENSOR_UNARY_OP_LOCALS stops at dim 3,
+    // but ggml_nrows() (and so the thread split) counts ne[4]. Walk dim 4 too.
+    const int64_t ne4  = dst->ne[4];
+    const size_t  nb04 = src0->nb[4];
+    const size_t  nb4  = dst->nb[4];
+    GGML_ASSERT(src0->ne[4] == ne4);
+
+    for (int64_t i4 = 0; i4 < ne4; i4++) { // dim 4 (ggmlR 5D)
     for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
         for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
             for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
@@ -265,8 +273,8 @@ static void ggml_compute_forward_rope_flt(
                     last_i2 = i2;
                 }
 
-                T * src = (T *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01);
-                T * dst_data  = (T *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1);
+                T * src = (T *)((char *) src0->data + i4*nb04 + i3*nb03 + i2*nb02 + i1*nb01);
+                T * dst_data  = (T *)((char *)  dst->data + i4*nb4  + i3*nb3  + i2*nb2  + i1*nb1);
 
                 switch (mode) {
                     case GGML_ROPE_TYPE_NORMAL:
@@ -291,8 +299,8 @@ static void ggml_compute_forward_rope_flt(
                             i0 += n_dims - 2; // skip the rotated channels
                             continue;
                         }
-                        const T * const src = (T *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                        T * dst_data  = (T *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+                        const T * const src = (T *)((char *) src0->data + i4*nb04 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                        T * dst_data  = (T *)((char *)  dst->data + i4*nb4  + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
                         dst_data[0] = src[0];
                         dst_data[1] = src[1];
@@ -301,6 +309,7 @@ static void ggml_compute_forward_rope_flt(
             } //attn-heads
         }
     }
+    } // i4
 }
 
 void ggml_compute_forward_rope(

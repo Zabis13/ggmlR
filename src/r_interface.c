@@ -19,6 +19,7 @@ extern SEXP R_ggml_vk_prec32_count(void);
 extern SEXP R_ggml_vk_hc_post_gate_count(void);
 extern SEXP R_ggml_vk_ssm_conv_fusion_count(void);
 extern SEXP R_ggml_vk_unary_mul_fusion_count(void);
+extern SEXP R_ggml_vk_topk_moe_fusion_count(SEXP mode);
 extern SEXP R_ggml_vk_test_fused_overlap(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_vulkan_device_description(SEXP device_idx);
 extern SEXP R_ggml_vulkan_device_memory(SEXP device_idx);
@@ -1017,6 +1018,8 @@ SEXP R_ggml_view_3d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0, SEXP ne1, SEXP ne2,
                     SEXP nb1, SEXP nb2, SEXP offset);
 SEXP R_ggml_view_4d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0, SEXP ne1, SEXP ne2, SEXP ne3,
                     SEXP nb1, SEXP nb2, SEXP nb3, SEXP offset);
+SEXP R_ggml_view_5d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0, SEXP ne1, SEXP ne2, SEXP ne3,
+                    SEXP ne4, SEXP nb1, SEXP nb2, SEXP nb3, SEXP nb4, SEXP offset);
 
 // Copy and Set operations
 SEXP R_ggml_cpy(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr);
@@ -1608,6 +1611,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_view_2d",        (DL_FUNC) &R_ggml_view_2d,        6},
     {"R_ggml_view_3d",        (DL_FUNC) &R_ggml_view_3d,        8},
     {"R_ggml_view_4d",        (DL_FUNC) &R_ggml_view_4d,        10},
+    {"R_ggml_view_5d",        (DL_FUNC) &R_ggml_view_5d,        12},
 
     // Copy and Set operations
     {"R_ggml_cpy",            (DL_FUNC) &R_ggml_cpy,            3},
@@ -1741,6 +1745,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_vk_hc_post_gate_count",    (DL_FUNC) &R_ggml_vk_hc_post_gate_count,    0},
     {"R_ggml_vk_ssm_conv_fusion_count", (DL_FUNC) &R_ggml_vk_ssm_conv_fusion_count, 0},
     {"R_ggml_vk_unary_mul_fusion_count", (DL_FUNC) &R_ggml_vk_unary_mul_fusion_count, 0},
+    {"R_ggml_vk_topk_moe_fusion_count", (DL_FUNC) &R_ggml_vk_topk_moe_fusion_count, 1},
     {"R_ggml_vk_test_fused_overlap",    (DL_FUNC) &R_ggml_vk_test_fused_overlap,    4},
     {"R_ggml_vulkan_device_description",(DL_FUNC) &R_ggml_vulkan_device_description,1},
     {"R_ggml_vulkan_device_memory",     (DL_FUNC) &R_ggml_vulkan_device_memory,     1},

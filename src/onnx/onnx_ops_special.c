@@ -311,6 +311,8 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
          * params back from the GPU: measured at 128 inputs, every one under
          * 256 bytes, 0.00 MB altogether -- the graph aborted having moved
          * essentially no data. Hosting the params takes that split to 86.
+         * (Before ggml 0.27; since then split inputs grow on demand and do not
+         * abort, but each one is still a copy and a sync point.)
          *
          * ggml_set_input() does NOT achieve this on its own: the scheduler
          * refuses to move a tensor that already sits in a buffer
@@ -344,7 +346,7 @@ int map_node_special(onnx_ggml_ctx_t *c, const onnx_node_t *n,
          * splits are planned, so on Vulkan scores stayed in VRAM, nms_cpu
          * refused to read device memory and left its output empty, and the
          * graph built around those empty outputs hit
-         * GGML_SCHED_MAX_SPLIT_INPUTS.
+         * GGML_SCHED_MAX_SPLIT_INPUTS (a hard limit before ggml 0.27).
          *
          * As proper srcs, all three are copied back to the host before this
          * CPU-only op runs, which is what QLinearMatMul already relies on. */

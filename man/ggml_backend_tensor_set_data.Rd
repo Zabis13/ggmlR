@@ -26,4 +26,7 @@ Integer and logical data are accepted for float tensors and
   \code{NaN}). An \code{I32} tensor (token indices, say) takes
   integers or whole-valued doubles; \code{NA}, fractions and values outside
   the 32-bit range stop with an error rather than being truncated.
+  An \code{F64} tensor takes doubles as they are. An \code{I64} tensor
+  takes integers or whole-valued doubles within \eqn{\pm 2^{53}}{+-2^53}
+  (where doubles are exact); anything else stops with an error.
 }

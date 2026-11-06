@@ -464,7 +464,9 @@ ggml_backend_tensor_set_async <- function(backend, tensor, data, offset = 0, siz
 #' @param tensor External pointer to tensor
 #' @param offset Byte offset (default 0)
 #' @param size Number of bytes to read
-#' @return Numeric vector with data
+#' @return Double vector of \code{ceiling(size / 8)} elements carrying the raw
+#'   bytes (reinterpret with \code{writeBin}/\code{readBin}); bytes past
+#'   \code{size} are zero. Filled only after \code{ggml_backend_synchronize()}.
 #' @export
 #' @family backend
 ggml_backend_tensor_get_async <- function(backend, tensor, offset = 0, size) {

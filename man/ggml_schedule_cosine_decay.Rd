@@ -12,7 +12,7 @@ ggml_schedule_cosine_decay(eta_min = 0, T_max = NULL)
 \item{T_max}{Total number of epochs (defaults to nepoch from fit state)}
 }
 \value{
-List with on_epoch_begin function
+List with on_train_begin and on_epoch_begin functions; eta_max is re-read from the LR at the start of every fit
 }
 \description{
 Anneals LR from initial value to `eta_min` following a cosine curve.

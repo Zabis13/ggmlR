@@ -458,6 +458,9 @@ ggml_gallocr_get_buffer_size <- function(galloc, buffer_id = 0L) {
 #'   \code{NaN}). An \code{I32} tensor (token indices, say) takes
 #'   integers or whole-valued doubles; \code{NA}, fractions and values outside
 #'   the 32-bit range stop with an error rather than being truncated.
+#'   An \code{F64} tensor takes doubles as they are. An \code{I64} tensor
+#'   takes integers or whole-valued doubles within \eqn{\pm 2^{53}}{+-2^53}
+#'   (where doubles are exact); anything else stops with an error.
 #' @param data R vector with data to set
 #' @param offset Byte offset (default: 0)
 #' @return No return value, called for side effects
@@ -489,6 +492,20 @@ nn_tensor_values <- function(tensor, data) {
       stop("index data is outside the 32-bit integer range", call. = FALSE)
     return(as.integer(data))
   }
+  if (type == GGML_TYPE_I64) {
+    # R has no int64: doubles carry it, exact only within +-2^53
+    if (!is.numeric(data) && !is.logical(data))
+      stop("I64 data must be numeric, got ", class(data)[1L], call. = FALSE)
+    if (anyNA(data))
+      stop("I64 data has ", sum(is.na(data)), " NA value(s)", call. = FALSE)
+    if (is.integer(data) || is.logical(data)) return(data)
+    if (any(!is.finite(data)) || any(data != trunc(data)))
+      stop("I64 data must be whole numbers; found e.g. ",
+           data[which(!is.finite(data) | data != trunc(data))[1L]], call. = FALSE)
+    if (any(abs(data) > 2^53))
+      stop("I64 data is outside +-2^53, where doubles stop being exact",
+           call. = FALSE)
+  }
   data
 }
 
@@ -500,7 +517,9 @@ nn_tensor_values <- function(tensor, data) {
 #' @param tensor Tensor pointer
 #' @param offset Byte offset (default: 0)
 #' @param n_elements Number of elements to retrieve (NULL for all)
-#' @return R vector with tensor data
+#' @return R vector with tensor data: integer for \code{I32}, double otherwise.
+#'   \code{I64} values come back as doubles, with a warning when any exceeds
+#'   \eqn{2^{53}}{2^53} in magnitude (precision is lost there).
 #' @export
 ggml_backend_tensor_get_data <- function(tensor, offset = 0, n_elements = NULL) {
   .Call("R_ggml_backend_tensor_get", tensor, as.numeric(offset),

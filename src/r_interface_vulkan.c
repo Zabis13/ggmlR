@@ -82,6 +82,21 @@ SEXP R_ggml_vk_unary_mul_fusion_count(void) {
 #endif
 }
 
+// Number of fused TOPK_MOE dispatches for one mode (0 early_softmax,
+// 1 early_softmax_norm, 2 late_softmax, 3 sigmoid_norm_bias,
+// 4 sqrt_softplus_norm_bias, 5 = with the extra SCALE fused). Test hook. 0 without Vulkan.
+#ifdef GGML_USE_VULKAN
+extern uint64_t ggml_vk_topk_moe_fusion_count(int mode);
+#endif
+SEXP R_ggml_vk_topk_moe_fusion_count(SEXP mode) {
+#ifdef GGML_USE_VULKAN
+    return ScalarReal((double) ggml_vk_topk_moe_fusion_count(asInteger(mode)));
+#else
+    (void) mode;
+    return ScalarReal(0.0);
+#endif
+}
+
 // Test hook: does a fused pattern's output overlap one of its external inputs?
 // node_idx is 0-based; mode (see ggml_vk_test_fused_output_overlaps) moves the
 // output onto an input for the call. NA without Vulkan.
@@ -150,16 +165,21 @@ SEXP R_ggml_vulkan_device_memory(SEXP device_idx) {
 
     size_t free_mem = 0, total_mem = 0;
     ggml_backend_vk_get_device_memory(device, &free_mem, &total_mem);
+    // Same value the backend's supports_op size refusal uses; 0 would read as
+    // "nothing fits", so an unknown limit is reported as NA instead.
+    const size_t max_tensor = ggml_backend_vk_get_device_max_tensor_size(device);
 
-    // Return named list with free and total memory
-    SEXP result = PROTECT(allocVector(VECSXP, 2));
-    SEXP names = PROTECT(allocVector(STRSXP, 2));
+    // Return named list with free/total memory and the per-tensor limit
+    SEXP result = PROTECT(allocVector(VECSXP, 3));
+    SEXP names = PROTECT(allocVector(STRSXP, 3));
 
     SET_VECTOR_ELT(result, 0, ScalarReal((double)free_mem));
     SET_VECTOR_ELT(result, 1, ScalarReal((double)total_mem));
+    SET_VECTOR_ELT(result, 2, ScalarReal(max_tensor > 0 ? (double)max_tensor : NA_REAL));
 
     SET_STRING_ELT(names, 0, mkChar("free"));
     SET_STRING_ELT(names, 1, mkChar("total"));
+    SET_STRING_ELT(names, 2, mkChar("max_tensor_size"));
     setAttrib(result, R_NamesSymbol, names);
 
     UNPROTECT(2);

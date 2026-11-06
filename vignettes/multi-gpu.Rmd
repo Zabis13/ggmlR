@@ -34,6 +34,7 @@ follows from why one GPU is not enough.
 | Mode | What is split | Use when | Entry point |
 |------|---------------|----------|-------------|
 | Tensor parallelism (TP) | Individual weight matrices, by rows | One layer is too big, or you want to cut per-layer latency | `ggml_vulkan_split_mul_mat()` |
+| Graph-level TP (meta backend, experimental) | Every weight of a whole graph, by a rule per tensor | As TP, but for a multi-layer model without a gather after each matrix | `ggml_tp_forward()`, `ggml_meta_backend()` |
 | Pipeline parallelism (PP) | Whole layers, by depth | The **model** does not fit on one card | `ggml_pp_forward()` |
 | Data parallelism (DP) | The batch | The model fits, you want throughput | `dp_train()`, `ggml_tp_dp_forward()` |
 
@@ -61,12 +62,18 @@ handles model loading, KV cache, sampling and serving:
 # llamaR — whole-LLM inference; the split happens inside the model loader
 model <- llama_load_model("model.gguf", n_gpu_layers = -1L,
                           devices = c("Vulkan0", "Vulkan1"),
-                          split_mode = "row")     # or "layer" for pipeline
+                          split_mode = "layer")   # or "tensor"
 ```
 
-The names coincide but the code does not: `split_mode = "row"` / `"layer"` is
-llamaR's own weight distribution over a real transformer, not a call into the
-`ggml_vulkan_split_mul_mat()` / `ggml_pp_forward()` shown below. Reach for the
+`split_mode = "layer"` is pipeline-style: whole layers per card.
+`split_mode = "tensor"` is real tensor parallelism through ggml's meta backend
+(section 4) — every weight split across the cards, each layer run on all of
+them. `split_mode = "row"` asks the backend for a row-split buffer type; Vulkan
+does not offer one, so on Vulkan `"row"` silently behaves like `"layer"`.
+
+None of these calls into the `ggml_vulkan_split_mul_mat()` / `ggml_pp_forward()`
+primitives shown below; `"tensor"` shares the meta backend with
+`ggml_tp_forward()`. Reach for the
 ggmlR primitives when you are building a custom parallel computation — a model
 architecture of your own, a research prototype, a non-LLM workload — rather than
 serving an existing GGUF.
@@ -144,7 +151,100 @@ ggml_vulkan_split_row_ranges(nrows = 2048, n_devices = 2)
 `ggml_vulkan_split_buffer_type()` exposes the same row-split as a ggml buffer
 type, for callers that allocate weights themselves.
 
-## 4. Pipeline parallelism
+## 4. Graph-level tensor parallelism: the meta backend
+
+`ggml_vulkan_split_mul_mat()` splits one matrix and gathers the result right
+away, so a two-layer model built from it pays two gathers. ggml's **meta
+backend** (upstream since ggml 0.27; experimental here) splits a whole graph
+instead. It wraps several devices into one backend and:
+
+- lays each weight out across the devices by a rule you give per tensor name;
+- runs every op on all devices at once, each on its own share, and works out
+  from the op how its result is laid out;
+- inserts a cross-device reduction only where a result has to be combined.
+
+The classic case is the Megatron MLP: split the first weight by its output
+features and the second by its input features. The hidden activation then stays
+split between the two layers, and the only reduction is after the second one.
+
+Shapes follow ggml: an R array's `dim()` is the tensor's `ne`, fastest
+dimension first. A weight with `dim = c(n_in, n_out)` and an input with
+`dim = c(n_in, batch)` give `ggml_mul_mat(ctx, w, input)` of shape
+`c(n_out, batch)` — `t(W) %*% x` in R terms. The split rules name a ggml axis:
+`"rows"` is `ne[1]` (here: output features), `"cols"` is `ne[0]` (input
+features).
+
+```{r eval=FALSE}
+n_in <- 512L; n_hid <- 2048L; n_out <- 512L; batch <- 16L
+W1 <- array(rnorm(n_in * n_hid),  c(n_in,  n_hid))
+W2 <- array(rnorm(n_hid * n_out), c(n_hid, n_out))
+X  <- array(rnorm(n_in * batch),  c(n_in,  batch))
+
+mlp <- function(ctx, input, w)          # w: the weight tensors, by name
+  ggml_mul_mat(ctx, w$w2, ggml_relu(ctx, ggml_mul_mat(ctx, w$w1, input)))
+
+Y <- ggml_tp_forward(
+  weights = list(w1 = W1, w2 = W2),            # names are what `split` refers to
+  forward = mlp,
+  x       = X,                                 # the input tensor is named "input"
+  devices = c(0L, 1L),
+  split   = list(w1 = "rows", w2 = "cols"))
+
+max(abs(Y - t(W2) %*% pmax(t(W1) %*% X, 0)))
+```
+
+Rules are `"mirror"` (the default: a full copy on each device), `"rows"`,
+`"cols"`, `"axis2"`, `"axis3"`, or `list(axis = "rows", weights = c(0.7, 0.3))`
+for uneven cards; `split` may also be a `function(name, ne)`. A rule that cannot
+apply — the axis is shorter than the number of devices — falls back to
+`"mirror"` for that tensor with a warning.
+
+`devices` takes Vulkan ids, device names (`"Vulkan0"`, `"CPU"`) or device
+pointers, and may list the same device twice. That is how to try the API on one
+GPU, or with no GPU at all:
+
+```{r eval=FALSE}
+Y <- ggml_tp_forward(list(w1 = W1, w2 = W2), mlp, X,
+                     devices = c("CPU", "CPU"),
+                     split = list(w1 = "rows", w2 = "cols"))
+```
+
+For a graph you drive yourself — a scheduler, repeated computes, several
+outputs — use the backend directly:
+
+```{r eval=FALSE}
+meta  <- ggml_meta_backend(c(0L, 1L), split = list(w1 = "rows", w2 = "cols"))
+sched <- ggml_backend_sched_new(list(meta, ggml_backend_cpu_init()))
+# Weights (and inputs) in a context allocated on `meta`:
+#   buf <- ggml_backend_alloc_ctx_tensors(ctx_w, meta)
+# The graph in a SEPARATE context, allocated through the scheduler:
+#   ggml_backend_sched_alloc_graph(sched, gf); ggml_backend_sched_graph_compute(sched, gf)
+```
+
+Keep the two contexts apart. The meta backend asks for a rule for every
+tensor in a buffer allocated on it; an intermediate result that ended up there
+would be laid out by its name rather than by the op that produced it.
+`ggml_backend_meta_device()` is the raw API underneath, with a callback that
+returns numeric axis codes (`GGML_SPLIT_AXIS_*`).
+
+One more rule for a graph you drive yourself: a matrix product whose inputs
+are both split along the reduced axis (`"cols"` on the weight and on its input)
+leaves per-device partial sums. The meta backend reduces them before their first
+consumer, but never after the graph's last node, and cannot read them back —
+so do not read such a tensor, and do not end a graph with one.
+`ggml_tp_forward()` appends a trivial consumer for you.
+
+**What it costs.** Vulkan has no device-to-device all-reduce, so the meta
+backend's reductions copy through host RAM — the same host-staging transport as
+the rest of this vignette (section 2). Graph-level TP moves less data than
+`ggml_vulkan_split_mul_mat()` layer by layer, but it still pays off only when
+the model does not fit on one card.
+
+**Status.** Forward graphs only: `ggml_fit()`, the autograd engine and ONNX
+models do not run on it. Not yet measured on real multi-GPU hardware. llamaR
+reaches the same backend through `split_mode = "tensor"`.
+
+## 5. Pipeline parallelism
 
 PP assigns *layers* to devices: GPU 0 runs stages 1–16, GPU 1 runs 17–32, and
 exactly one activation tensor crosses between them. Each stage is described by
@@ -183,7 +283,7 @@ Y <- matrix(y, nrow = K, ncol = M)
 max(abs(Y - t(W2) %*% pmax(t(W1) %*% X, 0)))   # ~1.8e-5
 ```
 
-## 5. Hybrid: DP over TP or PP
+## 6. Hybrid: DP over TP or PP
 
 With four GPUs, two replicas of TP=2 usually beat one TP=4 group: DP adds no
 cross-device traffic, so the hybrid *hides* the weakness of host-staging.
@@ -201,7 +301,7 @@ Y <- ggml_pp_dp_forward(make_stages, x, replicas = list(c(0L, 1L), c(2L, 3L)),
 For multi-GPU *training* rather than inference, use `dp_train()` —
 see `vignette("data-parallel-training")`.
 
-## 6. Clean shutdown (and the `--enable-hard-exit` flag)
+## 7. Clean shutdown (and the `--enable-hard-exit` flag)
 
 A multi-GPU script can segfault **after** it has printed its results. The cause
 is a race at process exit: the Vulkan loader and the driver's ICD libraries get
@@ -250,7 +350,7 @@ package. And although the race is observed in multi-GPU scripts — more devices
 mean more driver threads and a wider window — nothing in the mechanism is
 specific to multiple GPUs; single-GPU runs simply have not been seen to trip it.
 
-## 7. Where to look next
+## 8. Where to look next
 
 Runnable demos ship with the package, under `system.file("examples", package = "ggmlR")`:
 
@@ -271,9 +371,11 @@ than two GPUs are present:
 
 - `tests/testthat/test-vulkan-tensor-parallel.R` — split math, `split_mul_mat`,
   buffer-type factory, TP×DP and PP forwards
+- `tests/testthat/test-meta-backend-compute.R` — meta backend: compute against
+  the plain CPU on 2×CPU and 2× the same GPU, `ggml_meta_backend()`, `ggml_tp_forward()`
 - `tests/testthat/test-vulkan.R`, `test-vulkan-caps.R` — backend and capabilities
 
-## 8. Summary
+## 9. Summary
 
 ```{r}
 ggml_vulkan_status()

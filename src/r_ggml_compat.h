@@ -95,6 +95,12 @@ void r_ggml_abort(const char *file, int line, const char *msg);
  * Lets a diagnostic that has been accumulating state print it; NULL by
  * default, so nothing pays for it. */
 extern void (*r_ggml_abort_hook)(void);
+/* Run on every path that longjmps back to R (r_ggml_abort, r_ggml_exit,
+ * r_ggml_error, the ggml abort callback), before r_ggml_abort_hook. Owned by
+ * ggml-backend.cpp: puts back the src pointers the scheduler swapped into the
+ * caller's graph, which the C++ destructors would have restored. NULL until
+ * the scheduler first sets it. */
+extern void (*r_ggml_unwind_hook)(void);
 R_GGML_NORETURN
 void r_ggml_exit(int status);
 R_GGML_FORMAT_PRINTF(1, 2) R_GGML_NORETURN

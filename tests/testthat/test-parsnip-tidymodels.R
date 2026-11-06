@@ -213,3 +213,42 @@ test_that("tune_grid() tunes epochs (regression)", {
   metrics <- tune::collect_metrics(res)
   expect_true("rmse" %in% metrics$.metric)
 })
+
+test_that("tune_grid() over the whole dials activation grid fits every value", {
+  skip_if_no_parsnip()
+  skip_if_not_installed("workflows")
+  skip_if_not_installed("rsample")
+  skip_if_not_installed("tune")
+  skip_if_not_installed("yardstick")
+  skip_if_not_installed("dials")
+  skip_if_not_installed("hardhat")
+  set.seed(42)
+
+  spec <- parsnip::mlp(activation = tune(), hidden_units = 4L, epochs = 2L) |>
+    parsnip::set_engine("ggml", batch_size = 16L, backend = "cpu") |>
+    parsnip::set_mode("classification")
+
+  # The engine registers only activations that nn_apply_activation() knows and
+  # that train; plain dials::activation() would offer 23.
+  ps <- hardhat::extract_parameter_set_dials(spec)
+  act_values <- ps$object[[which(ps$id == "activation")]]$values
+  expect_setequal(act_values, c("relu", "sigmoid", "tanh", "silu", "gelu"))
+
+  wf <- workflows::workflow() |>
+    workflows::add_model(spec) |>
+    workflows::add_formula(Species ~ .)
+
+  # the grid tune itself would build from the parameter set: every value
+  grid  <- dials::grid_regular(ps, levels = length(act_values))
+  folds <- rsample::vfold_cv(iris, v = 2L)
+  res   <- tune::tune_grid(wf, resamples = folds, grid = grid)
+
+  notes <- tune::collect_notes(res)
+  expect_false(any(grepl("Unknown activation", notes$note)))
+  expect_equal(sum(notes$type == "error"), 0L)
+
+  acc <- tune::collect_metrics(res)
+  acc <- acc[acc$.metric == "accuracy", ]
+  expect_setequal(acc$activation, act_values)
+  expect_true(all(acc$n == 2L))
+})

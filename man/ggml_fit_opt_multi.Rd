@@ -67,7 +67,8 @@ train/validation split is taken, so the validation portion is a random
 sample rather than the tail of the input.  Defaults to \code{shuffle}.}
 
 \item{callbacks}{List of callback lists, as for \code{ggml_fit_opt()}. Each
-element may have `on_epoch_begin(epoch, logs, state)` and/or
+element may have `on_train_begin(logs, state)` (once, before the first
+epoch), `on_epoch_begin(epoch, logs, state)` and/or
 `on_epoch_end(epoch, logs, state)`. `state` is a mutable environment with
 `stop`, `lr_ud` and `nepoch`. `logs` carries the aggregate metrics
 (`train_loss`, `train_accuracy`, `val_loss`, `val_accuracy`) and, for each

@@ -270,6 +270,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
             if (vk_perf_logger_enabled && vk_perf_logger_concurrent) {
                 ctx->query_node_idx[ctx->query_idx] = node_idx;
                 compute_ctx->s->buffer->buf.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->query_pool, ctx->query_idx++);
+                ggml_vk_sync_buffers(ctx, compute_ctx);
             }
         }
         // Add all fused nodes to the unsynchronized lists.
@@ -540,6 +541,16 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_DIAG_MASK_INF:
         ggml_vk_diag_mask_inf(ctx, compute_ctx, src0, node);
 
+        break;
+    // ggmlR: no upstream Vulkan kernel for these three
+    case GGML_OP_DIAG_MASK_ZERO:
+        ggml_vk_diag_mask_zero(ctx, compute_ctx, src0, node);
+        break;
+    case GGML_OP_WIN_PART:
+        ggml_vk_win_part(ctx, compute_ctx, src0, node);
+        break;
+    case GGML_OP_WIN_UNPART:
+        ggml_vk_win_unpart(ctx, compute_ctx, src0, node);
         break;
     case GGML_OP_SOFT_MAX:
         if (ctx->fused_topk_moe_mode != TOPK_MOE_COUNT) {
@@ -1440,6 +1451,16 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
 
         // Async copy only works within the same device
         if (src_buf_ctx->dev_buffer->device != dst_buf->device) {
+            return false;
+        }
+        // DIVERGENCE (ggmlR): two backends on ONE device. The copy below is
+        // recorded on the destination's queue and does not wait for the
+        // source backend's pending work; the scheduler orders that with events,
+        // the meta backend has none (event_new = nullptr) and copied partial
+        // sums the source had not finished computing (llamaR split_mode
+        // "tensor" over the same GPU twice: garbage logits). Fall back to the
+        // caller's path: synchronize both backends, then a blocking copy.
+        if (backend_src != backend_dst) {
             return false;
         }
 
@@ -2390,6 +2411,16 @@ static bool ggml_vk_can_fuse_rms_norm_mul_rope(ggml_backend_vk_context * ctx, co
 
     // conditions for pipeline creation
     if (sizeof(vk_op_rms_norm_mul_rope_push_constants) > ctx->device->properties.limits.maxPushConstantsSize) {
+        // ggmlR: this silently costs QK-norm models (llamaR) two extra
+        // dispatches per layer, so say it once per process.
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            GGML_LOG_WARN("ggml_vulkan: RMS_NORM+MUL+ROPE fusion disabled on %s: push constants %zu B > device limit %u B\n",
+                          ctx->device->name.c_str(),
+                          sizeof(vk_op_rms_norm_mul_rope_push_constants),
+                          ctx->device->properties.limits.maxPushConstantsSize);
+        }
         return false;
     }
 
@@ -3623,6 +3654,26 @@ int ggml_backend_vk_get_device_groups(char * report, size_t report_size) {
     return (int) groups.size();
 }
 
+// ggmlR: the largest single tensor (bytes) the device can bind -- the ONE source
+// for both the supports_op size refusal below and the public
+// ggml_backend_vk_get_device_max_tensor_size() (R: max_tensor_size in
+// ggml_vulkan_device_memory()), so the limit callers plan against cannot drift
+// from the limit the backend enforces. maxStorageBufferRange applies unless the
+// shader binds through BDA (IM2COL/IM2COL_3D) or the device has 64-bit indexing.
+static uint64_t ggml_vk_device_max_tensor_size(const vk_device & device, bool uses_bda) {
+    uint64_t limit = device->max_buffer_size;
+    if (!uses_bda && !device->shader_64b_indexing) {
+        limit = std::min<uint64_t>(limit, device->properties.limits.maxStorageBufferRange);
+    }
+    return limit;
+}
+
+size_t ggml_backend_vk_get_device_max_tensor_size(int device) {
+    GGML_ASSERT(device >= 0 && device < (int) vk_instance.device_indices.size());
+    const vk_device dev = ggml_vk_get_device((size_t) device);
+    return (size_t) ggml_vk_device_max_tensor_size(dev, false);
+}
+
 void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total) {
     GGML_ASSERT(device < (int) vk_instance.device_indices.size());
     GGML_ASSERT(device < (int) vk_instance.device_supports_membudget.size());
@@ -3819,6 +3870,16 @@ static ggml_backend_t ggml_backend_vk_device_init(ggml_backend_dev_t dev, const 
     return ggml_backend_vk_init(ctx->device);
 }
 
+// ggmlR DIVERGENCE (5D): rope_funcs.glsl splits a row into i1/i2/i3 only and
+// addresses it as i3*nb03 (src) / i3*nb13 (dst), with i3 running over
+// nrows/(ne01*ne02) = ne03*ne04. That is exact whenever dims 3 and 4 are
+// laid out back to back (nb[4] == ne[3]*nb[3]) in both src0 and dst, so such
+// 5D tensors stay on the GPU; any other dim-4 layout goes to the CPU kernel,
+// which walks ne[4] explicitly.
+static bool ggml_vk_rope_dims34_collapsible(const ggml_tensor * t) {
+    return t->ne[4] == 1 || t->nb[4] == (size_t) t->ne[3] * t->nb[3];
+}
+
 static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, const ggml_tensor * op) {
     {
         // ggml 0.27: reject any tensor larger than the device can bind, so the op
@@ -3834,21 +3895,14 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
         // flood the log with the same line.
         auto const & tensor_size_supported = [&](const ggml_tensor * t) {
             const size_t tensor_size = ggml_nbytes(t);
-            const char * limit_name = nullptr;
-            uint64_t limit = 0;
-            if (tensor_size > device->max_buffer_size) {
-                limit_name = "max buffer size";
-                limit = device->max_buffer_size;
-            } else if (!uses_bda && !device->shader_64b_indexing &&
-                       tensor_size > device->properties.limits.maxStorageBufferRange) {
-                // For im2col shaders using BDA, and with shader64BitIndexing,
-                // the maxStorageBufferRange limit doesn't apply.
-                limit_name = "maxStorageBufferRange";
-                limit = device->properties.limits.maxStorageBufferRange;
-            }
-            if (limit_name == nullptr) {
+            // For im2col shaders using BDA, and with shader64BitIndexing,
+            // the maxStorageBufferRange limit doesn't apply (see the helper).
+            const uint64_t limit = ggml_vk_device_max_tensor_size(device, uses_bda);
+            if (tensor_size <= limit) {
                 return true;
             }
+            const char * limit_name = tensor_size > device->max_buffer_size
+                ? "max buffer size" : "maxStorageBufferRange";
             static std::mutex log_mutex;
             static std::set<std::string> logged;
             const std::string key = std::string(ggml_op_name(op->op)) + "|" + t->name + "|" + std::to_string(tensor_size);
@@ -4219,11 +4273,12 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
         case GGML_OP_REPEAT_BACK:
             return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_ROPE:
-            // ggml 0.27 guard + ggmlR DIVERGENCE: rope_funcs.glsl splits a row
-            // into i1/i2/i3 only, so with ne[4] > 1 i3 runs past ne03.
-            return ggml_is_contiguous_rows(op) && ggml_is_contiguous_rows(op->src[0]) &&
-                   op->src[0]->ne[4] == 1;
         case GGML_OP_ROPE_BACK:
+            // ggml 0.27 guard (contiguous rows) + ggmlR DIVERGENCE: 5D only
+            // when dims 3-4 collapse, see ggml_vk_rope_dims34_collapsible.
+            return ggml_is_contiguous_rows(op) && ggml_is_contiguous_rows(op->src[0]) &&
+                   ggml_vk_rope_dims34_collapsible(op) &&
+                   ggml_vk_rope_dims34_collapsible(op->src[0]);
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
@@ -4343,6 +4398,23 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_DIAG_MASK_INF:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+        // ggmlR: diag_mask_inf.comp built with MASK_ZERO; the kernel indexes the
+        // flattened rows, so any rank works as long as both sides are contiguous.
+        case GGML_OP_DIAG_MASK_ZERO:
+            return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
+                   op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        // ggmlR: win_part.comp -- linear indexing of contiguous src/dst; PART
+        // reads src [C, W, H] (ne[3] == 1, asserted by the builder), UNPART
+        // writes dst [C, W, H]. Element counts must fit the 32-bit index.
+        case GGML_OP_WIN_PART:
+        case GGML_OP_WIN_UNPART:
+            {
+                const ggml_tensor * img = op->op == GGML_OP_WIN_PART ? op->src[0] : op;   // the [C, W, H] side
+                return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
+                       op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                       img->ne[3] == 1 && op->ne[4] == 1 && op->src[0]->ne[4] == 1 &&
+                       ggml_nelements(op) <= UINT32_MAX && ggml_nelements(op->src[0]) <= UINT32_MAX;
+            }
         case GGML_OP_SOFT_MAX:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32
                 && (!op->src[1] || (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16));

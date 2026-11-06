@@ -98,7 +98,7 @@ test_that("LearnerClassifGGML constructs and has the expected contract", {
   expect_s3_class(learner, "LearnerClassif")
   expect_equal(learner$id, "classif.ggml")
   expect_setequal(learner$predict_types, c("response", "prob"))
-  expect_equal(learner$feature_types, "numeric")
+  expect_setequal(learner$feature_types, c("numeric", "integer", "logical"))
   expect_true(all(c("multiclass", "twoclass", "marshal", "weights")
                   %in% learner$properties))
   expect_true("ggmlR" %in% learner$packages)
@@ -221,7 +221,7 @@ test_that("LearnerRegrGGML constructs and has the expected contract", {
   expect_s3_class(learner, "LearnerRegr")
   expect_equal(learner$id, "regr.ggml")
   expect_equal(learner$predict_types, "response")
-  expect_equal(learner$feature_types, "numeric")
+  expect_setequal(learner$feature_types, c("numeric", "integer", "logical"))
   expect_true("marshal" %in% learner$properties)
 })
 
@@ -393,4 +393,118 @@ test_that("regr.ggml works with 3-fold CV resampling", {
   rmse <- rr$aggregate(mlr3::msr("regr.rmse"))
   expect_true(is.numeric(rmse))
   expect_true(is.finite(rmse))
+})
+
+# ---------------------------------------------------------------------------
+# integer / logical features (mlr3 feature_types)
+# ---------------------------------------------------------------------------
+
+test_that("integer and logical features train and predict through one path", {
+  skip_if_no_mlr3()
+  set.seed(3)
+  n <- 40
+  d <- data.frame(
+    xi = sample.int(5L, n, replace = TRUE),     # integer
+    xl = rep(c(TRUE, FALSE), n / 2),            # logical -> 1/0
+    xd = rnorm(n),
+    y  = factor(rep(c("a", "b"), each = n / 2))
+  )
+  task <- mlr3::as_task_classif(d, target = "y")
+  expect_setequal(task$feature_types$type, c("integer", "logical", "numeric"))
+
+  for (id in c("classif.ggml", "regr.ggml")) {
+    learner <- mlr3::lrn(id)
+    learner$param_set$values$epochs     <- 2L
+    learner$param_set$values$batch_size <- 10L
+    learner$param_set$values$backend    <- "cpu"
+    tk <- if (id == "regr.ggml") {
+      mlr3::as_task_regr(transform(d, y = xd * 2)[, c("xi", "xl", "y")],
+                         target = "y")
+    } else task
+    expect_no_error(learner$train(tk))
+    p <- learner$predict(tk)
+    expect_equal(length(p$response), n)
+    expect_false(anyNA(p$response))
+  }
+
+  # logical columns enter the model as 1/0: same predictions as the
+  # explicit numeric encoding with the same seed
+  num <- transform(d, xi = as.double(xi), xl = as.double(xl))
+  fit_prob <- function(dd) {
+    learner <- mlr3::lrn("classif.ggml", predict_type = "prob")
+    learner$param_set$values$epochs     <- 2L
+    learner$param_set$values$batch_size <- 10L
+    learner$param_set$values$backend    <- "cpu"
+    learner$param_set$values$seed       <- 11L
+    t <- mlr3::as_task_classif(dd, target = "y")
+    learner$train(t)
+    learner$predict(t)$prob
+  }
+  expect_equal(fit_prob(d), fit_prob(num))
+})
+
+# ---------------------------------------------------------------------------
+# use_weights (mlr3 >= 1.0): "ignore" must switch task weights off
+# ---------------------------------------------------------------------------
+
+test_that("use_weights = 'use' and 'ignore' give different models", {
+  skip_if_no_mlr3()
+  skip_if(is.null(mlr3::lrn("classif.ggml")$use_weights),
+          "mlr3 without use_weights")
+  set.seed(8)
+  n <- 60
+  d <- data.frame(x1 = rnorm(n), x2 = rnorm(n),
+                  y  = factor(rep(c("a", "b"), each = n / 2)))
+  # extreme weights: class "a" dominates the weighted loss
+  d$w <- ifelse(d$y == "a", 20, 0.05)
+  task <- mlr3::as_task_classif(d, target = "y")
+  task$set_col_roles("w", roles = "weights_learner")
+  task_now <- mlr3::as_task_classif(d[, c("x1", "x2", "y")], target = "y")
+
+  fit_prob <- function(tk, use) {
+    learner <- mlr3::lrn("classif.ggml", predict_type = "prob")
+    learner$use_weights <- use
+    learner$param_set$values$epochs     <- 5L
+    learner$param_set$values$batch_size <- 10L
+    learner$param_set$values$backend    <- "cpu"
+    learner$param_set$values$seed       <- 21L
+    learner$train(tk)
+    learner$predict(task_now)$prob
+  }
+  p_use    <- fit_prob(task, "use")
+  p_ignore <- fit_prob(task, "ignore")
+  p_none   <- fit_prob(task_now, "use")
+
+  expect_gt(max(abs(p_use - p_ignore)), 1e-3)
+  # "ignore" trains exactly as if the task had no weights
+  expect_equal(p_ignore, p_none)
+})
+
+# ---------------------------------------------------------------------------
+# ggml_unmarshal_model: a GPU-trained model must not force "vulkan" (a worker
+# without Vulkan would stop in ggml_compile); it comes back with "auto"
+# ---------------------------------------------------------------------------
+
+test_that("ggml_unmarshal_model picks auto for GPU models, cpu for CPU models", {
+  blob <- list(format = "ggmlR.marshal", version = 1L, sha256 = NA_character_,
+               payload = as.raw(1:4))
+  class(blob) <- "ggmlR_marshaled"
+  got <- NULL
+  local_mocked_bindings(.package = "ggmlR",
+                        ggml_load_model = function(path, backend = "auto") {
+    got <<- backend
+    invisible(NULL)
+  })
+
+  blob$backend <- "gpu"
+  ggml_unmarshal_model(blob)
+  expect_identical(got, "auto")
+
+  blob$backend <- "cpu"
+  ggml_unmarshal_model(blob)
+  expect_identical(got, "cpu")
+
+  # an explicit backend still wins
+  ggml_unmarshal_model(blob, backend = "gpu")
+  expect_identical(got, "vulkan")
 })

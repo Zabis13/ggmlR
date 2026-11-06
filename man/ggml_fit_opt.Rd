@@ -55,6 +55,7 @@ Callers that append an explicit validation set to the data pass
 \code{FALSE}, since there the split is positional and must be preserved.}
 
 \item{callbacks}{List of callback lists. Each element may have
+`on_train_begin(logs, state)` (once, before the first epoch),
 `on_epoch_begin(epoch, logs, state)` and/or `on_epoch_end(epoch, logs, state)`.
 Built-in factories: `ggml_callback_early_stopping()`,
 `ggml_schedule_step_decay()`, `ggml_schedule_cosine_decay()`,

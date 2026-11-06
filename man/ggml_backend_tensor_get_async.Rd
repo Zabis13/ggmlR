@@ -16,7 +16,9 @@ ggml_backend_tensor_get_async(backend, tensor, offset = 0, size)
 \item{size}{Number of bytes to read}
 }
 \value{
-Numeric vector with data
+Double vector of \code{ceiling(size / 8)} elements carrying the raw
+  bytes (reinterpret with \code{writeBin}/\code{readBin}); bytes past
+  \code{size} are zero. Filled only after \code{ggml_backend_synchronize()}.
 }
 \description{
 Get tensor data asynchronously

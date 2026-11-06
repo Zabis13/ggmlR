@@ -1983,7 +1983,9 @@ static void ggml_compute_forward_concat_any(
     GGML_ASSERT(dim >= 0 && dim < 5);
 
     // ggmlR DIVERGENCE: upstream asserts contiguous rows; inputs whose rows are not
-    // contiguous (views from the ONNX importer) take the element-wise path below.
+    // contiguous take the element-wise path below. Only types without their own
+    // concat kernel reach here (F64, I64; quantized still asserts), so ONNX Concat
+    // (F32/I32/F16) never does. Test: test-concat-any-noncontig.R.
     if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous_rows(src1)) {
         GGML_ASSERT(!ggml_is_quantized(src0->type));
 

@@ -1,5 +1,23 @@
 # Callbacks for ggml_fit() epoch loop
-# Each callback factory returns a list with on_epoch_begin and/or on_epoch_end.
+# Each callback factory returns a list with on_train_begin, on_epoch_begin
+# and/or on_epoch_end; every hook is optional.
+#
+# on_train_begin(logs, state) runs once per ggml_fit(), before the first epoch,
+# with the same `state` environment the epoch hooks get. Stateful callbacks
+# (early stopping, reduce-on-plateau, cosine decay) reset there, so one
+# callback object can be reused across fits -- resample() folds, tune_grid()
+# candidates -- each starting from scratch, as in Keras.
+
+# Run the on_train_begin hooks. Called by every epoch loop (ggml_fit_opt,
+# ggml_fit_opt_multi, ggml_fit_opt_gen and the two loops in the functional
+# ggml_fit) right after `state` is built; each ggml_fit() goes through exactly
+# one loop, so the hook fires once per fit.
+.ggml_cb_train_begin <- function(callbacks, state) {
+  for (cb in callbacks) {
+    if (is.function(cb$on_train_begin)) cb$on_train_begin(list(), state)
+  }
+  invisible(NULL)
+}
 
 # ============================================================================
 # Early Stopping
@@ -13,7 +31,7 @@
 #' @param patience Number of epochs with no improvement before stopping
 #' @param min_delta Minimum change to qualify as improvement
 #' @param mode "min" (lower is better) or "max" (higher is better). "auto" infers from monitor name.
-#' @return List with on_epoch_end function
+#' @return List with on_train_begin and on_epoch_end functions; the state resets at the start of every fit
 #' @export
 #' @family callbacks
 ggml_callback_early_stopping <- function(monitor = "val_loss", patience = 5,
@@ -25,6 +43,12 @@ ggml_callback_early_stopping <- function(monitor = "val_loss", patience = 5,
   wait <- 0L
 
   list(
+    # every fit starts afresh: the object may be reused across fits
+    on_train_begin = function(logs, state) {
+      best <<- if (mode == "min") Inf else -Inf
+      wait <<- 0L
+      invisible(NULL)
+    },
     on_epoch_end = function(epoch, logs, state) {
       val <- logs[[monitor]]
       if (is.null(val) || is.na(val)) return(invisible(NULL))
@@ -80,13 +104,18 @@ ggml_schedule_step_decay <- function(step_size = 10, gamma = 0.1) {
 #'
 #' @param eta_min Minimum LR at end of schedule
 #' @param T_max Total number of epochs (defaults to nepoch from fit state)
-#' @return List with on_epoch_begin function
+#' @return List with on_train_begin and on_epoch_begin functions; eta_max is re-read from the LR at the start of every fit
 #' @export
 #' @family callbacks
 ggml_schedule_cosine_decay <- function(eta_min = 0, T_max = NULL) {
-  eta_max <- NULL  # captured from first epoch
+  eta_max <- NULL  # captured at epoch 1 of each fit
 
   list(
+    # eta_max is each fit's own starting LR, not the first fit's
+    on_train_begin = function(logs, state) {
+      eta_max <<- NULL
+      invisible(NULL)
+    },
     on_epoch_begin = function(epoch, logs, state) {
       if (is.null(eta_max)) {
         lr <- .Call("R_ggml_opt_get_lr", state$lr_ud)
@@ -111,7 +140,7 @@ ggml_schedule_cosine_decay <- function(eta_min = 0, T_max = NULL) {
 #' @param min_lr Minimum LR
 #' @param min_delta Minimum change to qualify as improvement
 #' @param mode "min" or "max". "auto" infers from monitor name.
-#' @return List with on_epoch_end function
+#' @return List with on_train_begin and on_epoch_end functions; the state resets at the start of every fit
 #' @export
 #' @family callbacks
 ggml_schedule_reduce_on_plateau <- function(monitor = "val_loss", factor = 0.5,
@@ -124,6 +153,12 @@ ggml_schedule_reduce_on_plateau <- function(monitor = "val_loss", factor = 0.5,
   wait <- 0L
 
   list(
+    # every fit starts afresh: the object may be reused across fits
+    on_train_begin = function(logs, state) {
+      best <<- if (mode == "min") Inf else -Inf
+      wait <<- 0L
+      invisible(NULL)
+    },
     on_epoch_end = function(epoch, logs, state) {
       val <- logs[[monitor]]
       if (is.null(val) || is.na(val)) return(invisible(NULL))

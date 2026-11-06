@@ -65,7 +65,7 @@ int nms_gpu_enabled(void);
  * src[].  scores used to travel in userdata, so on Vulkan it stayed in VRAM
  * and the kernel refused to read it -- five NMS nodes in MaskRCNN produced
  * empty output, and the graph that got built around those empties ran into
- * GGML_SCHED_MAX_SPLIT_INPUTS.
+ * GGML_SCHED_MAX_SPLIT_INPUTS (a hard limit before ggml 0.27).
  *
  *   dst:      output [3, max_possible_selected], filled with -1
  *   src[0]:   boxes  [4, num_boxes, N] (ggml order)

@@ -51,7 +51,8 @@ is reshuffled each epoch while the validation portion stays fixed.  Set to
 
 \item{callbacks}{List of callback objects, e.g.
   \code{\link{ggml_callback_early_stopping}} or an LR scheduler.  Each is a
-  list with \code{on_epoch_begin(epoch, logs, state)} and/or
+  list with any of \code{on_train_begin(logs, state)} (once per fit, before
+  the first epoch), \code{on_epoch_begin(epoch, logs, state)} and/or
   \code{on_epoch_end(epoch, logs, state)}; setting \code{state$stop <- TRUE}
   stops training.  \code{logs} holds \code{train_loss},
   \code{train_accuracy}, \code{val_loss} and \code{val_accuracy}, and for a

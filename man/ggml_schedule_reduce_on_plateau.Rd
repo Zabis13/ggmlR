@@ -27,7 +27,7 @@ ggml_schedule_reduce_on_plateau(
 \item{mode}{"min" or "max". "auto" infers from monitor name.}
 }
 \value{
-List with on_epoch_end function
+List with on_train_begin and on_epoch_end functions; the state resets at the start of every fit
 }
 \description{
 Reduces LR when a metric stops improving.

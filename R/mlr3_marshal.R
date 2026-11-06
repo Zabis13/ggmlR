@@ -94,7 +94,9 @@ ggml_marshal_model <- function(model) {
 #'
 #' @param x A \code{"ggmlR_marshaled"} container.
 #' @param backend Backend selection passed through to
-#'   \code{\link{ggml_load_model}}. Default \code{"auto"}.
+#'   \code{\link{ggml_load_model}}. Default \code{NULL}: a model trained
+#'   on the CPU loads on the CPU; one trained on the GPU loads with
+#'   \code{"auto"} (GPU if available, else CPU).
 #' @return A compiled ggmlR model object (sequential or functional).
 #' @seealso \code{\link{ggml_marshal_model}}, \code{\link{ggml_load_model}}
 #' @export
@@ -118,7 +120,12 @@ ggml_unmarshal_model <- function(x, backend = NULL) {
     }
   }
 
-  resolved_backend <- backend %||% x$backend %||% "auto"
+  # A model trained on the GPU comes back with "auto": the GPU where there is
+  # one, the CPU otherwise. Forcing "vulkan" made ggml_compile() stop on a
+  # worker without Vulkan (future/callr). A CPU-trained model stays on the CPU.
+  # An explicit `backend` still wins.
+  resolved_backend <- backend %||%
+    (if (identical(x$backend, "cpu")) "cpu" else "auto")
   if (identical(resolved_backend, "gpu")) resolved_backend <- "vulkan"
 
   dir <- tempfile(pattern = "ggmlR_unmarshal_")
@@ -186,6 +193,10 @@ marshal_inner <- function(model, learner_label) {
 }
 
 # Reverse marshal_inner(): reconstruct the inner model from a tagged payload.
+# Returns list(model, rebuild_fn). For autograd models rebuild_fn is the closure
+# stored in the state container (container$model_fn); it goes back into the
+# learner model as ag_rebuild_fn so a second marshal works (marshal ->
+# unmarshal -> marshal, as with future/callr workers). NULL otherwise.
 unmarshal_inner <- function(tagged) {
   if (identical(tagged$api, "autograd")) {
     dir  <- tempfile(pattern = "ggmlR_ag_unmarshal_")
@@ -193,10 +204,11 @@ unmarshal_inner <- function(tagged) {
     on.exit(unlink(dir, recursive = TRUE, force = TRUE), add = TRUE)
     file <- file.path(dir, "model.rds")
     writeBin(tagged$payload, file)
-    return(ag_load_model(file))
+    return(list(model      = ag_load_model(file),
+                rebuild_fn = readRDS(file)$model_fn))
   }
   # sequential / functional
-  ggml_unmarshal_model(tagged$payload)
+  list(model = ggml_unmarshal_model(tagged$payload), rebuild_fn = NULL)
 }
 
 #' @noRd
@@ -216,12 +228,14 @@ marshal_model.classif_ggml_model <- function(model, inplace = FALSE, ...) {
 #' @noRd
 unmarshal_model.classif_ggml_model_marshaled <- function(model, inplace = FALSE, ...) {
   payload <- model$marshaled
+  inner <- unmarshal_inner(payload$inner)
   out <- list(
-    model         = unmarshal_inner(payload$inner),
+    model         = inner$model,
     class_names   = payload$class_names,
     n_features    = payload$n_features,
     feature_names = payload$feature_names
   )
+  out$ag_rebuild_fn <- inner$rebuild_fn   # NULL (not stored) for seq/functional
   class(out) <- c("classif_ggml_model", "list")
   out
 }
@@ -242,11 +256,13 @@ marshal_model.regr_ggml_model <- function(model, inplace = FALSE, ...) {
 #' @noRd
 unmarshal_model.regr_ggml_model_marshaled <- function(model, inplace = FALSE, ...) {
   payload <- model$marshaled
+  inner <- unmarshal_inner(payload$inner)
   out <- list(
-    model         = unmarshal_inner(payload$inner),
+    model         = inner$model,
     n_features    = payload$n_features,
     feature_names = payload$feature_names
   )
+  out$ag_rebuild_fn <- inner$rebuild_fn   # NULL (not stored) for seq/functional
   class(out) <- c("regr_ggml_model", "list")
   out
 }

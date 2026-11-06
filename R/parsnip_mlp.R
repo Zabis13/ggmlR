@@ -29,9 +29,16 @@ make_mlp_ggml <- function() {
   parsnip::set_model_arg("mlp", "ggml", "dropout", "dropout",
                          has_submodel = FALSE,
                          func = list(pkg = "dials", fun = "dropout"))
+  # Only activations that nn_apply_activation() knows AND that train (have a
+  # backward): dials::activation() alone offers 23 values, most of which would
+  # stop tune_grid() with "Unknown activation". hardsigmoid/hardswish run
+  # forward but have no backward yet; "linear" is not implemented. Same idea
+  # as brulee's registration.
   parsnip::set_model_arg("mlp", "ggml", "activation", "activation",
                          has_submodel = FALSE,
-                         func = list(pkg = "dials", fun = "activation"))
+                         func = list(pkg = "dials", fun = "activation",
+                                     values = c("relu", "sigmoid", "tanh",
+                                                "silu", "gelu")))
   parsnip::set_model_arg("mlp", "ggml", "learn_rate", "learn_rate",
                          has_submodel = FALSE,
                          func = list(pkg = "dials", fun = "learn_rate"))

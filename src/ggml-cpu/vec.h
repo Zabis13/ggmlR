@@ -926,7 +926,34 @@ inline static void ggml_vec_relu_f16 (const int n, ggml_fp16_t * y, const ggml_f
         y[i] = GGML_CPU_FP32_TO_FP16((v > 0.f) ? v : 0.f);
     }
 }
-inline static void ggml_vec_leaky_relu_f32 (const int n, float * y, const float * x, const float ns) { for (int i = 0; i < n; ++i) y[i] = ((x[i] > 0.f) ? x[i] : 0.f) + ns * ((x[i] < 0.0f) ? x[i] : 0.f); }
+// DIVERGENCE from upstream (same scalar loop in 0.27): at -O2 GCC does not
+// vectorize the two-ternary sum and emits branches, which mispredict on mixed
+// signs (~10x slower than relu). The and-mask form below is branch-free and
+// bit-identical to the scalar formula, NaN -> 0 and -0 -> +0 included
+// (ordered compares are false for NaN and for +-0).
+inline static void ggml_vec_leaky_relu_f32 (const int n, float * y, const float * x, const float ns) {
+    int i = 0;
+#if defined(__AVX__)
+    const __m256 vz = _mm256_setzero_ps();
+    const __m256 vs = _mm256_set1_ps(ns);
+    for (; i + 8 <= n; i += 8) {
+        const __m256 v = _mm256_loadu_ps(x + i);
+        const __m256 p = _mm256_and_ps(v, _mm256_cmp_ps(v, vz, _CMP_GT_OQ));
+        const __m256 m = _mm256_and_ps(v, _mm256_cmp_ps(v, vz, _CMP_LT_OQ));
+        _mm256_storeu_ps(y + i, _mm256_add_ps(p, _mm256_mul_ps(vs, m)));
+    }
+#elif defined(__SSE2__)
+    const __m128 vz = _mm_setzero_ps();
+    const __m128 vs = _mm_set1_ps(ns);
+    for (; i + 4 <= n; i += 4) {
+        const __m128 v = _mm_loadu_ps(x + i);
+        const __m128 p = _mm_and_ps(v, _mm_cmpgt_ps(v, vz));
+        const __m128 m = _mm_and_ps(v, _mm_cmplt_ps(v, vz));
+        _mm_storeu_ps(y + i, _mm_add_ps(p, _mm_mul_ps(vs, m)));
+    }
+#endif
+    for (; i < n; ++i) y[i] = ((x[i] > 0.f) ? x[i] : 0.f) + ns * ((x[i] < 0.0f) ? x[i] : 0.f);
+}
 inline static void ggml_vec_leaky_relu_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const float ns) {
     for (int i = 0; i < n; ++i) {
         float v = GGML_CPU_FP16_TO_FP32(x[i]);
