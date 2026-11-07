@@ -972,6 +972,21 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_win_unpart_f32;
         }
         return nullptr;
+    case GGML_OP_GET_REL_POS:   // ggmlR: rel_pos.comp, raw f16 copy
+        if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+            return ctx->device->pipeline_get_rel_pos_f16;
+        }
+        return nullptr;
+    case GGML_OP_ADD_REL_POS:   // ggmlR: rel_pos.comp
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_add_rel_pos_f32;
+        }
+        return nullptr;
+    case GGML_OP_POOL_2D_BACK:  // ggmlR: pool2d_back.comp
+        if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_pool2d_back_f32;
+        }
+        return nullptr;
     case GGML_OP_SOFT_MAX:
         GGML_ASSERT(!src1 || src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
         GGML_ASSERT(!src2 || src2->type == GGML_TYPE_F32);
@@ -1465,6 +1480,26 @@ template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * 
     p.d_offset = get_misalign_bytes(ctx, dst)  / ggml_type_size(dst->type);
 
     GGML_UNUSED(src1);
+    GGML_UNUSED(src2);
+    GGML_UNUSED(src3);
+}
+
+// ggmlR: rel_pos.comp takes each offset separately (src0, pw, ph, dst).
+template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_rel_pos_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
+    p.a_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
+    p.b_offset = src1 ? get_misalign_bytes(ctx, src1) / ggml_type_size(src1->type) : 0;
+    p.c_offset = src2 ? get_misalign_bytes(ctx, src2) / ggml_type_size(src2->type) : 0;
+    p.d_offset = get_misalign_bytes(ctx, dst)  / ggml_type_size(dst->type);
+
+    GGML_UNUSED(src3);
+}
+
+// ggmlR: pool2d_back.comp takes each offset separately (grad, forward input, dst).
+template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_pool2d_back_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
+    p.a_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
+    p.b_offset = get_misalign_bytes(ctx, src1) / ggml_type_size(src1->type);
+    p.d_offset = get_misalign_bytes(ctx, dst)  / ggml_type_size(dst->type);
+
     GGML_UNUSED(src2);
     GGML_UNUSED(src3);
 }

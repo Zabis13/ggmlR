@@ -1997,6 +1997,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_diag_mask_zero_f32, "diag_mask_zero_f32", diag_mask_zero_f32_len, diag_mask_zero_f32_data, "main", 2, sizeof(vk_op_diag_mask_push_constants), {1, 512, 1}, {}, 1, true);
     ggml_vk_create_pipeline(device, device->pipeline_win_part_f32,   "win_part_f32",   win_part_f32_len,   win_part_f32_data,   "main", 2, sizeof(vk_op_win_part_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_win_unpart_f32, "win_unpart_f32", win_unpart_f32_len, win_unpart_f32_data, "main", 2, sizeof(vk_op_win_part_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_get_rel_pos_f16, "get_rel_pos_f16", get_rel_pos_f16_len, get_rel_pos_f16_data, "main", 2, sizeof(vk_op_rel_pos_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_add_rel_pos_f32, "add_rel_pos_f32", add_rel_pos_f32_len, add_rel_pos_f32_data, "main", 4, sizeof(vk_op_rel_pos_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_pool2d_back_f32, "pool2d_back_f32", pool2d_back_f32_len, pool2d_back_f32_data, "main", 3, sizeof(vk_op_pool2d_back_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32,        "soft_max_f32",        soft_max_f32_len,     soft_max_f32_data,     "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_wg128,  "soft_max_f32_wg128",  soft_max_f32_len,     soft_max_f32_data,     "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 128 }, 1);

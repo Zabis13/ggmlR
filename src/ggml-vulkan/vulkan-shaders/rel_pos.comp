@@ -1,0 +1,73 @@
+#version 450
+
+// ggmlR: GGML_OP_GET_REL_POS / GGML_OP_ADD_REL_POS (SAM relative positions),
+// same indexing as ggml_compute_forward_get_rel_pos_f16 / _add_rel_pos_f32.
+//
+// GET_REL_POS  src [C, 2w-1] -> dst [C, w, w]:
+//              dst[i2, i1, i0] = src[(w - 1 - i1 + i2), i0]
+// ADD_REL_POS  src0 [K*K, ...], pw/ph [K, ...] -> dst (shape of src0):
+//              dst[r, a, b] = src0[r, a, b] + ph[r, a] + pw[r, b]
+//              (r = row of pw/ph, a = d / K % K, b = d % K). The two adds are
+//              applied in the order the CPU kernel applies them (ph first when
+//              a <= b), so the result is bit-identical. Inplace is fine: each
+//              thread reads and writes only its own element.
+//
+// One thread per dst element; all tensors contiguous.
+
+#include "types.glsl"
+
+layout (push_constant) uniform parameter
+{
+    uint ne;        // dst elements
+    uint ne0;       // GET: C;          ADD: K (= pw->ne[0])
+    uint ne1;       // GET: w (dst ne1); ADD: unused
+    uint a_offset;  // misalignment of src0 / pw / ph / dst, in elements
+    uint b_offset;
+    uint c_offset;
+    uint d_offset;
+} p;
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+#ifdef ADD_REL_POS
+layout (binding = 1) readonly buffer B {float data_pw[];};
+layout (binding = 2) readonly buffer C {float data_ph[];};
+layout (binding = 3) writeonly buffer D {D_TYPE data_d[];};
+#else
+layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
+#endif
+
+void main() {
+    const uint i = gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
+    if (i >= p.ne) {
+        return;
+    }
+
+#ifdef ADD_REL_POS
+    const uint K  = p.ne0;
+    const uint b  = i % K;
+    const uint t  = i / K;
+    const uint a  = t % K;
+    const uint rK = (t / K) * K;
+
+    const float h = data_ph[p.c_offset + rK + a];
+    const float w = data_pw[p.b_offset + rK + b];
+    precise float v = float(data_a[p.a_offset + i]);   // no reassociation of the two adds
+    if (a <= b) {
+        v += h;
+        v += w;
+    } else {
+        v += w;
+        v += h;
+    }
+    data_d[p.d_offset + i] = D_TYPE(v);
+#else
+    const uint i0 = i % p.ne0;
+    const uint t  = i / p.ne0;
+    const uint i1 = t % p.ne1;
+    const uint i2 = t / p.ne1;
+    const uint pos = (p.ne1 - i1 - 1) + i2;
+    data_d[p.d_offset + i] = data_a[p.a_offset + pos * p.ne0 + i0];
+#endif
+}

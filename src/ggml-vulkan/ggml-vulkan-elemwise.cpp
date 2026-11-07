@@ -297,6 +297,9 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_GELU_BACK:
     case GGML_OP_WIN_PART:         // ggmlR: win_part.comp, one thread per dst element
     case GGML_OP_WIN_UNPART:
+    case GGML_OP_GET_REL_POS:      // ggmlR: rel_pos.comp, one thread per dst element
+    case GGML_OP_ADD_REL_POS:
+    case GGML_OP_POOL_2D_BACK:     // ggmlR: pool2d_back.comp, one thread per dst element
         {
             uint32_t ne = ggml_nelements(dst);
             if (op == GGML_OP_CPY && ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
@@ -1983,6 +1986,28 @@ static void ggml_vk_win_unpart(ggml_backend_vk_context * ctx, vk_context& subctx
     ggml_vk_op_f32<vk_op_win_part_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_WIN_UNPART, {
         (uint32_t)ggml_nelements(dst), (uint32_t)dst->ne[0], (uint32_t)dst->ne[1], (uint32_t)dst->ne[2],
         w, npx, 0, 0 });
+}
+
+// ggmlR: GET_REL_POS -- src [C, 2w-1] f16 -> dst [C, w, w] f16 (raw copy).
+static void ggml_vk_get_rel_pos(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    ggml_vk_op_f32<vk_op_rel_pos_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_GET_REL_POS, {
+        (uint32_t)ggml_nelements(dst), (uint32_t)dst->ne[0], (uint32_t)dst->ne[1], 0, 0, 0, 0 });
+}
+
+// ggmlR: ADD_REL_POS -- dst = src0 + ph (along rows) + pw (along cols); src1 = pw, src2 = ph.
+static void ggml_vk_add_rel_pos(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst) {
+    ggml_vk_op_f32<vk_op_rel_pos_push_constants>(ctx, subctx, src0, src1, src2, nullptr, dst, GGML_OP_ADD_REL_POS, {
+        (uint32_t)ggml_nelements(dst), (uint32_t)src1->ne[0], 0, 0, 0, 0, 0 });
+}
+
+// ggmlR: POOL_2D_BACK -- op_params = { op, k0, k1, s0, s1, p0, p1 };
+// src0 = grad of pooled output [OW, OH, ...], src1 = forward input = dst shape.
+static void ggml_vk_pool_2d_back(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    const int32_t * o = (const int32_t *)dst->op_params;
+    ggml_vk_op_f32<vk_op_pool2d_back_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_POOL_2D_BACK, {
+        (uint32_t)ggml_nelements(dst), (uint32_t)dst->ne[0], (uint32_t)dst->ne[1],
+        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1],
+        o[1], o[2], o[3], o[4], o[5], o[6], (uint32_t)o[0], 0, 0, 0 });
 }
 
 static void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst) {

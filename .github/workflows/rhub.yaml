@@ -18,7 +18,7 @@ jobs:
       matrix:
         config:
           - {os: macos-latest,   r: 'release'}
-          - {os: macos-14,       r: 'release'}  # ARM64
+          - {os: macos-15,       r: 'release'}  # ARM64
           - {os: windows-latest, r: 'release'}
           - {os: windows-11-arm, r: 'release'}
           - {os: ubuntu-latest,  r: 'devel'}

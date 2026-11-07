@@ -1,0 +1,109 @@
+#version 450
+
+// ggmlR: GGML_OP_POOL_2D_BACK, same result as ggml_compute_forward_pool_2d_back.
+//
+// src0 = grad of the pooled output [OW, OH, planes]
+// src1 = forward input af           [IW, IH, planes]
+// dst  = grad of af                 [IW, IH, planes]
+//
+// The CPU kernel scatters (dst[...] += g) walking output windows oy, then ox.
+// Here every thread owns one dst element and gathers the same contributions in
+// the same oy/ox order, starting from 0, so the float sums are identical and
+// no atomics are needed. For MAX the window's argmax is recomputed exactly as
+// the CPU does: ky outer, kx inner, strict '>', start at -FLT_MAX, positions
+// outside the input skipped; a window with no candidate contributes nothing.
+
+#include "types.glsl"
+
+layout (push_constant) uniform parameter
+{
+    uint ne;        // dst elements
+    uint IW;
+    uint IH;
+    uint OW;
+    uint OH;
+    int  k0;
+    int  k1;
+    int  s0;
+    int  s1;
+    int  p0;
+    int  p1;
+    uint op;        // 0 = MAX, 1 = AVG (enum ggml_op_pool)
+    uint a_offset;  // misalignment of src0 / src1 / dst, in elements
+    uint b_offset;
+    uint d_offset;
+} p;
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly  buffer A {float data_g[];};   // grad of output
+layout (binding = 1) readonly  buffer B {float data_f[];};   // forward input
+layout (binding = 2) writeonly buffer D {float data_d[];};
+
+#define FLT_MAX_ 3.402823466e+38
+
+void main() {
+    const uint i = gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
+    if (i >= p.ne) {
+        return;
+    }
+
+    const uint ia    = p.IW * p.IH;
+    const uint plane = i / ia;
+    const uint r     = i - plane * ia;
+    const int  x     = int(r % p.IW);
+    const int  y     = int(r / p.IW);
+
+    const uint gbase = p.a_offset + plane * p.OW * p.OH;
+    const uint fbase = p.b_offset + plane * ia;
+
+    // output windows covering x: ox*s0 - p0 <= x <= ox*s0 - p0 + k0 - 1
+    const int nx = x + p.p0 - p.k0 + 1;
+    const int ny = y + p.p1 - p.k1 + 1;
+    const int ox_lo = nx <= 0 ? 0 : (nx + p.s0 - 1) / p.s0;
+    const int oy_lo = ny <= 0 ? 0 : (ny + p.s1 - 1) / p.s1;
+    const int ox_hi = (x + p.p0) < 0 ? -1 : min(int(p.OW) - 1, (x + p.p0) / p.s0);
+    const int oy_hi = (y + p.p1) < 0 ? -1 : min(int(p.OH) - 1, (y + p.p1) / p.s1);
+
+    precise float acc = 0.0;
+
+    for (int oy = oy_lo; oy <= oy_hi; ++oy) {
+        const int iy = oy * p.s1 - p.p1;
+        for (int ox = ox_lo; ox <= ox_hi; ++ox) {
+            const int ix = ox * p.s0 - p.p0;
+            const float g = data_g[gbase + uint(oy) * p.OW + uint(ox)];
+
+            if (p.op == 0) {
+                float maxval = -FLT_MAX_;
+                int kxmax = -1;
+                int kymax = -1;
+                for (int ky = 0; ky < p.k1; ++ky) {
+                    const int yy = iy + ky;
+                    if (yy < 0 || yy >= int(p.IH)) {
+                        continue;
+                    }
+                    for (int kx = 0; kx < p.k0; ++kx) {
+                        const int xx = ix + kx;
+                        if (xx < 0 || xx >= int(p.IW)) {
+                            continue;
+                        }
+                        const float val = data_f[fbase + uint(yy) * p.IW + uint(xx)];
+                        if (val <= maxval) {
+                            continue;
+                        }
+                        maxval = val;
+                        kxmax = kx;
+                        kymax = ky;
+                    }
+                }
+                if (kxmax != -1 && kymax != -1 && ix + kxmax == x && iy + kymax == y) {
+                    acc += g;
+                }
+            } else {
+                acc += g / float(p.k0 * p.k1);
+            }
+        }
+    }
+
+    data_d[p.d_offset + i] = acc;
+}

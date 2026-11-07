@@ -1233,6 +1233,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_diag_mask_zero_f32;   // ggmlR
     vk_pipeline pipeline_win_part_f32;         // ggmlR
     vk_pipeline pipeline_win_unpart_f32;       // ggmlR
+    vk_pipeline pipeline_get_rel_pos_f16;      // ggmlR
+    vk_pipeline pipeline_add_rel_pos_f32;      // ggmlR
+    vk_pipeline pipeline_pool2d_back_f32;      // ggmlR
     vk_pipeline pipeline_soft_max_f32, pipeline_soft_max_f32_f16;
     vk_pipeline pipeline_soft_max_f32_wg128, pipeline_soft_max_f32_f16_wg128;
     vk_pipeline pipeline_soft_max_f32_wg512, pipeline_soft_max_f32_f16_wg512;
@@ -2283,6 +2286,29 @@ struct vk_op_win_part_push_constants {
     uint32_t w;         // window size
     uint32_t npx;       // windows along W
     uint32_t a_offset;  // misalignment of src / dst, in elements
+    uint32_t d_offset;
+};
+
+// ggmlR: rel_pos.comp (GGML_OP_GET_REL_POS / ADD_REL_POS)
+struct vk_op_rel_pos_push_constants {
+    uint32_t ne;        // dst elements
+    uint32_t ne0;       // GET: C;           ADD: K (= pw->ne[0])
+    uint32_t ne1;       // GET: w (dst ne1); ADD: unused
+    uint32_t a_offset;  // misalignment of src0 / pw / ph / dst, in elements
+    uint32_t b_offset;
+    uint32_t c_offset;
+    uint32_t d_offset;
+};
+
+// ggmlR: pool2d_back.comp (GGML_OP_POOL_2D_BACK)
+struct vk_op_pool2d_back_push_constants {
+    uint32_t ne;        // dst elements
+    uint32_t IW, IH;    // forward input (= dst)
+    uint32_t OW, OH;    // pooled output (= src0)
+    int32_t  k0, k1, s0, s1, p0, p1;
+    uint32_t op;        // enum ggml_op_pool
+    uint32_t a_offset;  // misalignment of src0 / src1 / dst, in elements
+    uint32_t b_offset;
     uint32_t d_offset;
 };
 

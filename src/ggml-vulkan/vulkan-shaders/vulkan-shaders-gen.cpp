@@ -1088,6 +1088,9 @@ void process_shaders() {
     string_to_spv("diag_mask_zero_f32", "diag_mask_inf.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"MASK_ZERO", "1"}});
     string_to_spv("win_part_f32",       "win_part.comp",      {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
     string_to_spv("win_unpart_f32",     "win_part.comp",      {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"WIN_UNPART", "1"}});
+    string_to_spv("get_rel_pos_f16",    "rel_pos.comp",       {{"A_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}});
+    string_to_spv("add_rel_pos_f32",    "rel_pos.comp",       {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"ADD_REL_POS", "1"}});
+    string_to_spv("pool2d_back_f32",    "pool2d_back.comp",   {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
 
     string_to_spv("soft_max_f32", "soft_max.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("soft_max_f32_f16", "soft_max.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float16_t"}, {"D_TYPE", "float"}}));

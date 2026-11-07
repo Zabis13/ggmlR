@@ -552,6 +552,15 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_WIN_UNPART:
         ggml_vk_win_unpart(ctx, compute_ctx, src0, node);
         break;
+    case GGML_OP_GET_REL_POS:
+        ggml_vk_get_rel_pos(ctx, compute_ctx, src0, node);
+        break;
+    case GGML_OP_ADD_REL_POS:
+        ggml_vk_add_rel_pos(ctx, compute_ctx, src0, src1, src2, node);
+        break;
+    case GGML_OP_POOL_2D_BACK:
+        ggml_vk_pool_2d_back(ctx, compute_ctx, src0, src1, node);
+        break;
     case GGML_OP_SOFT_MAX:
         if (ctx->fused_topk_moe_mode != TOPK_MOE_COUNT) {
             ggml_vk_topk_moe(ctx, compute_ctx, cgraph, node_idx);
@@ -4414,6 +4423,37 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                        op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
                        img->ne[3] == 1 && op->ne[4] == 1 && op->src[0]->ne[4] == 1 &&
                        ggml_nelements(op) <= UINT32_MAX && ggml_nelements(op->src[0]) <= UINT32_MAX;
+            }
+        // ggmlR: rel_pos.comp -- linear indexing of contiguous tensors, like the
+        // CPU kernels. GET: raw f16 copy (BF16 stays on CPU). ADD: the per-element
+        // form covers src0 only when src0->ne[3] == 1 (the CPU kernel walks
+        // pw->ne[3] == src0->ne[2] patches and nothing beyond).
+        case GGML_OP_GET_REL_POS:
+            return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
+                   op->src[0]->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16 &&
+                   ggml_nelements(op) <= UINT32_MAX && ggml_nelements(op->src[0]) <= UINT32_MAX;
+        case GGML_OP_ADD_REL_POS:
+            return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]) &&
+                   ggml_is_contiguous(op->src[2]) && ggml_is_contiguous(op) &&
+                   op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
+                   op->src[2]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                   op->src[0]->ne[3] == 1 && op->src[0]->ne[4] == 1 && op->src[1]->ne[4] == 1 &&
+                   ggml_nelements(op) <= UINT32_MAX;
+        // ggmlR: pool2d_back.comp -- gather form of the CPU scatter; all three
+        // tensors contiguous (the CPU kernel assumes it too), planes = every dim
+        // past ne[1], counted the same in grad and dst.
+        case GGML_OP_POOL_2D_BACK:
+            {
+                const int32_t * o = (const int32_t *)op->op_params;
+                const ggml_tensor * g = op->src[0];
+                const ggml_tensor * f = op->src[1];
+                return ggml_is_contiguous(g) && ggml_is_contiguous(f) && ggml_is_contiguous(op) &&
+                       g->type == GGML_TYPE_F32 && f->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+                       ggml_are_same_shape(f, op) &&
+                       (o[0] == GGML_OP_POOL_MAX || o[0] == GGML_OP_POOL_AVG) &&
+                       o[1] > 0 && o[2] > 0 && o[3] > 0 && o[4] > 0 &&
+                       ggml_nrows(g) / g->ne[1] == ggml_nrows(op) / op->ne[1] &&
+                       ggml_nelements(op) <= UINT32_MAX && ggml_nelements(g) <= UINT32_MAX;
             }
         case GGML_OP_SOFT_MAX:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32
