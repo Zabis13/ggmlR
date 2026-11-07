@@ -60,3 +60,5 @@
 ^inst/scripts$
 ^inst/scripts/
 ^tools$
+^ab_split_inputs_.*$
+^bench_vk_current_ops_.*\.csv$

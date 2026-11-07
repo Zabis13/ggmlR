@@ -223,7 +223,7 @@ run_ops <- function() {
   }
 
   df <- do.call(rbind, results)
-  out <- sprintf("bench_vk_current_ops_%s.csv", format(Sys.time(), "%Y%m%d_%H%M%S"))
+  out <- file.path("/tmp", sprintf("bench_vk_current_ops_%s.csv", format(Sys.time(), "%Y%m%d_%H%M%S")))
   write.csv(df, out, row.names = FALSE)
   cat(sprintf("\nsaved %s\n", out))
 }

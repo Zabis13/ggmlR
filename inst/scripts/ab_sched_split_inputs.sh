@@ -18,7 +18,7 @@ DEV="${1:-vulkan}"
 ROUNDS="${2:-3}"
 RUNS="${3:-10}"
 VARIANTS=(30 128)
-OUT="${AB_OUT:-$PWD/ab_split_inputs_$(date +%Y%m%d_%H%M%S)}"
+OUT="${AB_OUT:-/tmp/ab_split_inputs_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$OUT"
 
 # ---- measure (one process = one variant) ------------------------------------
