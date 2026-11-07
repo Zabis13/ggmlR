@@ -4092,6 +4092,32 @@ ggml_pool_2d <- function(ctx, a, op, k0, k1, s0 = k0, s1 = k1, p0 = 0, p1 = 0) {
         PACKAGE = "ggmlR")
 }
 
+#' 2D Pooling Backward (Graph)
+#'
+#' Gradient of \code{\link{ggml_pool_2d}} with respect to its input: spreads
+#' the gradient of the pooled output back over the input window (evenly for
+#' average pooling, to the window maximum for max pooling).
+#'
+#' @param ctx GGML context
+#' @param a Gradient of the pooled output (F32)
+#' @param af Forward input of the pooling (F32); the result has its shape
+#' @param op Pool operation: GGML_OP_POOL_MAX (0) or GGML_OP_POOL_AVG (1)
+#' @param k0 Kernel size dimension 0
+#' @param k1 Kernel size dimension 1
+#' @param s0 Stride dimension 0 (default = k0)
+#' @param s1 Stride dimension 1 (default = k1)
+#' @param p0 Padding dimension 0 (default 0)
+#' @param p1 Padding dimension 1 (default 0)
+#' @return Gradient tensor with the shape of \code{af}
+#' @export
+ggml_pool_2d_back <- function(ctx, a, af, op, k0, k1, s0 = k0, s1 = k1, p0 = 0, p1 = 0) {
+  .Call("R_ggml_pool_2d_back", ctx, a, af, .ggml_pool_op(op),
+        as.integer(k0), as.integer(k1),
+        as.integer(s0), as.integer(s1),
+        as.numeric(p0), as.numeric(p1),
+        PACKAGE = "ggmlR")
+}
+
 #' Column to 1D Signal (Graph)
 #'
 #' Inverse of a 1D im2col: scatter-adds the columns of a GEMM result back into

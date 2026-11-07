@@ -1176,6 +1176,16 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_gated_linear_attn_f32;
         }
         return nullptr;
+    case GGML_OP_GATED_LINEAR_ATTN_BACK:   // ggmlR: gla_back.comp
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_gla_back_f32;
+        }
+        return nullptr;
+    case GGML_OP_RWKV_WKV6_BACK:   // ggmlR: wkv6_back.comp (+ seq_partial_sum.comp, picked by the dispatcher)
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_wkv6_back_f32;
+        }
+        return nullptr;
     case GGML_OP_LIGHTNING_INDEXER:
         // only the k type selects a pipeline, the other types are fixed by ggml_lightning_indexer()
         if (ggml_vk_lightning_indexer_k_type_supported(src1->type)) {

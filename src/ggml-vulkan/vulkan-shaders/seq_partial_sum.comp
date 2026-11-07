@@ -1,0 +1,32 @@
+#version 450
+
+// ggmlR: second pass of the recurrent backward kernels (wkv6_back.comp, ...).
+// A gradient shared by every sequence (wkv6's d_tf) is written by each
+// (sequence, head) workgroup as a partial; this adds the partials of each
+// element in ascending sequence order -- fixed order, reproducible run to run.
+//
+//     dst[d_off + e] = sum_{s = 0 .. ns-1} part[p_off + s*n + e],   e < n
+
+layout(push_constant) uniform Parameters {
+    uint n;       // elements per sequence
+    uint ns;      // sequences
+    uint p_off;   // partials offset in the scratch, in floats
+    uint d_off;   // destination offset in the packed output, in floats
+};
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer Part { float part[]; };
+layout(binding = 1) writeonly buffer Dst { float dst[]; };
+
+void main() {
+    const uint e = gl_GlobalInvocationID.x;
+    if (e >= n) {
+        return;
+    }
+    precise float acc = 0.0;
+    for (uint s = 0; s < ns; s++) {
+        acc += part[p_off + s * n + e];
+    }
+    dst[d_off + e] = acc;
+}

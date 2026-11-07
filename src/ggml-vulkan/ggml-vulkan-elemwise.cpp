@@ -1021,6 +1021,130 @@ static void ggml_vk_ssm_scan_back(ggml_backend_vk_context * ctx, vk_context& sub
     ctx->prealloc_x_need_sync = true;
 }
 
+// ggmlR extension: backward of GGML_OP_GATED_LINEAR_ATTN (gla_back.comp).
+//
+// One workgroup per (sequence, head), 64 invocations (one per state row).
+// The forward keeps only the final state, so the shader replays it, keeping a
+// checkpoint every GGML_VK_RECUR_BACK_K tokens plus one (K+1)-state window that
+// each segment is re-run into on the way back -- scratch in prealloc_x, sized
+// here and grown lazily like ssm_scan_back. Every output element is written
+// exactly once (no atomics, no memset), in a fixed order.
+static void ggml_vk_gla_back(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    const ggml_tensor * k     = dst->src[0];  // {S, H, T}
+    const ggml_tensor * state = dst->src[4];  // {S*S*H, n_seqs}
+
+    GGML_ASSERT(dst->buffer != nullptr);
+
+    const uint32_t S      = (uint32_t)k->ne[0];
+    const uint32_t H      = (uint32_t)k->ne[1];
+    const uint32_t T      = (uint32_t)k->ne[2];
+    const uint32_t n_seqs = (uint32_t)state->ne[1];
+    const uint32_t L      = T / n_seqs;
+    const uint32_t K      = GGML_VK_RECUR_BACK_K;
+    const uint32_t nck    = (L + K - 1) / K;
+
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, k, nullptr, nullptr, dst, dst->op);
+    GGML_ASSERT(pipeline != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+
+    const size_t scratch_size = (size_t)n_seqs * H * (nck + K + 1) * S * S * sizeof(float);
+
+    if (ctx->prealloc_size_x < scratch_size) {
+        ctx->prealloc_size_x = scratch_size;
+        ggml_vk_preallocate_buffers(ctx, subctx);
+    }
+    if (ctx->prealloc_x_need_sync) {
+        ggml_vk_sync_buffers(ctx, subctx);
+    }
+
+    const vk_op_gla_back_push_constants pc = {
+        T, H, n_seqs, L, nck, ggml_get_op_params_f32(dst, 0),
+    };
+
+    vk_subbuffer src_buf[6];
+    for (int i = 0; i < 6; i++) {
+        src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i]);
+    }
+    vk_subbuffer dst_buf     = ggml_vk_tensor_subbuffer(ctx, dst);
+    vk_subbuffer scratch_buf = { ctx->prealloc_x, 0, VK_WHOLE_SIZE };
+
+    // wg_denoms are {1,1,1}: elements count workgroups here.
+    const std::array<uint32_t, 3> elements = { H, n_seqs, 1 };
+
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+        {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5],
+         dst_buf, scratch_buf},
+        pc, elements);
+
+    ctx->prealloc_x_need_sync = true;
+}
+
+// ggmlR extension: backward of GGML_OP_RWKV_WKV6 (wkv6_back.comp), same
+// checkpoint scheme as ggml_vk_gla_back. d_tf is shared by every sequence:
+// each (sequence, head) workgroup leaves its partial in the scratch after the
+// checkpoints and windows, and seq_partial_sum.comp adds them in ascending
+// sequence order after a barrier -- reproducible, no atomics. The second pass
+// also runs for a single sequence, so there is one path for every n_seqs.
+static void ggml_vk_wkv6_back(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    const ggml_tensor * k     = dst->src[0];  // {S, H, T}
+    const ggml_tensor * state = dst->src[5];  // {S*S*H, n_seqs}
+
+    GGML_ASSERT(dst->buffer != nullptr);
+
+    const uint32_t S      = (uint32_t)k->ne[0];
+    const uint32_t H      = (uint32_t)k->ne[1];
+    const uint32_t T      = (uint32_t)k->ne[2];
+    const uint32_t C      = S * H;
+    const uint32_t n_seqs = (uint32_t)state->ne[1];
+    const uint32_t L      = T / n_seqs;
+    const uint32_t K      = GGML_VK_RECUR_BACK_K;
+    const uint32_t nck    = (L + K - 1) / K;
+
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, k, nullptr, nullptr, dst, dst->op);
+    GGML_ASSERT(pipeline != nullptr);
+    vk_pipeline pipeline_sum = ctx->device->pipeline_seq_partial_sum_f32;
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline_sum, 1);
+
+    const size_t part_el      = (size_t)n_seqs * H * (nck + K + 1) * S * S;   // partials start here
+    const size_t scratch_size = (part_el + (size_t)n_seqs * C) * sizeof(float);
+
+    if (ctx->prealloc_size_x < scratch_size) {
+        ctx->prealloc_size_x = scratch_size;
+        ggml_vk_preallocate_buffers(ctx, subctx);
+    }
+    if (ctx->prealloc_x_need_sync) {
+        ggml_vk_sync_buffers(ctx, subctx);
+    }
+
+    const vk_op_wkv6_back_push_constants pc = { T, H, n_seqs, L, nck };
+
+    vk_subbuffer src_buf[7];
+    for (int i = 0; i < 7; i++) {
+        src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i]);
+    }
+    vk_subbuffer dst_buf     = ggml_vk_tensor_subbuffer(ctx, dst);
+    vk_subbuffer scratch_buf = { ctx->prealloc_x, 0, VK_WHOLE_SIZE };
+
+    // wg_denoms are {1,1,1}: elements count workgroups here.
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+        {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], src_buf[6],
+         dst_buf, scratch_buf},
+        pc, { H, n_seqs, 1 });
+
+    // The partials written above are read below.
+    ggml_vk_sync_buffers(ctx, subctx);
+
+    const vk_op_seq_partial_sum_push_constants pc_sum = {
+        C, n_seqs, (uint32_t)part_el, 3 * C * T,   // d_tf follows d_k, d_v, d_r
+    };
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline_sum, {scratch_buf, dst_buf}, pc_sum, { C, 1, 1 });
+
+    ctx->prealloc_x_need_sync = true;
+}
+
 // ggmlR extension: GGML_OP_OUT_PROD on the GPU.
 //
 // Both gradients of ggml_mul_mat() are built from out_prod, so without this

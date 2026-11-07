@@ -725,6 +725,16 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
 
         break;
 
+    case GGML_OP_GATED_LINEAR_ATTN_BACK:
+        ggml_vk_gla_back(ctx, compute_ctx, node);
+
+        break;
+
+    case GGML_OP_RWKV_WKV6_BACK:
+        ggml_vk_wkv6_back(ctx, compute_ctx, node);
+
+        break;
+
 
     case GGML_OP_DSV4_HC_COMB:
         ggml_vk_dsv4_hc_comb(ctx, compute_ctx, src0, src1, src2, node);
@@ -3889,6 +3899,53 @@ static bool ggml_vk_rope_dims34_collapsible(const ggml_tensor * t) {
     return t->ne[4] == 1 || t->nb[4] == (size_t) t->ne[3] * t->nb[3];
 }
 
+// ggmlR: shared checks of the recurrent backward kernels (gla_back.comp,
+// wkv6_back.comp). Head size 64 like the forward shaders, the first n_src
+// sources F32, contiguous and 4D, the state (src[n_src-2]) holding n_seqs
+// sequences that divide the tokens. The scratch is the checkpoints plus one
+// (K+1)-state window per (sequence, head), plus extra_el floats; the shaders
+// index it and the packed output with 32-bit uints and bind it whole. Same
+// quarter-of-memory cap as ssm_scan_back.
+static bool ggml_vk_recur_back_supported(ggml_backend_dev_t dev, const ggml_tensor * op, int n_src, uint64_t extra_el) {
+    for (int i = 0; i < n_src; i++) {
+        if (op->src[i] == nullptr || op->src[i]->type != GGML_TYPE_F32 ||
+            !ggml_is_contiguous(op->src[i]) || op->src[i]->ne[4] != 1) {
+            return false;
+        }
+    }
+    if (op->type != GGML_TYPE_F32 || op->src[0]->ne[0] != 64) {
+        return false;
+    }
+    const uint64_t S      = 64;
+    const uint64_t H      = (uint64_t)op->src[0]->ne[1];
+    const uint64_t T      = (uint64_t)op->src[0]->ne[2];
+    const uint64_t n_seqs = (uint64_t)op->src[n_src - 2]->ne[1];
+    if (n_seqs == 0 || T % n_seqs != 0) {
+        return false;
+    }
+    const uint64_t K   = GGML_VK_RECUR_BACK_K;
+    const uint64_t nck = (T / n_seqs + K - 1) / K;
+
+    ggml_backend_vk_device_context * vk_ctx = (ggml_backend_vk_device_context *)dev->context;
+    const vk_device& vk_dev = ggml_vk_get_device(vk_ctx->device);
+
+    // shared: d_v reduction tile S*S plus two rows.
+    if ((S * S + 2 * S) * sizeof(float) > vk_dev->properties.limits.maxComputeSharedMemorySize) {
+        return false;
+    }
+
+    const uint64_t scratch_el = n_seqs * H * (nck + K + 1) * S * S + extra_el;
+    const uint64_t scratch_sz = scratch_el * sizeof(float);
+    if (scratch_el > UINT32_MAX || (uint64_t)ggml_nelements(op) > UINT32_MAX ||
+        scratch_sz > vk_dev->max_buffer_size ||
+        scratch_sz > vk_dev->properties.limits.maxStorageBufferRange) {
+        return false;
+    }
+    size_t mem_free = 0, mem_total = 0;
+    ggml_backend_vk_get_device_memory(vk_ctx->device, &mem_free, &mem_total);
+    return !(mem_total > 0 && scratch_sz > mem_total / 4);
+}
+
 static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, const ggml_tensor * op) {
     {
         // ggml 0.27: reject any tensor larger than the device can bind, so the op
@@ -4685,6 +4742,14 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                    op->src[0]->nb[0] == sizeof(float) &&
                    op->src[1]->nb[0] == sizeof(float) &&
                    op->src[2]->nb[0] == sizeof(float);
+        // ggmlR: gla_back.comp / wkv6_back.comp -- see ggml_vk_recur_back_supported.
+        case GGML_OP_GATED_LINEAR_ATTN_BACK:
+            return ggml_vk_recur_back_supported(dev, op, 6, 0);
+        case GGML_OP_RWKV_WKV6_BACK:
+            // + n_seqs*C floats of d_tf partials; tf must be one row per head.
+            return ggml_vk_recur_back_supported(dev, op, 7,
+                       (uint64_t)op->src[5]->ne[1] * op->src[0]->ne[0] * op->src[0]->ne[1]) &&
+                   ggml_nelements(op->src[3]) == op->src[0]->ne[0] * op->src[0]->ne[1];
         case GGML_OP_SSM_SCAN_BACK:
             {
                 // ggmlR extension: backward of ssm_scan.

@@ -1142,6 +1142,8 @@ SEXP R_ggml_pool_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP op,
                     SEXP k0, SEXP s0, SEXP p0);
 SEXP R_ggml_pool_2d(SEXP ctx_ptr, SEXP a_ptr, SEXP op,
                     SEXP k0, SEXP k1, SEXP s0, SEXP s1, SEXP p0, SEXP p1);
+SEXP R_ggml_pool_2d_back(SEXP ctx_ptr, SEXP a_ptr, SEXP af_ptr, SEXP op,
+                         SEXP k0, SEXP k1, SEXP s0, SEXP s1, SEXP p0, SEXP p1);
 SEXP R_ggml_im2col(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                    SEXP s0, SEXP s1, SEXP p0, SEXP p1,
                    SEXP d0, SEXP d1, SEXP is_2D, SEXP dst_type);
@@ -1730,6 +1732,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_win_unpart",        (DL_FUNC) &R_ggml_win_unpart,        5},
     {"R_ggml_pool_1d",           (DL_FUNC) &R_ggml_pool_1d,           6},
     {"R_ggml_pool_2d",           (DL_FUNC) &R_ggml_pool_2d,           9},
+    {"R_ggml_pool_2d_back",      (DL_FUNC) &R_ggml_pool_2d_back,      10},
     {"R_ggml_im2col",            (DL_FUNC) &R_ggml_im2col,            11},
 
     // Quantization functions

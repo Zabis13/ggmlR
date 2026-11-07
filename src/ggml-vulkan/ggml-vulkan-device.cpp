@@ -1287,6 +1287,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
     vk_pipeline pipeline_gated_linear_attn_f32;
+    vk_pipeline pipeline_gla_back_f32;          // ggmlR
+    vk_pipeline pipeline_wkv6_back_f32;         // ggmlR
+    vk_pipeline pipeline_seq_partial_sum_f32;   // ggmlR
     // [size_idx][kda] where size_idx: 0=d16, 1=d32, 2=d64, 3=d128
     vk_pipeline pipeline_gated_delta_net[4][2];
     vk_pipeline pipeline_ssm_scan_f32_d128;
@@ -1847,6 +1850,36 @@ struct vk_op_gated_linear_attn_push_constants {
     uint32_t C;
     uint32_t H;
     float scale;
+};
+
+// ggmlR: recurrent backward kernels (gla_back.comp, wkv6_back.comp). K = checkpoint
+// interval, passed to the shader as spec constant 0; the host needs it too to
+// size the scratch. Fixed until a measurement says otherwise (TODO 9.5-gpu-gaps).
+#define GGML_VK_RECUR_BACK_K 32u
+struct vk_op_gla_back_push_constants {
+    uint32_t T;
+    uint32_t H;
+    uint32_t n_seqs;
+    uint32_t L;       // tokens per sequence
+    uint32_t nck;     // checkpoints per (sequence, head) = ceil(L / K)
+    float    scale;
+};
+
+// ggmlR: wkv6_back.comp (GGML_OP_RWKV_WKV6_BACK)
+struct vk_op_wkv6_back_push_constants {
+    uint32_t T;
+    uint32_t H;
+    uint32_t n_seqs;
+    uint32_t L;       // tokens per sequence
+    uint32_t nck;     // checkpoints per (sequence, head) = ceil(L / K)
+};
+
+// ggmlR: seq_partial_sum.comp -- second pass adding per-sequence partials
+struct vk_op_seq_partial_sum_push_constants {
+    uint32_t n;       // elements per sequence
+    uint32_t ns;      // sequences
+    uint32_t p_off;   // partials offset in the scratch, in floats
+    uint32_t d_off;   // destination offset in the packed output, in floats
 };
 
 struct vk_op_conv3d_push_constants {

@@ -1,0 +1,206 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+// ggmlR: GGML_OP_GATED_LINEAR_ATTN_BACK on the GPU, same math as
+// ggml_compute_forward_gla_back_f32 (ops-recurrent.cpp).
+//
+// Forward, per head and state row i (head size S = 64, as gla.comp):
+//     S[i,j] = S[i,j]*g[i] + k[i]*v[j]
+//     y[j]  += S[i,j]*(q[i]*scale)          -- y reads the NEW state
+//
+// Backward, walking t down with gs = dL/dS carried from later tokens:
+//     g_cur  = gs[i,j] + gy[j]*q[i]*scale
+//     d_q[i] = sum_j gy[j]*cur[i,j]*scale
+//     d_g[i] = sum_j g_cur*prev[i,j]
+//     d_k[i] = sum_j g_cur*v[j]
+//     d_v[j] = sum_i g_cur*k[i]             -- the only sum across rows
+//     gs     = g_cur*g[i]
+//
+// ---- decomposition ----
+// One workgroup per (sequence, head), one invocation per state row i: rows
+// never mix in the recurrence, so each invocation keeps its row in registers
+// and touches only its own row of the scratch buffer (no barriers needed for
+// it). d_v is reduced across rows through shared memory, by one invocation per
+// j summing i in ascending order -- fixed order, reproducible run to run.
+//
+// ---- checkpoints ----
+// The forward keeps only the final state. Instead of all T+1 states, the
+// replay stores the state at every K-th token (K = spec constant), then the
+// backward walks segments from the last one, re-running each segment from its
+// checkpoint into a K+1-state window before stepping back through it.
+// Scratch per (sequence, head): NCK*S*S checkpoints + (K+1)*S*S window.
+// Layout is [state][j][i] (i fastest) so adjacent invocations hit adjacent
+// floats.
+//
+// Packed output, in forward source order: [d_k | d_v | d_q | d_g | d_state].
+// Incoming gradient: [gy (C*T) | g_state (S*C*n_seqs)].
+
+#define S 64
+
+layout(constant_id = 0) const uint K = 32;   // checkpoint interval
+
+layout(local_size_x = S, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Parameters {
+    uint T;        // tokens, all sequences
+    uint H;
+    uint n_seqs;
+    uint L;        // tokens per sequence = T / n_seqs
+    uint nck;      // checkpoints per (sequence, head) = ceil(L / K)
+    float scale;
+};
+
+layout(binding = 0) readonly buffer KBuf { float k[]; };
+layout(binding = 1) readonly buffer VBuf { float v[]; };
+layout(binding = 2) readonly buffer QBuf { float q[]; };
+layout(binding = 3) readonly buffer GBuf { float g[]; };
+layout(binding = 4) readonly buffer SBuf { float s0[]; };
+layout(binding = 5) readonly buffer DBuf { float grad[]; };
+layout(binding = 6) writeonly buffer OBuf { float dst[]; };
+layout(binding = 7) buffer Scratch { float scratch[]; };
+
+shared float sh_v[S];
+shared float sh_gy[S];
+shared float sh_red[S * S];   // [i][j]: g_cur*k[i] for the d_v reduction
+
+void main() {
+    const uint i   = gl_LocalInvocationID.x;
+    const uint h   = gl_WorkGroupID.x;
+    const uint seq = gl_WorkGroupID.y;
+
+    // Uniform across the workgroup, so no barrier below is half-reached.
+    if (h >= H || seq >= n_seqs) {
+        return;
+    }
+
+    const uint C  = S * H;
+    const uint SS = S * S;
+    const uint wg = seq * H + h;
+
+    const uint ck_base  = wg * nck * SS;
+    const uint win_base = n_seqs * H * nck * SS + wg * (K + 1) * SS;
+
+    const uint d_k_off = 0;
+    const uint d_v_off = C * T;
+    const uint d_q_off = 2 * C * T;
+    const uint d_g_off = 3 * C * T;
+    const uint d_s_off = 4 * C * T;
+    const uint g_s_off = C * T;
+
+    const uint sb = seq * SS * H + h * SS;   // this head's state block
+    const uint t_first = seq * L;
+
+    float row[S];
+
+    // ---- replay: state row i, checkpoint at every K-th token ----
+    [[unroll]] for (uint j = 0; j < S; j++) {
+        row[j] = s0[sb + i * S + j];
+    }
+    for (uint t = 0; t < L; t++) {
+        const uint tt = t_first + t;
+        if (t % K == 0) {
+            const uint c = ck_base + (t / K) * SS;
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                scratch[c + j * S + i] = row[j];
+            }
+        }
+        barrier();
+        sh_v[i] = v[tt * C + h * S + i];
+        barrier();
+        const float g_i = g[tt * C + h * S + i];
+        const float k_i = k[tt * C + h * S + i];
+        [[unroll]] for (uint j = 0; j < S; j++) {
+            precise float r = row[j] * g_i;
+            r += k_i * sh_v[j];
+            row[j] = r;
+        }
+    }
+
+    // ---- backward, segment by segment from the end ----
+    float gs[S];
+    [[unroll]] for (uint j = 0; j < S; j++) {
+        gs[j] = grad[g_s_off + seq * S * C + h * SS + i * S + j];
+    }
+
+    for (int c = int(nck) - 1; c >= 0; c--) {
+        const uint t0  = uint(c) * K;
+        const uint len = min(K, L - t0);
+
+        // re-run the segment from its checkpoint into the window
+        const uint ck = ck_base + uint(c) * SS;
+        [[unroll]] for (uint j = 0; j < S; j++) {
+            row[j] = scratch[ck + j * S + i];
+            scratch[win_base + j * S + i] = row[j];
+        }
+        for (uint u = 0; u < len; u++) {
+            const uint tt = t_first + t0 + u;
+            barrier();
+            sh_v[i] = v[tt * C + h * S + i];
+            barrier();
+            const float g_i = g[tt * C + h * S + i];
+            const float k_i = k[tt * C + h * S + i];
+            const uint w = win_base + (u + 1) * SS;
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                precise float r = row[j] * g_i;
+                r += k_i * sh_v[j];
+                row[j] = r;
+                scratch[w + j * S + i] = r;
+            }
+        }
+
+        // step back through the segment
+        for (int u = int(len) - 1; u >= 0; u--) {
+            const uint tt = t_first + t0 + uint(u);
+            const uint ti = tt * C + h * S;
+
+            barrier();
+            sh_v[i]  = v[ti + i];
+            sh_gy[i] = grad[ti + i];
+            barrier();
+
+            const float g_i = g[ti + i];
+            const float k_i = k[ti + i];
+            const float qv  = q[ti + i] * scale;
+
+            const uint wp = win_base + uint(u) * SS;       // prev = state before token
+            const uint wc = wp + SS;                       // cur  = state after token
+
+            precise float dq = 0.0;
+            precise float gg = 0.0;
+            precise float gk = 0.0;
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                const float gy_j = sh_gy[j];
+                const float cur  = scratch[wc + j * S + i];
+                const float prev = scratch[wp + j * S + i];
+
+                dq += gy_j * cur * scale;
+
+                precise float g_cur = gs[j];
+                g_cur += gy_j * qv;
+
+                gg += g_cur * prev;
+                gk += g_cur * sh_v[j];
+                sh_red[i * S + j] = g_cur * k_i;
+
+                gs[j] = g_cur * g_i;
+            }
+
+            dst[d_q_off + ti + i] = dq;
+            dst[d_g_off + ti + i] = gg;
+            dst[d_k_off + ti + i] = gk;
+
+            barrier();
+            // invocation i now plays column j = i of the d_v reduction
+            precise float dv = 0.0;
+            for (uint r = 0; r < S; r++) {
+                dv += sh_red[r * S + i];
+            }
+            dst[d_v_off + ti + i] = dv;
+        }
+    }
+
+    [[unroll]] for (uint j = 0; j < S; j++) {
+        dst[d_s_off + sb + i * S + j] = gs[j];
+    }
+}

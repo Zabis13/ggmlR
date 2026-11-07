@@ -4189,6 +4189,35 @@ SEXP R_ggml_pool_2d(SEXP ctx_ptr, SEXP a_ptr, SEXP op_sexp,
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+// ggmlR: gradient of ggml_pool_2d w.r.t. its input. a = grad of the pooled
+// output, af = forward input (result has its shape).
+SEXP R_ggml_pool_2d_back(SEXP ctx_ptr, SEXP a_ptr, SEXP af_ptr, SEXP op_sexp,
+                         SEXP k0_sexp, SEXP k1_sexp,
+                         SEXP s0_sexp, SEXP s1_sexp,
+                         SEXP p0_sexp, SEXP p1_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a  = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * af = (struct ggml_tensor *) R_ExternalPtrAddr(af_ptr);
+
+    if (ctx == NULL || a == NULL || af == NULL) {
+        error("Invalid pointer");
+    }
+
+    int op_int = asInteger(op_sexp);
+    enum ggml_op_pool op = (op_int == 0) ? GGML_OP_POOL_MAX : GGML_OP_POOL_AVG;
+
+    struct ggml_tensor * result = ggml_pool_2d_back(ctx, a, af, op,
+        asInteger(k0_sexp), asInteger(k1_sexp),
+        asInteger(s0_sexp), asInteger(s1_sexp),
+        (float) asReal(p0_sexp), (float) asReal(p1_sexp));
+
+    if (result == NULL) {
+        error("Failed to create pool_2d_back operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // Image to Column (for efficient convolution)
 SEXP R_ggml_im2col(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                    SEXP s0_sexp, SEXP s1_sexp,
