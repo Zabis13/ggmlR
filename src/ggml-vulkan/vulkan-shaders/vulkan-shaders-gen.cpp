@@ -1304,6 +1304,7 @@ void process_shaders() {
     string_to_spv("ssm_scan_back_f32", "ssm_scan_back.comp", {{"A_TYPE", "float"}});
     string_to_spv("gla_back_f32", "gla_back.comp", {{"A_TYPE", "float"}});   // ggmlR
     string_to_spv("wkv6_back_f32", "wkv6_back.comp", {{"A_TYPE", "float"}});   // ggmlR
+    string_to_spv("wkv7_back_f32", "wkv7_back.comp", {{"A_TYPE", "float"}});   // ggmlR
     string_to_spv("seq_partial_sum_f32", "seq_partial_sum.comp", {{"A_TYPE", "float"}});   // ggmlR
     // ggmlR: backward of flash attention. Upstream has no such shader (and no
     // working op), so attention training fell back to the CPU once per block.

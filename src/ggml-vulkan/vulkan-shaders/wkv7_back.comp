@@ -1,0 +1,253 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+// ggmlR: GGML_OP_RWKV_WKV7_BACK on the GPU, same math as
+// ggml_compute_forward_rwkv_wkv7_back_f32 (ops-recurrent.cpp).
+//
+// Forward, per head and state row i (head size S = 64 as wkv7.comp):
+//     sa[i]   = sum_j a[j]*S[i,j]
+//     S[i,j]  = S[i,j]*w[j] + v[i]*k[j] + sa[i]*b[j]
+//     y[i]    = sum_j S[i,j]*r[j]
+//
+// Backward per token, gs = dL/dS carried from later tokens, prev/cur = state
+// before/after the token:
+//     g_cur   = gs[i,j] + gy[i]*r[j]
+//     d_r[j]  = sum_i gy[i]*cur[i,j]
+//     d_w[j]  = sum_i g_cur*prev[i,j]
+//     d_k[j]  = sum_i g_cur*v[i]
+//     d_b[j]  = sum_i g_cur*sa[i]
+//     d_v[i]  = sum_j g_cur*k[j]
+//     gsa[i]  = sum_j g_cur*b[j]
+//     d_a[j]  = sum_i gsa[i]*prev[i,j]
+//     gs      = g_cur*w[j] + gsa[i]*a[j]
+//
+// Decomposition and checkpoints as gla_back.comp: one workgroup per
+// (sequence, head), one invocation per state row i (rows never mix; sa only
+// couples the columns of one row), state replayed from a checkpoint every K
+// tokens into a K+1-state window. Five of the gradients are sums over rows;
+// they share one S*S shared tile, reduced one after another, each by one
+// invocation per column j adding i in ascending order -- the CPU kernel's
+// order, and reproducible run to run. Every input is per token, so nothing
+// is shared across sequences and no second pass is needed.
+//
+// Packed output, in forward source order:
+//     [d_r | d_w | d_k | d_v | d_a | d_b | d_state]
+// Incoming gradient: [gy (C*T) | g_state (S*C*n_seqs)].
+
+#define S 64
+
+layout(constant_id = 0) const uint K = 32;   // checkpoint interval
+
+layout(local_size_x = S, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Parameters {
+    uint T;
+    uint H;
+    uint n_seqs;
+    uint L;        // tokens per sequence
+    uint nck;      // checkpoints per (sequence, head) = ceil(L / K)
+};
+
+layout(binding = 0) readonly buffer RBuf { float r[]; };
+layout(binding = 1) readonly buffer WBuf { float w[]; };
+layout(binding = 2) readonly buffer KBuf { float k[]; };
+layout(binding = 3) readonly buffer VBuf { float v[]; };
+layout(binding = 4) readonly buffer ABuf { float a[]; };
+layout(binding = 5) readonly buffer BBuf { float b[]; };
+layout(binding = 6) readonly buffer SBuf { float s0[]; };
+layout(binding = 7) readonly buffer DBuf { float grad[]; };
+layout(binding = 8) writeonly buffer OBuf { float dst[]; };
+layout(binding = 9) buffer Scratch { float scratch[]; };
+
+shared float sh_r[S], sh_w[S], sh_k[S], sh_a[S], sh_b[S];
+shared float sh_red[S * S];   // [i][j], one row-sum at a time
+
+// Column sum of sh_red in ascending row order; invocation i plays column j = i.
+// Called by the whole workgroup: the barriers are uniform.
+float column_sum(uint i) {
+    barrier();
+    precise float s = 0.0;
+    for (uint q = 0; q < S; q++) {
+        s += sh_red[q * S + i];
+    }
+    barrier();   // the tile is refilled right after
+    return s;
+}
+
+void main() {
+    const uint i   = gl_LocalInvocationID.x;
+    const uint h   = gl_WorkGroupID.x;
+    const uint seq = gl_WorkGroupID.y;
+
+    // Uniform across the workgroup, so no barrier below is half-reached.
+    if (h >= H || seq >= n_seqs) {
+        return;
+    }
+
+    const uint C  = S * H;
+    const uint SS = S * S;
+    const uint wg = seq * H + h;
+
+    const uint ck_base  = wg * nck * SS;
+    const uint win_base = n_seqs * H * nck * SS + wg * (K + 1) * SS;
+
+    const uint d_r_off = 0;
+    const uint d_w_off = C * T;
+    const uint d_k_off = 2 * C * T;
+    const uint d_v_off = 3 * C * T;
+    const uint d_a_off = 4 * C * T;
+    const uint d_b_off = 5 * C * T;
+    const uint d_s_off = 6 * C * T;
+    const uint g_s_off = C * T;
+
+    const uint sb = seq * SS * H + h * SS;
+    const uint t_first = seq * L;
+
+    float row[S];
+
+    // ---- replay: state row i, checkpoint at every K-th token ----
+    [[unroll]] for (uint j = 0; j < S; j++) {
+        row[j] = s0[sb + i * S + j];
+    }
+    for (uint t = 0; t < L; t++) {
+        const uint ti = (t_first + t) * C + h * S;
+        if (t % K == 0) {
+            const uint c = ck_base + (t / K) * SS;
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                scratch[c + j * S + i] = row[j];
+            }
+        }
+        barrier();
+        sh_w[i] = w[ti + i];
+        sh_k[i] = k[ti + i];
+        sh_a[i] = a[ti + i];
+        sh_b[i] = b[ti + i];
+        barrier();
+        const float v_i = v[ti + i];
+        precise float sa = 0.0;
+        [[unroll]] for (uint j = 0; j < S; j++) {
+            sa += sh_a[j] * row[j];
+        }
+        [[unroll]] for (uint j = 0; j < S; j++) {
+            precise float x = row[j] * sh_w[j];
+            x += v_i * sh_k[j];
+            x += sa * sh_b[j];
+            row[j] = x;
+        }
+    }
+
+    // ---- backward, segment by segment from the end ----
+    float gs[S];
+    [[unroll]] for (uint j = 0; j < S; j++) {
+        gs[j] = grad[g_s_off + seq * S * C + h * SS + i * S + j];
+    }
+
+    for (int c = int(nck) - 1; c >= 0; c--) {
+        const uint t0  = uint(c) * K;
+        const uint len = min(K, L - t0);
+
+        // re-run the segment from its checkpoint into the window
+        const uint ck = ck_base + uint(c) * SS;
+        [[unroll]] for (uint j = 0; j < S; j++) {
+            row[j] = scratch[ck + j * S + i];
+            scratch[win_base + j * S + i] = row[j];
+        }
+        for (uint u = 0; u < len; u++) {
+            const uint ti = (t_first + t0 + u) * C + h * S;
+            barrier();
+            sh_w[i] = w[ti + i];
+            sh_k[i] = k[ti + i];
+            sh_a[i] = a[ti + i];
+            sh_b[i] = b[ti + i];
+            barrier();
+            const float v_i = v[ti + i];
+            precise float sa = 0.0;
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                sa += sh_a[j] * row[j];
+            }
+            const uint wn = win_base + (u + 1) * SS;
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                precise float x = row[j] * sh_w[j];
+                x += v_i * sh_k[j];
+                x += sa * sh_b[j];
+                row[j] = x;
+                scratch[wn + j * S + i] = x;
+            }
+        }
+
+        // step back through the segment
+        for (int u = int(len) - 1; u >= 0; u--) {
+            const uint ti = (t_first + t0 + uint(u)) * C + h * S;
+
+            barrier();
+            sh_r[i] = r[ti + i];
+            sh_w[i] = w[ti + i];
+            sh_k[i] = k[ti + i];
+            sh_a[i] = a[ti + i];
+            sh_b[i] = b[ti + i];
+            barrier();
+
+            const float gy_i = grad[ti + i];
+            const float v_i  = v[ti + i];
+
+            const uint wp = win_base + uint(u) * SS;   // prev
+            const uint wc = wp + SS;                   // cur
+
+            // sa of this token, recomputed from prev exactly as the replay did
+            precise float sa = 0.0;
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                sa += sh_a[j] * scratch[wp + j * S + i];
+            }
+
+            // gs <- g_cur; row-local sums
+            precise float gv  = 0.0;
+            precise float gsa = 0.0;
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                precise float g_cur = gs[j];
+                g_cur += gy_i * sh_r[j];
+                gs[j] = g_cur;
+                gv  += g_cur * sh_k[j];
+                gsa += g_cur * sh_b[j];
+            }
+            dst[d_v_off + ti + i] = gv;
+
+            // five sums over rows, one tile at a time
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                sh_red[i * S + j] = gy_i * scratch[wc + j * S + i];
+            }
+            dst[d_r_off + ti + i] = column_sum(i);
+
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                sh_red[i * S + j] = gs[j] * scratch[wp + j * S + i];
+            }
+            dst[d_w_off + ti + i] = column_sum(i);
+
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                sh_red[i * S + j] = gs[j] * v_i;
+            }
+            dst[d_k_off + ti + i] = column_sum(i);
+
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                sh_red[i * S + j] = gs[j] * sa;
+            }
+            dst[d_b_off + ti + i] = column_sum(i);
+
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                sh_red[i * S + j] = gsa * scratch[wp + j * S + i];
+            }
+            dst[d_a_off + ti + i] = column_sum(i);
+
+            // carry to the previous token
+            [[unroll]] for (uint j = 0; j < S; j++) {
+                precise float x = gs[j] * sh_w[j];
+                x += gsa * sh_a[j];
+                gs[j] = x;
+            }
+        }
+    }
+
+    [[unroll]] for (uint j = 0; j < S; j++) {
+        dst[d_s_off + sb + i * S + j] = gs[j];
+    }
+}

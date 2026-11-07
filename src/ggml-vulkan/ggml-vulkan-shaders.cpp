@@ -2139,7 +2139,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     // ggmlR: backward of gated_linear_attn; 8 buffers (k, v, q, g, state, grad,
     // packed output, scratch). Workgroup = head size 64, spec constant 0 = K.
     ggml_vk_create_pipeline(device, device->pipeline_gla_back_f32, "gla_back_f32", gla_back_f32_len, gla_back_f32_data, "main", 8, sizeof(vk_op_gla_back_push_constants), {1, 1, 1}, {GGML_VK_RECUR_BACK_K}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_wkv6_back_f32, "wkv6_back_f32", wkv6_back_f32_len, wkv6_back_f32_data, "main", 9, sizeof(vk_op_wkv6_back_push_constants), {1, 1, 1}, {GGML_VK_RECUR_BACK_K}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_wkv6_back_f32, "wkv6_back_f32", wkv6_back_f32_len, wkv6_back_f32_data, "main", 9, sizeof(vk_op_recur_back_push_constants), {1, 1, 1}, {GGML_VK_RECUR_BACK_K}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_wkv7_back_f32, "wkv7_back_f32", wkv7_back_f32_len, wkv7_back_f32_data, "main", 10, sizeof(vk_op_recur_back_push_constants), {1, 1, 1}, {GGML_VK_RECUR_BACK_K}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_seq_partial_sum_f32, "seq_partial_sum_f32", seq_partial_sum_f32_len, seq_partial_sum_f32_data, "main", 2, sizeof(vk_op_seq_partial_sum_push_constants), {512, 1, 1}, {}, 1);
 
     // ggml 0.27: DeepSeek V4 hyper-connections.

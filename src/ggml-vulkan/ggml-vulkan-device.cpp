@@ -1289,6 +1289,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_gated_linear_attn_f32;
     vk_pipeline pipeline_gla_back_f32;          // ggmlR
     vk_pipeline pipeline_wkv6_back_f32;         // ggmlR
+    vk_pipeline pipeline_wkv7_back_f32;         // ggmlR
     vk_pipeline pipeline_seq_partial_sum_f32;   // ggmlR
     // [size_idx][kda] where size_idx: 0=d16, 1=d32, 2=d64, 3=d128
     vk_pipeline pipeline_gated_delta_net[4][2];
@@ -1865,8 +1866,8 @@ struct vk_op_gla_back_push_constants {
     float    scale;
 };
 
-// ggmlR: wkv6_back.comp (GGML_OP_RWKV_WKV6_BACK)
-struct vk_op_wkv6_back_push_constants {
+// ggmlR: wkv6_back.comp / wkv7_back.comp (GGML_OP_RWKV_WKV6_BACK / WKV7_BACK)
+struct vk_op_recur_back_push_constants {
     uint32_t T;
     uint32_t H;
     uint32_t n_seqs;

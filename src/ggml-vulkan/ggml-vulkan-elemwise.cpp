@@ -1119,7 +1119,7 @@ static void ggml_vk_wkv6_back(ggml_backend_vk_context * ctx, vk_context& subctx,
         ggml_vk_sync_buffers(ctx, subctx);
     }
 
-    const vk_op_wkv6_back_push_constants pc = { T, H, n_seqs, L, nck };
+    const vk_op_recur_back_push_constants pc = { T, H, n_seqs, L, nck };
 
     vk_subbuffer src_buf[7];
     for (int i = 0; i < 7; i++) {
@@ -1141,6 +1141,56 @@ static void ggml_vk_wkv6_back(ggml_backend_vk_context * ctx, vk_context& subctx,
         C, n_seqs, (uint32_t)part_el, 3 * C * T,   // d_tf follows d_k, d_v, d_r
     };
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline_sum, {scratch_buf, dst_buf}, pc_sum, { C, 1, 1 });
+
+    ctx->prealloc_x_need_sync = true;
+}
+
+// ggmlR extension: backward of GGML_OP_RWKV_WKV7 (wkv7_back.comp), same
+// checkpoint scheme as ggml_vk_gla_back. Every input is per token, so unlike
+// wkv6 nothing is shared across sequences and one dispatch is enough.
+static void ggml_vk_wkv7_back(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    const ggml_tensor * r     = dst->src[0];  // {S, H, T}
+    const ggml_tensor * state = dst->src[6];  // {S*S*H, n_seqs}
+
+    GGML_ASSERT(dst->buffer != nullptr);
+
+    const uint32_t S      = (uint32_t)r->ne[0];
+    const uint32_t H      = (uint32_t)r->ne[1];
+    const uint32_t T      = (uint32_t)r->ne[2];
+    const uint32_t n_seqs = (uint32_t)state->ne[1];
+    const uint32_t L      = T / n_seqs;
+    const uint32_t K      = GGML_VK_RECUR_BACK_K;
+    const uint32_t nck    = (L + K - 1) / K;
+
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, r, nullptr, nullptr, dst, dst->op);
+    GGML_ASSERT(pipeline != nullptr);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+
+    const size_t scratch_size = (size_t)n_seqs * H * (nck + K + 1) * S * S * sizeof(float);
+
+    if (ctx->prealloc_size_x < scratch_size) {
+        ctx->prealloc_size_x = scratch_size;
+        ggml_vk_preallocate_buffers(ctx, subctx);
+    }
+    if (ctx->prealloc_x_need_sync) {
+        ggml_vk_sync_buffers(ctx, subctx);
+    }
+
+    const vk_op_recur_back_push_constants pc = { T, H, n_seqs, L, nck };
+
+    vk_subbuffer src_buf[8];
+    for (int i = 0; i < 8; i++) {
+        src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i]);
+    }
+    vk_subbuffer dst_buf     = ggml_vk_tensor_subbuffer(ctx, dst);
+    vk_subbuffer scratch_buf = { ctx->prealloc_x, 0, VK_WHOLE_SIZE };
+
+    // wg_denoms are {1,1,1}: elements count workgroups here.
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+        {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], src_buf[6], src_buf[7],
+         dst_buf, scratch_buf},
+        pc, { H, n_seqs, 1 });
 
     ctx->prealloc_x_need_sync = true;
 }

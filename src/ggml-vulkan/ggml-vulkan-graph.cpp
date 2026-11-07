@@ -735,6 +735,11 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
 
         break;
 
+    case GGML_OP_RWKV_WKV7_BACK:
+        ggml_vk_wkv7_back(ctx, compute_ctx, node);
+
+        break;
+
 
     case GGML_OP_DSV4_HC_COMB:
         ggml_vk_dsv4_hc_comb(ctx, compute_ctx, src0, src1, src2, node);
@@ -3906,7 +3911,7 @@ static bool ggml_vk_rope_dims34_collapsible(const ggml_tensor * t) {
 // (K+1)-state window per (sequence, head), plus extra_el floats; the shaders
 // index it and the packed output with 32-bit uints and bind it whole. Same
 // quarter-of-memory cap as ssm_scan_back.
-static bool ggml_vk_recur_back_supported(ggml_backend_dev_t dev, const ggml_tensor * op, int n_src, uint64_t extra_el) {
+static bool ggml_vk_recur_back_supported(ggml_backend_dev_t dev, const ggml_tensor * op, int n_src, uint64_t extra_el, uint64_t shared_rows) {
     for (int i = 0; i < n_src; i++) {
         if (op->src[i] == nullptr || op->src[i]->type != GGML_TYPE_F32 ||
             !ggml_is_contiguous(op->src[i]) || op->src[i]->ne[4] != 1) {
@@ -3929,8 +3934,8 @@ static bool ggml_vk_recur_back_supported(ggml_backend_dev_t dev, const ggml_tens
     ggml_backend_vk_device_context * vk_ctx = (ggml_backend_vk_device_context *)dev->context;
     const vk_device& vk_dev = ggml_vk_get_device(vk_ctx->device);
 
-    // shared: d_v reduction tile S*S plus two rows.
-    if ((S * S + 2 * S) * sizeof(float) > vk_dev->properties.limits.maxComputeSharedMemorySize) {
+    // shared: one S*S reduction tile plus shared_rows rows of S.
+    if ((S * S + shared_rows * S) * sizeof(float) > vk_dev->properties.limits.maxComputeSharedMemorySize) {
         return false;
     }
 
@@ -4742,14 +4747,17 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                    op->src[0]->nb[0] == sizeof(float) &&
                    op->src[1]->nb[0] == sizeof(float) &&
                    op->src[2]->nb[0] == sizeof(float);
-        // ggmlR: gla_back.comp / wkv6_back.comp -- see ggml_vk_recur_back_supported.
+        // ggmlR: gla_back / wkv6_back / wkv7_back.comp -- see ggml_vk_recur_back_supported.
         case GGML_OP_GATED_LINEAR_ATTN_BACK:
-            return ggml_vk_recur_back_supported(dev, op, 6, 0);
+            return ggml_vk_recur_back_supported(dev, op, 6, 0, 2);
         case GGML_OP_RWKV_WKV6_BACK:
             // + n_seqs*C floats of d_tf partials; tf must be one row per head.
             return ggml_vk_recur_back_supported(dev, op, 7,
-                       (uint64_t)op->src[5]->ne[1] * op->src[0]->ne[0] * op->src[0]->ne[1]) &&
+                       (uint64_t)op->src[5]->ne[1] * op->src[0]->ne[0] * op->src[0]->ne[1], 2) &&
                    ggml_nelements(op->src[3]) == op->src[0]->ne[0] * op->src[0]->ne[1];
+        case GGML_OP_RWKV_WKV7_BACK:
+            // every input is per token: no partials, five shared rows (r, w, k, a, b)
+            return ggml_vk_recur_back_supported(dev, op, 8, 0, 5);
         case GGML_OP_SSM_SCAN_BACK:
             {
                 // ggmlR extension: backward of ssm_scan.
