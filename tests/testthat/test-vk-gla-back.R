@@ -8,7 +8,6 @@
 # offer the op -- otherwise the CPU fallback would pass the comparison.
 
 skip_if_no_vk <- function() {
-  skip_on_cran()
   skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 1L,
               "Vulkan not available")
 }

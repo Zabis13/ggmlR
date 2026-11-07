@@ -1,7 +1,6 @@
 # Tests for extended backend and graph introspection functions
 
 test_that("async graph compute works", {
-  skip_on_cran()
 
   ctx <- ggml_init(16 * 1024 * 1024, no_alloc = TRUE)
   on.exit(ggml_free(ctx))
@@ -40,7 +39,6 @@ test_that("async graph compute works", {
 })
 
 test_that("multi-buffer functions work", {
-  skip_on_cran()
 
   backend <- ggml_backend_cpu_init()
   skip_if(is.null(backend), "CPU backend not available")
@@ -140,7 +138,6 @@ test_that("ggml_backend_load returns NULL for a missing shared object", {
 })
 
 test_that("ggml_backend_multi_buffer_alloc_buffer wraps real buffers", {
-  skip_on_cran()
 
   backend <- ggml_backend_cpu_init()
   skip_if(is.null(backend), "CPU backend not available")
@@ -166,7 +163,6 @@ test_that("ggml_backend_multi_buffer_alloc_buffer wraps real buffers", {
 })
 
 test_that("ggml_backend_multi_buffer_set_usage runs on a multi-buffer", {
-  skip_on_cran()
 
   backend <- ggml_backend_cpu_init()
   skip_if(is.null(backend), "CPU backend not available")

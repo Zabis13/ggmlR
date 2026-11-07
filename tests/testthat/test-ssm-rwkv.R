@@ -434,7 +434,6 @@ test_that("ssm_scan gradients match a numeric gradient", {
   # The check this whole backward exists for. A BPTT kernel that is subtly
   # wrong still lets a loss descend, so every input is compared element by
   # element against a central difference.
-  skip_on_cran()
   set.seed(21L)
   d_state <- 3L; head_dim <- 2L; n_head <- 2L; nt <- 3L; ns <- 1L; ng <- 1L
 
@@ -506,7 +505,6 @@ test_that("ssm_scan gradients match a numeric gradient", {
 
 test_that("an ssm_scan node differentiates inside a backward graph", {
   # The graph case, not just the kernel -- see the flash_attn_back trap.
-  skip_on_cran()
   ctx <- ggml_init(64 * 1024 * 1024)
   on.exit(ggml_free(ctx))
 
@@ -555,7 +553,6 @@ skip_no_vulkan_ssm <- function() {
 }
 
 test_that("ssm_conv gradients agree between CPU and a scheduled Vulkan graph", {
-  skip_on_cran()
   skip_no_vulkan_ssm()
 
   d_conv <- 3L; d_inner <- 2L; n_t <- 4L; n_s <- 1L
@@ -611,7 +608,6 @@ test_that("ssm_conv gradients agree between CPU and a scheduled Vulkan graph", {
 })
 
 test_that("ssm_scan gradients agree between CPU and a scheduled Vulkan graph", {
-  skip_on_cran()
   skip_no_vulkan_ssm()
 
   d_state <- 3L; head_dim <- 2L; n_head <- 2L; nt <- 3L; ns <- 1L; ng <- 1L
@@ -672,7 +668,6 @@ test_that("ssm_scan gradients agree between CPU and a scheduled Vulkan graph", {
 # ---------------------------------------------------------------------------
 
 test_that("rwkv_wkv6 gradients match a numeric gradient", {
-  skip_on_cran()
   set.seed(41L)
   S <- 3L; H <- 1L; T <- 4L; ns <- 1L
 
@@ -729,7 +724,6 @@ test_that("rwkv_wkv6 gradients match a numeric gradient", {
 })
 
 test_that("an rwkv_wkv6 node differentiates inside a backward graph", {
-  skip_on_cran()
   ctx <- ggml_init(64 * 1024 * 1024)
   on.exit(ggml_free(ctx))
 
@@ -813,7 +807,6 @@ check_recurrent_grad <- function(names_order, build_fwd, build_back, v0,
 }
 
 test_that("rwkv_wkv7 gradients match a numeric gradient", {
-  skip_on_cran()
   set.seed(51L)
   S <- 3L; H <- 1L; n_tok <- 3L; ns <- 1L
   # n_tok, not T: `n_res` below is a lazy argument evaluated inside
@@ -845,7 +838,6 @@ test_that("rwkv_wkv7 gradients match a numeric gradient", {
 })
 
 test_that("gated_linear_attn gradients match a numeric gradient", {
-  skip_on_cran()
   set.seed(53L)
   S <- 3L; H <- 1L; n_tok <- 3L; ns <- 1L; sc <- 0.7
   mk <- function() runif(S*H*n_tok, -0.4, 0.4)
@@ -872,7 +864,6 @@ test_that("gated_linear_attn gradients match a numeric gradient", {
 })
 
 test_that("wkv7 and GLA nodes differentiate inside a backward graph", {
-  skip_on_cran()
   for (which_op in c("wkv7", "gla")) {
     ctx <- ggml_init(64 * 1024 * 1024)
     set.seed(57L)

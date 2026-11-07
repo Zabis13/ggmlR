@@ -1265,7 +1265,6 @@ test_that("requested regression metrics are computed by ggml_evaluate", {
   # ggml_evaluate() already knew how to compute these, but ggml_compile()
   # rejected the names as unsupported -- so the working code was unreachable.
   # The sequential path computed none at all.
-  skip_on_cran()
   set.seed(9)
   n <- 64L
   x <- matrix(runif(n * 4L, -1, 1), nrow = n)
@@ -1294,7 +1293,6 @@ test_that("requested regression metrics are computed by ggml_evaluate", {
 test_that("metrics that were not requested are absent", {
   # Accuracy is reported regardless; the regression metrics are opt-in, so a
   # model that did not ask for them must not grow the fields.
-  skip_on_cran()
   set.seed(9)
   n <- 64L
   x <- matrix(runif(n * 4L, -1, 1), nrow = n)

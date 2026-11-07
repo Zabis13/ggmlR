@@ -1,12 +1,12 @@
 # Vulkan kernel pool2d_back.comp for POOL_2D_BACK (TODO 9.5-gpu-gaps).
 # The shader gathers what the CPU kernel scatters, in the same window order,
-# so Vulkan must agree with the CPU bit for bit. Both are checked against a
+# so for MAX Vulkan must agree with the CPU bit for bit; AVG is compared with a
+# tight tolerance (GPU division is not correctly rounded). Both are checked against a
 # reference written in R, and the Vulkan device must actually offer the op:
 # without the supports_op check a missing kernel would fall back to the CPU
 # and pass.
 
 skip_if_no_vk <- function() {
-  skip_on_cran()
   skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 1L,
               "Vulkan not available")
 }
@@ -83,11 +83,20 @@ both_pool_back <- function(cc) {
   cpu <- run_pool_back(cc$g, cc$f, cc$gshape, cc$fshape, cc$prm, "cpu")
   vk  <- run_pool_back(cc$g, cc$f, cc$gshape, cc$fshape, cc$prm, "vulkan")
   expect_true(vk$supported)
-  expect_identical(vk$out, cpu$out)
+  if (cc$prm$op == GGML_OP_POOL_MAX) {
+    expect_identical(vk$out, cpu$out)
+  } else {
+    # AVG divides by k0*k1. Vulkan does not require float division to be
+    # correctly rounded (2.5 ulp allowed; drivers compute g * (1/ka)), so for
+    # a k0*k1 that is not a power of two the GPU result differs from the CPU
+    # by an ulp (RADV, k = 3x3 and 3x2). The summation order is still the
+    # CPU's, hence the tight tolerance.
+    expect_equal(vk$out, cpu$out, tolerance = 1e-6)
+  }
   cpu$out
 }
 
-test_that("Vulkan POOL_2D_BACK matches the CPU bit for bit and the definition", {
+test_that("Vulkan POOL_2D_BACK matches the CPU (MAX bit for bit) and the definition", {
   skip_if_no_vk()
   set.seed(5)
   cases <- list(

@@ -96,7 +96,6 @@ test_that("rope combines with causal masking", {
 })
 
 test_that("the Vulkan path agrees with the CPU one", {
-  skip_on_cran()
   dev <- tryCatch(ggml_backend_dev_by_type(ggml_backend_device_type_gpu()),
                   error = function(e) NULL)
   skip_if(is.null(dev), "no Vulkan device")

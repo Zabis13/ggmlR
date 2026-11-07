@@ -51,7 +51,6 @@ test_that("Vulkan leaky_relu matches R on small and odd sizes", {
 
 test_that("Vulkan leaky_relu covers tensors past 512*65535 elements", {
   skip_no_vk()
-  skip_on_cran()  # ~134 MB per tensor on the device
   n <- 512L * 65536L + 7L
   x <- ((seq_len(n) %% 17L) - 8L) * 0.5
   gpu <- run_graph(TRUE, list(f32(x, n)),

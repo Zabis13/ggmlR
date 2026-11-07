@@ -1510,7 +1510,6 @@ test_that("requested regression metrics are computed on the functional path", {
   # The functional evaluate() computed these already; they were unreachable
   # because ggml_compile() rejected the names. Both APIs now share one helper,
   # so a metric means the same thing in each.
-  skip_on_cran()
   set.seed(9)
   n <- 64L
   x <- matrix(runif(n * 4L, -1, 1), nrow = n)

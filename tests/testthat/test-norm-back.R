@@ -48,7 +48,6 @@ test_that("norm_back matches the closed form on CPU", {
 })
 
 test_that("the Vulkan shader agrees with the CPU kernel", {
-  skip_on_cran()
   dev <- tryCatch(ggml_backend_dev_by_type(ggml_backend_device_type_gpu()),
                   error = function(e) NULL)
   skip_if(is.null(dev), "no Vulkan device")

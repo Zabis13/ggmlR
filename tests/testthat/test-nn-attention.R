@@ -328,7 +328,6 @@ test_that("n_heads changes the result, so the heads are really split", {
 # ---------------------------------------------------------------------------
 
 test_that("attention trains on a task that needs cross-position mixing", {
-  skip_on_cran()
   # Every output position must equal the mean over the whole sequence, which a
   # position-wise layer cannot represent -- only a layer that mixes positions.
   set.seed(3L)
@@ -354,7 +353,6 @@ test_that("attention trains on a task that needs cross-position mixing", {
 })
 
 test_that("attention layers stack", {
-  skip_on_cran()
   # The output keeps the c(seq_len, d_model) shape of the input, which is what
   # lets one attention layer feed another.
   set.seed(2L)
@@ -464,7 +462,6 @@ test_that("time_distributed is rejected on a sequential model", {
 })
 
 test_that("a full transformer block trains", {
-  skip_on_cran()
   # Attention sublayer + residual, then a position-wise feed-forward sublayer
   # + residual -- the complete encoder block, not just the attention half.
   set.seed(2L)

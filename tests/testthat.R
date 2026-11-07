@@ -95,7 +95,12 @@ heavy <- c(
   "uncovered-exports",
   "ag-capture-step",
   "ag-clip-sched",
-  "trainer"
+  "trainer",
+  "vk-rel-pos",
+  "vk-pool2d-back",
+  "vk-gla-back",
+  "vk-wkv6-back",
+  "vk-wkv7-back"
 )
 
 # Under the valgrind memtest, running the full light suite (~67 files) blows

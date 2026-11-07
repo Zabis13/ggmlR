@@ -123,7 +123,6 @@ fit_with_loss <- function(loss, d, epochs = 30L, units = 16L) {
 }
 
 test_that("MAE training descends", {
-  skip_on_cran()
   d <- make_reg()
   m <- fit_with_loss("mae", d, epochs = 60L)
   h <- m$history
@@ -138,7 +137,6 @@ test_that("MAE training descends", {
 })
 
 test_that("Huber training descends", {
-  skip_on_cran()
   d <- make_reg()
   m <- fit_with_loss("huber", d, epochs = 60L)
   h <- m$history
@@ -150,7 +148,6 @@ test_that("Huber training descends", {
 })
 
 test_that("binary cross-entropy training descends", {
-  skip_on_cran()
   set.seed(42L)
   n <- 128L
   x <- matrix(runif(n * 4L, -1, 1), nrow = n)
@@ -180,7 +177,6 @@ test_that("binary cross-entropy training descends", {
 })
 
 test_that("MAE is more robust to an outlier than MSE", {
-  skip_on_cran()
   # The reason MAE exists: one wild target should not drag the fit. Training
   # both on the same corrupted data, MAE's predictions on the CLEAN points
   # should stay closer to the clean relationship.
@@ -211,7 +207,6 @@ test_that("MAE is more robust to an outlier than MSE", {
 # ---------------------------------------------------------------------------
 
 test_that("ggml_evaluate reports a finite loss for the new losses", {
-  skip_on_cran()
   # Previously any loss the R-side evaluator did not know returned NA, so this
   # guards the mapping as much as the value.
   d <- make_reg()
@@ -225,7 +220,6 @@ test_that("ggml_evaluate reports a finite loss for the new losses", {
 })
 
 test_that("a sequential model trains with the new losses", {
-  skip_on_cran()
   # The sequential path maps the loss name through its own call site; before
   # this it had a duplicate switch that knew only CE and MSE.
   d <- make_reg()
@@ -246,7 +240,6 @@ test_that("a sequential model trains with the new losses", {
 })
 
 test_that("the new losses mix with cross-entropy across output heads", {
-  skip_on_cran()
   # Per-head loss resolution has to cope with a head whose softmax is stripped
   # (CE) sitting next to one whose activation must survive (Huber).
   set.seed(42L)

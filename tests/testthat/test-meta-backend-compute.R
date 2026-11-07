@@ -189,7 +189,6 @@ test_that("ggml_meta_backend validates its arguments up front", {
 })
 
 test_that("ggml_meta_backend on 2x the same Vulkan device matches plain CPU", {
-  skip_on_cran()
   skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 1L,
               "Vulkan not available")
   expect_same_as_cpu(run_meta_backend(c(0L, 0L), list()), tol = 1e-4)
@@ -255,7 +254,6 @@ test_that("ggml_tp_forward validates its arguments", {
 })
 
 test_that("ggml_tp_forward MLP on 2x the same Vulkan device matches R", {
-  skip_on_cran()
   skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 1L,
               "Vulkan not available")
   for (s in list(list(), MEGATRON)) {
@@ -266,7 +264,6 @@ test_that("ggml_tp_forward MLP on 2x the same Vulkan device matches R", {
 })
 
 test_that("ggml_tp_forward MLP on 2 real Vulkan devices matches R", {
-  skip_on_cran()
   skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 2L,
               "need >= 2 Vulkan devices")
   y <- tp_mlp(c(0L, 1L), MEGATRON)

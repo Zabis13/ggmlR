@@ -77,7 +77,6 @@ test_that("sequential models reject multi-output compile arguments", {
 })
 
 test_that("BOTH heads train: each head's loss falls", {
-  skip_on_cran()
   d <- make_xy()
   # seed before compile: weights are drawn at compile time
   set.seed(1L)
@@ -100,7 +99,6 @@ test_that("BOTH heads train: each head's loss falls", {
 })
 
 test_that("a zero weight freezes its head while the other still trains", {
-  skip_on_cran()
   d <- make_xy()
   set.seed(1L)
   model <- build_two_head()
@@ -122,7 +120,6 @@ test_that("a zero weight freezes its head while the other still trains", {
 })
 
 test_that("y as a list must have one entry per output", {
-  skip_on_cran()
   d <- make_xy()
   set.seed(1L)
   model <- build_two_head()
@@ -136,7 +133,6 @@ test_that("y as a list must have one entry per output", {
 })
 
 test_that("a plain matrix y trains the last output only (legacy behaviour)", {
-  skip_on_cran()
   d <- make_xy()
   set.seed(1L)
   model <- build_two_head()
@@ -155,7 +151,6 @@ test_that("a plain matrix y trains the last output only (legacy behaviour)", {
 })
 
 test_that("a plain matrix y of the wrong width is rejected, not aborted", {
-  skip_on_cran()
   d <- make_xy()
   set.seed(1L)
   model <- build_two_head()
@@ -171,7 +166,6 @@ test_that("a plain matrix y of the wrong width is rejected, not aborted", {
 })
 
 test_that("evaluate reports per-head losses and the weighted total", {
-  skip_on_cran()
   d <- make_xy()
   set.seed(1L)
   model <- build_two_head()
@@ -191,7 +185,6 @@ test_that("evaluate reports per-head losses and the weighted total", {
 })
 
 test_that("a CE head and an MSE head can be mixed", {
-  skip_on_cran()
   d <- make_xy()
   # head_a is a 2-class softmax head, head_b stays a plain regression head.
   ya_onehot <- cbind(as.numeric(d$ya[, 1] > 1), as.numeric(d$ya[, 1] <= 1))
@@ -215,7 +208,6 @@ test_that("a CE head and an MSE head can be mixed", {
 })
 
 test_that("single-output models are unaffected", {
-  skip_on_cran()
   d <- make_xy()
   set.seed(1L)
   inp <- ggml_input(shape = 4L)
@@ -234,7 +226,6 @@ test_that("single-output models are unaffected", {
 })
 
 test_that("loss_weights survive a save/load round trip", {
-  skip_on_cran()
   d <- make_xy()
   set.seed(1L)
   model <- build_two_head()
@@ -269,7 +260,6 @@ skip_if_no_vulkan <- function() {
 }
 
 test_that("multi-output training on Vulkan matches the CPU", {
-  skip_on_cran()
   skip_if_no_vulkan()
   d <- make_xy()
 
@@ -296,7 +286,6 @@ test_that("multi-output training on Vulkan matches the CPU", {
 })
 
 test_that("the weighted reduction is correct on Vulkan", {
-  skip_on_cran()
   skip_if_no_vulkan()
   d <- make_xy()
 
@@ -319,7 +308,6 @@ test_that("the weighted reduction is correct on Vulkan", {
 })
 
 test_that("a CE head and an MSE head can be mixed on Vulkan", {
-  skip_on_cran()
   skip_if_no_vulkan()
   d <- make_xy()
   ya_onehot <- cbind(as.numeric(d$ya[, 1] > 1), as.numeric(d$ya[, 1] <= 1))
@@ -341,7 +329,6 @@ test_that("a CE head and an MSE head can be mixed on Vulkan", {
 })
 
 test_that("four heads fit in the graph and the context on Vulkan", {
-  skip_on_cran()
   skip_if_no_vulkan()
   # Guards the per-head sizing of ctx_static in ggml_opt_build(): it used to be
   # hardcoded to one loss, and overflowing it aborts the R process rather than
@@ -372,7 +359,6 @@ test_that("four heads fit in the graph and the context on Vulkan", {
 })
 
 test_that("per-head accuracy is reported for CE heads and absent for others", {
-  skip_on_cran()
   d <- make_xy()
   ya_onehot <- cbind(as.numeric(d$ya[, 1] > 1), as.numeric(d$ya[, 1] <= 1))
 
@@ -406,7 +392,6 @@ test_that("per-head accuracy is reported for CE heads and absent for others", {
 # ---------------------------------------------------------------------------
 
 test_that("callbacks fire on the multi-output path", {
-  skip_on_cran()
   d <- make_xy()
   seen <- list(begin = integer(0), end = integer(0))
   spy <- list(
@@ -432,7 +417,6 @@ test_that("callbacks fire on the multi-output path", {
 })
 
 test_that("early stopping cuts multi-output training short", {
-  skip_on_cran()
   d <- make_xy()
   # Stops at the end of epoch 2 regardless of the metric, so the assertion is
   # about the mechanism rather than about the loss happening to plateau.
@@ -462,7 +446,6 @@ test_that("early stopping cuts multi-output training short", {
 })
 
 test_that("a callback sees per-head keys, matching the history columns", {
-  skip_on_cran()
   d <- make_xy()
   captured <- NULL
   grabber <- list(
@@ -498,7 +481,6 @@ test_that("a callback sees per-head keys, matching the history columns", {
 })
 
 test_that("early stopping can monitor one head rather than the total", {
-  skip_on_cran()
   d <- make_xy()
 
   # ggml_callback_early_stopping() skips a metric it cannot find -- silently,
@@ -537,7 +519,6 @@ test_that("early stopping can monitor one head rather than the total", {
 })
 
 test_that("a head named val_x does not collide with another head's val key", {
-  skip_on_cran()
   d <- make_xy()
 
   # "val_a" is a legal output name, and without the train_ prefix on the
@@ -582,7 +563,6 @@ test_that("a head named val_x does not collide with another head's val key", {
 # ---------------------------------------------------------------------------
 
 test_that("changing thread count mid-training is harmless (multi-output)", {
-  skip_on_cran()
   d <- make_xy()
   original <- ggml_get_n_threads()
   on.exit(ggml_set_n_threads(original), add = TRUE)
@@ -616,7 +596,6 @@ test_that("changing thread count mid-training is harmless (multi-output)", {
 })
 
 test_that("changing thread count mid-training is harmless (single-output)", {
-  skip_on_cran()
   # The per-epoch re-sync landed in every R-side loop, including the
   # single-output path that was working before -- so it gets the same check.
   d <- make_xy()
@@ -808,7 +787,6 @@ test_that("a CE head and an MSE head mix on the multi-input path", {
 # divide evenly by batch_size, trains on silently corrupted labels.
 
 test_that("multi-output accepts validation_data as a list of matrices", {
-  skip_on_cran()
   d  <- make_xy(n = 64L)
   dv <- make_xy(n = 32L)
 
@@ -835,7 +813,6 @@ test_that("multi-output accepts validation_data as a list of matrices", {
 })
 
 test_that("validation_data survives a row count that needs truncation", {
-  skip_on_cran()
   # 50 + 22 = 72 rows total; batch_size 16 leaves 8 rows over, so the
   # truncation branch -- where the list-matrix used to blow up -- is taken.
   d  <- make_xy(n = 50L)
@@ -859,7 +836,6 @@ test_that("validation_data survives a row count that needs truncation", {
 })
 
 test_that("validation_data heads are matched by name, not by position", {
-  skip_on_cran()
   d  <- make_xy(n = 64L)
   dv <- make_xy(n = 32L)
 
@@ -893,7 +869,6 @@ test_that("validation_data heads are matched by name, not by position", {
 })
 
 test_that("malformed multi-output validation_data is rejected, not aborted", {
-  skip_on_cran()
   d  <- make_xy(n = 64L)
   dv <- make_xy(n = 32L)
 

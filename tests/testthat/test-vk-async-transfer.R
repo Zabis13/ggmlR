@@ -77,7 +77,6 @@ run_async_mode <- function(env) {
 
 test_that("Vulkan async set/get round-trip with the default queue setup", {
   skip_if_not(ggml_vulkan_available(), "no Vulkan device")
-  skip_on_cran()
   r <- run_async_mode(character())
   expect_equal(r$status, 0L, info = paste(r$out, collapse = "\n"))
   expect_true(any(grepl("^OK", r$out)), info = paste(r$out, collapse = "\n"))
@@ -85,7 +84,6 @@ test_that("Vulkan async set/get round-trip with the default queue setup", {
 
 test_that("Vulkan async set/get round-trip without a transfer queue", {
   skip_if_not(ggml_vulkan_available(), "no Vulkan device")
-  skip_on_cran()
   r <- run_async_mode("GGML_VK_ALLOW_GRAPHICS_QUEUE=1")
   expect_equal(r$status, 0L, info = paste(r$out, collapse = "\n"))
   expect_true(any(grepl("^OK", r$out)), info = paste(r$out, collapse = "\n"))

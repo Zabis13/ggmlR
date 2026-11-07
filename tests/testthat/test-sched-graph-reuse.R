@@ -8,7 +8,6 @@
 # triggers it: weights in a Vulkan buffer, the op pinned to the CPU.
 
 skip_if_no_vk_sched <- function() {
-  skip_on_cran()
   skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 1L,
               "Vulkan not available")
 }
