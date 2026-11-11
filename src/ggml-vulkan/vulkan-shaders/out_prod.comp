@@ -52,6 +52,67 @@ layout(push_constant) uniform PushConstants {
     uint dps2; uint dps3;                         // broadcast factors, dims 2/3
 };
 
+#ifdef OUT_PROD_N1
+// Variant for ne1 == 1 (compiled as out_prod_n1_f32): dst is one column,
+//     dst[i0] = sum_k src0[i0,k] * src1[0,k]
+// -- the bias gradient rowSums(g) = out_prod(g, ones[1,n]), and any
+// matrix-vector out_prod. The tiled kernel wastes 31 of its 32 dst columns
+// there and launches only ceil(ne0/32) workgroups, each walking all of K:
+// measured at ~22 us for 64 x 1 x 256 on an RX 9070.
+//
+// Here a workgroup owns N1_ROWS rows of dst and splits K over N1_KL lanes:
+// invocation (r, l) sums k = l, l + N1_KL, ... for row r. Consecutive
+// invocations read consecutive i0 of src0 (contiguous, coalesced); the src1
+// value is the same across a lane (broadcast). The N1_KL partial sums are
+// then added in a fixed order (lane 0, 1, ...), so the result is
+// deterministic. The dispatch is the tiled kernel's, with wg_denoms
+// {N1_ROWS, 1, 1}: ceil(ne0/N1_ROWS) x 1 x ne2*ne3 workgroups.
+
+#define N1_ROWS 32
+#define N1_KL   (WG / N1_ROWS)   // 8 lanes over K
+
+shared float part[N1_KL][N1_ROWS];
+
+void main() {
+    const uint lid = gl_LocalInvocationID.x;
+    const uint r   = lid % N1_ROWS;
+    const uint l   = lid / N1_ROWS;
+
+    const uint i0  = gl_WorkGroupID.x * N1_ROWS + r;
+    const uint i23 = gl_WorkGroupID.z;
+    const uint i2 = i23 % ne2;
+    const uint i3 = i23 / ne2;
+    if (i3 >= ne3) {
+        return;                                   // uniform across the workgroup
+    }
+
+    const uint i02 = i2 / dps2;
+    const uint i03 = i3 / dps3;
+    const uint s0_base = (i02 * nb02 + i03 * nb03) / 4u;
+    const uint s1_base = (i2 * nb12 + i3 * nb13) / 4u;   // i1 == 0
+    const uint s01 = nb01 / 4u;
+    const uint s11 = nb11 / 4u;
+
+    float acc = 0.0;
+    if (i0 < ne0) {
+        for (uint k = l; k < ne01; k += N1_KL) {
+            acc += src0[s0_base + i0 + k * s01] * src1[s1_base + k * s11];
+        }
+    }
+    part[l][r] = acc;
+    barrier();
+
+    if (l == 0u && i0 < ne0) {
+        float s = part[0][r];
+        [[unroll]] for (uint j = 1u; j < N1_KL; ++j) {
+            s += part[j][r];
+        }
+        dst[(i2 * nb2 + i3 * nb3) / 4u + i0] = s;
+    }
+}
+
+#else
+
 // [k][i] layout: the inner loop reads a row of each, and consecutive tx read
 // consecutive words of sa (no bank conflict); sb is read as a broadcast.
 shared float sa[TK][TM];
@@ -131,3 +192,4 @@ void main() {
         }
     }
 }
+#endif

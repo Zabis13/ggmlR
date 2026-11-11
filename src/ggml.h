@@ -630,6 +630,8 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
+        // DIVERGENCE from upstream: counter-based random numbers, see ggml_rand().
+        GGML_OP_RAND,
 
         GGML_OP_COUNT,
     };
@@ -2626,6 +2628,35 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 c);
+
+    // DIVERGENCE from upstream: counter-based random numbers (Philox4x32-10).
+    //
+    // An F32 tensor of shape ne[0..n_dims) whose element i is a function of
+    // (key, stream, i) only, so the CPU and Vulkan kernels draw the same
+    // uniform bits and a replayed graph gets new numbers by changing the key
+    // tensor, not the graph.
+    //
+    // key:    F32, at least 2 elements; the BIT PATTERNS of key[0] and key[1]
+    //         are the 64-bit Philox key (any two floats will do)
+    // stream: distinguishes several ggml_rand nodes that share one key
+    //
+    // UNIFORM is (k + 0.5) / 2^23 for a 23-bit k: strictly inside (0, 1) and
+    // bit-identical across backends. GUMBEL is -log(-log(u)); NORMAL is
+    // Box-Muller on two uniforms. Those two go through log / cos / sqrt, so
+    // backends may differ in the last bits.
+    enum ggml_rand_dist {
+        GGML_RAND_UNIFORM = 0,
+        GGML_RAND_GUMBEL  = 1,
+        GGML_RAND_NORMAL  = 2,
+    };
+
+    GGML_API struct ggml_tensor * ggml_rand(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * key,
+            enum ggml_rand_dist   dist,
+            int32_t               stream,
+            int                   n_dims,
+            const int64_t       * ne);
 
     // Ref: https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/diffusionmodules/util.py#L151
     // timesteps: [N,]

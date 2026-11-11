@@ -1186,6 +1186,10 @@ void process_shaders() {
 
     // ggmlR: OUT_PROD, the op both mul_mat gradients are built from (our tiled out_prod.comp).
     string_to_spv("out_prod_f32", "out_prod.comp", {{"A_TYPE", "float"}});
+    string_to_spv("out_prod_n1_f32", "out_prod.comp", {{"A_TYPE", "float"}, {"OUT_PROD_N1", "1"}});
+
+    // ggmlR: GGML_OP_RAND, counter-based random numbers.
+    string_to_spv("rand_f32", "rand.comp", {});
 
     string_to_spv("timestep_embedding_f32", "timestep_embedding.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
 

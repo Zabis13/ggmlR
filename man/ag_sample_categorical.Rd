@@ -4,13 +4,19 @@
 \alias{ag_sample_categorical}
 \title{Sample one index per column from logits}
 \usage{
-ag_sample_categorical(x)
+ag_sample_categorical(x, key = NULL, stream = 0L)
 }
 \arguments{
 \item{x}{ag_tensor or numeric matrix, \code{[n, batch]}.}
+
+\item{key}{\code{NULL} (default) for host noise, or a key as for
+\code{\link{ag_rand}}.}
+
+\item{stream}{Stream of the key, see \code{\link{ag_rand}}.}
 }
 \value{
-Integer vector of length \code{ncol(x)}, 0-based.
+Integer vector of length \code{ncol(x)}, 0-based; with \code{key},
+  an ag_tensor \code{[1, batch]} holding the same.
 }
 \description{
 Categorical sampling by the Gumbel-max trick:
@@ -33,6 +39,12 @@ entry is unmasked.
 
 Near-ties of \code{x + G} are rounded in f32 on the GPU and in double on the
 CPU, so the two paths can differ in a rare column even with the same seed.
+
+With \code{key} the noise is drawn on the device instead
+(\code{\link{ag_rand}}, Gumbel) and the result is a \code{[1, batch]}
+ag_tensor that stays there: nothing is uploaded but the key and nothing
+comes down, so the draw can be recorded by \code{\link{ag_capture}} with the
+key as an input. The numbers differ from the \code{runif} path.
 }
 \examples{
 set.seed(1)

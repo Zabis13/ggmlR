@@ -3795,6 +3795,35 @@ struct ggml_tensor * ggml_fill_inplace(
     return ggml_fill_impl(ctx, a, c, true);
 }
 
+// ggml_rand
+// DIVERGENCE from upstream: counter-based random numbers, see ggml.h.
+
+struct ggml_tensor * ggml_rand(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * key,
+    enum ggml_rand_dist   dist,
+    int32_t               stream,
+    int                   n_dims,
+    const int64_t       * ne) {
+    GGML_ASSERT(key->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(key));
+    GGML_ASSERT(ggml_nelements(key) >= 2);
+    GGML_ASSERT(dist == GGML_RAND_UNIFORM || dist == GGML_RAND_GUMBEL || dist == GGML_RAND_NORMAL);
+    GGML_ASSERT(stream >= 0);
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, n_dims, ne);
+    // the element index is a 32-bit counter word
+    GGML_ASSERT(ggml_nelements(result) <= (int64_t) UINT32_MAX);
+
+    ggml_set_op_params_i32(result, 0, (int32_t) dist);
+    ggml_set_op_params_i32(result, 1, stream);
+
+    result->op = GGML_OP_RAND;
+    result->src[0] = key;
+
+    return result;
+}
+
 // ggml_argsort
 
 struct ggml_tensor * ggml_argsort(

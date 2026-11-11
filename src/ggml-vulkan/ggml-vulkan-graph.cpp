@@ -382,6 +382,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_fill(ctx, compute_ctx, node);
 
         break;
+    case GGML_OP_RAND:
+        ggml_vk_rand(ctx, compute_ctx, src0, node);
+
+        break;
     case GGML_OP_SCALE:
         if (ctx->fused_hc_post_gate) {
             ggml_tensor * hc_post = cgraph->nodes[node_idx + ctx->num_additional_fused_ops];
@@ -3031,6 +3035,127 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     UNUSED(backend);
 }
 
+// ---------------------------------------------------------------------------
+// ggmlR (not upstream): record a graph once, submit it many times.
+//
+// ggml_backend_vk_graph_compute() records the command buffers anew on every
+// call (a few microseconds per node on the CPU). For a graph run over and over
+// with the same tensors -- a step of an environment rollout -- the recording
+// is the same every time. Here it is made once, into a command pool of its
+// own (the context's pool is reset at every synchronize), with the buffers
+// opened for simultaneous use; a replay submits them n times in one
+// vkQueueSubmit, each run behind a full memory barrier, and waits once.
+//
+// Only what a replay repeats exactly may be recorded: the descriptors must be
+// pushed into the command buffer (VK_KHR_push_descriptor; pooled descriptor
+// sets are rewritten by later graphs), and no host-side copy, memset or
+// semaphore may take part. Anything else refuses the recording (NULL).
+//
+// A recording points at device buffers by handle. The handles it uses are
+// collected while it is made (ggml_vk_rec_track: dispatch descriptors, copies,
+// fills); when one of those buffers is destroyed (a freed tensor, a grown
+// prealloc buffer) its handle may go to a new buffer, so the recording is
+// marked stale (ggml_vk_rec_buffer_destroyed) and a replay returns 1: record
+// again. Buffers it does not use -- the pass pool of a training step -- may
+// come and go without touching it.
+
+static void ggml_vk_graph_rec_destroy(ggml_vk_graph_rec * rec) {
+    if (rec == nullptr) return;
+    g_vk_recs.erase(std::remove(g_vk_recs.begin(), g_vk_recs.end(), rec), g_vk_recs.end());
+    if (rec->device) {
+        rec->device->device.waitIdle();
+        if (rec->pool.pool) rec->pool.destroy(rec->device->device);
+    }
+    delete rec;
+}
+
+void * ggml_backend_vk_graph_record(ggml_backend_t backend, ggml_cgraph * cgraph) {
+    if (backend == nullptr || cgraph == nullptr || !ggml_backend_is_vk(backend)) return nullptr;
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *) backend->context;
+    // a synchronize inside graph_compute (no async support) would reset the
+    // recording's pool; the perf logger submits and waits per graph
+    if (!ctx->device->push_descriptors || !ctx->device->support_async || vk_perf_logger_enabled) {
+        return nullptr;
+    }
+
+    ggml_vk_synchronize(ctx);           // nothing pending, context cleaned up
+
+    ggml_vk_graph_rec * rec = new ggml_vk_graph_rec();
+    rec->device = ctx->device;
+    rec->ctx = ctx;
+    rec->pool.init(ctx->device, ctx->device->compute_queue.get());
+    // registered from the start: a buffer destroyed while the graph is being
+    // recorded (a prealloc buffer grown) marks it stale too
+    g_vk_recs.push_back(rec);
+
+    std::swap(ctx->compute_cmd_pool, rec->pool);
+    g_vk_rec = rec;
+    ggml_status status = GGML_STATUS_FAILED;
+    try {
+        status = ggml_backend_vk_graph_compute(backend, cgraph);
+        if (!ctx->compute_ctx.expired()) {
+            // a batch left open: close it into the recording
+            vk_context c = ctx->compute_ctx.lock();
+            ggml_vk_ctx_end(c);
+            ggml_vk_submit(c, {});
+            ctx->compute_ctx.reset();
+        }
+    } catch (...) {
+        rec->failed = true;
+    }
+    g_vk_rec = nullptr;
+    std::swap(ctx->compute_cmd_pool, rec->pool);
+
+    // signals the empty submits made for the fences, resets the context's
+    // state (sync lists, contexts) as after any graph
+    ggml_vk_synchronize(ctx);
+
+    if (status != GGML_STATUS_SUCCESS || rec->failed || rec->stale || rec->bufs.empty()) {
+        ggml_vk_graph_rec_destroy(rec);
+        return nullptr;
+    }
+
+    // the barrier run before each replay: every earlier write (the previous
+    // run, uploads) is visible to every later access
+    vk_command_buffer * b = ggml_vk_create_cmd_buffer(rec->device, rec->pool);
+    b->buf.begin({ vk::CommandBufferUsageFlagBits::eSimultaneousUse });
+    vk::MemoryBarrier mb{ vk::AccessFlagBits::eMemoryWrite,
+                          vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite };
+    b->buf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+                           vk::PipelineStageFlagBits::eAllCommands, {}, { mb }, {}, {});
+    b->buf.end();
+    rec->barrier = b->buf;
+    return rec;
+}
+
+// 0: done; 1: stale (a buffer the recording uses was destroyed since; free it
+// and record again); -1: not this backend's recording.
+int ggml_backend_vk_graph_replay(ggml_backend_t backend, void * rec_ptr, int n) {
+    ggml_vk_graph_rec * rec = (ggml_vk_graph_rec *) rec_ptr;
+    if (backend == nullptr || rec == nullptr || !ggml_backend_is_vk(backend)) return -1;
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *) backend->context;
+    if (rec->ctx != ctx) return -1;
+    if (n < 1) return 0;
+    if (rec->stale) return 1;
+
+    ggml_vk_synchronize(ctx);           // earlier work first, then the replays
+
+    std::vector<vk::CommandBuffer> cbs;
+    cbs.reserve((size_t) n * (rec->bufs.size() + 1));
+    for (int i = 0; i < n; i++) {
+        cbs.push_back(rec->barrier);
+        cbs.insert(cbs.end(), rec->bufs.begin(), rec->bufs.end());
+    }
+    vk::SubmitInfo si{ 0, nullptr, nullptr, (uint32_t) cbs.size(), cbs.data(), 0, nullptr };
+    ctx->device->compute_queue->handle->submit({ si }, ctx->fence);
+    ggml_vk_wait_for_fence(ctx);
+    return 0;
+}
+
+void ggml_backend_vk_graph_record_free(void * rec_ptr) {
+    ggml_vk_graph_rec_destroy((ggml_vk_graph_rec *) rec_ptr);
+}
+
 // Sort the graph for improved parallelism.
 static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * graph, struct ggml_backend_graph_optimize_params * params)
 {
@@ -4459,6 +4584,8 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
             return op->type == GGML_TYPE_F32;
         case GGML_OP_FILL:
             return op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
+        case GGML_OP_RAND:      // ggmlR
+            return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SCALE:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_PAD:

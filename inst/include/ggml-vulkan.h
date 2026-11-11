@@ -20,6 +20,14 @@ GGML_BACKEND_API void ggml_backend_vk_get_device_memory(int device, size_t * fre
 // ggmlR, not upstream: largest single tensor (bytes) the device can bind; ops
 // with a larger src/dst are refused by supports_op and fall back to CPU.
 GGML_BACKEND_API size_t ggml_backend_vk_get_device_max_tensor_size(int device);
+// ggmlR, not upstream: record a graph's command buffers once and submit them n
+// times (one vkQueueSubmit, a full barrier before each run, one wait). record
+// returns NULL when the graph cannot be replayed exactly (no push descriptors,
+// host-side copies, ...); replay returns 0 done, 1 stale (a buffer the
+// recording uses was destroyed since: free and record again), -1 wrong backend.
+GGML_BACKEND_API void * ggml_backend_vk_graph_record(ggml_backend_t backend, struct ggml_cgraph * cgraph);
+GGML_BACKEND_API int    ggml_backend_vk_graph_replay(ggml_backend_t backend, void * rec, int n);
+GGML_BACKEND_API void   ggml_backend_vk_graph_record_free(void * rec);
 // ggmlR Tensor Parallelism (P2P), not upstream: enumerate device groups (LDA) and
 // probe peer memory access; writes a report and returns the number of groups.
 GGML_BACKEND_API int  ggml_backend_vk_get_device_groups(char * report, size_t report_size);

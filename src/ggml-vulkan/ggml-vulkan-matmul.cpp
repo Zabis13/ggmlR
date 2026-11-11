@@ -1587,6 +1587,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
             if (y_needs_k_padding) {
                 GGML_ASSERT(y_sz % 4 == 0);
                 // Zero B padding because clamping only A can produce 0 * Inf or NaN.
+                ggml_vk_rec_track(d_Y->buffer);
                 subctx->s->buffer->buf.fillBuffer(d_Y->buffer, 0, y_sz, 0);
                 ggml_vk_sync_buffers(ctx, subctx);
                 const ggml_tensor y_staged_dst = make_y_staged_dst();

@@ -5796,3 +5796,36 @@ ggml_gated_linear_attn_back <- function(ctx, k, v, q, g, state, grad, scale) {
   .Call("R_ggml_gated_linear_attn_back", ctx, k, v, q, g, state, grad,
         as.numeric(scale), PACKAGE = "ggmlR")
 }
+
+#' Counter-Based Random Numbers (Graph)
+#'
+#' An F32 tensor of random numbers computed on the backend the graph runs on
+#' (Philox4x32-10). Element \code{i} depends only on the key, \code{stream}
+#' and \code{i}: a recorded graph draws new numbers when the key tensor's data
+#' changes, and the CPU and Vulkan kernels produce the same uniform bits.
+#'
+#' @details \code{"uniform"} is \code{(k + 0.5) / 2^23} for a 23-bit integer
+#'   \code{k}, so it lies strictly inside (0, 1) and is bit-identical across
+#'   backends. \code{"gumbel"} is \code{-log(-log(u))} and \code{"normal"} is
+#'   Box-Muller on two uniforms; both go through \code{log} / \code{cos} /
+#'   \code{sqrt} and may differ between backends in the last bits.
+#'
+#'   The key is read as raw bits, so any two floats work, e.g. two draws of
+#'   \code{stats::runif} (which makes the stream follow \code{set.seed}). Give
+#'   every \code{ggml_rand} node sharing one key its own \code{stream}.
+#'
+#' @param ctx GGML context
+#' @param key F32 tensor with at least 2 elements; the bit patterns of the
+#'   first two are the 64-bit key
+#' @param dist \code{"uniform"}, \code{"gumbel"} or \code{"normal"}
+#' @param dims Shape of the result, 1 to 4 positive integers
+#' @param stream Non-negative integer separating nodes that share a key
+#' @return F32 tensor of shape \code{dims}
+#' @export
+ggml_rand <- function(ctx, key, dist = c("uniform", "gumbel", "normal"),
+                      dims, stream = 0L) {
+  dist <- match.arg(dist)
+  .Call("R_ggml_rand", ctx, key,
+        match(dist, c("uniform", "gumbel", "normal")) - 1L,
+        as.integer(stream), as.double(dims), PACKAGE = "ggmlR")
+}

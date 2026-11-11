@@ -70,6 +70,7 @@ namespace std {
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -391,6 +392,38 @@ struct vk_command_pool {
             [](const auto& cb) { return cb.in_use; });
     }
 };
+
+// ggmlR (not upstream): a graph recorded once into command buffers of its own
+// and submitted many times (ggml_backend_vk_graph_record / _replay), so a
+// replay costs no command recording on the CPU. While g_vk_rec is set,
+// ggml_vk_submit() keeps the command buffers instead of submitting them and
+// ggml_vk_begin_submission() opens them for simultaneous use.
+struct ggml_vk_graph_rec {
+    vk_device device;
+    ggml_backend_vk_context * ctx = nullptr;
+    vk_command_pool pool;
+    std::vector<vk::CommandBuffer> bufs;   // the graph, in submission order
+    vk::CommandBuffer barrier;             // full barrier, before every run
+    std::unordered_set<VkBuffer> handles;  // every buffer the commands touch
+    bool stale = false;                    // one of them was destroyed since
+    bool failed = false;                   // something a replay would not repeat
+};
+static ggml_vk_graph_rec * g_vk_rec = nullptr;            // being recorded
+static std::vector<ggml_vk_graph_rec *> g_vk_recs;        // alive, for staleness
+
+// A buffer used by the commands being recorded (dispatch descriptors, copies,
+// fills): its destruction makes the recording stale.
+static inline void ggml_vk_rec_track(vk::Buffer b) {
+    if (g_vk_rec != nullptr) g_vk_rec->handles.insert((VkBuffer) b);
+}
+
+// Called when a device buffer is destroyed: its handle may be reused by a new
+// buffer, so a recording that points at it must not be replayed.
+static inline void ggml_vk_rec_buffer_destroyed(vk::Buffer b) {
+    for (ggml_vk_graph_rec * r : g_vk_recs) {
+        if (r->handles.count((VkBuffer) b)) r->stale = true;
+    }
+}
 
 struct vk_queue_handle {
     vk::Queue queue;
@@ -1217,6 +1250,7 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_fill_f32;
     vk_pipeline pipeline_fill_f16;
+    vk_pipeline pipeline_rand_f32;          // ggmlR: GGML_OP_RAND
 
     vk_pipeline pipeline_geglu[2];
     vk_pipeline pipeline_reglu[2];
@@ -1301,6 +1335,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_ssm_scan_back_f32_d128;
     vk_pipeline pipeline_ssm_scan_back_f32_d256;
     vk_pipeline pipeline_out_prod_f32;   // ggmlR: backward of mul_mat
+    vk_pipeline pipeline_out_prod_n1_f32;   // ggmlR: out_prod with ne1 == 1 (bias gradient)
     vk_pipeline pipeline_cross_entropy_loss_back_f32, pipeline_cross_entropy_loss_back_f32_wg512;
     vk_pipeline pipeline_flash_attn_back_f32;   // ggmlR: backward of flash attention
     vk_pipeline pipeline_im2col_back_f32;   // ggmlR: backward of convolution
@@ -1464,6 +1499,7 @@ struct vk_buffer_struct {
         try {
             // bump before destroying, so a thread that sees the buffer gone also sees the new count
             device->buffer_destroy_count.fetch_add(1, std::memory_order_release);
+            ggml_vk_rec_buffer_destroyed(buffer);   // ggmlR: recorded graphs using it
             r_tp_tracef("  freeMemory...");
             device->device.freeMemory(device_memory);
             r_tp_tracef("  destroyBuffer...");
@@ -1652,6 +1688,14 @@ struct vk_op_push_constants {
     float param2;
     float param3;
     float param4;
+};
+
+// ggmlR: GGML_OP_RAND (rand.comp)
+struct vk_op_rand_push_constants {
+    uint32_t n;
+    uint32_t dist;
+    uint32_t stream;
+    uint32_t k_offset;
 };
 
 struct vk_op_count_experts_push_constants {
@@ -4106,6 +4150,29 @@ static vk_command_buffer* ggml_vk_get_or_create_cmd_buffer(vk_device& device, vk
 }
 
 static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
+    if (g_vk_rec != nullptr) {
+        // recording (ggml_backend_vk_graph_record): keep the command buffers.
+        // Host-side copies, semaphores or work outside the recording's pool
+        // would not be repeated by a replay: the recording is refused.
+        if (ctx->p != &g_vk_rec->ctx->compute_cmd_pool ||
+            !ctx->in_memcpys.empty() || !ctx->out_memcpys.empty() || !ctx->memsets.empty()) {
+            g_vk_rec->failed = true;
+        }
+        for (const auto& sequence : ctx->seqs) {
+            for (const auto& submission : sequence) {
+                if (!submission.wait_semaphores.empty() || !submission.signal_semaphores.empty()) {
+                    g_vk_rec->failed = true;
+                }
+                g_vk_rec->bufs.push_back(submission.buffer->buf);
+            }
+        }
+        ctx->seqs.clear();
+        // a fence the caller will wait on must still signal
+        if (fence) {
+            ctx->p->q->handle->submit({}, fence);
+        }
+        return;
+    }
     if (ctx->seqs.empty()) {
         if (fence) {
             ctx->p->q->handle->submit({}, fence);

@@ -1061,6 +1061,10 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_OP_FILL: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ false);
             } break;
+            // ggmlR: the output shape is unrelated to the key's, as for a scalar op
+            case GGML_OP_RAND: {
+                split_state = handle_generic(src_ss, /*scalar_only =*/ true);
+            } break;
             case GGML_OP_FLASH_ATTN_EXT: {
                 split_state = handle_flash_attn_ext(src_ss);
             } break;

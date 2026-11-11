@@ -1574,6 +1574,38 @@ static void ggml_vk_fill(ggml_backend_vk_context * ctx, vk_context& subctx, ggml
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { dst_buf }, pc, elements);
 }
 
+// ggmlR: GGML_OP_RAND, counter-based random numbers (rand.comp). src0 is the
+// key: an F32 tensor whose first two bit patterns are the Philox key. It is
+// usually a view into a packed input buffer, hence the misalignment offset.
+static void ggml_vk_rand(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    VK_LOG_DEBUG("ggml_vk_rand(dst=" << dst << ", ne=" << ggml_nelements(dst) << ")");
+    const uint64_t n = ggml_nelements(dst);
+    GGML_ASSERT(n > 0 && n <= UINT32_MAX);
+
+    vk_op_rand_push_constants pc = {
+        (uint32_t)n,
+        (uint32_t)ggml_get_op_params_i32(dst, 0),
+        (uint32_t)ggml_get_op_params_i32(dst, 1),
+        get_misalign_bytes(ctx, src0) / (uint32_t)ggml_type_size(src0->type),
+    };
+
+    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, nullptr, nullptr, dst, GGML_OP_RAND);
+    GGML_ASSERT(pipeline != nullptr);
+
+    // Split the task distribution to 2D to avoid exceeding maxComputeWorkGroupCount
+    const uint32_t total_wg = CEIL_DIV(n, pipeline->wg_denoms[0]);
+    const uint32_t wg_x = std::min(total_wg, ctx->device->properties.limits.maxComputeWorkGroupCount[0]);
+    const uint32_t wg_y = CEIL_DIV(total_wg, wg_x);
+    GGML_ASSERT(wg_y <= ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    vk_subbuffer key_buf = ggml_vk_tensor_subbuffer(ctx, src0, true);
+    vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst, false);
+
+    std::array<uint32_t, 3> elements = { wg_x * pipeline->wg_denoms[0], wg_y * pipeline->wg_denoms[1], 1 };
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { key_buf, dst_buf }, pc, elements);
+}
+
 static void ggml_vk_sin(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_SIN, vk_op_unary_push_constants_init(src0, dst));
 }

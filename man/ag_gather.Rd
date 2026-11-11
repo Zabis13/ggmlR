@@ -12,7 +12,8 @@ ag_gather(x, index)
 \item{index}{Integer-valued vector of length \code{ncol(x)}, \strong{0-based},
 each in \code{0..nrow(x)-1}. A 1-based index is an error (out of range for
 \code{n}) or, worse, silently the neighbouring row -- so the range is checked
-and \code{NA} / non-integers are rejected.}
+and \code{NA} / non-integers are rejected. Or a \code{[1, batch]} ag_tensor
+of such indices.}
 }
 \value{
 ag_tensor \code{[1, batch]}.
@@ -27,6 +28,14 @@ Built as \code{colSums(x * onehot(index))}, so the graph backward covers it
 with no rule of its own. The one-hot is \code{[n, batch]} and is uploaded on
 every call: cheap for tens of classes (games), wasteful for thousands --
 there a dedicated op with an I32 index tensor is the right tool (TODO.md).
+
+\code{index} may also be a \code{[1, batch]} ag_tensor, as returned by
+\code{ag_argmax(as_tensor = TRUE)} or \code{ag_sample_categorical(key = )}.
+With \code{x} on the GPU nothing then touches the host: the pick is a
+\code{get_rows} over the flattened \code{x}, so it can be recorded by
+\code{\link{ag_capture}}. That path is for collection and is \strong{not
+differentiable}, and the index is not range-checked (it never leaves the
+device); pass a host vector in the training step.
 }
 \examples{
 ag_gather(matrix(1:6 + 0, 3, 2), c(2L, 0L))   # 3 4

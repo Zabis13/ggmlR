@@ -1927,14 +1927,19 @@ ag_exp <- function(x) {
 #' @return ag_tensor with new shape, same data
 #' @export
 ag_reshape <- function(x, nrow, ncol) {
-  x_data     <- .ag_data(x)
   device     <- if (is_ag_tensor(x)) x$device else "cpu"
-  orig_shape <- dim(x_data)
-  n          <- length(x_data)
+  # On the GPU the operand stays on the device (a handle inside a recording or
+  # in graph mode): its shape from the accessor, no download.
+  x_data     <- if (device == "gpu") .ag_operand(x) else .ag_data(x)
+  orig_shape <- if (device == "gpu") as.integer(.ag_dim(x_data)) else dim(x_data)
+  n          <- if (device == "gpu") prod(orig_shape) else length(x_data)
   nrow       <- if (nrow == -1L) n %/% ncol else as.integer(nrow)
   ncol       <- if (ncol == -1L) n %/% nrow else as.integer(ncol)
   if (device == "gpu") {
-    out <- ag_tensor(.ag_gpu_reshape(x_data, nrow, ncol), device = "gpu", dtype = .ag_device_state$dtype)
+    if (nrow * ncol != n)
+      stop(sprintf("ag_reshape: %d x %d does not hold the %d elements of x",
+                   nrow, ncol, n), call. = FALSE)
+    out <- .ag_wrap_result(.ag_gpu_reshape(x_data, nrow, ncol), device)
   } else {
     out <- ag_tensor(matrix(x_data, nrow, ncol), device = device)
   }

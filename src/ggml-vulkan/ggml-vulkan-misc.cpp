@@ -1002,7 +1002,11 @@ static vk_subbuffer ggml_vk_tensor_subbuffer(
 static vk_submission ggml_vk_begin_submission(vk_device& device, vk_command_pool& p, bool one_time = true) {
     vk_submission s;
     s.buffer = ggml_vk_get_or_create_cmd_buffer(device, p);
-    if (one_time) {
+    if (g_vk_rec != nullptr) {
+        // ggml_backend_vk_graph_record: submitted many times, also several
+        // times within one vkQueueSubmit
+        s.buffer->buf.begin({ vk::CommandBufferUsageFlagBits::eSimultaneousUse });
+    } else if (one_time) {
         s.buffer->buf.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
     } else {
         s.buffer->buf.begin({ vk::CommandBufferUsageFlags{} });
@@ -1056,6 +1060,9 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     subctx->s->buffer->buf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
 
     if (ctx->device->push_descriptors) {
+        for (const vk::DescriptorBufferInfo & info : descriptor_buffer_infos) {
+            ggml_vk_rec_track(info.buffer);
+        }
         vk::WriteDescriptorSet write_descriptor_set{ {}, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
         subctx->s->buffer->buf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, pipeline->layout, 0, { write_descriptor_set });
     } else {
@@ -1362,6 +1369,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
         }
 
         ggml_vk_sync_buffers(ctx, subctx);
+        ggml_vk_rec_track(buf->buffer); ggml_vk_rec_track(dst->buffer);
         subctx->s->buffer->buf.copyBuffer(buf->buffer, dst->buffer, slices);
         return;
     }
@@ -1426,6 +1434,7 @@ static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, siz
         }
 
         ggml_vk_sync_buffers(nullptr, subctx);
+        ggml_vk_rec_track(buf->buffer); ggml_vk_rec_track(dst->buffer);
         subctx->s->buffer->buf.copyBuffer(buf->buffer, dst->buffer, slices);
         return true;
     }
@@ -1547,6 +1556,7 @@ static bool ggml_vk_buffer_read_2d_async(vk_context subctx, vk_buffer& src, size
     if (buf != nullptr) {
         // Memory is pinned, use as staging buffer
         ggml_vk_sync_buffers(nullptr, subctx);
+        ggml_vk_rec_track(src->buffer); ggml_vk_rec_track(buf->buffer);
         subctx->s->buffer->buf.copyBuffer(src->buffer, buf->buffer, slices);
 
         return true;
@@ -1701,6 +1711,7 @@ static void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t 
     }
 
     // Fall back to GPU fillBuffer for non-UMA or non-host-visible buffers
+    ggml_vk_rec_track(dst->buffer);
     ctx->s->buffer->buf.fillBuffer(dst->buffer, offset, size, c);
 }
 

@@ -492,12 +492,21 @@ ag_backward_profile_report <- function() {
     if (is.null(bdim)) return(g)
     if (bdim[2L] == 1L && out_nc > 1L) {
       # b was [m,1] broadcast across columns -> db = rowSums(g), [m,1].
-      # Reducing ne[1] is not something sum_rows does, so transpose to
-      # [n,m] and reduce ne[0] instead, then reshape [1,m] back to [m,1].
-      # ggml_cont before the reduction: sum_rows over a transposed VIEW is
-      # a different (and here wrong) memory walk.
-      gt <- ggml_cont(ctx, ggml_transpose(ctx, g))
-      g <- ggml_reshape_2d(ctx, ggml_sum_rows(ctx, gt), out_nr, 1L)
+      # sum_rows reduces ne[0] only, so through it this took cont(transpose)
+      # + sum_rows + reshape -- a full copy of g. One out_prod against a row
+      # of ones does it in a single node:
+      #   out_prod(a [m,n], b [1,n])[i,0] = sum_k a[i,k] * 1 = rowSums(g).
+      # The ones are data-independent, so a recording may freeze them.
+      # TEMPORARY (benchmark of TODO item 3A): option ggmlR.bias_grad_outprod
+      # = FALSE restores the old path; remove once measured.
+      if (isTRUE(getOption("ggmlR.bias_grad_outprod", TRUE))) {
+        ones <- const(matrix(1, 1L, out_nc))
+        uploads[[length(uploads)]]$const <<- TRUE
+        g <- ggml_out_prod(ctx, g, ones)
+      } else {
+        gt <- ggml_cont(ctx, ggml_transpose(ctx, g))
+        g <- ggml_reshape_2d(ctx, ggml_sum_rows(ctx, gt), out_nr, 1L)
+      }
     }
     if (bdim[1L] == 1L && out_nr > 1L) {
       # b was [1,n] broadcast down rows -> db = colSums(g), [1,n], which

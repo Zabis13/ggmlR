@@ -209,3 +209,150 @@ test_that("ag_buffer refuses more memory than the device has free", {
   cap <- ceiling(free / 4 / 1024) + 1
   expect_error(ag_buffer(1024, cap), "free")
 })
+
+# ag_buffer_copy_from(): a device tensor of another backend (an environment's)
+# copied into buffer columns on the device.
+env_tensor <- function(backend, vals, rows, k, type = GGML_TYPE_F32) {
+  ctx <- ggml_init(4 * ggml_tensor_overhead() + 1024, no_alloc = TRUE)
+  t <- ggml_new_tensor_2d(ctx, type, rows, k)
+  bb <- ggml_backend_alloc_ctx_tensors(ctx, backend)
+  if (type == GGML_TYPE_F32) ggml_backend_tensor_set_data(t, as.numeric(vals))
+  list(t = t, ctx = ctx, bb = bb)
+}
+env_free <- function(e) { ggml_backend_buffer_free(e$bb); ggml_free(e$ctx) }
+
+test_that("ag_buffer_copy_from writes columns from another backend's tensor", {
+  skip_if_no_gpu_buf()
+  ag_device("gpu"); on.exit(ag_device("cpu"), add = TRUE)
+  be <- ggml_vulkan_init(0L); on.exit(ggml_backend_free(be), add = TRUE)
+  buf <- ag_buffer(3, 6)
+  m <- matrix(1:6 + 0.5, 3, 2)
+  e <- env_tensor(be, m, 3, 2); on.exit(env_free(e), add = TRUE)
+  ag_buffer_copy_from(buf, e$t, be, col_offset = 3)
+  expect_equal(ag_buffer_read(buf), cbind(matrix(0, 3, 3), m, 0))
+  # the whole buffer at once
+  e2 <- env_tensor(be, 1:18, 3, 6); on.exit(env_free(e2), add = TRUE)
+  ag_buffer_copy_from(buf, e2$t, be)
+  expect_equal(ag_buffer_read(buf), matrix(1:18 + 0, 3, 6))
+  ag_buffer_free(buf)
+})
+
+test_that("ag_buffer_copy_from from the ag backend itself is synchronous", {
+  skip_if_no_gpu_buf()
+  ag_device("gpu"); on.exit(ag_device("cpu"), add = TRUE)
+  buf <- ag_buffer(2, 4)
+  be <- ggmlR:::.ag_device_state$backend
+  e <- env_tensor(be, c(7, 8), 2, 1); on.exit(env_free(e), add = TRUE)
+  ag_buffer_copy_from(buf, e$t, be, col_offset = 1)
+  expect_equal(as.matrix(ag_get_rows(buf, 1)), matrix(c(7, 8), 2, 1))
+  ag_buffer_free(buf)
+})
+
+test_that("a captured graph sees ag_buffer_copy_from writes without re-recording", {
+  skip_if_no_gpu_buf()
+  ag_device("gpu"); on.exit(ag_device("cpu"), add = TRUE)
+  be <- ggml_vulkan_init(0L); on.exit(ggml_backend_free(be), add = TRUE)
+  buf <- ag_buffer(2, 3)
+  W <- ag_param(diag(2))
+  f <- ag_capture(function(idx) ag_matmul(W, ag_get_rows(buf, idx)), params = list(W, buf))
+  e1 <- env_tensor(be, c(1, 2), 2, 1); on.exit(env_free(e1), add = TRUE)
+  e2 <- env_tensor(be, c(3, 4), 2, 1); on.exit(env_free(e2), add = TRUE)
+  i <- matrix(0, ncol = 1)
+  ag_buffer_copy_from(buf, e1$t, be, 0)
+  expect_equal(f(idx = i), matrix(c(1, 2), 2, 1), tolerance = 1e-6)
+  gen <- buf$core$gen
+  ag_buffer_copy_from(buf, e2$t, be, 0)
+  expect_identical(buf$core$gen, gen)
+  expect_equal(f(idx = i), matrix(c(3, 4), 2, 1), tolerance = 1e-6)
+  expect_length(ls(attr(f, "captures")), 1L)
+  ag_buffer_free(buf)
+})
+
+test_that("ag_buffer_copy_from refuses what breaks its contract", {
+  skip_if_no_gpu_buf()
+  on.exit(ag_device("cpu"), add = TRUE)
+  ag_device("gpu")
+  be <- ggml_vulkan_init(0L); on.exit(ggml_backend_free(be), add = TRUE)
+  buf <- ag_buffer(3, 4)
+  ok <- env_tensor(be, 1:6, 3, 2); on.exit(env_free(ok), add = TRUE)
+  expect_error(ag_buffer_copy_from(buf, ok$t, be, 3), "outside the buffer")
+  expect_error(ag_buffer_copy_from(buf, ok$t, be, -1), "outside the buffer")
+  expect_error(ag_buffer_copy_from(buf, ok$t, be, 0.5), "outside the buffer")
+  tr <- env_tensor(be, 1:6, 2, 3); on.exit(env_free(tr), add = TRUE)
+  expect_error(ag_buffer_copy_from(buf, tr$t, be), "rows")
+  i32 <- env_tensor(be, NULL, 3, 2, GGML_TYPE_I32); on.exit(env_free(i32), add = TRUE)
+  expect_error(ag_buffer_copy_from(buf, i32$t, be), "f32")
+  # nothing was written by the refused calls
+  expect_equal(ag_buffer_read(buf), matrix(0, 3, 4))
+  ag_buffer_free(buf)
+})
+
+# via_host: every copy that would go through the host is an error naming the
+# reason by default, and the host copy (same values) with via_host = "allow".
+reset_via_host_note <- function() {
+  reg <- ggmlR:::.ag_buffer_reg
+  reg$via_host_noted <- NULL
+}
+
+test_that("via_host: a tensor in host memory, ag on the GPU", {
+  skip_if_no_gpu_buf()
+  ag_device("gpu"); on.exit(ag_device("cpu"), add = TRUE)
+  cpu <- ggml_backend_cpu_init(); on.exit(ggml_backend_free(cpu), add = TRUE)
+  buf <- ag_buffer(3, 4)
+  h <- env_tensor(cpu, 1:6, 3, 2); on.exit(env_free(h), add = TRUE)
+  expect_error(ag_buffer_copy_from(buf, h$t, cpu), "host memory.*via_host = \"allow\"")
+  expect_equal(ag_buffer_read(buf), matrix(0, 3, 4))
+  reset_via_host_note()
+  expect_message(ag_buffer_copy_from(buf, h$t, cpu, 1, via_host = "allow"), "host memory")
+  expect_silent(ag_buffer_copy_from(buf, h$t, cpu, 1, via_host = "allow"))
+  expect_equal(ag_buffer_read(buf), cbind(0, matrix(1:6 + 0, 3, 2), 0))
+  ag_buffer_free(buf)
+})
+
+test_that("via_host: ag on the CPU, the tensor on the GPU", {
+  skip_if_no_gpu_buf()
+  ag_device("cpu")
+  be <- ggml_vulkan_init(0L); on.exit(ggml_backend_free(be), add = TRUE)
+  buf <- ag_buffer(3, 4)
+  g <- env_tensor(be, 1:6, 3, 2); on.exit(env_free(g), add = TRUE)
+  expect_error(ag_buffer_copy_from(buf, g$t, be), "ag device is the CPU.*via_host = \"allow\"")
+  expect_equal(ag_buffer_read(buf), matrix(0, 3, 4))
+  reset_via_host_note()
+  expect_message(ag_buffer_copy_from(buf, g$t, be, 2, via_host = "allow"), "ag device is the CPU")
+  expect_equal(ag_buffer_read(buf), cbind(0, 0, matrix(1:6 + 0, 3, 2)))
+  ag_buffer_free(buf)
+})
+
+test_that("via_host: the tensor on another GPU", {
+  skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 2L,
+              "fewer than two Vulkan devices")
+  ag_device("gpu"); on.exit(ag_device("cpu"), add = TRUE)
+  be1 <- ggml_vulkan_init(1L); on.exit(ggml_backend_free(be1), add = TRUE)
+  buf <- ag_buffer(3, 4)
+  g <- env_tensor(be1, 1:6, 3, 2); on.exit(env_free(g), add = TRUE)
+  expect_error(ag_buffer_copy_from(buf, g$t, be1), "on device.*via_host = \"allow\"")
+  expect_equal(ag_buffer_read(buf), matrix(0, 3, 4))
+  reset_via_host_note()
+  expect_message(ag_buffer_copy_from(buf, g$t, be1, 0, via_host = "allow"), "on device")
+  expect_equal(ag_buffer_read(buf), cbind(matrix(1:6 + 0, 3, 2), 0, 0))
+  ag_buffer_free(buf)
+})
+
+test_that("via_host on the CPU only: default error, allow copies, same contract", {
+  ag_device("cpu")
+  cpu <- ggml_backend_cpu_init(); on.exit(ggml_backend_free(cpu), add = TRUE)
+  buf <- ag_buffer(2, 4)
+  e <- env_tensor(cpu, 1:4, 2, 2); on.exit(env_free(e), add = TRUE)
+  expect_error(ag_buffer_copy_from(buf, e$t, cpu, 1), "ag device is the CPU.*via_host")
+  expect_error(ag_buffer_copy_from(buf, e$t, cpu, via_host = "maybe"), "should be one of")
+  reset_via_host_note()
+  expect_message(ag_buffer_copy_from(buf, e$t, cpu, 1, via_host = "allow"), "once per session")
+  expect_silent(ag_buffer_copy_from(buf, e$t, cpu, 1, via_host = "allow"))
+  expect_equal(ag_buffer_read(buf), cbind(0, matrix(1:4 + 0, 2, 2), 0))
+  # the same refusals as the device path, and nothing written by them
+  expect_error(ag_buffer_copy_from(buf, e$t, cpu, 3, via_host = "allow"), "outside the buffer")
+  tr <- env_tensor(cpu, 1:4, 4, 1); on.exit(env_free(tr), add = TRUE)
+  expect_error(ag_buffer_copy_from(buf, tr$t, cpu, via_host = "allow"), "rows")
+  expect_equal(ag_buffer_read(buf), cbind(0, matrix(1:4 + 0, 2, 2), 0))
+  ag_buffer_free(buf)
+})

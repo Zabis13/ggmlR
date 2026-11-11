@@ -621,6 +621,61 @@ SEXP R_ggml_vulkan_is_backend(SEXP backend_ptr) {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// Recorded graphs (ggml_backend_vk_graph_record / _replay): the command
+// buffers of a graph recorded once and submitted many times.
+
+#ifdef GGML_USE_VULKAN
+static void r_vk_graph_rec_finalizer(SEXP ptr) {
+    void * rec = R_ExternalPtrAddr(ptr);
+    if (rec != NULL) {
+        ggml_backend_vk_graph_record_free(rec);
+        R_ClearExternalPtr(ptr);
+    }
+}
+#endif
+
+// External pointer to the recording, or NULL when the graph cannot be
+// recorded (not a Vulkan backend, no push descriptors, host-side copies, ...).
+SEXP R_ggml_vk_graph_record(SEXP backend_ptr, SEXP graph_ptr) {
+#ifdef GGML_USE_VULKAN
+    ggml_backend_t backend = (ggml_backend_t) R_ExternalPtrAddr(backend_ptr);
+    struct ggml_cgraph * graph = (struct ggml_cgraph *) R_ExternalPtrAddr(graph_ptr);
+    if (backend == NULL || graph == NULL) return R_NilValue;
+    void * rec = ggml_backend_vk_graph_record(backend, graph);
+    if (rec == NULL) return R_NilValue;
+    SEXP ptr = PROTECT(R_MakeExternalPtr(rec, R_NilValue, R_NilValue));
+    R_RegisterCFinalizerEx(ptr, r_vk_graph_rec_finalizer, FALSE);
+    UNPROTECT(1);
+    return ptr;
+#else
+    (void) backend_ptr; (void) graph_ptr;
+    return R_NilValue;
+#endif
+}
+
+// 0 done, 1 stale (record again), -1 wrong backend or freed recording.
+SEXP R_ggml_vk_graph_replay(SEXP backend_ptr, SEXP rec_ptr, SEXP n) {
+#ifdef GGML_USE_VULKAN
+    ggml_backend_t backend = (ggml_backend_t) R_ExternalPtrAddr(backend_ptr);
+    void * rec = R_ExternalPtrAddr(rec_ptr);
+    if (backend == NULL || rec == NULL) return ScalarInteger(-1);
+    return ScalarInteger(ggml_backend_vk_graph_replay(backend, rec, asInteger(n)));
+#else
+    (void) backend_ptr; (void) rec_ptr; (void) n;
+    return ScalarInteger(-1);
+#endif
+}
+
+SEXP R_ggml_vk_graph_record_free(SEXP rec_ptr) {
+#ifdef GGML_USE_VULKAN
+    r_vk_graph_rec_finalizer(rec_ptr);
+#else
+    (void) rec_ptr;
+#endif
+    return R_NilValue;
+}
+
 // Get backend name
 SEXP R_ggml_vulkan_backend_name(SEXP backend_ptr) {
 #ifdef GGML_USE_VULKAN

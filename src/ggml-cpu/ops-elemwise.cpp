@@ -2484,6 +2484,83 @@ void ggml_compute_forward_fill(const ggml_compute_params * params, ggml_tensor *
     }
 }
 
+// ggml_compute_forward_rand
+// DIVERGENCE from upstream: counter-based random numbers, see ggml_rand().
+//
+// Philox4x32-10 (Salmon et al., "Parallel random numbers: as easy as 1, 2, 3",
+// SC'11). Element i uses the counter (i, 0, stream, 0) and takes words 0 and 1
+// of the block. rand.comp is the same arithmetic word for word; the integer
+// part and the uniform conversion must stay bit-identical between the two.
+
+static inline void ggml_philox4x32_10(uint32_t c[4], uint32_t k0, uint32_t k1) {
+    for (int r = 0; r < 10; ++r) {
+        if (r > 0) {
+            k0 += 0x9E3779B9u;
+            k1 += 0xBB67AE85u;
+        }
+        const uint64_t p0 = (uint64_t) 0xD2511F53u * c[0];
+        const uint64_t p1 = (uint64_t) 0xCD9E8D57u * c[2];
+        const uint32_t n0 = (uint32_t) (p1 >> 32) ^ c[1] ^ k0;
+        const uint32_t n2 = (uint32_t) (p0 >> 32) ^ c[3] ^ k1;
+        c[0] = n0;
+        c[1] = (uint32_t) p1;
+        c[2] = n2;
+        c[3] = (uint32_t) p0;
+    }
+}
+
+// 23 random bits -> (k + 0.5) / 2^23. Both steps are exact in f32 (k + 0.5
+// needs 24 bits, the scale is a power of two), so the result never rounds to
+// 0 or 1 and does not depend on the backend's rounding or on fma contraction.
+static inline float ggml_rand_u01(uint32_t x) {
+    return ((float) (x >> 9) + 0.5f) * (1.0f / 8388608.0f);
+}
+
+// Elements [i0, i1) of the stream into out[i0..i1). The one loop behind the op
+// and behind the host entry (R_ggml_rand_host), so both give the same numbers.
+void ggml_rand_fill_f32(float * out, int64_t i0, int64_t i1, uint32_t k0, uint32_t k1,
+                        int32_t dist, uint32_t stream) {
+    const uint32_t k[2] = { k0, k1 };
+    for (int64_t i = i0; i < i1; ++i) {
+        uint32_t c[4] = { (uint32_t) i, 0u, stream, 0u };
+        ggml_philox4x32_10(c, k[0], k[1]);
+        const float u = ggml_rand_u01(c[0]);
+        switch (dist) {
+            case GGML_RAND_UNIFORM:
+                out[i] = u;
+                break;
+            case GGML_RAND_GUMBEL:
+                out[i] = -logf(-logf(u));
+                break;
+            case GGML_RAND_NORMAL:
+                out[i] = sqrtf(-2.0f * logf(u)) * cosf(6.2831855f * ggml_rand_u01(c[1]));
+                break;
+            default:
+                GGML_ABORT("ggml_rand: unknown distribution %d", dist);
+        }
+    }
+}
+
+void ggml_compute_forward_rand(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * key = dst->src[0];
+
+    GGML_ASSERT(key->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    uint32_t k[2];
+    memcpy(k, key->data, sizeof(k));
+
+    const int32_t  dist   = ggml_get_op_params_i32(dst, 0);
+    const uint32_t stream = (uint32_t) ggml_get_op_params_i32(dst, 1);
+
+    const int64_t n  = ggml_nelements(dst);
+    const int64_t i0 = n * params->ith / params->nth;
+    const int64_t i1 = n * (params->ith + 1) / params->nth;
+
+    ggml_rand_fill_f32((float *) dst->data, i0, i1, k[0], k[1], dist, stream);
+}
+
 // ggml_compute_tri
 
 static void ggml_compute_forward_tri_f32(const ggml_compute_params * params, ggml_tensor * dst) {

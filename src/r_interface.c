@@ -34,6 +34,9 @@ extern SEXP R_ggml_vk_hard_exit_available(void);  // ggmlR: was -DGGML_VK_HARD_E
 extern SEXP R_ggml_vulkan_init(SEXP device_idx);
 extern SEXP R_ggml_vulkan_free(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_is_backend(SEXP backend_ptr);
+extern SEXP R_ggml_vk_graph_record(SEXP backend_ptr, SEXP graph_ptr);
+extern SEXP R_ggml_vk_graph_replay(SEXP backend_ptr, SEXP rec_ptr, SEXP n);
+extern SEXP R_ggml_vk_graph_record_free(SEXP rec_ptr);
 extern SEXP R_ggml_vulkan_backend_name(SEXP backend_ptr);
 extern SEXP R_ggml_vulkan_list_devices(void);
 extern SEXP R_ggml_vulkan_device_caps(SEXP device_idx);
@@ -209,6 +212,7 @@ extern SEXP R_onnx_device_info(SEXP);
 extern SEXP R_ggml_backend_tensor_set_async(SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_backend_tensor_get_async(SEXP, SEXP, SEXP, SEXP);
 extern SEXP R_ggml_backend_tensor_copy_async(SEXP, SEXP, SEXP, SEXP);
+extern SEXP R_ag_buffer_copy_cols(SEXP, SEXP, SEXP, SEXP, SEXP);
 // Buffer management
 extern SEXP R_ggml_backend_buffer_clear(SEXP, SEXP);
 extern SEXP R_ggml_backend_buffer_set_usage(SEXP, SEXP);
@@ -804,7 +808,7 @@ SEXP R_ggml_version(void) {
 
 SEXP R_ggml_test(void) {
     Rprintf("GGML library loaded successfully!\n");
-    Rprintf("GGML version: %s\n", "0.11.0");
+    Rprintf("GGML version: %s\n", GGML_VERSION);
     Rprintf("Tensor overhead: %zu bytes\n", ggml_tensor_overhead());
     return ScalarLogical(1);
 }
@@ -1155,6 +1159,8 @@ SEXP R_ggml_conv_2d_dw_direct(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                               SEXP s0, SEXP s1, SEXP p0, SEXP p1, SEXP d0, SEXP d1);
 SEXP R_ggml_conv_transpose_2d_p0(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP stride);
 SEXP R_ggml_arange(SEXP ctx_ptr, SEXP start, SEXP stop, SEXP step);
+SEXP R_ggml_rand(SEXP ctx_ptr, SEXP key_ptr, SEXP dist, SEXP stream, SEXP dims);
+SEXP R_ggml_rand_host(SEXP key, SEXP dist, SEXP stream, SEXP n);
 SEXP R_ggml_roll(SEXP ctx_ptr, SEXP a_ptr, SEXP shift0, SEXP shift1, SEXP shift2, SEXP shift3);
 SEXP R_ggml_pad_reflect_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP p0, SEXP p1);
 SEXP R_ggml_get_rel_pos(SEXP ctx_ptr, SEXP a_ptr, SEXP qh, SEXP kh);
@@ -1724,6 +1730,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_conv_2d_dw_direct", (DL_FUNC) &R_ggml_conv_2d_dw_direct, 9},
     {"R_ggml_conv_transpose_2d_p0", (DL_FUNC) &R_ggml_conv_transpose_2d_p0, 4},
     {"R_ggml_arange",            (DL_FUNC) &R_ggml_arange,            4},
+    {"R_ggml_rand",              (DL_FUNC) &R_ggml_rand,              5},
+    {"R_ggml_rand_host",         (DL_FUNC) &R_ggml_rand_host,         4},
     {"R_ggml_roll",              (DL_FUNC) &R_ggml_roll,              6},
     {"R_ggml_pad_reflect_1d",    (DL_FUNC) &R_ggml_pad_reflect_1d,    4},
     {"R_ggml_get_rel_pos",       (DL_FUNC) &R_ggml_get_rel_pos,       4},
@@ -1763,6 +1771,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_vulkan_init",              (DL_FUNC) &R_ggml_vulkan_init,              1},
     {"R_ggml_vulkan_free",              (DL_FUNC) &R_ggml_vulkan_free,              1},
     {"R_ggml_vulkan_is_backend",        (DL_FUNC) &R_ggml_vulkan_is_backend,        1},
+    {"R_ggml_vk_graph_record",          (DL_FUNC) &R_ggml_vk_graph_record,          2},
+    {"R_ggml_vk_graph_replay",          (DL_FUNC) &R_ggml_vk_graph_replay,          3},
+    {"R_ggml_vk_graph_record_free",     (DL_FUNC) &R_ggml_vk_graph_record_free,     1},
     {"R_ggml_vulkan_backend_name",      (DL_FUNC) &R_ggml_vulkan_backend_name,      1},
     {"R_ggml_vulkan_list_devices",      (DL_FUNC) &R_ggml_vulkan_list_devices,      0},
     {"R_ggml_vulkan_device_caps",       (DL_FUNC) &R_ggml_vulkan_device_caps,       1},
@@ -1905,6 +1916,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_backend_tensor_set_async",         (DL_FUNC) &R_ggml_backend_tensor_set_async,          5},
     {"R_ggml_backend_tensor_get_async",         (DL_FUNC) &R_ggml_backend_tensor_get_async,          4},
     {"R_ggml_backend_tensor_copy_async",        (DL_FUNC) &R_ggml_backend_tensor_copy_async,         4},
+    {"R_ag_buffer_copy_cols",                   (DL_FUNC) &R_ag_buffer_copy_cols,                    5},
     {"R_ggml_backend_buffer_clear",             (DL_FUNC) &R_ggml_backend_buffer_clear,              2},
     {"R_ggml_backend_buffer_set_usage",         (DL_FUNC) &R_ggml_backend_buffer_set_usage,          2},
     {"R_ggml_backend_buffer_get_usage",         (DL_FUNC) &R_ggml_backend_buffer_get_usage,          1},

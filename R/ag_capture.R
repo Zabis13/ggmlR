@@ -79,14 +79,16 @@
 #' had at recording time.
 #'
 #' @param fn Function of named ag_tensor arguments returning an ag_tensor or a
-#'   named list of ag_tensors. Forward computations only (no
+#'   named list of ag_tensors, or \code{NULL} when its only effect is writes
+#'   with \code{\link{ag_set_rows}}. Forward computations only (no
 #'   \code{with_grad_tape}).
 #' @param params Optional list of ag_tensors (typically the model parameters)
 #'   and \code{\link{ag_buffer}}s read with \code{\link{ag_get_rows}}
 #'   whose device memory the recording may reference; a change re-records.
 #' @return A function taking the same named arguments as numeric matrices (a
-#'   vector is one column) and returning a matrix, or a named list of matrices.
-#' @seealso \code{\link{ag_capture_free}}
+#'   vector is one column) and returning a matrix, a named list of matrices,
+#'   or \code{NULL} invisibly (writes only: nothing is downloaded).
+#' @seealso \code{\link{ag_capture_free}}, \code{\link{ag_set_rows}}
 #' @export
 #' @examples
 #' \donttest{
@@ -109,8 +111,13 @@ ag_capture <- function(fn, params = NULL) {
     args <- .ag_capture_args(list(...))
     nms <- names(args)
     st <- .ag_device_state
-    if (!identical(st$device, "gpu") || is.null(st$backend))
-      return(.ag_capture_plain(fn, args))
+    # set by ag_capture_repeat() for the duration of one call
+    times <- last$times %||% 1L
+    if (!identical(st$device, "gpu") || is.null(st$backend)) {
+      if (times == 1L) return(.ag_capture_plain(fn, args))
+      for (i in seq_len(times)) .ag_capture_plain(fn, args)
+      return(invisible(NULL))
+    }
     dims  <- unlist(lapply(args, dim), use.names = FALSE)
     modes <- c(.ag_compute_dtype(), st$matmul_precision %||% "default")
     cap <- last$cap
@@ -130,11 +137,47 @@ ag_capture <- function(fn, params = NULL) {
       cache[[last$sig]] <- cap
     }
     last$cap <- cap; last$nms <- nms; last$dims <- dims; last$modes <- modes
-    .ag_capture_replay(cap, args)
+    .ag_capture_replay(cap, args, times)
   }
   attr(step, "captures") <- cache
   class(step) <- c("ag_captured", "function")
   step
+}
+
+#' Run a captured function several times in one go
+#'
+#' Calls \code{f}, a function from \code{\link{ag_capture}()} that only writes
+#' (\code{\link{ag_set_rows}}) and returns \code{NULL}, \code{n} times with
+#' the same arguments. On the GPU the inputs are uploaded once and the
+#' recorded graph is queued \code{n} times without waiting in between; R waits
+#' once, at the end. Each run sees the device state the previous one left (a
+#' counter, game boards): the backend orders the runs by the memory they
+#' share. On the CPU \code{f} is simply called \code{n} times.
+#'
+#' On Vulkan the graph's command buffers are recorded once and submitted
+#' \code{n} times in one go, so a run costs no command recording on the CPU;
+#' the recording is made again after a device buffer it uses was freed (its
+#' handle may be reused). Where that is not possible (no push descriptors) each run
+#' is recorded and queued as usual. \code{GGMLR_VK_GRAPH_RECORD=0} turns the
+#' recorded path off.
+#'
+#' @param f A function returned by \code{\link{ag_capture}()} whose recording
+#'   has no outputs.
+#' @param n Number of runs, a positive whole number.
+#' @param ... Named arguments of \code{f}, as for a single call.
+#' @return \code{NULL}, invisibly.
+#' @seealso \code{\link{ag_capture}}, \code{\link{ag_set_rows}}
+#' @export
+ag_capture_repeat <- function(f, n, ...) {
+  if (!inherits(f, "ag_captured") || is.null(environment(f)$last))
+    stop("ag_capture_repeat: f must be a function returned by ag_capture()", call. = FALSE)
+  if (!is.numeric(n) || length(n) != 1L || is.na(n) || n < 1 || n != round(n))
+    stop("ag_capture_repeat: n must be a positive whole number", call. = FALSE)
+  last <- environment(f)$last
+  last$times <- as.integer(n)
+  on.exit(last$times <- NULL, add = TRUE)
+  f(...)
+  invisible(NULL)
 }
 
 #' Release the device memory held by a captured function
@@ -362,6 +405,8 @@ ag_capture_set <- function(f, max_grad_norm) {
 # CPU (or no backend): run fn as ordinary ag_* code, same return shape.
 .ag_capture_plain <- function(fn, args) {
   res <- do.call(fn, lapply(args, ag_tensor))
+  if (is.null(res) || (is.list(res) && !is_ag_tensor(res) && !length(res)))
+    return(invisible(NULL))                 # writes only (ag_set_rows)
   if (is_ag_tensor(res)) return(as.matrix(res))
   lapply(res, as.matrix)
 }
@@ -551,15 +596,33 @@ ag_capture_set <- function(f, max_grad_norm) {
     .ag_bwd$enabled <- TRUE; .ag_bwd$resident <- TRUE
   }
 
+  # ag_set_rows() during fn adds its write nodes to .ag_capture_reg$effects
+  .ag_capture_reg$effects <- list()
+  .ag_capture_reg$recording <- TRUE
+  on.exit({ .ag_capture_reg$recording <- FALSE; .ag_capture_reg$effects <- list() },
+          add = TRUE)
   res <- do.call(fn, ins)
+  .ag_capture_reg$recording <- FALSE
+  effects <- .ag_capture_reg$effects
   if (!is.null(opt)) .ag_tape$enabled <- FALSE
   single <- is_ag_tensor(res)
-  outs <- if (single) list(res) else res
-  if (!is.list(outs) || !length(outs) || !all(vapply(outs, is_ag_tensor, logical(1))))
-    stop("ag_capture: fn must return an ag_tensor or a list of ag_tensors",
-         call. = FALSE)
-  if (!single && (is.null(names(outs)) || any(!nzchar(names(outs)))))
-    stop("ag_capture: a list returned by fn must be fully named", call. = FALSE)
+  no_out <- is.null(res) || (is.list(res) && !single && !length(res))
+  if (no_out) {
+    if (!is.null(opt))
+      stop("ag_capture_step: fn must return the loss, or a named list with an ",
+           "element 'loss'", call. = FALSE)
+    if (!length(effects))
+      stop("ag_capture: fn returned nothing and wrote nothing with ag_set_rows()",
+           call. = FALSE)
+    outs <- list()
+  } else {
+    outs <- if (single) list(res) else res
+    if (!is.list(outs) || !all(vapply(outs, is_ag_tensor, logical(1))))
+      stop("ag_capture: fn must return an ag_tensor, a list of ag_tensors or NULL",
+           call. = FALSE)
+    if (!single && (is.null(names(outs)) || any(!nzchar(names(outs)))))
+      stop("ag_capture: a list returned by fn must be fully named", call. = FALSE)
+  }
 
   grad_items <- list()
   if (!is.null(opt)) {
@@ -640,12 +703,12 @@ ag_capture_set <- function(f, max_grad_norm) {
   ctx_graph <- ggml_init(.ag_graph_ctx_bytes(), no_alloc = TRUE)
   if (is.null(ctx_graph))
     stop("ag_capture: failed to create a ggml context for the graph", call. = FALSE)
-  if (!is.null(root)) {
-    graph <- ggml_build_forward_expand(ctx_graph, root)
-  } else {
-    graph <- ggml_build_forward_expand(ctx_graph, out_ptrs[[1L]])
-    for (p in out_ptrs[-1L]) ggml_graph_expand(graph, p)
-  }
+  # The outputs first, then the ag_set_rows() writes in the order they were
+  # made: a read of the written buffer reaches the graph before the write.
+  roots <- c(if (!is.null(root)) list(root) else out_ptrs,
+             lapply(effects, function(h) h$ptr))
+  graph <- ggml_build_forward_expand(ctx_graph, roots[[1L]])
+  for (p in roots[-1L]) ggml_graph_expand(graph, p)
   # Gradients are roots of their own: not reachable from the outputs.
   for (it in grad_items) ggml_graph_expand(graph, it$g)
 
@@ -735,7 +798,11 @@ ag_capture_set <- function(f, max_grad_norm) {
   invisible(NULL)
 }
 
-.ag_capture_replay <- function(cap, args) {
+.ag_capture_replay <- function(cap, args, times = 1L) {
+  if (times > 1L && (length(cap$out_shapes) || !is.null(cap$opt)))
+    stop("ag_capture_repeat: only a captured function that returns NULL ",
+         "(writes with ag_set_rows only) can run several times in one go",
+         call. = FALSE)
   # Training steps only: forward-only replays (rl_act and the like) would mix in.
   t0 <- if (!is.null(cap$opt) && .ag_capture_prof_on()) as.numeric(Sys.time())
   tick <- function(stage) if (!is.null(t0)) t0 <<- .ag_capture_prof_add(stage, t0)
@@ -793,6 +860,27 @@ ag_capture_set <- function(f, max_grad_norm) {
     cap$last_clip <- NULL
     stop("ag_capture: graph compute returned status ", status, call. = FALSE)
   }
+  if (times > 1L) {
+    n <- .ag_launch$by_site[["captured graph"]]
+    .ag_launch$by_site[["captured graph"]] <- (if (is.null(n)) 0 else n) + times
+    .ag_launch$last_nodes <- ggml_graph_n_nodes(cap$graph)
+    # Vulkan: the command buffers recorded once and submitted `times` times
+    # (no recording on the CPU per run; see ggml_backend_vk_graph_record)
+    if (.ag_capture_vk_replay(cap, times)) return(invisible(NULL))
+    # otherwise queued without waiting, one wait at the end. Runs that touch
+    # the same memory (state written by one, read by the next) are ordered by
+    # the backend: Vulkan keeps the unsynchronized writes of earlier graphs
+    # until the wait and puts a barrier before an overlapping node.
+    for (i in seq_len(times)) {
+      status <- ggml_backend_graph_compute_async(cap$backend, cap$graph)
+      if (!identical(as.integer(status), 0L)) {
+        ggml_backend_synchronize(cap$backend)
+        fail(status)
+      }
+    }
+    ggml_backend_synchronize(cap$backend)
+    return(invisible(NULL))
+  }
   status <- run_graph(cap$graph, "captured graph", "replay: graph 1 (fwd+bwd)")
   if (!identical(as.integer(status), 0L)) fail(status)
 
@@ -829,12 +917,15 @@ ag_capture_set <- function(f, max_grad_norm) {
   tick("replay: post")
   if (!is.null(t0)) .ag_capture_reg$prof["replays"] <-
     (if (is.na(.ag_capture_reg$prof["replays"])) 0 else .ag_capture_reg$prof["replays"]) + 1
+  if (!length(cap$out_shapes)) return(invisible(NULL))   # writes only
   if (cap$single) outs[[1L]] else outs
 }
 
 .ag_capture_free <- function(cap) {
   if (!isTRUE(cap$alive)) return(invisible(NULL))
   cap$alive <- FALSE
+  # the recorded command buffers point at the buffers freed below
+  .ag_capture_vk_rec_free(cap)
   for (b in cap$bufs) tryCatch(ggml_backend_buffer_free(b), error = function(e) NULL)
   for (x in c(cap$ctxs, list(cap$ctx_graph, cap$ctx_graph_opt)))
     if (!is.null(x)) tryCatch(ggml_free(x), error = function(e) NULL)
@@ -842,6 +933,40 @@ ag_capture_set <- function(f, max_grad_norm) {
   cap$ctx_graph_opt <- cap$graph_opt <- NULL
   if (exists(cap$id, envir = .ag_capture_reg$items, inherits = FALSE))
     rm(list = cap$id, envir = .ag_capture_reg$items)
+  invisible(NULL)
+}
+
+# ---- recorded command buffers (Vulkan) for ag_capture_repeat() -------------
+#
+# cap$vk_rec: the step graph's command buffers recorded once by the backend
+# (R_ggml_vk_graph_record), replayed n times in one submit. NULL until the
+# first repeat; FALSE when the backend refused (not Vulkan, no push
+# descriptors, ...), then the async chain is used. A replay that reports
+# stale (a buffer the recording uses was destroyed since: its handle may be
+# reused) is recorded again once. GGMLR_VK_GRAPH_RECORD=0 switches it off.
+
+.ag_capture_vk_replay <- function(cap, times) {
+  if (identical(Sys.getenv("GGMLR_VK_GRAPH_RECORD"), "0") || isFALSE(cap$vk_rec))
+    return(FALSE)
+  for (attempt in 1:2) {
+    if (is.null(cap$vk_rec)) {
+      rec <- .Call("R_ggml_vk_graph_record", cap$backend, cap$graph, PACKAGE = "ggmlR")
+      if (is.null(rec)) { cap$vk_rec <- FALSE; return(FALSE) }
+      cap$vk_rec <- rec
+    }
+    s <- .Call("R_ggml_vk_graph_replay", cap$backend, cap$vk_rec, as.integer(times),
+               PACKAGE = "ggmlR")
+    if (identical(s, 0L)) return(TRUE)
+    .ag_capture_vk_rec_free(cap)
+    if (!identical(s, 1L)) { cap$vk_rec <- FALSE; return(FALSE) }
+  }
+  FALSE
+}
+
+.ag_capture_vk_rec_free <- function(cap) {
+  if (inherits(cap$vk_rec, "externalptr"))
+    .Call("R_ggml_vk_graph_record_free", cap$vk_rec, PACKAGE = "ggmlR")
+  cap$vk_rec <- NULL
   invisible(NULL)
 }
 

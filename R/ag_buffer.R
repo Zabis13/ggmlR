@@ -136,6 +136,105 @@ ag_buffer_write <- function(buf, data, col_offset) {
   invisible(buf)
 }
 
+#' Copy a device tensor into buffer columns
+#'
+#' Writes a ggml tensor that already lives on the GPU -- for example the
+#' observations of an environment computed in its own backend -- into columns
+#' of an \code{\link{ag_buffer}}, device to device: the data does not pass
+#' through the host or R.
+#'
+#' The contract is strict and nothing is converted:
+#' \itemize{
+#'   \item \code{tensor} is f32, contiguous, 2-d \code{[rows, k]} in ggml
+#'     order (ne0 = \code{rows}, the buffer's row count; one column per
+#'     item). A tensor laid out \code{[k, rows]} must be transposed by its
+#'     producer; the buffer does not.
+#'   \item \code{tensor} is on the same device as the buffer, and the ag
+#'     device is the GPU.
+#' }
+#' Otherwise the copy would have to go through the host: with ag on the CPU
+#' (the buffer lives on the host), with \code{tensor} in host memory, or with
+#' \code{tensor} on another device. By default (\code{via_host = "error"})
+#' each of these is an error naming the reason, not a silent slow copy.
+#' \code{via_host = "allow"} takes the host path instead -- the tensor is
+#' downloaded and written with \code{ag_buffer_write()}: same values, same
+#' synchronous semantics. A message names the reason once per session for
+#' each reason (silence it with \code{suppressMessages()}).
+#'
+#' The write is synchronous, like \code{ag_buffer_write()}: queued ag nodes
+#' are computed first (they read the old value), and when the call returns
+#' the columns hold the new data. The buffer is not reallocated, so
+#' recordings that read it stay valid.
+#'
+#' @param buf An \code{\link{ag_buffer}}.
+#' @param tensor A ggml tensor pointer, normally in device memory.
+#' @param backend The backend that owns \code{tensor}'s memory (the
+#'   environment's backend); its queued work is finished before the copy.
+#' @param col_offset 0-based index of the first column written.
+#' @param via_host \code{"error"} (default) or \code{"allow"}: whether a copy
+#'   that has to go through the host is refused or made.
+#' @return \code{buf}, invisibly.
+#' @seealso \code{\link{ag_buffer_write}}, \code{\link{ag_get_rows}}
+#' @export
+ag_buffer_copy_from <- function(buf, tensor, backend, col_offset = 0,
+                                via_host = c("error", "allow")) {
+  via_host <- match.arg(via_host)
+  .ag_buffer_reap()
+  core <- .ag_buffer_core(buf)
+  if (!is.numeric(col_offset) || length(col_offset) != 1L || is.na(col_offset))
+    stop("ag_buffer_copy_from: col_offset must be a single number", call. = FALSE)
+  if (!.ag_buffer_gpu())
+    return(.ag_buffer_copy_via_host(buf, tensor, backend, col_offset, via_host,
+                                    "cpu", "the ag device is the CPU"))
+  .ag_buffer_on_device(core)
+  # a queued node reading the buffer must see the value it was queued against
+  if (.ag_defer_len()) .ag_defer_drain()
+  reason <- .Call("R_ag_buffer_copy_cols", backend, .ag_device_state$backend,
+                  tensor, core$ptr, as.double(col_offset), PACKAGE = "ggmlR")
+  if (!is.null(reason)) {
+    kind <- if (startsWith(reason, "the tensor is in host")) "host" else "device"
+    return(.ag_buffer_copy_via_host(buf, tensor, backend, col_offset, via_host,
+                                    kind, reason))
+  }
+  invisible(buf)
+}
+
+# The host path: refused with the reason unless via_host = "allow". The same
+# contract as the device path is checked here, then the backend is
+# synchronized so the tensor holds its final value, and the data goes through
+# ag_buffer_write().
+.ag_buffer_copy_via_host <- function(buf, tensor, backend, col_offset, via_host,
+                                     kind, reason) {
+  if (identical(via_host, "error"))
+    stop(sprintf(paste0("ag_buffer_copy_from: %s, so the copy would go through ",
+                        "the host. Pass via_host = \"allow\" to make it anyway."),
+                 reason), call. = FALSE)
+  if (!identical(ggml_tensor_type(tensor), GGML_TYPE_F32))
+    stop("ag_buffer_copy_from: tensor must be f32", call. = FALSE)
+  if (!ggml_is_contiguous(tensor))
+    stop("ag_buffer_copy_from: tensor must be contiguous", call. = FALSE)
+  ne <- ggml_tensor_shape(tensor)
+  if (any(ne[3:4] != 1))
+    stop("ag_buffer_copy_from: tensor must be 2-d [rows, k]", call. = FALSE)
+  rows <- ne[1L]; k <- ne[2L]
+  if (rows != buf$rows)
+    stop(sprintf("ag_buffer_copy_from: tensor has %d rows (ne0), the buffer has %d",
+                 as.integer(rows), as.integer(buf$rows)), call. = FALSE)
+  if (col_offset < 0 || col_offset != round(col_offset) || col_offset + k > buf$capacity)
+    stop(sprintf("ag_buffer_copy_from: columns %g..%g are outside the buffer (capacity %d)",
+                 col_offset, col_offset + k - 1, as.integer(buf$capacity)), call. = FALSE)
+  noted <- .ag_buffer_reg$via_host_noted %||% character()
+  if (!kind %in% noted) {
+    .ag_buffer_reg$via_host_noted <- c(noted, kind)
+    message(sprintf(paste0("ag_buffer_copy_from: %s; copying through the host ",
+                           "(via_host = \"allow\"). Shown once per session."), reason))
+  }
+  if (k == 0) return(invisible(buf))
+  ggml_backend_synchronize(backend)
+  vals <- ggml_backend_tensor_get_data(tensor, n_elements = rows * k)
+  ag_buffer_write(buf, matrix(vals, rows, k), col_offset)
+}
+
 #' @rdname ag_buffer
 #' @param k Number of columns to read.
 #' @details \code{ag_buffer_read()} returns columns \code{col_offset} to
@@ -244,6 +343,96 @@ ag_get_rows <- function(buf, idx) {
   # buffer, and the collector cannot free it before the node is computed
   out$ag_buffer_ref <- buf
   out
+}
+
+#' Write buffer columns by index
+#'
+#' Writes the columns of \code{x} into columns \code{idx} of an
+#' \code{\link{ag_buffer}}. Inside \code{\link{ag_capture}()} the write is a
+#' node of the recorded graph (\code{ggml_set_rows}): every replay writes on
+#' the device, with nothing crossing the bus, and the state it leaves -- a
+#' counter, a board, a rollout column -- is what the next replay reads. A
+#' recording whose only effect is such writes may return \code{NULL}: its
+#' replays then download nothing.
+#'
+#' @param buf An \code{\link{ag_buffer}}; inside a recording it must be
+#'   listed in \code{params}.
+#' @param idx 0-based column indices: a numeric vector, or an ag_tensor with
+#'   one column (f32). Inside a recording an ag_tensor (an input or a value
+#'   computed on the device).
+#' @param x An ag_tensor or numeric matrix of shape \code{rows x length(idx)}.
+#' @return \code{buf}, invisibly.
+#' @details Outside a recording the write goes through the host
+#'   (\code{\link{ag_buffer_write}}), after any queued device work.
+#'
+#'   Inside a recording the writes run after the outputs, in the order they
+#'   were made. A recording may read columns it also writes only when the
+#'   written value depends on the read one (\code{t <- t + 1}, a board
+#'   updated from itself); otherwise the order of the read and the write is
+#'   not defined. Indices are clamped to \code{0..capacity-1} on the device,
+#'   as in \code{\link{ag_get_rows}}; with repeated indices which write wins is
+#'   not defined (outside a recording repeated indices are an error).
+#' @export
+ag_set_rows <- function(buf, idx, x) {
+  .ag_buffer_reap()
+  core <- .ag_buffer_core(buf)
+  if (isTRUE(.ag_capture_reg$recording)) return(.ag_set_rows_node(buf, core, idx, x))
+
+  # outside a recording: host values, then ag_buffer_write
+  i <- if (is_ag_tensor(idx)) as.numeric(as.matrix(idx)) else as.numeric(idx)
+  if (!length(i)) stop("ag_set_rows: idx is empty", call. = FALSE)
+  if (anyNA(i) || any(i != round(i)) || any(i < 0) || any(i > core$capacity - 1))
+    stop(sprintf("ag_set_rows: idx must be whole numbers in 0..%d", core$capacity - 1L),
+         call. = FALSE)
+  if (anyDuplicated(i)) stop("ag_set_rows: idx has repeated indices", call. = FALSE)
+  v <- if (is_ag_tensor(x)) as.matrix(x) else x
+  if (is.vector(v) && !is.list(v)) v <- matrix(v, ncol = 1L)
+  if (!is.matrix(v) || !(is.numeric(v) || is.logical(v)))
+    stop("ag_set_rows: x must be an ag_tensor or a numeric matrix", call. = FALSE)
+  if (nrow(v) != core$rows || ncol(v) != length(i))
+    stop(sprintf("ag_set_rows: x is %d x %d, expected %d x %d (rows x length(idx))",
+                 nrow(v), ncol(v), core$rows, length(i)), call. = FALSE)
+  # one write per run of consecutive indices
+  run <- cumsum(c(1L, diff(i) != 1))
+  for (r in unique(run)) {
+    k <- which(run == r)
+    ag_buffer_write(buf, v[, k, drop = FALSE], col_offset = i[k[1L]])
+  }
+  invisible(buf)
+}
+
+# The write as a node of the recording, kept in .ag_capture_reg$effects: the
+# build adds it to the graph after the outputs.
+.ag_set_rows_node <- function(buf, core, idx, x) {
+  if (!is_ag_tensor(idx))
+    stop("ag_set_rows: inside ag_capture idx must be an ag_tensor (an input of the ",
+         "captured function or a value computed from one)", call. = FALSE)
+  if (!identical(.ag_compute_dtype(idx$dtype %||% "f32"), "f32"))
+    stop("ag_set_rows: idx must be an f32 tensor", call. = FALSE)
+  if (!is_ag_tensor(x))
+    stop("ag_set_rows: inside ag_capture x must be an ag_tensor", call. = FALSE)
+  b <- prod(.ag_dim(.ag_handle_of(idx) %||% .ag_data(idx)))
+  dx <- .ag_dim(.ag_handle_of(x) %||% .ag_data(x))
+  if (dx[1L] != core$rows || dx[2L] != b)
+    stop(sprintf("ag_set_rows: x is %d x %d, expected %d x %d (rows x length(idx))",
+                 dx[1L], dx[2L], core$rows, b), call. = FALSE)
+  .ag_buffer_on_device(core)
+  h <- .ag_handle(core$ptr, c(core$rows, core$capacity), scope = "persistent")
+  res <- .ag_run_op(
+    op_fn = function(ctx, ptrs) {
+      safe <- ggml_clamp(ctx, ptrs[[2L]], 0, core$capacity - 1)
+      i32 <- ggml_reshape_1d(ctx, ggml_cast(ctx, safe, GGML_TYPE_I32), b)
+      v <- .ag_f32(ctx, ptrs[[3L]])
+      if (!ggml_is_contiguous(v)) v <- ggml_cont(ctx, v)
+      ggml_set_rows(ctx, ptrs[[1L]], v, i32)
+    },
+    inputs    = list(h, .ag_operand(idx), .ag_operand(x)),
+    out_shape = c(core$rows, core$capacity),
+    dtype     = "f32",
+    resident  = TRUE
+  )
+  .ag_capture_reg$effects[[length(.ag_capture_reg$effects) + 1L]] <- res
+  invisible(buf)
 }
 
 #' @export

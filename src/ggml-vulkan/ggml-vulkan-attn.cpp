@@ -1254,6 +1254,18 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_OUT_PROD:
         if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 &&
             dst->type == GGML_TYPE_F32) {
+            // One dst column (bias gradient, matrix-vector): the K-split
+            // variant; the tiled kernel would idle 31 of 32 columns. The
+            // dispatch extent {ne0, ne1, ne2*ne3} is shared, so the
+            // variant's wg_denoms alone set its grid.
+            // GGMLR_VK_OUT_PROD_N1=0 disables it (A/B measurement).
+            static const bool n1_on = [] {
+                const char * e = getenv("GGMLR_VK_OUT_PROD_N1");
+                return !(e && e[0] == '0');
+            }();
+            if (n1_on && dst->ne[1] == 1) {
+                return ctx->device->pipeline_out_prod_n1_f32;
+            }
             return ctx->device->pipeline_out_prod_f32;
         }
         return nullptr;
@@ -1459,6 +1471,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_REL_POS_BIAS:
         if (dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_rel_pos_bias_f32;
+        }
+        return nullptr;
+    case GGML_OP_RAND:          // ggmlR
+        if (dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_rand_f32;
         }
         return nullptr;
     case GGML_OP_FILL:

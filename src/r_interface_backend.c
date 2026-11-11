@@ -626,6 +626,90 @@ SEXP R_ggml_backend_tensor_copy_async(SEXP backend_src_ptr, SEXP backend_dst_ptr
     return R_NilValue;
 }
 
+// ag_buffer_copy_from(): copy a device tensor [rows, k] into columns
+// col_offset..col_offset+k-1 of a buffer tensor [rows, capacity], device to
+// device. Every precondition is an R error here: ggml_backend_tensor_copy*()
+// GGML_ASSERTs on a layout mismatch, which would take the R session down.
+// A tensor in host memory or on another device is not copied: the call returns
+// the reason as a string (NULL after a copy), and the R side decides -- an
+// error, or the host path when via_host = "allow".
+//
+// Two backends on one Vulkan device: cpy_tensor_async declines (see the
+// DIVERGENCE note there), so ggml synchronizes both and does a blocking
+// buffer-to-buffer copy. One backend: the copy is queued, hence the final
+// synchronize -- the write is synchronous either way, like ag_buffer_write().
+SEXP R_ag_buffer_copy_cols(SEXP backend_src_ptr, SEXP backend_dst_ptr,
+                           SEXP src_ptr, SEXP dst_ptr, SEXP col_offset_sexp) {
+    ggml_backend_t backend_src = (ggml_backend_t) r_ptr_required(backend_src_ptr, "source backend");
+    ggml_backend_t backend_dst = (ggml_backend_t) r_ptr_required(backend_dst_ptr, "buffer backend");
+    struct ggml_tensor * src = (struct ggml_tensor *) r_ptr_required(src_ptr, "source tensor");
+    struct ggml_tensor * dst = (struct ggml_tensor *) r_ptr_required(dst_ptr, "buffer tensor");
+    const double off_d = asReal(col_offset_sexp);
+
+    if (src->type != GGML_TYPE_F32) {
+        error("ag_buffer_copy_from: tensor must be f32, got %s", ggml_type_name(src->type));
+    }
+    if (!ggml_is_contiguous(src)) {
+        error("ag_buffer_copy_from: tensor must be contiguous");
+    }
+    if (src->ne[2] != 1 || src->ne[3] != 1) {
+        error("ag_buffer_copy_from: tensor must be 2-d [rows, k]");
+    }
+    if (src->ne[0] != dst->ne[0]) {
+        error("ag_buffer_copy_from: tensor has %lld rows (ne0), the buffer has %lld",
+              (long long) src->ne[0], (long long) dst->ne[0]);
+    }
+    if (ISNAN(off_d) || off_d < 0 || off_d != (double)(int64_t) off_d ||
+        off_d + (double) src->ne[1] > (double) dst->ne[1]) {
+        error("ag_buffer_copy_from: columns %.0f..%.0f are outside the buffer (capacity %lld)",
+              off_d, off_d + (double) src->ne[1] - 1, (long long) dst->ne[1]);
+    }
+    if (src->buffer == NULL || src->data == NULL) {
+        error("ag_buffer_copy_from: tensor has no backend memory");
+    }
+    if (dst->buffer == NULL || dst->data == NULL) {
+        error("ag_buffer_copy_from: buffer has no device memory");
+    }
+    // A copy that would have to go through the host is not made here: the
+    // reason is returned and the R side errors or falls back (via_host).
+    if (ggml_backend_buffer_is_host(src->buffer)) {
+        return mkString("the tensor is in host memory");
+    }
+    ggml_backend_dev_t dev_src = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(src->buffer));
+    ggml_backend_dev_t dev_dst = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(dst->buffer));
+    if (dev_src == NULL || dev_src != dev_dst) {
+        char msg[512];
+        snprintf(msg, sizeof msg, "the tensor is on device '%s', the buffer on '%s'",
+                 dev_src ? ggml_backend_dev_name(dev_src) : "?",
+                 dev_dst ? ggml_backend_dev_name(dev_dst) : "?");
+        return mkString(msg);
+    }
+    if (ggml_backend_get_device(backend_src) != dev_src) {
+        error("ag_buffer_copy_from: backend is not the one the tensor's memory belongs to");
+    }
+    if (src->ne[1] == 0) {
+        return R_NilValue;
+    }
+
+    // A view of the target columns, bound to the buffer's memory. Columns are
+    // contiguous in ne1, so the view is contiguous and has src's layout.
+    struct ggml_init_params ip = { ggml_tensor_overhead() + 256, NULL, true };
+    struct ggml_context * ctx = ggml_init(ip);
+    if (ctx == NULL) {
+        error("ag_buffer_copy_from: could not create a context for the view");
+    }
+    const size_t offset = (size_t) off_d * dst->nb[1];
+    struct ggml_tensor * view = ggml_view_2d(ctx, dst, src->ne[0], src->ne[1], dst->nb[1], offset);
+    if (ggml_backend_view_init(view) != GGML_STATUS_SUCCESS) {
+        ggml_free(ctx);
+        error("ag_buffer_copy_from: failed to bind the view to the buffer");
+    }
+    ggml_backend_tensor_copy_async(backend_src, backend_dst, src, view);
+    ggml_backend_synchronize(backend_dst);
+    ggml_free(ctx);
+    return R_NilValue;
+}
+
 // ============================================================================
 // Buffer Management
 // ============================================================================

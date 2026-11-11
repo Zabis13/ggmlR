@@ -1611,12 +1611,16 @@ GGML_PREC_F32 <- 10L
 # Reshape: ggml_reshape_2d + ggml_cont
 .ag_gpu_reshape <- function(x_data, new_nrow, new_ncol) {
   .ag_run_op(
-    op_fn    = function(ctx, ptrs)
-                 ggml_cont(ctx, ggml_reshape_2d(ctx, ptrs[[1L]],
-                                                as.integer(new_nrow),
-                                                as.integer(new_ncol))),
+    op_fn    = function(ctx, ptrs) {
+                 # reshape needs a contiguous source (a transpose is a view)
+                 src <- ptrs[[1L]]
+                 if (!ggml_is_contiguous(src)) src <- ggml_cont(ctx, src)
+                 ggml_cont(ctx, ggml_reshape_2d(ctx, src, as.integer(new_nrow),
+                                                as.integer(new_ncol)))
+               },
     inputs   = list(x_data),
-    out_shape = c(new_nrow, new_ncol)
+    out_shape = c(new_nrow, new_ncol),
+    resident = TRUE
   )
 }
 

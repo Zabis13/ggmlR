@@ -8,7 +8,8 @@ ag_capture(fn, params = NULL)
 }
 \arguments{
 \item{fn}{Function of named ag_tensor arguments returning an ag_tensor or a
-named list of ag_tensors. Forward computations only (no
+named list of ag_tensors, or \code{NULL} when its only effect is writes
+with \code{\link{ag_set_rows}}. Forward computations only (no
 \code{with_grad_tape}).}
 
 \item{params}{Optional list of ag_tensors (typically the model parameters)
@@ -17,7 +18,8 @@ whose device memory the recording may reference; a change re-records.}
 }
 \value{
 A function taking the same named arguments as numeric matrices (a
-  vector is one column) and returning a matrix, or a named list of matrices.
+  vector is one column) and returning a matrix, a named list of matrices,
+  or \code{NULL} invisibly (writes only: nothing is downloaded).
 }
 \description{
 Wraps \code{fn} so that, on the GPU, its ag_* operations are recorded once
@@ -45,5 +47,5 @@ f(x = matrix(1, 3, 4))
 }
 }
 \seealso{
-\code{\link{ag_capture_free}}
+\code{\link{ag_capture_free}}, \code{\link{ag_set_rows}}
 }

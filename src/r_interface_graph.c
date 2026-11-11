@@ -6468,3 +6468,92 @@ SEXP R_ggml_dsv4_hc_post(SEXP ctx_ptr, SEXP x_ptr, SEXP res_ptr, SEXP post_ptr, 
 
     return R_MakeExternalPtr(ggml_dsv4_hc_post(ctx, x, res, post, comb), R_NilValue, R_NilValue);
 }
+
+// ggmlR: the numbers of GGML_OP_RAND on the host, without a backend or a graph:
+// the CPU kernel's own loop (ggml-cpu/ops-elemwise.cpp). key: two numbers, taken
+// as f32 bit patterns like the key tensor of ggml_rand(); returns n doubles.
+void ggml_rand_fill_f32(float * out, int64_t i0, int64_t i1, uint32_t k0, uint32_t k1,
+                        int32_t dist, uint32_t stream);
+
+SEXP R_ggml_rand_host(SEXP key_sexp, SEXP dist_sexp, SEXP stream_sexp, SEXP n_sexp) {
+    if (!isReal(key_sexp) || LENGTH(key_sexp) < 2) {
+        error("ggml_rand: key must be two numbers");
+    }
+    const int dist   = asInteger(dist_sexp);
+    const int stream = asInteger(stream_sexp);
+    const double nd  = asReal(n_sexp);
+    if (dist < 0 || dist > 2) {
+        error("ggml_rand: unknown distribution");
+    }
+    if (stream == NA_INTEGER || stream < 0) {
+        error("ggml_rand: stream must be a non-negative integer");
+    }
+    // the counter is 32 bits of element index
+    if (!R_FINITE(nd) || nd < 1 || nd != floor(nd) || nd > 4294967295.0) {
+        error("ggml_rand: the number of elements must be a positive whole number below 2^32");
+    }
+    const R_xlen_t n = (R_xlen_t) nd;
+    const float kf[2] = { (float) REAL(key_sexp)[0], (float) REAL(key_sexp)[1] };
+    uint32_t k[2];
+    memcpy(k, kf, sizeof(k));
+
+    float * buf = (float *) R_alloc((size_t) n, sizeof(float));
+    ggml_rand_fill_f32(buf, 0, (int64_t) n, k[0], k[1], dist, (uint32_t) stream);
+    SEXP res = PROTECT(allocVector(REALSXP, n));
+    double * out = REAL(res);
+    for (R_xlen_t i = 0; i < n; i++) {
+        out[i] = (double) buf[i];
+    }
+    UNPROTECT(1);
+    return res;
+}
+
+// ggmlR: counter-based random numbers, see ggml_rand() in ggml.h.
+// key: F32 tensor with >= 2 elements; dist: 0 uniform, 1 Gumbel, 2 normal.
+SEXP R_ggml_rand(SEXP ctx_ptr, SEXP key_ptr, SEXP dist_sexp, SEXP stream_sexp, SEXP dims_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor  * key = (struct ggml_tensor *) R_ExternalPtrAddr(key_ptr);
+    if (ctx == NULL || key == NULL) {
+        error("Invalid pointer");
+    }
+    if (key->type != GGML_TYPE_F32) {
+        error("ggml_rand: key must be an F32 tensor");
+    }
+    if (!ggml_is_contiguous(key) || ggml_nelements(key) < 2) {
+        error("ggml_rand: key must be contiguous with at least 2 elements");
+    }
+
+    const int dist   = asInteger(dist_sexp);
+    const int stream = asInteger(stream_sexp);
+    if (dist < 0 || dist > 2) {
+        error("ggml_rand: unknown distribution");
+    }
+    if (stream == NA_INTEGER || stream < 0) {
+        error("ggml_rand: stream must be a non-negative integer");
+    }
+
+    const int n_dims = LENGTH(dims_sexp);
+    if (n_dims < 1 || n_dims > 4) {
+        error("ggml_rand: dims must have 1 to 4 entries");
+    }
+    int64_t ne[4] = {1, 1, 1, 1};
+    double total = 1.0;
+    for (int i = 0; i < n_dims; i++) {
+        const double d = REAL(dims_sexp)[i];
+        if (!R_FINITE(d) || d < 1 || d != floor(d)) {
+            error("ggml_rand: dims must be positive whole numbers");
+        }
+        ne[i] = (int64_t) d;
+        total *= d;
+    }
+    if (total > 4294967295.0) {
+        error("ggml_rand: at most 2^32 - 1 elements");
+    }
+
+    struct ggml_tensor * result = ggml_rand(ctx, key, (enum ggml_rand_dist) dist, stream, n_dims, ne);
+    if (result == NULL) {
+        error("Failed to create rand operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}

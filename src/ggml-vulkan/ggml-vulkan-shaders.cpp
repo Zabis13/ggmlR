@@ -1973,6 +1973,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_fill_f16, "fill_f16", fill_f16_len, fill_f16_data, "main", 1, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    // ggmlR: GGML_OP_RAND -- key (raw bits) + dst
+    ggml_vk_create_pipeline(device, device->pipeline_rand_f32, "rand_f32", rand_f32_len, rand_f32_data, "main", 2, sizeof(vk_op_rand_push_constants), {512, 1, 1}, {}, 1);
 
 #define CREATE_GLU(name)  \
     ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
@@ -2263,6 +2265,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     }
     // wg_denoms = the dst tile of one workgroup (TM x TN in out_prod.comp).
     ggml_vk_create_pipeline(device, device->pipeline_out_prod_f32, "out_prod_f32", out_prod_f32_len, out_prod_f32_data, "main", 3, sizeof(vk_op_out_prod_push_constants), {32, 32, 1}, {}, 1);
+    // ne1 == 1 variant: N1_ROWS dst rows per workgroup.
+    ggml_vk_create_pipeline(device, device->pipeline_out_prod_n1_f32, "out_prod_n1_f32", out_prod_n1_f32_len, out_prod_n1_f32_data, "main", 3, sizeof(vk_op_out_prod_push_constants), {32, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32, "cross_entropy_loss_back_f32", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32_wg512, "cross_entropy_loss_back_f32_wg512", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_push_constants), {1, 1, 1}, { 512 }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_f32, "cross_entropy_loss_f32", cross_entropy_loss_f32_len, cross_entropy_loss_f32_data, "main", 3, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);

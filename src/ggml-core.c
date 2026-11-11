@@ -1192,9 +1192,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_COMB",
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
+    // DIVERGENCE from upstream: counter-based random numbers, see ggml_rand().
+    "RAND",
 };
 
-static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
+static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1325,9 +1327,11 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "dsv4_hc_comb(mixes, scale, base)",
     "dsv4_hc_pre(x, weights)",
     "dsv4_hc_post(x, residual, post, comb)",
+    // DIVERGENCE from upstream: counter-based random numbers, see ggml_rand().
+    "rand(key)",
 };
 
-static_assert(GGML_OP_COUNT == 113, "GGML_OP_COUNT != 113");
+static_assert(GGML_OP_COUNT == 114, "GGML_OP_COUNT != 114");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 

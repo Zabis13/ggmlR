@@ -4,13 +4,17 @@
 \alias{ag_argmax}
 \title{Column-wise argmax}
 \usage{
-ag_argmax(x)
+ag_argmax(x, as_tensor = FALSE)
 }
 \arguments{
 \item{x}{ag_tensor or numeric matrix, \code{[n, batch]}.}
+
+\item{as_tensor}{\code{FALSE} (default) for an integer vector, \code{TRUE}
+for a \code{[1, batch]} ag_tensor on the device of \code{x}.}
 }
 \value{
-Integer vector of length \code{ncol(x)}, 0-based.
+Integer vector of length \code{ncol(x)}, 0-based; or, with
+  \code{as_tensor = TRUE}, an ag_tensor \code{[1, batch]} holding the same.
 }
 \description{
 Index of the largest entry in every column of \code{x}, for action selection
@@ -21,9 +25,12 @@ Ties go to the FIRST index on every path (R, CPU kernel, Vulkan shader),
 matching \code{which.max}. \code{NaN} is never selected; a column with nothing
 above \code{-Inf} (all \code{NaN} / all \code{-Inf}) gives \code{0}.
 
-Not differentiable. On the GPU this reads the result back to the host, so it
-is a synchronisation point: fine where the environment needs the action, but
-keep it out of the training step.
+Not differentiable. On the GPU the default reads the result back to the
+host, so it is a synchronisation point: fine where the environment needs the
+action, but keep it out of the training step. With \code{as_tensor = TRUE}
+the indices stay on the device as a \code{[1, batch]} ag_tensor (whole
+numbers stored as floats), which is what lets action selection be part of a
+recorded graph (\code{\link{ag_capture}}) and feed \code{\link{ag_gather}}.
 }
 \examples{
 ag_argmax(matrix(c(1, 3, 3,  5, 2, 5), 3, 2))   # 1 0

@@ -1,0 +1,63 @@
+#version 450
+
+// ggmlR: GGML_OP_RAND, counter-based random numbers (Philox4x32-10).
+//
+// The same arithmetic, word for word, as ggml_compute_forward_rand() in
+// ggml-cpu/ops-elemwise.cpp: element i uses the counter (i, 0, stream, 0) and
+// the key's two bit patterns, and takes words 0 and 1 of the block. The
+// integer part and the uniform conversion are bit-identical to the CPU; the
+// Gumbel and normal transforms go through log / cos / sqrt and may differ in
+// the last bits.
+
+layout (push_constant) uniform parameter
+{
+    uint n;         // elements of dst
+    uint dist;      // 0 uniform, 1 Gumbel, 2 normal
+    uint stream;
+    uint k_offset;  // misalignment of the key inside its descriptor, in elements
+} p;
+
+layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+
+// The key is an F32 tensor read as raw bits.
+layout (binding = 0) readonly buffer K {uint data_k[];};
+layout (binding = 1) writeonly buffer D {float data_d[];};
+
+// 23 random bits -> (k + 0.5) / 2^23: exact in f32, never 0 or 1.
+float u01(uint x) {
+    return (float(x >> 9) + 0.5) * (1.0 / 8388608.0);
+}
+
+void main() {
+    // 2D grid flattening, as in fill.comp.
+    const uint i = (gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+
+    if (i >= p.n) {
+        return;
+    }
+
+    uint k0 = data_k[p.k_offset];
+    uint k1 = data_k[p.k_offset + 1];
+    uvec4 c = uvec4(i, 0u, p.stream, 0u);
+
+    for (int r = 0; r < 10; ++r) {
+        if (r > 0) {
+            k0 += 0x9E3779B9u;
+            k1 += 0xBB67AE85u;
+        }
+        uint hi0, lo0, hi1, lo1;
+        umulExtended(0xD2511F53u, c.x, hi0, lo0);
+        umulExtended(0xCD9E8D57u, c.z, hi1, lo1);
+        c = uvec4(hi1 ^ c.y ^ k0, lo1, hi0 ^ c.w ^ k1, lo0);
+    }
+
+    const float u = u01(c.x);
+
+    if (p.dist == 1u) {
+        data_d[i] = -log(-log(u));
+    } else if (p.dist == 2u) {
+        data_d[i] = sqrt(-2.0 * log(u)) * cos(6.2831855 * u01(c.y));
+    } else {
+        data_d[i] = u;
+    }
+}

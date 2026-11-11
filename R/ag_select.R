@@ -11,17 +11,36 @@
 #' matching \code{which.max}. \code{NaN} is never selected; a column with nothing
 #' above \code{-Inf} (all \code{NaN} / all \code{-Inf}) gives \code{0}.
 #'
-#' Not differentiable. On the GPU this reads the result back to the host, so it
-#' is a synchronisation point: fine where the environment needs the action, but
-#' keep it out of the training step.
+#' Not differentiable. On the GPU the default reads the result back to the
+#' host, so it is a synchronisation point: fine where the environment needs the
+#' action, but keep it out of the training step. With \code{as_tensor = TRUE}
+#' the indices stay on the device as a \code{[1, batch]} ag_tensor (whole
+#' numbers stored as floats), which is what lets action selection be part of a
+#' recorded graph (\code{\link{ag_capture}}) and feed \code{\link{ag_gather}}.
 #'
 #' @param x ag_tensor or numeric matrix, \code{[n, batch]}.
-#' @return Integer vector of length \code{ncol(x)}, 0-based.
+#' @param as_tensor \code{FALSE} (default) for an integer vector, \code{TRUE}
+#'   for a \code{[1, batch]} ag_tensor on the device of \code{x}.
+#' @return Integer vector of length \code{ncol(x)}, 0-based; or, with
+#'   \code{as_tensor = TRUE}, an ag_tensor \code{[1, batch]} holding the same.
 #' @export
 #' @examples
 #' ag_argmax(matrix(c(1, 3, 3,  5, 2, 5), 3, 2))   # 1 0
-ag_argmax <- function(x) {
+ag_argmax <- function(x, as_tensor = FALSE) {
   device <- if (is_ag_tensor(x)) x$device else "cpu"
+  if (device == "gpu" && isTRUE(as_tensor)) {
+    x_data <- .ag_operand(x)
+    .ag_index_fits(.ag_dim(x_data)[1L], "ag_argmax")
+    idx <- .ag_run_op(
+      op_fn = function(ctx, ptrs) .ag_index_out(ctx, ggml_argmax(ctx, .ag_f32(ctx, ptrs[[1L]]))),
+      inputs    = list(x_data),
+      out_shape = c(1L, .ag_ncol(x_data)),
+      resident  = .ag_is_handle(x_data)
+    )
+    return(.ag_wrap_result(idx, device))
+  }
+  if (isTRUE(as_tensor))
+    return(ag_tensor(matrix(ag_argmax(x), nrow = 1L), device = device))
   if (device == "gpu") {
     x_data <- .ag_operand(x)
     idx <- .ag_run_op(
@@ -127,11 +146,20 @@ ag_log_softmax <- function(x) {
 #' every call: cheap for tens of classes (games), wasteful for thousands --
 #' there a dedicated op with an I32 index tensor is the right tool (TODO.md).
 #'
+#' \code{index} may also be a \code{[1, batch]} ag_tensor, as returned by
+#' \code{ag_argmax(as_tensor = TRUE)} or \code{ag_sample_categorical(key = )}.
+#' With \code{x} on the GPU nothing then touches the host: the pick is a
+#' \code{get_rows} over the flattened \code{x}, so it can be recorded by
+#' \code{\link{ag_capture}}. That path is for collection and is \strong{not
+#' differentiable}, and the index is not range-checked (it never leaves the
+#' device); pass a host vector in the training step.
+#'
 #' @param x ag_tensor or numeric matrix, \code{[n, batch]}.
 #' @param index Integer-valued vector of length \code{ncol(x)}, \strong{0-based},
 #'   each in \code{0..nrow(x)-1}. A 1-based index is an error (out of range for
 #'   \code{n}) or, worse, silently the neighbouring row -- so the range is checked
-#'   and \code{NA} / non-integers are rejected.
+#'   and \code{NA} / non-integers are rejected. Or a \code{[1, batch]} ag_tensor
+#'   of such indices.
 #' @return ag_tensor \code{[1, batch]}.
 #' @export
 #' @examples
@@ -139,6 +167,34 @@ ag_log_softmax <- function(x) {
 ag_gather <- function(x, index) {
   d <- .ag_sel_dim(x)
   n <- d[1L]; b <- d[2L]
+  if (is_ag_tensor(index)) {
+    di <- .ag_sel_dim(index)
+    if (prod(di) != b)
+      stop(sprintf("ag_gather: index has %d elements, x has %d columns", prod(di), b),
+           call. = FALSE)
+    if (is_ag_tensor(x) && x$device == "gpu" && index$device == "gpu") {
+      # flat position idx + n * column, computed in f32: exact below 2^24
+      if (as.double(n) * b > 2^24)
+        stop("ag_gather: a device index needs nrow(x) * ncol(x) <= 2^24", call. = FALSE)
+      x_data <- .ag_operand(x)
+      i_data <- .ag_operand(index)
+      res <- .ag_run_op(
+        op_fn = function(ctx, ptrs) {
+          xx <- ptrs[[1L]]
+          if (!ggml_is_contiguous(xx)) xx <- ggml_cont(ctx, xx)
+          off  <- ggml_arange(ctx, 0, n * b, n)                       # n * column
+          flat <- ggml_add(ctx, ggml_reshape_1d(ctx, .ag_f32(ctx, ptrs[[2L]]), b), off)
+          ggml_get_rows(ctx, ggml_reshape_2d(ctx, xx, 1L, n * b),
+                        ggml_cast_numeric(ctx, flat, GGML_TYPE_I32))
+        },
+        inputs    = list(x_data, i_data),
+        out_shape = c(1L, b),
+        resident  = .ag_is_handle(x_data) || .ag_is_handle(i_data)
+      )
+      return(.ag_wrap_result(res, "gpu"))
+    }
+    index <- as.numeric(.ag_as_matrix(.ag_data(index)))
+  }
   if (!is.numeric(index))
     stop("ag_gather: index must be numeric (0-based integers)", call. = FALSE)
   if (length(index) != b)
@@ -202,14 +258,48 @@ ag_max <- function(x) ag_gather(x, ag_argmax(x))
 #' Near-ties of \code{x + G} are rounded in f32 on the GPU and in double on the
 #' CPU, so the two paths can differ in a rare column even with the same seed.
 #'
+#' With \code{key} the noise is drawn on the device instead
+#' (\code{\link{ag_rand}}, Gumbel) and the result is a \code{[1, batch]}
+#' ag_tensor that stays there: nothing is uploaded but the key and nothing
+#' comes down, so the draw can be recorded by \code{\link{ag_capture}} with the
+#' key as an input. The numbers differ from the \code{runif} path.
+#'
 #' @param x ag_tensor or numeric matrix, \code{[n, batch]}.
-#' @return Integer vector of length \code{ncol(x)}, 0-based.
+#' @param key \code{NULL} (default) for host noise, or a key as for
+#'   \code{\link{ag_rand}}.
+#' @param stream Stream of the key, see \code{\link{ag_rand}}.
+#' @return Integer vector of length \code{ncol(x)}, 0-based; with \code{key},
+#'   an ag_tensor \code{[1, batch]} holding the same.
 #' @export
 #' @examples
 #' set.seed(1)
 #' ag_sample_categorical(matrix(c(0, 0, -1e4,  5, 0, 0), 3, 2))
-ag_sample_categorical <- function(x) {
+ag_sample_categorical <- function(x, key = NULL, stream = 0L) {
   d <- .ag_sel_dim(x)
+  if (!is.null(key)) {
+    device <- if (is_ag_tensor(x)) x$device else "cpu"
+    if (device == "gpu") {
+      .ag_index_fits(d[1L], "ag_sample_categorical")
+      x_data <- .ag_operand(x)
+      k_data <- .ag_rand_key(key, "gpu")
+      idx <- .ag_run_op(
+        op_fn = function(ctx, ptrs) {
+          g <- ggml_rand(ctx, .ag_f32(ctx, ptrs[[2L]]), "gumbel", d, stream)
+          .ag_index_out(ctx, ggml_argmax(ctx, ggml_add(ctx, .ag_f32(ctx, ptrs[[1L]]), g)))
+        },
+        inputs    = list(x_data, k_data),
+        out_shape = c(1L, d[2L]),
+        resident  = .ag_is_handle(x_data) || .ag_is_handle(k_data)
+      )
+      return(.ag_wrap_result(idx, device))
+    }
+    m <- .ag_as_matrix(.ag_data(x))
+    if (is.null(dim(m))) m <- matrix(m, ncol = 1L)
+    m <- m + .ag_rand_host(.ag_rand_key(key, "cpu"), "gumbel", d, stream)
+    m[is.na(m)] <- -Inf
+    return(ag_tensor(matrix(max.col(t(m), ties.method = "first") - 1L, nrow = 1L),
+                     device = device))
+  }
   g <- matrix(-log(-log(stats::runif(d[1L] * d[2L]))), d[1L], d[2L])
   device <- if (is_ag_tensor(x)) x$device else "cpu"
   if (device == "gpu") {
@@ -261,4 +351,114 @@ ag_sample_normal <- function(mu, log_std) {
   device <- .ag_result_device(mu, log_std)
   eps <- ag_tensor(matrix(stats::rnorm(d[1L] * d[2L]), d[1L], d[2L]), device = device)
   ag_add(mu, ag_mul(eps, ag_exp(log_std)))
+}
+
+#' Random numbers on the device
+#'
+#' A \code{[n, batch]} ag_tensor of counter-based random numbers
+#' (\code{\link{ggml_rand}}, Philox4x32-10) computed where the tensor lives.
+#' Element i depends only on the key, \code{stream} and i, so:
+#' \itemize{
+#'   \item a graph recorded by \code{\link{ag_capture}} draws new numbers at
+#'     every replay when the key is one of its inputs -- two numbers go up,
+#'     no noise matrix;
+#'   \item the CPU and GPU devices draw the same uniform numbers bit for bit
+#'     (Gumbel and normal agree to the last bits of \code{log} / \code{cos}).
+#' }
+#'
+#' The key is read as two f32 bit patterns; any two numbers work. Drawing them
+#' with \code{stats::runif(2)} makes the stream follow \code{set.seed}. Ops
+#' that share one key must use different \code{stream}s, or they see the same
+#' numbers.
+#'
+#' Not differentiable: the result is a constant of the graph. For a
+#' reparameterised sample build \code{mu + exp(log_std) * eps} from it.
+#'
+#' @param key Two numbers, or an ag_tensor \code{[2, 1]} (an input of a
+#'   recorded graph). Its device decides where the numbers are drawn; a plain
+#'   vector uses \code{device}.
+#' @param dist \code{"uniform"} on (0, 1), \code{"gumbel"} (standard) or
+#'   \code{"normal"} (standard).
+#' @param dims \code{c(n, batch)}.
+#' @param stream Non-negative integer separating ops that share a key.
+#' @param device Device for a key that is not an ag_tensor; defaults to
+#'   \code{ag_default_device()}.
+#' @return ag_tensor \code{[n, batch]}.
+#' @export
+#' @examples
+#' set.seed(1)
+#' eps <- ag_rand(runif(2), "normal", c(2, 5), device = "cpu")
+ag_rand <- function(key, dist = c("uniform", "gumbel", "normal"), dims,
+                    stream = 0L, device = NULL) {
+  dist <- match.arg(dist)
+  if (!is.numeric(dims) || length(dims) != 2L || anyNA(dims) || any(dims < 1) ||
+      any(dims != round(dims)))
+    stop("ag_rand: dims must be c(n, batch), two positive whole numbers", call. = FALSE)
+  dims <- as.integer(dims)
+  if (is_ag_tensor(key)) device <- key$device
+  else if (is.null(device)) device <- ag_default_device()
+  k_data <- .ag_rand_key(key, device)
+  if (device != "gpu")
+    return(ag_tensor(.ag_rand_host(k_data, dist, dims, stream), device = device))
+  ttype <- .ag_dtype_to_ggml(.ag_compute_dtype())
+  res <- .ag_run_op(
+    op_fn = function(ctx, ptrs) {
+      r <- ggml_rand(ctx, .ag_f32(ctx, ptrs[[1L]]), dist, dims, stream)
+      # ggml_rand is F32; the rest of the graph is in the compute dtype
+      if (ttype != GGML_TYPE_F32) ggml_cast(ctx, r, ttype) else r
+    },
+    inputs    = list(k_data),
+    out_shape = dims,
+    resident  = .ag_is_handle(k_data)
+  )
+  .ag_wrap_result(res, device)
+}
+
+# The key as an operand: a handle or a [2, 1] matrix on the GPU, two numbers
+# on the host. Only the first two elements are read.
+.ag_rand_key <- function(key, device) {
+  n <- if (is_ag_tensor(key)) prod(.ag_sel_dim(key)) else length(key)
+  if (!(is_ag_tensor(key) || is.numeric(key)) || n < 2L)
+    stop("ag_rand: key must be two numbers or an ag_tensor [2, 1]", call. = FALSE)
+  if (is_ag_tensor(key) && device == "gpu" && key$device == "gpu") return(.ag_operand(key))
+  k <- if (is_ag_tensor(key)) as.numeric(.ag_as_matrix(.ag_data(key))) else as.numeric(key)
+  if (anyNA(k[1:2])) stop("ag_rand: key contains NA", call. = FALSE)
+  if (device == "gpu") matrix(k[1:2], ncol = 1L) else k[1:2]
+}
+
+# The numbers of ggml_rand on the host: the host path of ag_rand, so that a
+# model on the CPU device draws the numbers the GPU would. Calls the CPU
+# kernel's loop directly -- building a backend and a graph per call was ~0.5 ms.
+.ag_rand_host <- function(key, dist, dims, stream) {
+  v <- .Call("R_ggml_rand_host", as.numeric(key),
+             match(dist, c("uniform", "gumbel", "normal")) - 1L,
+             as.integer(stream), as.numeric(dims[1L]) * dims[2L], PACKAGE = "ggmlR")
+  dim(v) <- dims[1:2]
+  v
+}
+
+# F32 view of an operand: argmax and rand are F32-only, and an f16 / bf16
+# compute dtype uploads operands in that type.
+.ag_f32 <- function(ctx, a) {
+  if (ggml_tensor_type(a) != GGML_TYPE_F32) ggml_cast(ctx, a, GGML_TYPE_F32) else a
+}
+
+# An I32 index node as a float tensor in the compute dtype, so it concatenates
+# with the other outputs of a recorded graph (one download) and feeds ag_* ops.
+# argmax yields a 1-d [batch]; reshaped to the declared [1, batch], so ops that
+# check ggml shapes (concat with another [1, batch] row) accept it.
+.ag_index_out <- function(ctx, idx) {
+  f <- ggml_cast_numeric(ctx, idx, GGML_TYPE_F32)
+  ttype <- .ag_dtype_to_ggml(.ag_compute_dtype())
+  if (ttype != GGML_TYPE_F32) f <- ggml_cast(ctx, f, ttype)
+  ggml_reshape_2d(ctx, f, 1L, ggml_nelements(f))
+}
+
+# Whole numbers up to n - 1 must be exact in the compute dtype.
+.ag_index_fits <- function(n, what) {
+  lim <- switch(.ag_compute_dtype(), f16 = 2048, bf16 = 256, 2^24)
+  if (n > lim)
+    stop(sprintf("%s: %d classes do not fit an index tensor of dtype %s (max %d)",
+                 what, n, .ag_compute_dtype(), lim), call. = FALSE)
+  invisible(NULL)
 }

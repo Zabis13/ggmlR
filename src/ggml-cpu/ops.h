@@ -89,6 +89,9 @@ void ggml_compute_forward_top_k(const struct ggml_compute_params * params, struc
 void ggml_compute_forward_leaky_relu(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_tri(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_fill(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_rand(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_rand_fill_f32(float * out, int64_t i0, int64_t i1, uint32_t k0, uint32_t k1,
+                        int32_t dist, uint32_t stream);
 void ggml_compute_forward_flash_attn_ext(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_flash_attn_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_ssm_conv(const struct ggml_compute_params * params, struct ggml_tensor * dst);

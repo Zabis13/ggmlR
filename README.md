@@ -928,7 +928,8 @@ Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM),
 | Reductions | `ag_sum`, `ag_mean` (with `dim`, `keepdim`) |
 | Math | `ag_log`, `ag_exp`, `ag_pow`, `ag_clamp` |
 | Shape | `ag_reshape`, `ag_transpose`, `ag_slice_rows`, `ag_concat_rows` |
-| Device buffers | `ag_buffer`, `ag_buffer_write`, `ag_buffer_read`, `ag_buffer_free`, `ag_get_rows` (see [Device buffers](#device-buffers)) |
+| Device buffers | `ag_buffer`, `ag_buffer_write`, `ag_buffer_read`, `ag_buffer_free`, `ag_get_rows`, `ag_buffer_copy_from` (see [Device buffers](#device-buffers)) |
+| Action selection | `ag_log_softmax`, `ag_argmax`, `ag_sample_categorical`, `ag_sample_normal`, `ag_gather`, `ag_rand` (see [Action selection on the device](#action-selection-on-the-device)) |
 | Attention | `ag_multihead_attention`, `ag_flash_attention` (all heads in one fused op) |
 | Loss | `ag_mse_loss`, `ag_cross_entropy_loss`, `ag_softmax_cross_entropy_loss` |
 | Layers | `ag_linear`, `ag_batch_norm`, `ag_layer_norm`, `ag_dropout`, `ag_embedding` |
@@ -1291,7 +1292,47 @@ ag_buffer_free(buf)                             # release now, not at gc()
 * Creation fails when the buffer needs more than 85% of the free device memory
   the driver reports. `ag_device("cpu")` moves buffers to the host first (about
   twice their device size, as R doubles); the next GPU use uploads them again.
+* `ag_buffer_copy_from(buf, tensor, backend, col_offset)` copies a ggml tensor
+  that is already on the device (an environment's observations, laid out
+  `[rows, k]`) into the buffer GPU to GPU, without the host. A copy that would
+  have to go through the host is an error unless `via_host = "allow"`.
 * On the CPU the same calls work on an R matrix.
+
+### Action selection on the device
+
+Picking an action from a policy head -- mask, softmax, argmax or a sample, and
+the log-probability of what was picked -- can stay on the device and be part of
+one `ag_capture()` recording. Only a two-number key goes up; the logits never
+come down.
+
+```r
+ag_device("gpu")
+act <- ag_capture(function(x, key) {
+  lp <- ag_log_softmax(ag_matmul(W, x))           # [n_actions, B]
+  a  <- ag_sample_categorical(lp, key = key)      # [1, B], on the device
+  list(a = a, logp = ag_gather(lp, a))
+}, params = list(W))
+r <- act(x = obs, key = matrix(runif(2), 2, 1))   # r$a: 0-based actions, r$logp
+```
+
+* `ag_rand(key, dist, dims, stream)` -- a `[n, batch]` tensor of `"uniform"`,
+  `"gumbel"` or `"normal"` numbers computed where the key lives
+  (`ggml_rand()`, Philox4x32-10, a counter-based generator). Element i depends
+  only on the key, the stream and i: the same key gives the same numbers, the
+  CPU and the GPU draw the same uniform bits (Gumbel and normal agree to the
+  last bits of `log` / `cos`), and keys from `runif()` make a run follow
+  `set.seed()`. Use different `stream`s for independent draws from one key.
+* `ag_sample_categorical(x, key = )` -- Gumbel-max with noise from `ag_rand()`;
+  returns a `[1, batch]` tensor of 0-based indices instead of an R vector.
+  Without `key` it behaves as before (host noise, integer vector).
+* `ag_argmax(x, as_tensor = TRUE)` -- the same for the greedy choice.
+* `ag_gather(x, index)` accepts such an index tensor and picks `x[index[j], j]`
+  on the device. With an index tensor it is not differentiable and the range is
+  not checked; for a loss pass the indices as an R vector, as before.
+* Indices travel as floats so that they share the recording's single download
+  with the other outputs: exact up to 2^24 classes in f32, 2048 in f16.
+* Mask illegal actions by adding a large finite negative number (`-1e4`) before
+  the softmax.
 
 ### Budgeting a training run
 
@@ -2124,7 +2165,7 @@ exact either way.
 
 ## Upstream ggml version
 
-ggmlR 0.8.9 is synced with **ggml 0.27.0** (`ggml_version()`). Upstream code is taken function by function; where ggmlR has its own behaviour, ours is kept: 5D tensors (`ne[4]`) in CPU and Vulkan kernels, the backward kernels upstream lacks (`ggml_flash_attn_back()`, norm/GELU backward), first-index tie-breaking in argsort / top-k / argmax, and the ONNX-specific ops.
+ggmlR 0.8.9.1 is synced with **ggml 0.27.0** (`ggml_version()`). Upstream code is taken function by function; where ggmlR has its own behaviour, ours is kept: 5D tensors (`ne[4]`) in CPU and Vulkan kernels, the backward kernels upstream lacks (`ggml_flash_attn_back()`, norm/GELU backward), first-index tie-breaking in argsort / top-k / argmax, and the ONNX-specific ops.
 
 What came with 0.27:
 
