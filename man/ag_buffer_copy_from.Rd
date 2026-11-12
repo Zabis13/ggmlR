@@ -37,10 +37,14 @@ through the host or R.
 \details{
 The contract is strict and nothing is converted:
 \itemize{
-  \item \code{tensor} is f32, contiguous, 2-d \code{[rows, k]} in ggml
-    order (ne0 = \code{rows}, the buffer's row count; one column per
-    item). A tensor laid out \code{[k, rows]} must be transposed by its
-    producer; the buffer does not.
+  \item \code{tensor} is f32 and contiguous, with one buffer column per
+    item along its trailing axes: 2-d \code{[rows, k]} in ggml order, or
+    N-d whose leading axes make up a column -- the buffer's row count is
+    \code{ne0}, \code{ne0 * ne1} or \code{ne0 * ne1 * ne2}, and the
+    remaining axes count the columns (a state \code{[S, 6, n]} fills
+    \code{n} columns of a buffer with \code{6 S} rows). A tensor laid out
+    \code{[k, rows]} must be transposed by its producer; the buffer does
+    not.
   \item \code{tensor} is on the same device as the buffer, and the ag
     device is the GPU.
 }

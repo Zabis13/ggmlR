@@ -237,6 +237,50 @@ test_that("ag_buffer_copy_from writes columns from another backend's tensor", {
   ag_buffer_free(buf)
 })
 
+test_that("ag_buffer_copy_from takes an N-d tensor, columns along the trailing axes", {
+  skip_if_no_gpu_buf()
+  ag_device("gpu"); on.exit(ag_device("cpu"), add = TRUE)
+  be <- ggml_vulkan_init(0L); on.exit(ggml_backend_free(be), add = TRUE)
+  nd <- function(vals, ne) {
+    ctx <- ggml_init(4 * ggml_tensor_overhead() + 1024, no_alloc = TRUE)
+    t <- if (length(ne) == 3L) ggml_new_tensor_3d(ctx, GGML_TYPE_F32, ne[1], ne[2], ne[3]) else
+      ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[1], ne[2], ne[3], ne[4])
+    bb <- ggml_backend_alloc_ctx_tensors(ctx, be)
+    ggml_backend_tensor_set_data(t, as.numeric(vals))
+    list(t = t, ctx = ctx, bb = bb)
+  }
+  buf <- ag_buffer(6, 5)
+  # [2, 3, 4]: rows = 2 * 3, four columns
+  e <- nd(1:24, c(2, 3, 4)); on.exit(env_free(e), add = TRUE)
+  ag_buffer_copy_from(buf, e$t, be, col_offset = 1)
+  expect_equal(ag_buffer_read(buf), cbind(0, matrix(1:24 + 0, 6, 4)))
+  # [2, 3, 1]: one column, the trailing axis of size 1
+  e1 <- nd(101:106, c(2, 3, 1)); on.exit(env_free(e1), add = TRUE)
+  ag_buffer_copy_from(buf, e1$t, be, col_offset = 0)
+  expect_equal(ag_buffer_read(buf, 0, 1), matrix(101:106 + 0, 6, 1))
+  # [6, 2, 2]: rows = ne0, 2 * 2 columns
+  e2 <- nd(1:24, c(6, 2, 2)); on.exit(env_free(e2), add = TRUE)
+  ag_buffer_copy_from(buf, e2$t, be, col_offset = 0)
+  expect_equal(ag_buffer_read(buf, 0, 4), matrix(1:24 + 0, 6, 4))
+  # [2, 3, 2, 2]: 4-d, rows = 2 * 3
+  e3 <- nd(24:1, c(2, 3, 2, 2)); on.exit(env_free(e3), add = TRUE)
+  ag_buffer_copy_from(buf, e3$t, be, col_offset = 1)
+  expect_equal(ag_buffer_read(buf, 1, 4), matrix(24:1 + 0, 6, 4))
+  # refused: no product of leading axes is 6; too many columns
+  bad <- nd(1:16, c(4, 2, 2)); on.exit(env_free(bad), add = TRUE)
+  expect_error(ag_buffer_copy_from(buf, bad$t, be), "rows")
+  expect_error(ag_buffer_copy_from(buf, e$t, be, col_offset = 2), "outside the buffer")
+  # the host path follows the same rule
+  ag_device("cpu")
+  hb <- ag_buffer(6, 5)
+  suppressMessages(ag_buffer_copy_from(hb, e$t, be, col_offset = 1, via_host = "allow"))
+  expect_equal(ag_buffer_read(hb), cbind(0, matrix(1:24 + 0, 6, 4)))
+  expect_error(suppressMessages(ag_buffer_copy_from(hb, bad$t, be, via_host = "allow")), "rows")
+  ag_buffer_free(hb)
+  ag_device("gpu")
+  ag_buffer_free(buf)
+})
+
 test_that("ag_buffer_copy_from from the ag backend itself is synchronous", {
   skip_if_no_gpu_buf()
   ag_device("gpu"); on.exit(ag_device("cpu"), add = TRUE)

@@ -626,7 +626,8 @@ SEXP R_ggml_backend_tensor_copy_async(SEXP backend_src_ptr, SEXP backend_dst_ptr
     return R_NilValue;
 }
 
-// ag_buffer_copy_from(): copy a device tensor [rows, k] into columns
+// ag_buffer_copy_from(): copy a device tensor of k columns (2-d [rows, k], or
+// N-d with the leading axes making up a column) into columns
 // col_offset..col_offset+k-1 of a buffer tensor [rows, capacity], device to
 // device. Every precondition is an R error here: ggml_backend_tensor_copy*()
 // GGML_ASSERTs on a layout mismatch, which would take the R session down.
@@ -652,17 +653,30 @@ SEXP R_ag_buffer_copy_cols(SEXP backend_src_ptr, SEXP backend_dst_ptr,
     if (!ggml_is_contiguous(src)) {
         error("ag_buffer_copy_from: tensor must be contiguous");
     }
-    if (src->ne[2] != 1 || src->ne[3] != 1) {
-        error("ag_buffer_copy_from: tensor must be 2-d [rows, k]");
+    // N-d: the leading axes of the tensor make up one column of the buffer and
+    // the rest count the columns, so the buffer's row count must be the
+    // product of the first d axes for some d (ne0, ne0*ne1, ...).
+    int64_t lead = 1, k = 0;
+    for (int d = 0; d < GGML_MAX_DIMS; d++) {
+        lead *= src->ne[d];
+        if (lead == dst->ne[0]) {
+            k = 1;
+            for (int j = d + 1; j < GGML_MAX_DIMS; j++) k *= src->ne[j];
+            break;
+        }
+        if (lead > dst->ne[0]) break;
     }
-    if (src->ne[0] != dst->ne[0]) {
-        error("ag_buffer_copy_from: tensor has %lld rows (ne0), the buffer has %lld",
-              (long long) src->ne[0], (long long) dst->ne[0]);
+    if (lead != dst->ne[0]) {
+        error("ag_buffer_copy_from: tensor [%lld, %lld, %lld, %lld] does not split into "
+              "columns of the buffer's %lld rows (the rows must be the product of its "
+              "leading axes)",
+              (long long) src->ne[0], (long long) src->ne[1], (long long) src->ne[2],
+              (long long) src->ne[3], (long long) dst->ne[0]);
     }
     if (ISNAN(off_d) || off_d < 0 || off_d != (double)(int64_t) off_d ||
-        off_d + (double) src->ne[1] > (double) dst->ne[1]) {
+        off_d + (double) k > (double) dst->ne[1]) {
         error("ag_buffer_copy_from: columns %.0f..%.0f are outside the buffer (capacity %lld)",
-              off_d, off_d + (double) src->ne[1] - 1, (long long) dst->ne[1]);
+              off_d, off_d + (double) k - 1, (long long) dst->ne[1]);
     }
     if (src->buffer == NULL || src->data == NULL) {
         error("ag_buffer_copy_from: tensor has no backend memory");
@@ -687,19 +701,22 @@ SEXP R_ag_buffer_copy_cols(SEXP backend_src_ptr, SEXP backend_dst_ptr,
     if (ggml_backend_get_device(backend_src) != dev_src) {
         error("ag_buffer_copy_from: backend is not the one the tensor's memory belongs to");
     }
-    if (src->ne[1] == 0) {
+    if (k == 0) {
         return R_NilValue;
     }
 
-    // A view of the target columns, bound to the buffer's memory. Columns are
-    // contiguous in ne1, so the view is contiguous and has src's layout.
+    // A view of the target columns, bound to the buffer's memory, in src's
+    // own shape (the copy wants equal layouts). Columns are contiguous in
+    // ne1 and src is contiguous, so the bytes line up.
     struct ggml_init_params ip = { ggml_tensor_overhead() + 256, NULL, true };
     struct ggml_context * ctx = ggml_init(ip);
     if (ctx == NULL) {
         error("ag_buffer_copy_from: could not create a context for the view");
     }
     const size_t offset = (size_t) off_d * dst->nb[1];
-    struct ggml_tensor * view = ggml_view_2d(ctx, dst, src->ne[0], src->ne[1], dst->nb[1], offset);
+    struct ggml_tensor * view = ggml_view_4d(ctx, dst, src->ne[0], src->ne[1], src->ne[2],
+                                             src->ne[3], src->nb[1], src->nb[2], src->nb[3],
+                                             offset);
     if (ggml_backend_view_init(view) != GGML_STATUS_SUCCESS) {
         ggml_free(ctx);
         error("ag_buffer_copy_from: failed to bind the view to the buffer");

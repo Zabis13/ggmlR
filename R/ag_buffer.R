@@ -145,10 +145,14 @@ ag_buffer_write <- function(buf, data, col_offset) {
 #'
 #' The contract is strict and nothing is converted:
 #' \itemize{
-#'   \item \code{tensor} is f32, contiguous, 2-d \code{[rows, k]} in ggml
-#'     order (ne0 = \code{rows}, the buffer's row count; one column per
-#'     item). A tensor laid out \code{[k, rows]} must be transposed by its
-#'     producer; the buffer does not.
+#'   \item \code{tensor} is f32 and contiguous, with one buffer column per
+#'     item along its trailing axes: 2-d \code{[rows, k]} in ggml order, or
+#'     N-d whose leading axes make up a column -- the buffer's row count is
+#'     \code{ne0}, \code{ne0 * ne1} or \code{ne0 * ne1 * ne2}, and the
+#'     remaining axes count the columns (a state \code{[S, 6, n]} fills
+#'     \code{n} columns of a buffer with \code{6 S} rows). A tensor laid out
+#'     \code{[k, rows]} must be transposed by its producer; the buffer does
+#'     not.
 #'   \item \code{tensor} is on the same device as the buffer, and the ag
 #'     device is the GPU.
 #' }
@@ -213,13 +217,17 @@ ag_buffer_copy_from <- function(buf, tensor, backend, col_offset = 0,
     stop("ag_buffer_copy_from: tensor must be f32", call. = FALSE)
   if (!ggml_is_contiguous(tensor))
     stop("ag_buffer_copy_from: tensor must be contiguous", call. = FALSE)
-  ne <- ggml_tensor_shape(tensor)
-  if (any(ne[3:4] != 1))
-    stop("ag_buffer_copy_from: tensor must be 2-d [rows, k]", call. = FALSE)
-  rows <- ne[1L]; k <- ne[2L]
-  if (rows != buf$rows)
-    stop(sprintf("ag_buffer_copy_from: tensor has %d rows (ne0), the buffer has %d",
-                 as.integer(rows), as.integer(buf$rows)), call. = FALSE)
+  ne <- as.numeric(ggml_tensor_shape(tensor))
+  ne <- c(ne, rep(1, 4L - length(ne)))
+  # the leading axes make up one column: rows = ne0, ne0 * ne1, ...
+  rows <- buf$rows
+  d <- match(TRUE, cumprod(ne) == rows)
+  if (is.na(d))
+    stop(sprintf(paste0("ag_buffer_copy_from: tensor [%s] does not split into columns of ",
+                        "the buffer's %d rows (the rows must be the product of its ",
+                        "leading axes)"),
+                 paste(ne, collapse = ", "), as.integer(rows)), call. = FALSE)
+  k <- prod(ne[-seq_len(d)])
   if (col_offset < 0 || col_offset != round(col_offset) || col_offset + k > buf$capacity)
     stop(sprintf("ag_buffer_copy_from: columns %g..%g are outside the buffer (capacity %d)",
                  col_offset, col_offset + k - 1, as.integer(buf$capacity)), call. = FALSE)

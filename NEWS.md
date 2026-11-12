@@ -2,7 +2,7 @@
 
 * New `ag_rand()` / `ggml_rand()`: uniform, Gumbel and normal random numbers computed on the device from a two-number key, the same on the CPU and on Vulkan.
 * Action selection on the device: `ag_argmax(as_tensor = TRUE)`, `ag_sample_categorical(key = )` and `ag_gather()` with an index tensor keep the result on the device and can be recorded by `ag_capture()`.
-* New `ag_buffer_copy_from()` copies a device tensor into an `ag_buffer` GPU to GPU, without the host.
+* New `ag_buffer_copy_from()` copies a device tensor into an `ag_buffer` GPU to GPU, without the host; the tensor may be N-d (its leading axes make up a column).
 * New `ag_set_rows()` writes `ag_buffer` columns by index; inside `ag_capture()` the write is a graph node, and a captured function that only writes may return `NULL` (its replays download nothing).
 * New `ag_capture_repeat(f, n, ...)` runs such a write-only captured function `n` times with one upload and one wait: on the GPU the runs are queued without waiting in between.
 * On Vulkan, `ag_capture_repeat()` records the graph's command buffers once and submits them `n` times (`GGMLR_VK_GRAPH_RECORD=0` turns this off).
