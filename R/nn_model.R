@@ -2457,13 +2457,24 @@ ggml_save_model.ggml_functional_model <- function(model, path) {
 
   # node_weights: list of node_id -> list of ggml tensors
   # Extract numeric data from each tensor
+  # [[ ]], not $: the model is a list, and with node_weights absent
+  # model$node_weights partially matches node_weights_data -- plain vectors that
+  # were then read as tensor pointers ("Invalid tensor pointer").
   nw_data <- NULL
-  if (!is.null(model$node_weights)) {
-    nw_data <- lapply(model$node_weights, function(wlist) {
+  if (!is.null(model[["node_weights"]])) {
+    nw_data <- lapply(model[["node_weights"]], function(wlist) {
       lapply(wlist, function(t) {
         if (is.null(t)) NULL else ggml_backend_tensor_get_data(t)
       })
     })
+  } else if (!is.null(model[["node_weights_data"]])) {
+    # Only ggml_fit() and ggml_trainer() put live tensors in node_weights. A
+    # model that has weights but was never fitted in this session -- straight
+    # from ggml_load_model(), or given node_weights_data by hand -- carries
+    # them here, as plain vectors, and they are saved as they are. Without this
+    # branch such a model was written WITHOUT weights, and the next load
+    # silently started from a fresh initialisation.
+    nw_data <- model[["node_weights_data"]]
   }
 
   saveRDS(list(

@@ -553,7 +553,7 @@ print.ggml_trainer <- function(x, ...) {
     stats::setNames(lapply(m$layers, function(l) l$weights),
                     sprintf("%04d", seq_along(m$layers)))
   } else {
-    m$node_weights
+    m[["node_weights"]]   # [[ ]]: $ would partially match node_weights_data
   }
   out  <- list()
   seen <- list()

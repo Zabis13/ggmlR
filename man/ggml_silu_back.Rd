@@ -9,9 +9,9 @@ ggml_silu_back(ctx, a, b)
 \arguments{
 \item{ctx}{GGML context}
 
-\item{a}{Forward input tensor}
+\item{a}{Gradient tensor from upstream (dy)}
 
-\item{b}{Gradient tensor from upstream}
+\item{b}{Forward input tensor (x)}
 }
 \value{
 Gradient tensor for the input

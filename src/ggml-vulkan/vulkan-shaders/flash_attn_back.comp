@@ -117,8 +117,10 @@ float wg_reduce_max(float v, uint tid) {
 void main() {
     const uint tid = gl_LocalInvocationID.x;
 
-    // One workgroup per (query, head, batch).
-    const uint row = gl_WorkGroupID.x;
+    // One workgroup per (query, head, batch). Rows past the x limit of the
+    // dispatch spill into y (ggml_vk_flash_attn_back), so the row index is
+    // linearised over both; the padding of the last y row exits on iq3 >= B.
+    const uint row = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
     const uint iq1 = row % p.N;
     const uint iq2 = (row / p.N) % p.H;
     const uint iq3 = row / (p.N * p.H);

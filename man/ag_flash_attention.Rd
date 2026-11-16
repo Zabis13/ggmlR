@@ -4,7 +4,16 @@
 \alias{ag_flash_attention}
 \title{Multi-head attention in a single fused operation}
 \usage{
-ag_flash_attention(q, k, v, n_heads, scale = NULL, mask = NULL, causal = FALSE)
+ag_flash_attention(
+  q,
+  k,
+  v,
+  n_heads,
+  scale = NULL,
+  mask = NULL,
+  causal = FALSE,
+  batch = 1L
+)
 }
 \arguments{
 \item{q, k, v}{\code{ag_tensor}s of shape \code{[d_model, seq]}. \code{k} and
@@ -24,9 +33,22 @@ for the gradient.}
 
 \item{causal}{\code{TRUE} builds the causal mask for you: query \code{j}
 attends to keys \code{1..j}. Cannot be combined with \code{mask}.}
+
+\item{batch}{Number of independent sequences packed side by side in the
+columns (default 1). With \code{batch = B}, \code{q} is
+\code{[d_model, B * seq_q]} and \code{k}, \code{v} are
+\code{[d_model, B * seq_kv]}; sample \code{b} occupies columns
+\code{(b-1)*seq + 1 ... b*seq} and attends only within itself. The whole
+batch is still one fused call (ggml's fourth axis), not a loop, so a
+transformer over many short sequences -- a batch of board positions, say --
+costs one node. \code{mask} and \code{causal} describe ONE sequence
+(\code{[seq_kv, seq_q]}) and apply to every sample. Everything around the
+attention stays 2D: a linear layer applied to \code{[d_in, B * seq]} is
+already per-token.}
 }
 \value{
-An \code{ag_tensor} of shape \code{[d_model, seq_q]}.
+An \code{ag_tensor} of shape \code{[d_model, seq_q]}
+  (\code{[d_model, batch * seq_q]} when \code{batch > 1}).
 }
 \description{
 Computes scaled dot-product attention over all heads at once with
@@ -52,5 +74,9 @@ with_grad_tape({
   loss <- ag_mse_loss(out, ag_tensor(matrix(0, d_model, seq_len)))
 })
 backward(loss)
+
+# Four sequences of length 8 in one call
+qb <- ag_param(matrix(runif(d_model * 4 * seq_len, -1, 1), d_model, 4 * seq_len))
+ob <- ag_flash_attention(qb, qb, qb, n_heads = 4L, batch = 4L)
 }
 }

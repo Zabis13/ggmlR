@@ -119,6 +119,19 @@ ag_device <- function(device) {
   device <- match.arg(device, c("cpu", "gpu"))
   prev   <- .ag_device_state$device
 
+  # A CPU backend left in $backend (by older code, or by a caller that put one
+  # there) must not stand in for the GPU: ops would run on the CPU while the
+  # device reads "gpu", silently. Release it, as the switch to "cpu" below
+  # releases a GPU one, and bring up Vulkan.
+  if (device == "gpu" && !is.null(.ag_device_state$backend) &&
+      identical(tryCatch(ggml_backend_name(.ag_device_state$backend),
+                         error = function(e) NA_character_), "CPU")) {
+    .ag_residency_reset()
+    tryCatch(ggml_backend_free(.ag_device_state$backend),
+             error = function(e) NULL)
+    .ag_device_state$backend <- NULL
+  }
+
   if (device == "gpu" && is.null(.ag_device_state$backend)) {
     .ag_init_gpu_backend()
   }
@@ -169,6 +182,12 @@ ag_default_device <- function() {
 #' give f32 accuracy (~\code{1e-7}). \code{"f32"} asks every \code{ag_matmul}
 #' (forward, and the input gradient of the graph backward) for the f32-tile
 #' kernel, so the result no longer depends on the batch size or the device.
+#' The same setting asks \code{\link{ag_flash_attention}} for f32 accumulation
+#' in its forward. That is a request, not a guarantee: on cooperative-matrix
+#' devices (e.g. RDNA4 under RADV) Vulkan multiplies the attention operands as
+#' f16 whatever the accumulator, and the forward stays about \code{3e-4} to
+#' \code{7e-4} off an f32 reference with or without it. The backward of
+#' \code{ag_flash_attention} is f32 regardless.
 #'
 #' Cost: none measurable on small layers (RL policies, tens to hundreds of
 #' units); 2-4x slower on large ones (1024 x 1024 and up). That is why the default
@@ -1019,6 +1038,27 @@ GGML_PREC_F32 <- 10L
 .ag_gpu_exp <- function(x_data) {
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_exp(ctx, ptrs[[1L]]),
+    inputs   = list(x_data),
+    out_shape = .ag_dim(x_data),
+    resident  = .ag_is_handle(x_data)
+  )
+}
+
+.ag_gpu_silu <- function(x_data) {
+  .ag_run_op(
+    op_fn    = function(ctx, ptrs) ggml_silu(ctx, ptrs[[1L]]),
+    inputs   = list(x_data),
+    out_shape = .ag_dim(x_data),
+    resident  = .ag_is_handle(x_data)
+  )
+}
+
+# ggml_rms_norm normalises over ne0, which for an R [features, batch] matrix is
+# the feature axis of each column -- one example at a time, as ag_rms_norm
+# promises.
+.ag_gpu_rms_norm <- function(x_data, eps) {
+  .ag_run_op(
+    op_fn    = function(ctx, ptrs) ggml_rms_norm(ctx, ptrs[[1L]], eps = eps),
     inputs   = list(x_data),
     out_shape = .ag_dim(x_data),
     resident  = .ag_is_handle(x_data)

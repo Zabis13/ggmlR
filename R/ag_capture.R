@@ -481,7 +481,17 @@ ag_capture_set <- function(f, max_grad_norm) {
       if (!isTRUE(p$core$freed)) .ag_buffer_on_device(p$core)
       next
     }
-    if (!identical(p$device, "gpu") || !is.null(.ag_handle_of(p))) next
+    if (!identical(p$device, "gpu")) next
+    # Skip only what is already in the PERSISTENT pool. A tensor used on the
+    # device before (e.g. a constant in an eager forward) holds a pass-pool
+    # handle, and the recording swaps the pass pool for its own: inside it that
+    # handle is not live, the value would be uploaded during the recording, and
+    # the guard refused the call -- although the tensor was declared in
+    # `params` exactly so that this would not happen. Its value is read here
+    # (from the host copy, or from the device while the handle is still live)
+    # and moved to the persistent pool like any other.
+    h <- .ag_handle_of(p)
+    if (!is.null(h) && identical(.ag_handle_scope(h), "persistent")) next
     d   <- .ag_data(p)
     dt  <- p$dtype %||% .ag_device_state$dtype
     ptr <- .ag_r_to_gpu(d, dtype = dt, scope = "persistent")

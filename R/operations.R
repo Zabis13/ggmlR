@@ -3141,8 +3141,8 @@ ggml_concat <- function(ctx, a, b, dim = 0) {
 #' Used during training for gradient computation.
 #'
 #' @param ctx GGML context
-#' @param a Forward input tensor
-#' @param b Gradient tensor from upstream
+#' @param a Gradient tensor from upstream (dy)
+#' @param b Forward input tensor (x)
 #' @return Gradient tensor for the input
 #' @export
 ggml_silu_back <- function(ctx, a, b) {

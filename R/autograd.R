@@ -688,6 +688,44 @@ ag_sigmoid <- function(x) {
   out
 }
 
+#' SiLU (Swish) activation
+#'
+#' Applies \eqn{x / (1 + e^{-x})}, the activation of the feed-forward half of
+#' \code{\link{ggml_layer_transformer_block}}. One node on the tape (forward
+#' \code{ggml_silu}, backward \code{ggml_silu_back}) rather than the three of
+#' \code{ag_mul(x, ag_sigmoid(x))}, and it runs in the graph backward, so it can
+#' be part of an \code{\link{ag_capture_step}} recording.
+#'
+#' @param x ag_tensor
+#' @return ag_tensor of the same shape as \code{x}
+#' @export
+#' @examples
+#' ag_silu(ag_tensor(matrix(c(-2, 0, 2), 3, 1)))
+ag_silu <- function(x) {
+  device <- if (is_ag_tensor(x)) x$device else "cpu"
+  if (device == "gpu") {
+    x_data <- .ag_operand(x)
+    out    <- .ag_wrap_result(.ag_gpu_silu(x_data), device)
+  } else {
+    x_data <- .ag_data(x)
+    out    <- ag_tensor(x_data / (1.0 + exp(-x_data)), device = device)
+  }
+  out$requires_grad <- is_ag_tensor(x) && x$requires_grad
+  if (out$requires_grad) {
+    # d silu(x) = s * (1 + x * (1 - s)), s = sigmoid(x). The snapshot is x, as
+    # ggml_silu_back wants it; a resident x stays a handle.
+    x_snap <- x_data
+    grad_fn <- function(grad_out) {
+      xm <- .ag_as_matrix(x_snap)
+      s  <- 1.0 / (1.0 + exp(-xm))
+      list(x = grad_out * s * (1.0 + xm * (1.0 - s)))
+    }
+    out$grad_fn <- grad_fn
+    ag_record(out, grad_fn, list(x = x), op = "silu", x_snap = x_snap)
+  }
+  out
+}
+
 #' Tanh activation
 #'
 #' @param x ag_tensor

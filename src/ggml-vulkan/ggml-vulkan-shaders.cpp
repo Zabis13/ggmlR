@@ -2297,7 +2297,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     // specialisation constant caps the kv length the shared-memory cache holds;
     // supports_op refuses anything longer rather than overrunning it.
     if (device->atomic_float_add) {
-        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_back_f32, "flash_attn_back_f32", flash_attn_back_f32_len, flash_attn_back_f32_data, "main", 6, sizeof(vk_op_flash_attn_back_push_constants), {1, 1, 1}, {128, 1024}, 1);
+        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_back_f32, "flash_attn_back_f32", flash_attn_back_f32_len, flash_attn_back_f32_data, "main", 6, sizeof(vk_op_flash_attn_back_push_constants), {128, 1, 1}, {128, 1024}, 1);
         // Stage-truncated copies for profiling (GGMLR_FAB_PROFILE). Same SPIR-V,
         // different PROFILE_STAGE specialisation constant.
         for (uint32_t st = 1; st <= 4; st++) {
@@ -2305,7 +2305,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             ggml_vk_create_pipeline2(device, device->pipeline_flash_attn_back_f32_prof[st],
                 prof_name, flash_attn_back_f32_len, flash_attn_back_f32_data,
                 "main", 6, sizeof(vk_op_flash_attn_back_push_constants),
-                {1, 1, 1}, {128, 1024, st}, 1);
+                {128, 1, 1}, {128, 1024, st}, 1);
 
         }
     }

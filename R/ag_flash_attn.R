@@ -41,29 +41,52 @@
 # differences (dq 2.6e-08, dk 2.1e-08, dv 4.7e-08). Getting the padding wrong
 # silently shifts dk and dv, which is why it is computed rather than assumed.
 
+# Accumulation precision of the forward, from ag_matmul_precision(): "f32"
+# marks the node GGML_PREC_F32, "default" leaves it exactly as ggml builds it.
+# The CPU computes in f32 either way. ag_capture re-records when it changes.
+#
+# ⚠️ ONLY THE ACCUMULATOR. On the coopmat path (FA_COOPMAT1 -- measured on an
+# RX 9070, RDNA4/RADV) Q.K^T and P.V are multiplied as f16 matrices whatever is
+# asked, and the forward came out 2.9e-4 (one sequence) / 7.0e-4 (batch of 5)
+# off the CPU with the flag and without it, identical to the last digit. Where
+# the accumulator IS the limit the flag helps; it cannot buy f32 operands.
+# ggml_flash_attn_back, our own kernel, is f32 throughout, so gradients are not
+# affected.
+.ag_flash_prec <- function(res) {
+  if (identical(.ag_device_state$matmul_precision, "f32"))
+    ggml_flash_attn_ext_set_prec(res, GGML_PREC_F32)
+  res
+}
+
 # Byte-aligned element offset of the next packed slice: ggml pads each tensor
 # in the packed buffer to a 16-byte boundary, so a slice of n floats occupies
 # ceiling(n * 4 / 16) * 4 elements.
 .ag_flash_pad <- function(n) ceiling(n * 4 / 16) * 16 / 4
 
-# [d_model, seq] matrix -> [d_head, seq, n_head] array.
+# [d_model, seq * batch] matrix -> [d_head, seq, n_head, batch] array.
 #
 # Row block h of the matrix is head h, matching how ag_multihead_attention
-# slices: rows (h-1)*d_head + 1 ... h*d_head.
-.ag_flash_split_heads <- function(m, n_heads) {
-  d_model <- nrow(m); seq_len_ <- ncol(m)
+# slices: rows (h-1)*d_head + 1 ... h*d_head. With batch > 1 the columns hold
+# the sequences one after another -- sample b in columns (b-1)*seq + 1 ...
+# b*seq -- which is what ggml's fourth axis is when the same bytes are read
+# 4D, so the batch costs no data movement either.
+.ag_flash_split_heads <- function(m, n_heads, batch = 1L) {
+  d_model <- nrow(m); seq_len_ <- ncol(m) %/% batch
   d_head  <- d_model %/% n_heads
   # A [d_model, seq] matrix is column-major: element (r, c) lives at
   # r + (c-1)*d_model, so simply reading the same memory as [d_head, n_head,
-  # seq] already groups consecutive rows into heads -- no data moves. Flash
-  # wants [d_head, seq, n_head], so only the permute costs anything.
-  aperm(array(m, dim = c(d_head, n_heads, seq_len_)), c(1L, 3L, 2L))
+  # seq, batch] already groups consecutive rows into heads -- no data moves.
+  # Flash wants [d_head, seq, n_head, batch], so only the permute costs.
+  aperm(array(m, dim = c(d_head, n_heads, seq_len_, batch)), c(1L, 3L, 2L, 4L))
 }
 
-# [d_head, seq, n_head] array -> [d_model, seq] matrix. Inverse of the above.
+# [d_head, seq, n_head, batch] array -> [d_model, seq * batch] matrix. Inverse
+# of the above. A 3D array is read as batch = 1.
 .ag_flash_join_heads <- function(a) {
-  d_head <- dim(a)[1L]; seq_len_ <- dim(a)[2L]; n_heads <- dim(a)[3L]
-  matrix(aperm(a, c(1L, 3L, 2L)), d_head * n_heads, seq_len_)
+  dm <- dim(a); if (length(dm) == 3L) dm <- c(dm, 1L)
+  d_head <- dm[1L]; seq_len_ <- dm[2L]; n_heads <- dm[3L]; batch <- dm[4L]
+  matrix(aperm(array(a, dm), c(1L, 3L, 2L, 4L)), d_head * n_heads,
+         seq_len_ * batch)
 }
 
 
@@ -128,19 +151,27 @@
   # would quietly run on Vulkan after the user asked for the CPU -- which
   # showed up as a 4e-04 disagreement with an R reference that turned out to be
   # f16 accumulation on the GPU, not a bug in the layout.
-  if (is.null(.ag_device_state$backend)) {
+  #
+  # The CPU backend made here is LOCAL to the call and freed on exit. It used to
+  # be stored in .ag_device_state$backend, where it outlived the call: a later
+  # ag_device("gpu") saw a non-NULL backend, skipped the Vulkan init, and every
+  # "gpu" op after that ran on the CPU -- with device == "gpu" and nothing
+  # reported. The CPU device needs no shared backend (ag_device("cpu") drops it).
+  backend <- .ag_device_state$backend
+  if (is.null(backend)) {
     if (identical(.ag_device_state$device, "cpu")) {
       # The thread count has to be applied to every CPU backend that is
       # created: without it ggml takes omp_get_max_threads(), which breaks the
       # CPU-time ratio R CMD check enforces.
-      .ag_device_state$backend <- ggml_backend_cpu_init()
-      ggml_backend_cpu_set_n_threads(.ag_device_state$backend,
-                                     ggml_get_n_threads())
+      backend <- ggml_backend_cpu_init()
+      ggml_backend_cpu_set_n_threads(backend, ggml_get_n_threads())
+      on.exit(tryCatch(ggml_backend_free(backend), error = function(e) NULL),
+              add = TRUE)
     } else {
       .ag_init_gpu_backend()
+      backend <- .ag_device_state$backend
     }
   }
-  backend   <- .ag_device_state$backend
 
   # ⚠️ THE BACKWARD IS F32-ONLY, AND THAT DECIDES THE DTYPE FOR THE WHOLE CALL.
   #
@@ -160,6 +191,9 @@
 
   dk <- dim(q)[1L]; n_q <- dim(q)[2L]; n_head <- dim(q)[3L]
   dv <- dim(v)[1L]; n_kv <- dim(k)[2L]
+  # Fourth axis: independent sequences. The mask, if any, is one [n_kv, n_q]
+  # matrix that ggml broadcasts over it (ne33 = 1).
+  nb <- if (length(dim(q)) >= 4L) dim(q)[4L] else 1L
 
   # Own context, freed here: these tensors are 3D and short-lived, so they have
   # no business in the shared residency context the 2D ops use.
@@ -167,9 +201,9 @@
   if (is.null(ctx)) stop("ggmlR: failed to create a context for flash attention.")
   on.exit(ggml_free(ctx), add = TRUE)
 
-  tq <- ggml_new_tensor_4d(ctx, ggml_type, dk, n_q,  n_head, 1L)
-  tk <- ggml_new_tensor_4d(ctx, ggml_type, dk, n_kv, n_head, 1L)
-  tv <- ggml_new_tensor_4d(ctx, ggml_type, dv, n_kv, n_head, 1L)
+  tq <- ggml_new_tensor_4d(ctx, ggml_type, dk, n_q,  n_head, nb)
+  tk <- ggml_new_tensor_4d(ctx, ggml_type, dk, n_kv, n_head, nb)
+  tv <- ggml_new_tensor_4d(ctx, ggml_type, dv, n_kv, n_head, nb)
 
   # The mask is [n_kv, n_batch] -- keys down the rows, queries across the
   # columns -- and ggml requires it in F16 and contiguous
@@ -181,12 +215,12 @@
     tm <- ggml_new_tensor_2d(ctx, GGML_TYPE_F16, nrow(mask), ncol(mask))
   }
 
-  fwd <- ggml_flash_attn_ext(ctx, tq, tk, tv, tm, scale, 0, 0)
+  fwd <- .ag_flash_prec(ggml_flash_attn_ext(ctx, tq, tk, tv, tm, scale, 0, 0))
 
   td <- NULL; bwd <- NULL
   if (!is.null(grad_out)) {
     # d carries the result's permuted layout: [n_embd_v, n_head, n_batch].
-    td  <- ggml_new_tensor_4d(ctx, ggml_type, dv, n_head, n_q, 1L)
+    td  <- ggml_new_tensor_4d(ctx, ggml_type, dv, n_head, n_q, nb)
     bwd <- ggml_flash_attn_back(ctx, tq, tk, tv, tm, td, scale)
   }
 
@@ -205,8 +239,8 @@
   if (!is.null(bwd)) ggml_graph_expand(graph, bwd)
   .ag_graph_compute(backend, graph, "flash attention")
 
-  # Result comes back permuted: [d_v, n_head, n_q].
-  out <- array(ggml_backend_tensor_get_data(fwd), c(dv, n_head, n_q))
+  # Result comes back permuted: [d_v, n_head, n_q, batch].
+  out <- array(ggml_backend_tensor_get_data(fwd), c(dv, n_head, n_q, nb))
 
   grads <- NULL
   if (!is.null(bwd)) {
@@ -260,7 +294,19 @@
 #'   for the gradient.
 #' @param causal \code{TRUE} builds the causal mask for you: query \code{j}
 #'   attends to keys \code{1..j}. Cannot be combined with \code{mask}.
-#' @return An \code{ag_tensor} of shape \code{[d_model, seq_q]}.
+#' @param batch Number of independent sequences packed side by side in the
+#'   columns (default 1). With \code{batch = B}, \code{q} is
+#'   \code{[d_model, B * seq_q]} and \code{k}, \code{v} are
+#'   \code{[d_model, B * seq_kv]}; sample \code{b} occupies columns
+#'   \code{(b-1)*seq + 1 ... b*seq} and attends only within itself. The whole
+#'   batch is still one fused call (ggml's fourth axis), not a loop, so a
+#'   transformer over many short sequences -- a batch of board positions, say --
+#'   costs one node. \code{mask} and \code{causal} describe ONE sequence
+#'   (\code{[seq_kv, seq_q]}) and apply to every sample. Everything around the
+#'   attention stays 2D: a linear layer applied to \code{[d_in, B * seq]} is
+#'   already per-token.
+#' @return An \code{ag_tensor} of shape \code{[d_model, seq_q]}
+#'   (\code{[d_model, batch * seq_q]} when \code{batch > 1}).
 #' @export
 #' @examples
 #' \donttest{
@@ -273,10 +319,18 @@
 #'   loss <- ag_mse_loss(out, ag_tensor(matrix(0, d_model, seq_len)))
 #' })
 #' backward(loss)
+#'
+#' # Four sequences of length 8 in one call
+#' qb <- ag_param(matrix(runif(d_model * 4 * seq_len, -1, 1), d_model, 4 * seq_len))
+#' ob <- ag_flash_attention(qb, qb, qb, n_heads = 4L, batch = 4L)
 #' }
 ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
-                               mask = NULL, causal = FALSE) {
+                               mask = NULL, causal = FALSE, batch = 1L) {
   n_heads <- as.integer(n_heads)
+  if (length(batch) != 1L || is.na(batch) || batch < 1 || batch != round(batch))
+    stop("ggmlR: ag_flash_attention() needs `batch` to be a positive whole ",
+         "number.", call. = FALSE)
+  batch <- as.integer(batch)
   resident <- .ag_flash_resident_ok()
 
   # Shapes without materialising: on the resident path q/k/v may be handles, and
@@ -303,8 +357,14 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
   d_head <- d_model %/% n_heads
   if (is.null(scale)) scale <- 1 / sqrt(d_head)
 
-  seq_q  <- .ag_ncol(qo)
-  seq_kv <- .ag_ncol(ko)
+  # seq_q / seq_kv are per SAMPLE from here on; the matrices are batch times
+  # as wide.
+  if (.ag_ncol(qo) %% batch != 0L || .ag_ncol(ko) %% batch != 0L)
+    stop("ggmlR: ag_flash_attention() needs the column counts of q (",
+         .ag_ncol(qo), ") and k/v (", .ag_ncol(ko), ") to be multiples of ",
+         "batch (", batch, ").", call. = FALSE)
+  seq_q  <- .ag_ncol(qo) %/% batch
+  seq_kv <- .ag_ncol(ko) %/% batch
   mask_m <- .ag_flash_mask(mask, causal, seq_q, seq_kv)
 
   needs_grad <- (is_ag_tensor(q) && q$requires_grad) ||
@@ -314,7 +374,7 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
   if (resident)
     return(.ag_flash_attention_resident(q, k, v, qo, ko, vo, n_heads, scale,
                                         mask_m, d_model, seq_q, seq_kv,
-                                        needs_grad))
+                                        needs_grad, batch))
 
   # ------------------------------------------------------------------ CPU path
   # Unchanged: its own context, its own compute, values through R. The graph
@@ -322,15 +382,16 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
   # nothing here for an `op` to buy.
   q_data <- qo; k_data <- ko; v_data <- vo
 
-  qh <- .ag_flash_split_heads(q_data, n_heads)
-  kh <- .ag_flash_split_heads(k_data, n_heads)
-  vh <- .ag_flash_split_heads(v_data, n_heads)
+  qh <- .ag_flash_split_heads(q_data, n_heads, batch)
+  kh <- .ag_flash_split_heads(k_data, n_heads, batch)
+  vh <- .ag_flash_split_heads(v_data, n_heads, batch)
 
   res <- .ag_flash_run(qh, kh, vh, scale, mask = mask_m)
 
-  # Result arrives as [d_head, n_head, seq]; ungroup to [d_head, seq, n_head]
-  # before joining the heads back into a [d_model, seq] matrix.
-  out_mat <- .ag_flash_join_heads(aperm(res$out, c(1L, 3L, 2L)))
+  # Result arrives as [d_head, n_head, seq, batch]; ungroup to
+  # [d_head, seq, n_head, batch] before joining the heads back into a
+  # [d_model, batch * seq] matrix.
+  out_mat <- .ag_flash_join_heads(aperm(res$out, c(1L, 3L, 2L, 4L)))
 
   out <- ag_tensor(out_mat, device = .ag_device_state$device,
                    dtype = .ag_device_state$dtype)
@@ -339,10 +400,10 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
   if (out$requires_grad) {
     q_ref <- q; k_ref <- k; v_ref <- v
     grad_fn <- function(grad_out) {
-      # grad_out is [d_model, seq_q] in R terms; flash wants the result's own
-      # permuted layout [d_head, n_head, seq_q].
-      gh <- aperm(.ag_flash_split_heads(.ag_as_matrix(grad_out), n_heads),
-                  c(1L, 3L, 2L))
+      # grad_out is [d_model, batch * seq_q] in R terms; flash wants the
+      # result's own permuted layout [d_head, n_head, seq_q, batch].
+      gh <- aperm(.ag_flash_split_heads(.ag_as_matrix(grad_out), n_heads, batch),
+                  c(1L, 3L, 2L, 4L))
       # Same mask as the forward pass: a gradient computed against a different
       # mask than the values it belongs to is wrong in a way nothing reports.
       g  <- .ag_flash_run(qh, kh, vh, scale, grad_out = gh, mask = mask_m)$grads
@@ -437,23 +498,28 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
 # yields a view, which flash_attn_ext will not take. Per the permute contract in
 # CLAUDE.md the arguments are DESTINATION positions, so sending source axis 1
 # (n_head) to position 2 and source axis 2 (seq) to position 1 is (0, 2, 1, 3).
-.ag_flash_to_heads <- function(ctx, t2d, d_head, n_heads, seq_len_) {
-  t3 <- ggml_reshape_3d(ctx, t2d, d_head, n_heads, seq_len_)
-  ggml_cont(ctx, ggml_permute(ctx, t3, 0L, 2L, 1L, 3L))
+#
+# With batch > 1 the [d_model, batch * seq] tensor is read as
+# [d_head, n_heads, seq, batch]: the batch is ggml's fourth axis, which the
+# (0, 2, 1, 3) permute leaves where it is.
+.ag_flash_to_heads <- function(ctx, t2d, d_head, n_heads, seq_len_, batch = 1L) {
+  t4 <- ggml_reshape_4d(ctx, t2d, d_head, n_heads, seq_len_, batch)
+  ggml_cont(ctx, ggml_permute(ctx, t4, 0L, 2L, 1L, 3L))
 }
 
-# Flash layout [d_head, seq, n_head] -> [d_model, seq] tensor. Inverse of the
-# above: send source axis 1 (seq) to position 2 and axis 2 (n_head) to
-# position 1, then read the [d_head, n_head, seq] result as [d_model, seq].
-.ag_flash_from_heads <- function(ctx, t3d, d_head, n_heads, seq_len_) {
+# Flash layout [d_head, seq, n_head, batch] -> [d_model, batch * seq] tensor.
+# Inverse of the above: send source axis 1 (seq) to position 2 and axis 2
+# (n_head) to position 1, then read the [d_head, n_head, seq, batch] result as
+# [d_model, batch * seq].
+.ag_flash_from_heads <- function(ctx, t3d, d_head, n_heads, seq_len_, batch = 1L) {
   c3 <- ggml_cont(ctx, ggml_permute(ctx, t3d, 0L, 2L, 1L, 3L))
-  ggml_reshape_2d(ctx, c3, d_head * n_heads, seq_len_)
+  ggml_reshape_2d(ctx, c3, d_head * n_heads, seq_len_ * batch)
 }
 
-# The forward result arrives as [d_v, n_head, n_q] -- head and sequence are
-# SWAPPED relative to q/k/v, which the file header flags as real and verified.
-# Send axis 1 (n_head) to position 2 and axis 2 (n_q) to position 1 to reach
-# [d_v, n_q, n_head], the layout .ag_flash_from_heads expects.
+# The forward result arrives as [d_v, n_head, n_q, batch] -- head and sequence
+# are SWAPPED relative to q/k/v, which the file header flags as real and
+# verified. Send axis 1 (n_head) to position 2 and axis 2 (n_q) to position 1
+# to reach [d_v, n_q, n_head, batch], the layout .ag_flash_from_heads expects.
 .ag_flash_unswap <- function(ctx, t3d) {
   ggml_cont(ctx, ggml_permute(ctx, t3d, 0L, 2L, 1L, 3L))
 }
@@ -471,7 +537,7 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
 # is what lets attention join a fused forward+backward graph instead of forcing
 # a compute in the middle of one.
 .ag_flash_build_fwd <- function(ctx, ggml_type, q, k, v, n_heads, scale, mask_m,
-                                d_model, seq_q, seq_kv) {
+                                d_model, seq_q, seq_kv, batch = 1L) {
   d_head <- d_model %/% n_heads
   uploads <- list()
 
@@ -485,13 +551,13 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
     tt
   }
 
-  tq2 <- operand(q, seq_q)
-  tk2 <- operand(k, seq_kv)
-  tv2 <- operand(v, seq_kv)
+  tq2 <- operand(q, seq_q  * batch)
+  tk2 <- operand(k, seq_kv * batch)
+  tv2 <- operand(v, seq_kv * batch)
 
-  fq <- .ag_flash_to_heads(ctx, tq2, d_head, n_heads, seq_q)
-  fk <- .ag_flash_to_heads(ctx, tk2, d_head, n_heads, seq_kv)
-  fv <- .ag_flash_to_heads(ctx, tv2, d_head, n_heads, seq_kv)
+  fq <- .ag_flash_to_heads(ctx, tq2, d_head, n_heads, seq_q,  batch)
+  fk <- .ag_flash_to_heads(ctx, tk2, d_head, n_heads, seq_kv, batch)
+  fv <- .ag_flash_to_heads(ctx, tv2, d_head, n_heads, seq_kv, batch)
 
   # The mask is a constant of the graph, not a tracked value: it is built from
   # `causal` or supplied by the caller and never receives a gradient. ggml wants
@@ -502,11 +568,11 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
     uploads[[length(uploads) + 1L]] <- list(ptr = tm, val = as.numeric(mask_m))
   }
 
-  res <- ggml_flash_attn_ext(ctx, fq, fk, fv, tm, scale, 0, 0)
+  res <- .ag_flash_prec(ggml_flash_attn_ext(ctx, fq, fk, fv, tm, scale, 0, 0))
 
-  # [d_v, n_head, n_q] -> [d_v, n_q, n_head] -> [d_model, seq_q].
+  # [d_v, n_head, n_q, B] -> [d_v, n_q, n_head, B] -> [d_model, B * seq_q].
   out <- .ag_flash_from_heads(ctx, .ag_flash_unswap(ctx, res),
-                              d_head, n_heads, seq_q)
+                              d_head, n_heads, seq_q, batch)
 
   list(out = out, fq = fq, fk = fk, fv = fv, tm = tm, uploads = uploads)
 }
@@ -531,21 +597,23 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
   d_model <- nd$d_model; n_heads <- nd$n_heads
   d_head  <- d_model %/% n_heads
   seq_q   <- nd$seq_q;  seq_kv  <- nd$seq_kv
+  # Tapes recorded before `batch` existed carry no field: one sequence.
+  batch   <- if (is.null(nd$batch)) 1L else nd$batch
 
-  # g [d_model, seq_q] -> [d_head, seq_q, n_head] -> [d_head, n_head, seq_q].
-  gh <- .ag_flash_to_heads(ctx, g, d_head, n_heads, seq_q)
+  # g [d_model, B*seq_q] -> [d_head, seq_q, n_head, B] -> [d_head, n_head, seq_q, B].
+  gh <- .ag_flash_to_heads(ctx, g, d_head, n_heads, seq_q, batch)
   td <- .ag_flash_unswap(ctx, gh)
 
   packed <- ggml_flash_attn_back(ctx, nd$fq, nd$fk, nd$fv, nd$tm, td, nd$scale)
 
-  nq <- d_head * seq_q  * n_heads
-  nk <- d_head * seq_kv * n_heads
+  nq <- d_head * seq_q  * n_heads * batch
+  nk <- d_head * seq_kv * n_heads * batch
   # dv == d_head here because ag_flash_attention() requires q, k and v to share
   # d_model and splits all three by the same n_heads. ggml itself allows
   # dv != dk; if this wrapper ever does, this line is the one that has to grow a
   # separate d_v -- getting it wrong shifts nothing in dq or dk and silently
   # truncates dv.
-  nv <- d_head * seq_kv * n_heads
+  nv <- d_head * seq_kv * n_heads * batch
   off_k <- .ag_flash_pad(nq)
   off_v <- off_k + .ag_flash_pad(nk)
 
@@ -557,8 +625,8 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
 
   slice <- function(n, off_elems, seq_len_) {
     vw <- ggml_view_1d(ctx, packed, n, off_elems * esz)
-    t3 <- ggml_reshape_3d(ctx, vw, d_head, seq_len_, n_heads)
-    .ag_flash_from_heads(ctx, t3, d_head, n_heads, seq_len_)
+    t4 <- ggml_reshape_4d(ctx, vw, d_head, seq_len_, n_heads, batch)
+    .ag_flash_from_heads(ctx, t4, d_head, n_heads, seq_len_, batch)
   }
 
   list(q = slice(nq, 0,     seq_q),
@@ -576,7 +644,7 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
 # plus a mask in a different dtype. The 3D special case stays here.
 .ag_flash_attention_resident <- function(q, k, v, qo, ko, vo, n_heads, scale,
                                          mask_m, d_model, seq_q, seq_kv,
-                                         needs_grad) {
+                                         needs_grad, batch = 1L) {
   ggml_type <- .ag_dtype_to_ggml(.ag_compute_dtype())
 
   # Descriptor budget: three operands, three head conversions (reshape+permute
@@ -586,7 +654,7 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
   ctx <- .ag_ctx_ensure(32L, scope = "pass")
 
   b <- .ag_flash_build_fwd(ctx, ggml_type, qo, ko, vo, n_heads, scale, mask_m,
-                           d_model, seq_q, seq_kv)
+                           d_model, seq_q, seq_kv, batch)
 
 
   # Deferral, on the same terms as every other op: if the queue is open, this
@@ -596,7 +664,7 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
   # if its backward were emittable.
   if (.ag_defer_ok("pass", NULL)) {
     .ag_defer_push(b$out, b$uploads)
-    h <- .ag_handle(b$out, c(d_model, seq_q), scope = "pass", pending = TRUE)
+    h <- .ag_handle(b$out, c(d_model, seq_q * batch), scope = "pass", pending = TRUE)
   } else {
     if (.ag_defer_len()) .ag_defer_drain()
     .ag_ctx_flush(ctx, scope = "pass")
@@ -609,7 +677,7 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
     on.exit(ggml_free(ctx_graph), add = TRUE)
     graph <- ggml_build_forward_expand(ctx_graph, b$out)
     .ag_graph_compute(.ag_device_state$backend, graph, "flash attention (deferred)")
-    h <- .ag_handle(b$out, c(d_model, seq_q), scope = "pass")
+    h <- .ag_handle(b$out, c(d_model, seq_q * batch), scope = "pass")
   }
   out <- .ag_tensor_from_handle(h, dtype = .ag_device_state$dtype)
   out$requires_grad <- needs_grad
@@ -622,11 +690,11 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
     q_ref <- q; k_ref <- k; v_ref <- v
     fq <- b$fq; fk <- b$fk; fv <- b$fv; tm <- b$tm
     grad_fn <- function(grad_out) {
-      qh <- .ag_flash_split_heads(.ag_as_matrix(.ag_data(q_ref)), n_heads)
-      kh <- .ag_flash_split_heads(.ag_as_matrix(.ag_data(k_ref)), n_heads)
-      vh <- .ag_flash_split_heads(.ag_as_matrix(.ag_data(v_ref)), n_heads)
-      gh <- aperm(.ag_flash_split_heads(.ag_as_matrix(grad_out), n_heads),
-                  c(1L, 3L, 2L))
+      qh <- .ag_flash_split_heads(.ag_as_matrix(.ag_data(q_ref)), n_heads, batch)
+      kh <- .ag_flash_split_heads(.ag_as_matrix(.ag_data(k_ref)), n_heads, batch)
+      vh <- .ag_flash_split_heads(.ag_as_matrix(.ag_data(v_ref)), n_heads, batch)
+      gh <- aperm(.ag_flash_split_heads(.ag_as_matrix(grad_out), n_heads, batch),
+                  c(1L, 3L, 2L, 4L))
       g  <- .ag_flash_run(qh, kh, vh, scale, grad_out = gh, mask = mask_m)$grads
       list(
         q = if (is_ag_tensor(q_ref) && q_ref$requires_grad)
@@ -650,7 +718,7 @@ ag_flash_attention <- function(q, k, v, n_heads, scale = NULL,
     ag_record(out, grad_fn, list(q = q, k = k, v = v), op = "flash_attn",
               fq = fq, fk = fk, fv = fv, tm = tm, scale = scale,
               n_heads = n_heads, d_model = d_model,
-              seq_q = seq_q, seq_kv = seq_kv)
+              seq_q = seq_q, seq_kv = seq_kv, batch = batch)
   }
   out
 }

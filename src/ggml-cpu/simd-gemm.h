@@ -240,10 +240,6 @@ static inline void simd_gemm(
     rvv_simd_gemm_dispatch_tail<GEMM_RM - 1>(C, A, B, K, N, KN, remaining_rows);
 }
 
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
-
 #else // scalar path
 
 static inline void simd_gemm(

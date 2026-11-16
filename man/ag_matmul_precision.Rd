@@ -21,6 +21,12 @@ f16: relative error around \code{4e-4}, while up to 8 columns (and the CPU)
 give f32 accuracy (~\code{1e-7}). \code{"f32"} asks every \code{ag_matmul}
 (forward, and the input gradient of the graph backward) for the f32-tile
 kernel, so the result no longer depends on the batch size or the device.
+The same setting asks \code{\link{ag_flash_attention}} for f32 accumulation
+in its forward. That is a request, not a guarantee: on cooperative-matrix
+devices (e.g. RDNA4 under RADV) Vulkan multiplies the attention operands as
+f16 whatever the accumulator, and the forward stays about \code{3e-4} to
+\code{7e-4} off an f32 reference with or without it. The backward of
+\code{ag_flash_attention} is f32 regardless.
 }
 \details{
 Cost: none measurable on small layers (RL policies, tens to hundreds of

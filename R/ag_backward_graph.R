@@ -272,7 +272,7 @@ ag_backward_resident <- function(on = TRUE) {
 .AG_BWD_GRAPH_OPS <- c("matmul", "add", "loss_const", "elemwise_mul",
                        "transpose", "softmax", "scale", "mul", "flash_attn",
                        "sub", "log", "sum", "log_softmax", "slice_rows",
-                       "concat_rows")
+                       "concat_rows", "silu", "rms_norm")
 
 # Can this tape run as one graph?
 #
@@ -586,6 +586,22 @@ ag_backward_profile_report <- function() {
       x <- inp$x
       if (is_ag_tensor(x) && isTRUE(x$requires_grad))
         accumulate(as.character(x$id), ggml_div(ctx, g, const(nd$x_snap)))
+
+    } else if (identical(nd$op, "silu")) {
+      # dx = g * s * (1 + x * (1 - s)), s = sigmoid(x): one ggml_silu_back
+      # node. Argument order is (dy, x), as ggml-graph.c's own SILU rule calls it.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad))
+        accumulate(as.character(x$id), ggml_silu_back(ctx, g, const(nd$x_snap)))
+
+    } else if (identical(nd$op, "rms_norm")) {
+      # dx = (g - y * mean(g * y)) / rms(x) per column: one ggml_rms_norm_back
+      # node, (dy, x, eps) as in ggml-graph.c's RMS_NORM rule. ne0 is the R
+      # matrix's row axis, the axis the forward normalised over.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad))
+        accumulate(as.character(x$id),
+                   ggml_rms_norm_back(ctx, g, const(nd$x_snap), nd$eps))
 
     } else if (identical(nd$op, "log_softmax")) {
       # dx = g - p * colSums(g), p = exp(logp). Rebuilt from the logp snapshot

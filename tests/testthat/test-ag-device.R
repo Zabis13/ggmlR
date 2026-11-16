@@ -496,3 +496,20 @@ test_that("switching to the CPU releases the GPU backend", {
                ggmlR:::.ag_data(a) %*% ggmlR:::.ag_data(b),
                tolerance = 1e-2)
 })
+
+test_that("flash attention on the CPU does not leave a CPU backend for ag_device('gpu')", {
+  # .ag_flash_run used to store the CPU backend it created in the shared state;
+  # ag_device("gpu") then saw a non-NULL backend, skipped the Vulkan init, and
+  # "gpu" ops ran on the CPU without a word.
+  skip_if_not(ggml_vulkan_available(), "Vulkan not available")
+  skip_if_not(ggml_vulkan_device_count() > 0, "No Vulkan devices")
+  local_cpu_device()
+
+  ag_device("cpu")
+  m <- matrix(runif(32), 8, 4)
+  invisible(ag_flash_attention(ag_tensor(m), ag_tensor(m), ag_tensor(m), 2L))
+  expect_null(ggmlR:::.ag_device_state$backend)
+
+  ag_device("gpu")
+  expect_false(identical(ggml_backend_name(ggmlR:::.ag_device_state$backend), "CPU"))
+})

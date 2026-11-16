@@ -53,6 +53,30 @@ test_that("captured forward equals the uncaptured one and the CPU", {
   expect_equal(out3$h, pmax(w1 %*% x2 + as.vector(b1), 0), tolerance = 1e-5)
 })
 
+test_that("a constant in params that was used eagerly first is still recorded", {
+  # Using the constant on the device before the first call gave it a pass-pool
+  # handle. The recording swaps the pass pool for its own, so that handle was
+  # not live inside it, the constant was uploaded during the recording, and the
+  # guard refused -- although it was declared in params. It is now moved to the
+  # persistent pool before recording, like a constant that was never used.
+  skip_if_no_gpu_cap()
+  set.seed(5)
+  cm <- matrix(rnorm(4 * 3), 4, 3); x <- matrix(rnorm(3 * 2), 3, 2)
+
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+  prev_prec <- ag_matmul_precision("f32")
+  on.exit(ag_matmul_precision(prev_prec), add = TRUE)
+  C <- ag_tensor(cm)
+  invisible(as.matrix(ag_matmul(C, ag_tensor(x))))        # eager use first
+  f <- ag_capture(function(x) ag_matmul(C, x), params = list(C))
+  on.exit(ag_capture_free(f), add = TRUE)
+
+  expect_equal(f(x = x), cm %*% x, tolerance = 1e-5)
+  x2 <- matrix(rnorm(3 * 2), 3, 2)
+  expect_equal(f(x = x2), cm %*% x2, tolerance = 1e-5)
+})
+
 test_that("a new input shape records again; the old recording still works", {
   skip_if_no_gpu_cap()
   ag_device("gpu")

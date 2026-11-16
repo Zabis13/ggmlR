@@ -2065,7 +2065,7 @@ nn_build_functional_node <- function(node, built_tensors, built_shapes,
 nn_build_functional_graph <- function(model, batch_size, training = FALSE,
                                       logits_output = FALSE) {
   backend      <- model$compilation$backend
-  saved_weights <- model$node_weights  # NULL before first fit, list after
+  saved_weights <- model[["node_weights"]]  # [[ ]]: $ would partially match node_weights_data; NULL before first fit, list after
   # R-vector weights from ggml_load_model (node_id -> named list of numeric)
   saved_weights_data <- model$node_weights_data
 

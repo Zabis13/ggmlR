@@ -1,3 +1,9 @@
+# ggmlR 0.8.9.2
+
+* Batched transformers on the GPU: `ag_flash_attention(batch = )` attends over many sequences in one call, and new `ag_silu()` / `ag_rms_norm()` complete the transformer block.
+* `ggml_save_model()` no longer loses the weights of a reloaded functional model.
+* `ag_device("gpu")` no longer stays on the CPU after attention ran on the CPU.
+
 # ggmlR 0.8.9.1
 
 * New `ag_rand()` / `ggml_rand()`: uniform, Gumbel and normal random numbers computed on the device from a two-number key, the same on the CPU and on Vulkan.

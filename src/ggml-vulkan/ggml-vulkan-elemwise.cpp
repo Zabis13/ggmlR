@@ -1384,8 +1384,17 @@ static void ggml_vk_flash_attn_back(ggml_backend_vk_context * ctx, vk_context& s
     ggml_vk_buffer_memset_async(subctx, dst_buf.buffer, dst_buf.offset, 0, ggml_nbytes(dst));
     ggml_vk_sync_buffers(ctx, subctx);
 
-    // One workgroup per query row; the pipeline's workgroup is BLOCK_SIZE wide.
-    const std::array<uint32_t, 3> elements = { N * H * B * 128u, 1, 1 };
+    // One workgroup per query row; the pipeline's workgroup is BLOCK_SIZE (128)
+    // wide and its wg_denoms are {128,1,1}, so elements[0] counts invocations.
+    // (With wg_denoms {1,1,1}, as before, N*H*B*128 meant 128x the workgroups,
+    // all but one in 128 exiting on iq3 >= B -- and a batched call hit the
+    // maxComputeWorkGroupCount assert.) Rows beyond 65535 -- the smallest x
+    // limit Vulkan allows -- spill into y; the shader linearises (x, y) back.
+    const uint32_t rows = N * H * B;
+    const uint32_t wg_x = std::min<uint32_t>(rows, 65535u);
+    const uint32_t wg_y = CEIL_DIV(rows, wg_x);
+    GGML_ASSERT(wg_y <= ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
+    const std::array<uint32_t, 3> elements = { wg_x * 128u, wg_y, 1 };
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
         {q_buf, k_buf, v_buf, m_buf, d_buf, dst_buf}, pc, elements);

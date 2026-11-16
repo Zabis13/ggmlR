@@ -793,6 +793,32 @@ for (epoch in 1:50) {
 }
 ```
 
+### Batched transformer block
+
+A batch of `n` sequences of `s` tokens is one `[d_model, n * s]` matrix, each
+sequence in adjacent columns. Linear layers are per-token as they are;
+`ag_flash_attention(batch = n)` keeps every sequence to itself in one fused
+call. With `ag_rms_norm()` and `ag_silu()` (the norm and activation of
+`ggml_layer_transformer_block()`) the whole block runs in the graph backward,
+so it can be recorded with `ag_capture_step()`.
+
+```r
+d <- 64L; n <- 512L; s <- 20L
+rms1 <- ag_rms_norm(d); rms2 <- ag_rms_norm(d)
+Wq <- ag_param(matrix(rnorm(d * d, sd = 0.1), d, d))   # likewise Wk, Wv, Wo, W1, W2
+
+block <- function(h) {                                  # h: [d, n * s]
+  a <- rms1$forward(h)
+  h <- ag_add(h, ag_matmul(Wo, ag_flash_attention(ag_matmul(Wq, a), ag_matmul(Wk, a),
+                                                  ag_matmul(Wv, a), n_heads = 4L,
+                                                  batch = n)))
+  ag_add(h, ag_matmul(W2, ag_silu(ag_matmul(W1, rms2$forward(h)))))
+}
+```
+
+On Vulkan devices with cooperative matrices the attention forward multiplies
+in f16 (about `3e-4`–`7e-4` off an f32 reference); its backward is f32.
+
 ### Data-parallel training
 
 `dp_train()` splits data across N replicas, averages gradients, and keeps weights in sync automatically.
