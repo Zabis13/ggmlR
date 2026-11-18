@@ -516,6 +516,44 @@ ag_backward_profile_report <- function() {
     g
   }
 
+  # Fused bias gradient (GGML_OP_OUT_PROD_ROWSUM). A dense layer is recorded
+  # as add(matmul(W, x), b) with b [m,1] broadcast over the columns; its dW is
+  # out_prod(g, x) and its db the row sums of the same g. When the matmul's
+  # output feeds nothing but that add, g is the same tensor at both nodes, and
+  # one ggml_out_prod_rowsum(g, x) gives [dW | db] in one pass over g. The add
+  # comes first in this reverse walk, so it leaves db to the matmul
+  # (fused_bias[matmul output id] = what the matmul needs for it), and the
+  # matmul splits the result into two views. options(ggmlR.bias_grad_fuse =
+  # FALSE) turns it off.
+  consumers <- new.env(hash = TRUE, parent = emptyenv())
+  producer  <- new.env(hash = TRUE, parent = emptyenv())
+  for (nd0 in nodes) {
+    assign(as.character(nd0$output_id), nd0, envir = producer)
+    for (t0 in nd0$inputs) if (is_ag_tensor(t0)) {
+      k0 <- as.character(t0$id)
+      assign(k0, get0(k0, envir = consumers, inherits = FALSE, ifnotfound = 0L) + 1L,
+             envir = consumers)
+    }
+  }
+  fused_bias <- new.env(hash = TRUE, parent = emptyenv())
+  # Measured 2026-11-18 (RX 9070, PPO captured update, one process,
+  # interleaved): the separate db node was 0.4-5% of the update; fusing takes
+  # ~1.5% off pendulum and is within noise on tic-tac-toe -- kept for wider
+  # reductions (long K, convolutions) where the separate node costs more.
+  fuse_on <- isTRUE(getOption("ggmlR.bias_grad_fuse", TRUE))
+  # The add node `nd` with bias B: can its db come from the matmul below it?
+  can_fuse_bias <- function(nd, A, B) {
+    if (!fuse_on || !is_ag_tensor(A) || !is_ag_tensor(B)) return(FALSE)
+    bdim <- .ag_dim(nd$b_orig)
+    if (is.null(bdim) || bdim[2L] != 1L || nd$out_nc <= 1L || bdim[1L] != nd$out_nr)
+      return(FALSE)
+    mm <- get0(as.character(A$id), envir = producer, inherits = FALSE)
+    if (is.null(mm) || !identical(mm$op, "matmul")) return(FALSE)
+    W <- mm$inputs$A
+    is_ag_tensor(W) && isTRUE(W$requires_grad) &&
+      identical(get0(as.character(A$id), envir = consumers, inherits = FALSE), 1L)
+  }
+
   # Seed: dL/dL = 1. A 1x1 tensor, so the scalar rules below can multiply by it
   # in the graph rather than reading it back.
   assign(as.character(loss$id), const(matrix(1.0)), envir = gnodes)
@@ -539,7 +577,24 @@ ag_backward_profile_report <- function() {
       # shapes -- and passes silently on square ones, which is exactly how it
       # first slipped through (the PoC chain was 512x512 throughout). Both
       # rules below are verified against R on m=5, k=4, n=3, all distinct.
-      if (is_ag_tensor(A) && isTRUE(A$requires_grad))
+      fb <- get0(as.character(nd$output_id), envir = fused_bias, inherits = FALSE)
+      if (!is.null(fb)) {
+        # dW and db of a dense layer in one node: [m, k + 1], dW the first k
+        # columns, db the last; both contiguous, so plain views. F32 only --
+        # with an f16/bf16 compute dtype the two take the separate path.
+        xs <- const(nd$b_snap)
+        if (ggml_tensor_type(g) == GGML_TYPE_F32 && ggml_tensor_type(xs) == GGML_TYPE_F32) {
+          r   <- ggml_out_prod_rowsum(ctx, g, xs)
+          .ag_bwd$fused_bias <- (.ag_bwd$fused_bias %||% 0L) + 1L   # for tests
+          sh  <- ggml_tensor_shape(r)
+          nb1 <- ggml_tensor_nb(r)[2L]
+          accumulate(as.character(A$id), ggml_view_2d(ctx, r, sh[1L], sh[2L] - 1L, nb1, 0))
+          accumulate(fb$b_id, ggml_view_2d(ctx, r, sh[1L], 1L, nb1, (sh[2L] - 1L) * nb1))
+        } else {
+          accumulate(as.character(A$id), ggml_out_prod(ctx, g, xs))
+          accumulate(fb$b_id, reduce_b(g, fb$b_orig, fb$out_nr, fb$out_nc))
+        }
+      } else if (is_ag_tensor(A) && isTRUE(A$requires_grad))
         accumulate(as.character(A$id), ggml_out_prod(ctx, g, const(nd$b_snap)))
       # dB = t(A) %*% g, shapes [k,m]x[m,n] -> [k,n]. Shared axis m sits in
       # ne[0] of both A[m,k] and g[m,n], so this one IS mul_mat -- and needs no
@@ -552,12 +607,21 @@ ag_backward_profile_report <- function() {
       if (is_ag_tensor(A) && isTRUE(A$requires_grad))
         accumulate(as.character(A$id), g)
       if (is_ag_tensor(B) && isTRUE(B$requires_grad)) {
+        if (can_fuse_bias(nd, A, B)) {
+          # db comes with dW from the matmul (see fused_bias above); what it
+          # needs if it has to fall back to reduce_b goes along
+          assign(as.character(A$id),
+                 list(b_id = as.character(B$id), b_orig = nd$b_orig,
+                      out_nr = nd$out_nr, out_nc = nd$out_nc),
+                 envir = fused_bias)
+        } else {
         # B may have been broadcast over A in the forward pass -- the bias case
         # of ag_linear -- and then its gradient is g summed over the axis that
         # was broadcast. Both directions are emitted here; neither needs a
         # download (reduce_b above).
         accumulate(as.character(B$id),
                    reduce_b(g, nd$b_orig, nd$out_nr, nd$out_nc))
+        }
       }
 
     } else if (identical(nd$op, "sub")) {

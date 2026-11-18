@@ -792,6 +792,11 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
 
         break;
 
+    case GGML_OP_OUT_PROD_ROWSUM:   // ggmlR
+        ggml_vk_out_prod_rowsum(ctx, compute_ctx, node);
+
+        break;
+
     case GGML_OP_GET_ROWS_BACK:
         ggml_vk_get_rows_back(ctx, compute_ctx, node);
 
@@ -4947,6 +4952,7 @@ static bool ggml_backend_vk_device_supports_op_impl(ggml_backend_dev_t dev, cons
                 return true;
             }
         case GGML_OP_OUT_PROD:
+        case GGML_OP_OUT_PROD_ROWSUM:   // ggmlR: same kernel, same constraints
             // ggmlR: dst and both sources must be F32, and the innermost stride
             // of src0 and dst must be the element size -- the same constraints
             // the CPU kernel asserts. A transposed src1 IS supported (the

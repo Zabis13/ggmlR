@@ -338,6 +338,70 @@ void ggml_compute_forward_out_prod(
     }
 }
 
+// ggml_compute_forward_out_prod_rowsum (ggmlR extension)
+//
+// dst[:, i1] = sum_k src0[:, k] * src1[i1, k] for i1 < ne10, and
+// dst[:, ne10] = sum_k src0[:, k] (see ggml_out_prod_rowsum()). Each thread
+// owns whole dst columns and sums k in ascending order, so the result does not
+// depend on the thread count.
+
+void ggml_compute_forward_out_prod_rowsum(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(ne0 == ne00);
+    GGML_ASSERT(ne1 == ne10 + 1);
+    GGML_ASSERT(ne2 == ne12);
+    GGML_ASSERT(ne3 == ne13);
+    GGML_ASSERT(ne2 % ne02 == 0);
+    GGML_ASSERT(ne3 % ne03 == 0);
+    GGML_ASSERT(nb00 == sizeof(float));
+    GGML_ASSERT(nb0  == sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t dps2 = ne2 / ne02;
+    const int64_t dps3 = ne3 / ne03;
+
+    // dst columns, the row-sum one included
+    const int64_t nr  = ne1*ne2*ne3;
+    const int64_t dr  = (nr + nth - 1)/nth;
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i3 = ir/(ne2*ne1);
+        const int64_t i2 = (ir - i3*ne2*ne1)/ne1;
+        const int64_t i1 = (ir - i3*ne2*ne1 - i2*ne1);
+
+        const int64_t i02 = i2 / dps2;
+        const int64_t i03 = i3 / dps3;
+
+        float * d = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3));
+        ggml_vec_set_f32(ne0, d, 0.0f);
+
+        for (int64_t k = 0; k < ne01; ++k) {
+            const float * s0 = (const float *) ((const char *) src0->data + (k*nb01 + i02*nb02 + i03*nb03));
+            if (i1 < ne10) {
+                const float * s1 = (const float *) ((const char *) src1->data + (i1*nb10 + k*nb11 + i2*nb12 + i3*nb13));
+                ggml_vec_mad_f32(ne0, d, s0, *s1);
+            } else {
+                ggml_vec_acc_f32(ne0, d, s0);
+            }
+        }
+    }
+}
+
 // ggml_compute_forward_scale
 
 static void ggml_compute_forward_scale_f32(

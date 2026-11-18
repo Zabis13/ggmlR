@@ -49,15 +49,14 @@ test_that("FNN kNN path and distance-matrix fallback build the same graph", {
   expect_equal(g_fnn$weight[o1], g_ref$weight[o2], tolerance = 1e-6)
 })
 
-# Our kNN graph must agree with uwot's: both find the k nearest neighbours of
-# each point under exact Euclidean distance, so the neighbour sets should
-# essentially coincide. We compare the raw kNN (the input to the fuzzy set) via
-# the same distance matrix the graph builder uses, against uwot's exact NN
-# (ret_nn, nn_method = "fnn" for an exact brute-force search). Ties at equal
-# distance can swap one or two neighbours, so we require high overlap, not
+# Our kNN graph must agree with an exact reference: both find the k nearest
+# neighbours of each point under exact Euclidean distance, so the neighbour sets
+# should essentially coincide. We compare the raw kNN (the input to the fuzzy
+# set) via the same distance matrix the graph builder uses, against FNN's exact
+# brute-force search (the same search uwot runs for nn_method = "fnn"). Ties at
+# equal distance can swap one or two neighbours, so we require high overlap, not
 # identity. CPU-only: this validates the graph engine, independent of the GPU.
-test_that("kNN graph overlaps uwot's exact nearest neighbours", {
-  skip_if_not_installed("uwot")
+test_that("kNN graph overlaps exact (FNN brute-force) nearest neighbours", {
   skip_if_not_installed("FNN")
 
   set.seed(7)
@@ -68,11 +67,8 @@ test_that("kNN graph overlaps uwot's exact nearest neighbours", {
   D <- as.matrix(stats::dist(X))               # CPU exact, what the builder uses
   ours <- t(apply(D, 1, function(r) order(r)[2:(k + 1L)]))
 
-  # uwot: exact NN indices (column 1 is self, drop it)
-  nn <- uwot::umap(X, n_neighbors = k + 1L, nn_method = "fnn",
-                   ret_nn = TRUE, ret_model = FALSE, init = "random",
-                   n_epochs = 0L)$nn$euclidean$idx
-  theirs <- nn[, -1, drop = FALSE]
+  # FNN: exact NN indices; get.knn already excludes the point itself
+  theirs <- FNN::get.knn(X, k = k, algorithm = "brute")$nn.index
 
   overlap <- mean(vapply(seq_len(nrow(X)), function(i)
     length(intersect(ours[i, ], theirs[i, ])) / k, numeric(1)))

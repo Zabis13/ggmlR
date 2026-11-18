@@ -3076,6 +3076,39 @@ ggml_out_prod <- function(ctx, a, b) {
   .Call("R_ggml_out_prod", ctx, a, b, PACKAGE = "ggmlR")
 }
 
+#' Outer Product with Row Sums (Graph)
+#'
+#' \code{ggml_out_prod(ctx, a, b)} with one more column: the sums of \code{a}
+#' over its second dimension. For \code{a} of shape \code{[m, k]} and \code{b}
+#' of shape \code{[n, k]} (ggml order, \code{ne[0]} first) the result is
+#' \code{[m, n + 1]}: columns \code{1..n} are \code{out_prod(a, b)}, column
+#' \code{n + 1} is \code{rowSums} of \code{a} in R terms. With \code{a} the
+#' output gradient of a dense layer and \code{b} its input, these are the
+#' weight and the bias gradients in one pass. F32 only; dimensions 3 and 4
+#' broadcast as in \code{\link{ggml_out_prod}}.
+#'
+#' @param ctx GGML context
+#' @param a Tensor \code{[m, k, ...]}, F32, not transposed
+#' @param b Tensor \code{[n, k, ...]}, F32
+#' @return Tensor \code{[m, n + 1, ...]}
+#' @seealso \code{\link{ggml_out_prod}}
+#' @export
+#' @examples
+#' \donttest{
+#' ctx <- ggml_init(16 * 1024 * 1024)
+#' a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 5)
+#' b <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2, 5)
+#' ggml_set_f32(a, as.numeric(1:15))
+#' ggml_set_f32(b, rep(1, 10))
+#' r <- ggml_out_prod_rowsum(ctx, a, b)   # [3, 3]; column 3 = row sums of a
+#' graph <- ggml_build_forward_expand(ctx, r)
+#' ggml_graph_compute(ctx, graph)
+#' ggml_free(ctx)
+#' }
+ggml_out_prod_rowsum <- function(ctx, a, b) {
+  .Call("R_ggml_out_prod_rowsum", ctx, a, b, PACKAGE = "ggmlR")
+}
+
 #' Diagonal Matrix (Graph)
 #'
 #' Creates a diagonal matrix from a vector.

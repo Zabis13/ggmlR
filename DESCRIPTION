@@ -1,7 +1,7 @@
 Package: ggmlR
 Type: Package
 Title: 'GGML' Tensor Operations for Machine Learning
-Version: 0.8.9.2
+Version: 0.8.9.3
 Authors@R: c(
     person("Yuri", "Baramykov",
         email = "lbsbmsu@mail.ru",
@@ -59,20 +59,15 @@ Suggests:
     knitr,
     rmarkdown,
     Matrix,
-    Seurat,
     SeuratObject,
     RSpectra,
     irlba,
-    uwot,
     FNN,
     SingleCellExperiment,
     SummarizedExperiment,
     S4Vectors,
     withr,
-    hardhat,
-    rsample,
-    tune,
-    workflows
+    hardhat
 VignetteBuilder: knitr, rmarkdown
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3

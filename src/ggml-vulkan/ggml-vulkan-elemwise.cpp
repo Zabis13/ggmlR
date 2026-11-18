@@ -404,6 +404,14 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                          (uint32_t)(dst->ne[2] * dst->ne[3]) };
         }
         break;
+    case GGML_OP_OUT_PROD_ROWSUM:   // ggmlR
+        {
+            // As OUT_PROD over the product columns only (dst->ne[1] - 1): the
+            // row-sum column comes from the first column tile's workgroups.
+            elements = { (uint32_t)dst->ne[0], (uint32_t)(dst->ne[1] - 1),
+                         (uint32_t)(dst->ne[2] * dst->ne[3]) };
+        }
+        break;
     default:
         elements = { (uint32_t)ggml_nelements(src0), 1, 1 };
         break;
@@ -1213,6 +1221,29 @@ static void ggml_vk_out_prod(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     ggml_vk_op_f32<vk_op_out_prod_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_OUT_PROD, {
         (uint32_t)dst->ne[0], (uint32_t)dst->ne[1],
+        (uint32_t)dst->ne[2], (uint32_t)dst->ne[3],
+        (uint32_t)src0->ne[1],
+        (uint32_t)src0->nb[1], (uint32_t)src0->nb[2], (uint32_t)src0->nb[3],
+        (uint32_t)src1->nb[0], (uint32_t)src1->nb[1],
+        (uint32_t)src1->nb[2], (uint32_t)src1->nb[3],
+        (uint32_t)dst->nb[1], (uint32_t)dst->nb[2], (uint32_t)dst->nb[3],
+        dps2, dps3,
+    });
+}
+
+// ggmlR extension: GGML_OP_OUT_PROD_ROWSUM -- out_prod plus the row sums of
+// src0 as column dst->ne[1] - 1 (out_prod.comp, OUT_PROD_ROWSUM). The push
+// constants are OUT_PROD's with ne1 = the product columns; the shader writes
+// the sums one column past them.
+static void ggml_vk_out_prod_rowsum(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    const uint32_t dps2 = (uint32_t)(dst->ne[2] / src0->ne[2]);
+    const uint32_t dps3 = (uint32_t)(dst->ne[3] / src0->ne[3]);
+
+    ggml_vk_op_f32<vk_op_out_prod_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_OUT_PROD_ROWSUM, {
+        (uint32_t)dst->ne[0], (uint32_t)(dst->ne[1] - 1),
         (uint32_t)dst->ne[2], (uint32_t)dst->ne[3],
         (uint32_t)src0->ne[1],
         (uint32_t)src0->nb[1], (uint32_t)src0->nb[2], (uint32_t)src0->nb[3],

@@ -2267,6 +2267,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_out_prod_f32, "out_prod_f32", out_prod_f32_len, out_prod_f32_data, "main", 3, sizeof(vk_op_out_prod_push_constants), {32, 32, 1}, {}, 1);
     // ne1 == 1 variant: N1_ROWS dst rows per workgroup.
     ggml_vk_create_pipeline(device, device->pipeline_out_prod_n1_f32, "out_prod_n1_f32", out_prod_n1_f32_len, out_prod_n1_f32_data, "main", 3, sizeof(vk_op_out_prod_push_constants), {32, 1, 1}, {}, 1);
+    // OUT_PROD_ROWSUM: the tiled kernel's tile; the grid covers the product
+    // columns only, the row-sum column is written by the y == 0 workgroups.
+    ggml_vk_create_pipeline(device, device->pipeline_out_prod_rowsum_f32, "out_prod_rowsum_f32", out_prod_rowsum_f32_len, out_prod_rowsum_f32_data, "main", 3, sizeof(vk_op_out_prod_push_constants), {32, 32, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32, "cross_entropy_loss_back_f32", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32_wg512, "cross_entropy_loss_back_f32_wg512", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_push_constants), {1, 1, 1}, { 512 }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_f32, "cross_entropy_loss_f32", cross_entropy_loss_f32_len, cross_entropy_loss_f32_data, "main", 3, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);

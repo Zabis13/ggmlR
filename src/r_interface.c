@@ -1035,6 +1035,7 @@ SEXP R_ggml_set_2d(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP nb1, SEXP offset);
 
 // Matrix operations
 SEXP R_ggml_out_prod(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr);
+SEXP R_ggml_out_prod_rowsum(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr);
 SEXP R_ggml_diag(SEXP ctx_ptr, SEXP a_ptr);
 
 // Backward pass operations
@@ -1631,6 +1632,7 @@ static const R_CallMethodDef CallEntries[] = {
 
     // Matrix operations
     {"R_ggml_out_prod",       (DL_FUNC) &R_ggml_out_prod,       3},
+    {"R_ggml_out_prod_rowsum", (DL_FUNC) &R_ggml_out_prod_rowsum, 3},
     {"R_ggml_diag",           (DL_FUNC) &R_ggml_diag,           2},
 
     // Backward pass operations

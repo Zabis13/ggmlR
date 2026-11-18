@@ -1,3 +1,7 @@
+# ggmlR 0.8.9.3
+
+* `ggml_out_prod_rowsum()` — `ggml_out_prod()` plus the row sums of `a`, on the CPU and on Vulkan; the `ag_*` backward uses it to get a dense layer's weight and bias gradients in one node (fused epilogue).
+
 # ggmlR 0.8.9.2
 
 * Batched transformers on the GPU: `ag_flash_attention(batch = )` attends over many sequences in one call, and new `ag_silu()` / `ag_rms_norm()` complete the transformer block.
@@ -6,11 +10,11 @@
 
 # ggmlR 0.8.9.1
 
-* New `ag_rand()` / `ggml_rand()`: uniform, Gumbel and normal random numbers computed on the device from a two-number key, the same on the CPU and on Vulkan.
+* `ag_rand()` / `ggml_rand()` — uniform, Gumbel and normal random numbers computed on the device from a two-number key, the same on the CPU and on Vulkan.
 * Action selection on the device: `ag_argmax(as_tensor = TRUE)`, `ag_sample_categorical(key = )` and `ag_gather()` with an index tensor keep the result on the device and can be recorded by `ag_capture()`.
-* New `ag_buffer_copy_from()` copies a device tensor into an `ag_buffer` GPU to GPU, without the host; the tensor may be N-d (its leading axes make up a column).
-* New `ag_set_rows()` writes `ag_buffer` columns by index; inside `ag_capture()` the write is a graph node, and a captured function that only writes may return `NULL` (its replays download nothing).
-* New `ag_capture_repeat(f, n, ...)` runs such a write-only captured function `n` times with one upload and one wait: on the GPU the runs are queued without waiting in between.
+* `ag_buffer_copy_from()` copies a device tensor into an `ag_buffer` GPU to GPU, without the host; the tensor may be N-d (its leading axes make up a column).
+* `ag_set_rows()` writes `ag_buffer` columns by index; inside `ag_capture()` the write is a graph node, and a captured function that only writes may return `NULL` (its replays download nothing).
+* `ag_capture_repeat(f, n, ...)` runs such a write-only captured function `n` times with one upload and one wait: on the GPU the runs are queued without waiting in between.
 * On Vulkan, `ag_capture_repeat()` records the graph's command buffers once and submits them `n` times (`GGMLR_VK_GRAPH_RECORD=0` turns this off).
 
 # ggmlR 0.8.9
@@ -28,55 +32,55 @@
 # ggmlR 0.8.8
 
 * `GGML_MAX_NAME` raised to 160 (needed by stable-diffusion.cpp); dependent packages only need a rebuild.
-* New C API from ggml 0.27: `ggml_prec_set_acc()` and `ggml_gated_delta_net_ext(..., K)` (`K = 1` only), plus an 8-argument C++ overload of `ggml_gated_delta_net()`. Existing calls are unchanged.
+* C API from ggml 0.27: `ggml_prec_set_acc()` and `ggml_gated_delta_net_ext(..., K)` (`K = 1` only), plus an 8-argument C++ overload of `ggml_gated_delta_net()`. Existing calls are unchanged.
 
 # ggmlR 0.8.7
 
 * **Breaking:** `ggml_freeze_weights()` / `ggml_unfreeze_weights()` now stop when a `layer_names` entry or `prefix` matches no layer; a functional model used to ignore it silently.
 * Sequential models with `batch_norm` under `ggml_trainer()`: new `$calibrate_bn(x)` sets the running statistics the trainer never updated, and creating such a trainer warns.
 * `ggml_freeze_weights()` / `ggml_unfreeze_weights()` take `prefix` (a whole transformer block with `prefix = "block1_"`); new `ggml_freeze_bn_stats()` / `ggml_unfreeze_bn_stats()` fix batch-norm statistics in training and stop their recalibration, independently of freezing gamma and beta.
-* New `predict_precision` in `ggml_compile()` and `matmul_precision` in `ggml_predict()` / `$predict()`: `"f32"` makes Vulkan predictions match the CPU (~1e-6) instead of carrying f16-tile error (~1e-3) that depends on batch size; see README, "Precision of matrix multiplies on Vulkan".
+* `predict_precision` in `ggml_compile()` and `matmul_precision` in `ggml_predict()` / `$predict()`: `"f32"` makes Vulkan predictions match the CPU (~1e-6) instead of carrying f16-tile error (~1e-3) that depends on batch size; see README, "Precision of matrix multiplies on Vulkan".
 * Sequential `ggml_layer_embedding()` works as a first layer (new `input_shape`; it was never allocated before); integer data is accepted for every input, and index inputs refuse NA and fractions.
-* New `weight_decay` in `ggml_compile()` and `ggml_trainer()` (decoupled, AdamW/SGD; frozen weights are not decayed).
+* `weight_decay` in `ggml_compile()` and `ggml_trainer()` (decoupled, AdamW/SGD; frozen weights are not decayed).
 * Fixes: trainer `$predict()` on fewer rows than a batch; out-of-vocabulary token indices are an error; clear error for freezing `ag_*` modules.
 * `ggml_save_model()` writes format 3 (keeps functional frozen marks), `ggml_load_model()` checks saved weights' names and sizes and refuses newer formats; earlier releases load format-3 files ignoring the frozen marks — see README, "Save / Load".
 
 * **Device buffers** — new `ag_buffer()` keeps a large table on the device, written in place with `ag_buffer_write()` and read back in parts with `ag_buffer_read()`; `ag_get_rows()` gathers columns by index inside ag_* graphs and `ag_capture()` recordings, sending only the indices. Built for replay buffers in off-policy RL. `ag_buffer_free()` releases the memory at once.
-* New `ag_slice_rows(x, from, n)` and `ag_concat_rows(a, b)` — row slice and `rbind` on the device, with gradients and graph-backward rules.
-* New `ggml_pad_ext()` — zero padding before and after each dimension.
+* `ag_slice_rows(x, from, n)` and `ag_concat_rows(a, b)` — row slice and `rbind` on the device, with gradients and graph-backward rules.
+* `ggml_pad_ext()` — zero padding before and after each dimension.
 * `ggml_trainer()` now takes functional models and per-output loss masks (`loss_mask`), and gains `$predict()`, `$snapshot()` and `$update_target()` for target networks; functional `ggml_fit()` now rejects `sample_weight` instead of silently ignoring it.
 
 # ggmlR 0.8.6
 
 * **All 15 reference ONNX models agree with ONNX Runtime** (CPU within 1e-3, was 14/15); MaskRCNN-12-int8 matches bit for bit (`max|d| = 0`).
-* New integer-accumulator `QLinearMatMul` kernel, alongside the existing `QLinearConv` one. Scoped to 2-D A x B.
-* New `ONNX_INJECT_NODES` / `ONNX_INJECT_DIR`: replace a node's output with a reference dump mid-run, to tell one amplified divergence from several independent ones.
+* Integer-accumulator `QLinearMatMul` kernel, alongside the existing `QLinearConv` one. Scoped to 2-D A x B.
+* `ONNX_INJECT_NODES` / `ONNX_INJECT_DIR` — replace a node's output with a reference dump mid-run, to tell one amplified divergence from several independent ones.
 
 # ggmlR 0.8.5
 
 * **GPU-resident training** — weights, Adam moments, gradients and forward activations stay in device buffers across steps, cutting a training step from 10 host/device crossings to 4 (0.188 MB to 0.047); graph backward and resident gradients are now the default, and training is numerically unchanged.
 * **Transformers train on the GPU** — new `ag_flash_attention(q, k, v, n_heads)` computes every head in one fused call with its gradient in one more, backed by new `ggml_flash_attn_back()`, `GGML_OP_NORM_BACK` and `GGML_OP_GELU_BACK` kernels (CPU and Vulkan) that upstream ships as inference-only stubs.
 * **Training from a generator** — `ggml_fit(model, generator = )` pulls batches from a function instead of slicing a matrix held in memory, so only the current batch is resident. Endless generators (augmentation, simulators, RL rollouts) are supported via `steps_per_epoch`, with `initial_epoch`, `validation_generator` and `validation_steps` alongside. `ggml_fit_opt_gen()` exposes the same loop for training loops you drive yourself.
-* **New `ggml_trainer()`** — a training context that outlives a single call, for loops where "epoch" is not the unit of progress (reinforcement learning, curricula). `tr$step(x, y)` runs one forward/backward and returns that step's loss, keeping weights, Adam moments and the graph alive across steps; `$eval()`, `$model()`, `$set_lr()` and `$free()` complete it.
+* `ggml_trainer()` — a training context that outlives a single call, for loops where "epoch" is not the unit of progress (reinforcement learning, curricula). `tr$step(x, y)` runs one forward/backward and returns that step's loss, keeping weights, Adam moments and the graph alive across steps; `$eval()`, `$model()`, `$set_lr()` and `$free()` complete it.
 
 # ggmlR 0.8.4
 
 * Mamba backward on the GPU: `SSM_CONV_BACK` and `SSM_SCAN_BACK` now have Vulkan shaders, so state-space blocks train entirely on the GPU (`inst/examples/mamba_train_demo.R`: 21.7s -> 7.7s). Requires `d_state` 128 or 256 and Mamba-2 shapes; other shapes fall back to the CPU.
-* New multi-head attention: `ggml_layer_attention()` and `ggml_attention()`, with `causal = TRUE` for GPT-style masking and cross-attention via `ggml_apply(list(query, context), attn)`. All heads run in one batched pass.
+* Multi-head attention: `ggml_layer_attention()` and `ggml_attention()`, with `causal = TRUE` for GPT-style masking and cross-attention via `ggml_apply(list(query, context), attn)`. All heads run in one batched pass.
 * `ggml_layer_dense()` gains `time_distributed = TRUE`, applying one kernel per position and keeping the sequence axis. Together with attention this completes a transformer block in the functional API.
-* New losses `"mae"`, `"huber"` and `"binary_crossentropy"` in `ggml_compile()`, with matching `ggml_opt_loss_type_*()` constants. Binary CE expects probabilities (end the model in a sigmoid).
-* New SSM / RWKV bindings: `ggml_ssm_conv()`, `ggml_ssm_scan()`, `ggml_rwkv_wkv6()`, `ggml_rwkv_wkv7()` and `ggml_gated_linear_attn()`. Each packs sequence output and final state in one tensor; use `ggml_ssm_scan_output()`/`ggml_ssm_scan_state()` and `ggml_rwkv_output()`/`ggml_rwkv_state()` to view either half. Inference only.
+* Losses `"mae"`, `"huber"` and `"binary_crossentropy"` in `ggml_compile()`, with matching `ggml_opt_loss_type_*()` constants. Binary CE expects probabilities (end the model in a sigmoid).
+* SSM / RWKV bindings: `ggml_ssm_conv()`, `ggml_ssm_scan()`, `ggml_rwkv_wkv6()`, `ggml_rwkv_wkv7()` and `ggml_gated_linear_attn()`. Each packs sequence output and final state in one tensor; use `ggml_ssm_scan_output()`/`ggml_ssm_scan_state()` and `ggml_rwkv_output()`/`ggml_rwkv_state()` to view either half. Inference only.
 * Functional models with several outputs now train all heads; previously `ggml_fit()` silently optimized only the last one. Per-head losses and weights are set via `ggml_compile(loss = list(...), loss_weights = c(...))`, and per-head losses are reported in `model$history` and `ggml_evaluate()`.
 
 # ggmlR 0.8.3
 
-* New custom operations: `ggml_custom()` / `ggml_custom_inplace()` add a graph node computed by a named C kernel; downstream packages register their own via the `ggmlR_register_custom_op` C callable. Built in: `"row_median"`, `"row_permute"`, `"clip_inplace"`; `ggml_custom_ops()` lists the registry. CPU-only.
+* Custom operations: `ggml_custom()` / `ggml_custom_inplace()` add a graph node computed by a named C kernel; downstream packages register their own via the `ggmlR_register_custom_op` C callable. Built in: `"row_median"`, `"row_permute"`, `"clip_inplace"`; `ggml_custom_ops()` lists the registry. CPU-only.
 * `ggml_layer_concatenate()` is now trainable: `GGML_OP_CONCAT` has a backward pass, so multi-branch models train end-to-end. See `inst/examples/functional_concatenate.R`.
 * `ggml_vulkan_status()` now invisibly returns `list(available, n_devices, devices)` instead of `NULL`. Console output is unchanged.
-* New `ag_layer_norm()`: LayerNorm for the autograd engine, with learnable `gamma`/`beta` and an exact backward pass. No running statistics, so training and evaluation behave identically.
-* New `clip_grad_value()` for element-wise gradient clipping into `[-clip_value, clip_value]`.
-* New `check_grad_anomaly()`, a post-`backward()` hook reporting `NaN`/`Inf` gradients per parameter, with `action = "warn"`, `"stop"` or `"silent"`.
-* New LR schedulers `lr_scheduler_onecycle()`, `lr_scheduler_cyclic()` and `lr_scheduler_warmup_cosine()`.
+* `ag_layer_norm()` — LayerNorm for the autograd engine, with learnable `gamma`/`beta` and an exact backward pass. No running statistics, so training and evaluation behave identically.
+* `clip_grad_value()` for element-wise gradient clipping into `[-clip_value, clip_value]`.
+* `check_grad_anomaly()` — a post-`backward()` hook reporting `NaN`/`Inf` gradients per parameter, with `action = "warn"`, `"stop"` or `"silent"`.
+* LR schedulers `lr_scheduler_onecycle()`, `lr_scheduler_cyclic()` and `lr_scheduler_warmup_cosine()`.
 * `lr_scheduler_cosine()` gains `T_mult` for SGDR warm restarts; the default `T_mult = 1` keeps the previous constant-period behaviour.
 
 # ggmlR 0.8.2
@@ -117,8 +121,8 @@
 * **ggml-0.11.0 migration complete** (vendored library upgraded from 0.9.5); all ggmlR features and optimizations preserved (5D indexing, Q4_K Flash Attention, RDNA4 subgroup-shuffle MMQ, Vulkan 1.4 push constants).
 * CPU backend updated to 0.11.0: `use_ref` flag, Hadamard FWHT op, rewritten Flash Attention (split-KV + tiled).
 * Vulkan shaders synchronized with 0.11.0 across all stages.
-* New quantization types **Q1_0** and **NVFP4** — full GPU support.
-* New exports: `quantize_q1_0()`, `quantize_nvfp4()`, `dequantize_row_q1_0()`, `dequantize_row_nvfp4()`.
+* Quantization types **Q1_0** and **NVFP4** — full GPU support.
+* Added exports: `quantize_q1_0()`, `quantize_nvfp4()`, `dequantize_row_q1_0()`, `dequantize_row_nvfp4()`.
 * **In progress**: GPU inference speedup — fixing scheduler `copyin` overhead in single-backend decode (Ministral-3B, targeting ~3×).
 
 # ggmlR 0.7.6
@@ -135,17 +139,17 @@
 
 * **ONNX Conv**: replaced `ggml_conv_2d` (IM2COL+GEMM) with `ggml_conv_2d_direct` (`GGML_OP_CONV_2D`) in `onnx_ggml.c` — SuperResolution GPU time 344 ms → 5 ms (~70×).
 * **Vulkan softmax**: `wg512` pipeline threshold lowered from `>1024` to `>=512` — improves attention softmax at seq_len 512–1024.
-* **New examples**: `benchmark_ops.R` (36-op CPU/GPU micro-benchmark), `profile_onnx_superres_gpu.R` (GPU profiler for SuperResolution).
+* **Examples**: `benchmark_ops.R` (36-op CPU/GPU micro-benchmark), `profile_onnx_superres_gpu.R` (GPU profiler for SuperResolution).
 
 # ggmlR 0.7.3
 
 ## Vulkan: subgroup-shuffle mmq for Q4_K / Q5_K / Q6_K (wavefront-64 devices)
 
 * **`USE_SUBGROUP_NO_SHMEM` path added to `mul_mmq.comp`** — on wavefront-64 devices (RDNA4, subgroup_size=64) the `block_a` weight tile is loaded directly into registers via `subgroupShuffle` / `subgroupBroadcast`, eliminating the shared-memory round-trip in `block_a_to_shmem → block_a_to_registers`. Measured on RX 9070: Flux 768×768 sampling 22.38s → 20.80s (~7% end-to-end; sampling is not pure matmul so the gain on isolated Q4_K GEMM is higher).
-* **New device capability field `subgroup_no_shmem`** — `ggml_vulkan_device_caps()` now returns this flag (logical), indicating whether the shuffle mmq path is active.
+* **Device capability field `subgroup_no_shmem`** — `ggml_vulkan_device_caps()` now returns this flag (logical), indicating whether the shuffle mmq path is active.
 * **`GL_EXT_shader_subgroup_extended_types_float16`** added to `mul_mmq.comp` under `#ifdef USE_SUBGROUP_NO_SHMEM && FLOAT16` — required for `subgroupShuffle` on `float16_t` components of `f16vec2`.
 * **`ggml_vulkan_device_caps()` extended** — `wavefronts_per_simd` and `arch` fields added; all 14 fields now documented.
-* **New pipeline `pipeline_dequant_mul_mat_mat_q8_1_no_shmem`** — registered in device struct; selected at dispatch when `subgroup_size == 64` and src0 is Q4_K / Q5_K / Q6_K; falls back to standard mmq pipeline gracefully when not compiled.
+* **Pipeline `pipeline_dequant_mul_mat_mat_q8_1_no_shmem`** — registered in device struct; selected at dispatch when `subgroup_size == 64` and src0 is Q4_K / Q5_K / Q6_K; falls back to standard mmq pipeline gracefully when not compiled.
 * **`GGML_TYPE_Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K` exported** — these constants were defined in `tensors.R` but missing from NAMESPACE; `roxygen2::roxygenise()` now includes them.
 * **`inst/examples/vulkan_caps.R` extended** — new section shows `USE_SUBGROUP_NO_SHMEM: ACTIVE/INACTIVE` with explanation of conditions.
 * **Tests** — `tests/testthat/test-vulkan.R` adds smoke tests for Q4_K / Q5_K / Q6_K quantized matmul via Vulkan (no NaN/Inf, correct shape); `test-vulkan-caps.R` asserts `integer_dot_product=TRUE` on RDNA4.
@@ -182,15 +186,15 @@
   Engine arguments: `batch_size`, `backend`, `verbose`, `validation_split`, `optimizer`, `callbacks`. All `mlp()` parameters (`hidden_units`, `epochs`, `dropout`, `activation`, `learn_rate`) are mapped through.
 * **`backend = "gpu"` in parsnip** — `"gpu"` is now correctly translated to `"vulkan"` inside `ggmlr_parsnip_fit_classif()` and `ggmlr_parsnip_fit_regr()`. Previously the string was passed through and caused an unknown backend error.
 * **`learn_rate` callback** — the `learn_rate` argument from `mlp()` is applied via an internal `on_epoch_begin` callback that sets the optimizer learning rate at the start of epoch 1. Works for both `"adam"` and `"sgd"` optimizers.
-* **New `Suggests`:** `parsnip`, `tibble`, `rlang`, `dials`.
-* **New example:** `inst/examples/tidymodels_integration.R` — CPU vs GPU comparison for iris classification and mtcars regression using the parsnip engine.
+* **Added to `Suggests`:** `parsnip`, `tibble`, `rlang`, `dials`.
+* **Example:** `inst/examples/tidymodels_integration.R` — CPU vs GPU comparison for iris classification and mtcars regression using the parsnip engine.
 
 ## mlr3 integration
 
 * **`LearnerClassifGGML` / `LearnerRegrGGML` always defined** — R6 class definitions are now unconditional (no longer wrapped in `if (requireNamespace("mlr3"))`). This ensures the classes are always present in the ggmlR namespace, so `ggmlR:::.register_mlr3()` can be called reliably from vignettes and tests regardless of package load order.
 * **Registration robustness** — `.onLoad()` no longer uses `mlr3misc::register_namespace_callback()` (which had a bug in v0.21.0 causing `R CMD check` warning `namespace can be unloaded cleanly`). Registration now uses `isNamespaceLoaded()` + `setHook()` directly, covering both "mlr3 already loaded" and "mlr3 loads after ggmlR" scenarios.
 * **`mlr3misc` removed from `Suggests`** — no longer needed.
-* **New example:** `inst/examples/mlr3_integration.R` — CPU vs GPU comparison for iris classification and mtcars regression, plus 3-fold CV.
+* **Example:** `inst/examples/mlr3_integration.R` — CPU vs GPU comparison for iris classification and mtcars regression, plus 3-fold CV.
 
 ## Bug fixes
 
@@ -236,7 +240,7 @@
 
 ## Test suite
 
-* New test files: `test-gguf.R`, `test-graph-utils.R`, `test-inplace-ops.R`, `test-keras-api.R`, `test-misc-ops.R`, `test-model-ops.R`, `test-print-methods.R`, `test-tensor-utils.R`, `test-threading.R`, `test-autograd-missing.R`, `test-nn-functional-missing.R`, `test-quants-missing.R`.
+* Added test files: `test-gguf.R`, `test-graph-utils.R`, `test-inplace-ops.R`, `test-keras-api.R`, `test-misc-ops.R`, `test-model-ops.R`, `test-print-methods.R`, `test-tensor-utils.R`, `test-threading.R`, `test-autograd-missing.R`, `test-nn-functional-missing.R`, `test-quants-missing.R`.
 
 # ggmlR 0.6.8
 
@@ -262,7 +266,7 @@
   - Tile: uses `ggml_repeat_5d()`.
   - Gather axis=0: generic reshape-back for any rank.
   - `tmap_put_nd()` and `slice_fill` arrays updated to `GGML_MAX_DIMS`.
-* New internal helpers: `onnx_reshape_nd()`, `onnx_new_tensor_nd()`, `ne_product()` — eliminate switch/case duplication.
+* Internal helpers: `onnx_reshape_nd()`, `onnx_new_tensor_nd()`, `ne_product()` — eliminate switch/case duplication.
 * Resize/Interpolate remains 4D (spatial op, 5D not relevant). Transpose/Permute remains 4D (`ggml_permute` API limitation).
 
 ## ONNX: ConstantOfShape INT64/INT32/DOUBLE value fix
@@ -276,7 +280,7 @@
 
 ## ONNX: ScatterElements op (GPU + CPU)
 
-* New `GGML_OP_SCATTER_ELEMENTS` added to the ggml engine with both CPU kernel and Vulkan compute shader.
+* `GGML_OP_SCATTER_ELEMENTS` added to the ggml engine with both CPU kernel and Vulkan compute shader.
 * **Vulkan shader** (`scatter_elements.comp`): two variants compiled at install time — `scatter_elements_none` (overwrite) and `scatter_elements_add` (atomicAdd via `GL_EXT_shader_atomic_float`). Data is copied to output via `vkCmdCopyBuffer` with a pipeline barrier before the scatter dispatch.
 * **CPU kernel**: single-threaded scatter with memcpy (overwrite) or element-wise addition (reduce=add).
 * ONNX mapper: `ScatterElements` op with `axis=0` and `reduction="none"/"add"` attributes. Indices cast to I32, updates/data cast to F32 automatically.

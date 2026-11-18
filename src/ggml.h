@@ -632,6 +632,10 @@ extern "C" {
         GGML_OP_DSV4_HC_POST,
         // DIVERGENCE from upstream: counter-based random numbers, see ggml_rand().
         GGML_OP_RAND,
+        // ggmlR extension: out_prod with the row sums of src0 as one more
+        // column, the bias gradient fused into the weight gradient. See
+        // ggml_out_prod_rowsum().
+        GGML_OP_OUT_PROD_ROWSUM,
 
         GGML_OP_COUNT,
     };
@@ -1583,6 +1587,16 @@ extern "C" {
     // B: p columns, n rows,
     // result is m columns, p rows
     GGML_API struct ggml_tensor * ggml_out_prod(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    // ggmlR extension: ggml_out_prod(a, b) with one more column, the sums of
+    // a over its rows (ne[1]): result [a->ne[0], b->ne[0] + 1, ...], columns
+    // 0..b->ne[0]-1 = out_prod(a, b), column b->ne[0] = sum_k a[:, k]. With
+    // a = the output gradient g and b = the layer input x this is dW and db of
+    // y = W x + b in one pass over g. F32 only; no backward.
+    GGML_API struct ggml_tensor * ggml_out_prod_rowsum(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);

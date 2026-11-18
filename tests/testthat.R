@@ -79,6 +79,7 @@ heavy <- c(
   "sc-umap",
   "diagnostics",
   "sc-seurat",
+  "sc-seurat-compat",
   "quantize-fns",
   "sc-sce",
   "loss-mask",

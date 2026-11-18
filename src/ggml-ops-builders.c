@@ -1544,6 +1544,32 @@ struct ggml_tensor * ggml_out_prod(
     return result;
 }
 
+// ggml_out_prod_rowsum (ggmlR extension)
+//
+// out_prod(a, b) plus one column: dst[:, b->ne[0]] = sum over a's rows. For a
+// linear layer y = W x + b with output gradient g, out_prod(g, x) is dW and the
+// row sums of g are db; separately db was its own node (an out_prod against a
+// row of ones), launched and reading g once more. F32 only, like the Vulkan
+// kernel; the layout of a and b is that of ggml_out_prod.
+
+struct ggml_tensor * ggml_out_prod_rowsum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    GGML_ASSERT(ggml_can_out_prod(a, b));
+    GGML_ASSERT(!ggml_is_transposed(a));
+    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
+
+    const int64_t ne[4] = { a->ne[0], b->ne[0] + 1, b->ne[2], b->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op     = GGML_OP_OUT_PROD_ROWSUM;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
 // ggml_scale
 
 static struct ggml_tensor * ggml_scale_impl(

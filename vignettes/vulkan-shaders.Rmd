@@ -437,6 +437,6 @@ and the user callbacks `MAP_CUSTOM1/2/3` and `CUSTOM`.
 | RoIAlign | `roi_align.comp` | ONNX `RoiAlign` (Mask R-CNN) | C implementation |
 | Non-max suppression | `nms.comp` | ONNX `NonMaxSuppression` | C implementation |
 
-See `vignette("single-cell-seurat", package = "ggmlR")` and
+See `vignette("single-cell-seurat", package = "ggmlR")` (temporarily disabled) and
 `vignette("onnx-import", package = "ggmlR")` for the user-facing side of the
 last two tables.

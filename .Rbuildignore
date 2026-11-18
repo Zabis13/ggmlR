@@ -62,3 +62,6 @@
 ^tools$
 ^ab_split_inputs_.*$
 ^bench_vk_current_ops_.*\.csv$
+^tests/testthat/test-sc-seurat\.R$
+^tests/testthat/test-sc-seurat-compat\.R$
+^vignettes/single-cell-seurat\.Rmd$

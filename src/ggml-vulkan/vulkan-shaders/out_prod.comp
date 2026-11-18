@@ -113,6 +113,16 @@ void main() {
 
 #else
 
+// OUT_PROD_ROWSUM (compiled as out_prod_rowsum_f32, GGML_OP_OUT_PROD_ROWSUM):
+// the same kernel, plus one more dst column, ne1 here being the product
+// columns only:
+//     dst[i0, ne1] = sum_k src0[i0, k]
+// -- db next to dW for a dense layer. The workgroups of the first column tile
+// (gl_WorkGroupID.y == 0) take the sums from the src0 tile already in shared
+// memory: no extra global read, no extra dispatch. Every invocation adds its
+// two sa values per step (branch-free; only ty == 0 of those workgroups
+// writes), and each sum runs k = 0, 1, ... in order, so it is deterministic.
+
 // [k][i] layout: the inner loop reads a row of each, and consecutive tx read
 // consecutive words of sa (no bank conflict); sb is read as a broadcast.
 shared float sa[TK][TM];
@@ -144,6 +154,9 @@ void main() {
     const bool b_k_contig = (s11 == 1u);          // transposed src1
 
     float acc[2][2] = { { 0.0, 0.0 }, { 0.0, 0.0 } };
+#ifdef OUT_PROD_ROWSUM
+    float rsum[2] = { 0.0, 0.0 };
+#endif
 
     for (uint k0 = 0u; k0 < ne01; k0 += TK) {
         // Each tile is TK x 32 = 1024 values: 4 per invocation.
@@ -176,6 +189,10 @@ void main() {
             acc[1][0] += a1 * b0;
             acc[0][1] += a0 * b1;
             acc[1][1] += a1 * b1;
+#ifdef OUT_PROD_ROWSUM
+            rsum[0] += a0;                        // k past ne01 was loaded as 0
+            rsum[1] += a1;
+#endif
         }
         barrier();
     }
@@ -191,5 +208,15 @@ void main() {
             }
         }
     }
+#ifdef OUT_PROD_ROWSUM
+    if (gl_WorkGroupID.y == 0u && ty == 0u) {
+        [[unroll]] for (uint a = 0u; a < 2u; ++a) {
+            const uint i0 = tile0 + tx + 16u * a;
+            if (i0 < ne0) {
+                dst[d_base + i0 + ne1 * s1d] = rsum[a];
+            }
+        }
+    }
+#endif
 }
 #endif

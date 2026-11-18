@@ -1269,6 +1269,12 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_out_prod_f32;
         }
         return nullptr;
+    case GGML_OP_OUT_PROD_ROWSUM:   // ggmlR
+        if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 &&
+            dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_out_prod_rowsum_f32;
+        }
+        return nullptr;
     case GGML_OP_GET_ROWS_BACK:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_get_rows_back_f32;

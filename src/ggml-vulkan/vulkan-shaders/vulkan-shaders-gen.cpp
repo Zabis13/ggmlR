@@ -1187,6 +1187,8 @@ void process_shaders() {
     // ggmlR: OUT_PROD, the op both mul_mat gradients are built from (our tiled out_prod.comp).
     string_to_spv("out_prod_f32", "out_prod.comp", {{"A_TYPE", "float"}});
     string_to_spv("out_prod_n1_f32", "out_prod.comp", {{"A_TYPE", "float"}, {"OUT_PROD_N1", "1"}});
+    // ggmlR: OUT_PROD_ROWSUM, the tiled kernel plus the row sums of src0 (bias gradient).
+    string_to_spv("out_prod_rowsum_f32", "out_prod.comp", {{"A_TYPE", "float"}, {"OUT_PROD_ROWSUM", "1"}});
 
     // ggmlR: GGML_OP_RAND, counter-based random numbers.
     string_to_spv("rand_f32", "rand.comp", {});

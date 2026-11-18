@@ -762,6 +762,11 @@ opt$step(grads)
 opt$zero_grad()
 ```
 
+A dense layer written as `ag_add(ag_matmul(W, x), b)` with a bias `[m, 1]`
+gets its weight and bias gradients from one node in the graph backward,
+`ggml_out_prod_rowsum()`: one pass over the output gradient instead of two.
+This is automatic when the matmul's result feeds nothing but that add.
+
 ### Transformer encoder block
 
 ```r
@@ -1549,7 +1554,7 @@ Every accelerated step matches Seurat to float noise (normalize/scale max abs er
 top-gene agreement 1.0000). `scale` comes out ~1× — it is memory-bound with
 nothing to accelerate, so it defaults to the CPU even under Vulkan; PCA's
 covariance multiply is the biggest matrix-multiply win. See the
-`single-cell-seurat` vignette for the full breakdown.
+`single-cell-seurat` vignette for the full breakdown (temporarily disabled).
 
 (Numbers are hardware-dependent; reproduce the UMAP shaders separately with
 `inst/examples/umap_shaders_bench.R`.)

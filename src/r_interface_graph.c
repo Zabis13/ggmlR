@@ -2988,6 +2988,38 @@ SEXP R_ggml_out_prod(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr) {
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+// ggmlR extension: out_prod with the row sums of a as one more column.
+// The constructor's asserts are checked here first, so a bad call is an R
+// error rather than an abort.
+SEXP R_ggml_out_prod_rowsum(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+    if (a->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32) {
+        error("ggml_out_prod_rowsum: a and b must be F32");
+    }
+    if (a->ne[1] != b->ne[1] || b->ne[2] % a->ne[2] != 0 || b->ne[3] % a->ne[3] != 0) {
+        error("ggml_out_prod_rowsum: a and b must share ne[1], and b's ne[2], ne[3] "
+              "must be multiples of a's");
+    }
+    if (a->ne[4] != 1 || b->ne[4] != 1) {
+        error("ggml_out_prod_rowsum: 4D at most (ne[4] must be 1)");
+    }
+    if (ggml_is_transposed(a)) {
+        error("ggml_out_prod_rowsum: a must not be transposed");
+    }
+
+    struct ggml_tensor * result = ggml_out_prod_rowsum(ctx, a, b);
+    if (result == NULL) {
+        error("Failed to create out_prod_rowsum operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 // Diagonal matrix from vector
 SEXP R_ggml_diag(SEXP ctx_ptr, SEXP a_ptr) {
     struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);

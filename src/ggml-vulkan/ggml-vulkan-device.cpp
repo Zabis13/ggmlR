@@ -1336,6 +1336,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_ssm_scan_back_f32_d256;
     vk_pipeline pipeline_out_prod_f32;   // ggmlR: backward of mul_mat
     vk_pipeline pipeline_out_prod_n1_f32;   // ggmlR: out_prod with ne1 == 1 (bias gradient)
+    vk_pipeline pipeline_out_prod_rowsum_f32;   // ggmlR: GGML_OP_OUT_PROD_ROWSUM
     vk_pipeline pipeline_cross_entropy_loss_back_f32, pipeline_cross_entropy_loss_back_f32_wg512;
     vk_pipeline pipeline_flash_attn_back_f32;   // ggmlR: backward of flash attention
     vk_pipeline pipeline_im2col_back_f32;   // ggmlR: backward of convolution
