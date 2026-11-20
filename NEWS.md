@@ -1,4 +1,4 @@
-# ggmlR 0.8.9.4
+# ggmlR 0.8.9.4 
 
 * RL building blocks for `ag_*`: `ag_gae()`, `ag_discounted_returns()`, `ag_nstep_targets()`, `ag_huber_loss()`, `ag_entropy()`, `ag_normal_log_prob()`, and target networks with `ag_soft_update()` / `ag_hard_update()`.
 * `ag_replay_buffer()` — replay on the device, uniform or prioritized (`ag_per_sampler()`), with save/load.
