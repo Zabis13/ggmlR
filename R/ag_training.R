@@ -763,6 +763,7 @@ check_grad_anomaly <- function(params, grads, action = c("warn", "stop", "silent
 # has no cyclable field.
 .ag_momentum_field <- function(optimizer) {
   if (inherits(optimizer, "ag_optimizer_sgd"))  return("momentum")
+  if (inherits(optimizer, "ag_optimizer_rmsprop")) return("momentum")
   if (inherits(optimizer, "ag_optimizer_adam")) return("beta1")
   NULL
 }

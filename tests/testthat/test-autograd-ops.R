@@ -131,6 +131,22 @@ test_that("gradcheck: ag_exp", {
   expect_true(ok)
 })
 
+# ---- ag_sin / ag_cos --------------------------------------------------------
+
+test_that("ag_sin and ag_cos forward", {
+  x <- ag_tensor(matrix(c(-1, 0, 0.5, 2), 1, 4))
+  expect_equal(as.numeric(ag_sin(x)$data), sin(c(-1, 0, 0.5, 2)), tolerance = 1e-6)
+  expect_equal(as.numeric(ag_cos(x)$data), cos(c(-1, 0, 0.5, 2)), tolerance = 1e-6)
+})
+
+test_that("gradcheck: ag_sin, ag_cos", {
+  set.seed(6)
+  W <- ag_param(matrix(runif(4, -2, 2), 2, 2))
+  for (f in list(ag_sin, ag_cos))
+    expect_true(ag_gradcheck(fn = function(ins) ag_sum(f(ins$W)),
+                             inputs = list(W = W), atol = 1e-4, quiet = TRUE))
+})
+
 # ---- ag_reshape -------------------------------------------------------------
 
 test_that("ag_reshape: data unchanged, shape changes", {

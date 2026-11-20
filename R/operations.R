@@ -4277,6 +4277,43 @@ ggml_im2col <- function(ctx, a, b, s0, s1, p0, p1, d0, d1, is_2D = TRUE, dst_typ
         PACKAGE = "ggmlR")
 }
 
+#' Column to Image, the backward of im2col (Graph)
+#'
+#' Gradient of \code{\link{ggml_im2col}} with respect to its image input:
+#' every column element is added back to the image position it was read from,
+#' so overlapping windows (stride smaller than the kernel) sum; positions read
+#' from the zero padding are dropped. With \code{dY} the gradient of a
+#' convolution's output and \code{W} its kernel, the input gradient is
+#' \code{ggml_im2col_back(W^T dY, W, dim(x))}.
+#'
+#' The gradient comes first, the kernel second: that is the order the CPU and
+#' Vulkan kernels read and the order ggml's own backward pass uses (upstream's
+#' parameter comments in \code{ggml.h} had them swapped).
+#' Every input pixel gathers the taps that read it, with no atomics, so the
+#' result does not depend on scheduling.
+#'
+#' @param ctx GGML context
+#' @param a Gradient of the im2col output \code{[IC*KH*KW, OW, OH, N]}
+#'   (\code{is_2D = TRUE}), F32, contiguous
+#' @param b Convolution kernel \code{[KW, KH, IC, OC]}, F32; only its
+#'   \code{KW}, \code{KH} are read
+#' @param ne Shape of the im2col input, 4 values: \code{c(IW, IH, IC, N)}
+#' @inheritParams ggml_im2col
+#' @return F32 tensor of shape \code{ne}
+#' @seealso \code{\link{ggml_im2col}}
+#' @export
+ggml_im2col_back <- function(ctx, a, b, ne, s0, s1, p0, p1, d0, d1, is_2D = TRUE) {
+  ne <- as.numeric(ne)
+  if (length(ne) != 4L || anyNA(ne) || any(ne < 1) || any(ne != round(ne)))
+    stop("ggml_im2col_back: ne must be 4 positive whole numbers", call. = FALSE)
+  .Call("R_ggml_im2col_back", ctx, a, b, ne,
+        as.integer(s0), as.integer(s1),
+        as.integer(p0), as.integer(p1),
+        as.integer(d0), as.integer(d1),
+        as.logical(is_2D),
+        PACKAGE = "ggmlR")
+}
+
 #' @rdname ggml_pool_1d
 #' @export
 GGML_OP_POOL_MAX <- 0L

@@ -32,19 +32,32 @@
 # Optimizer state multiplier: how many extra full-size copies of every
 # parameter the optimizer keeps.
 #
-#   adam     m and v                          -> 2
-#   sgd      velocity, only with momentum > 0  -> 1
-#   sgd_plain no state                         -> 0
+#   adam / adamw              m and v                            -> 2
+#   sgd                       velocity, only with momentum > 0    -> 1
+#   sgd_plain                 no state                            -> 0
+#   rmsprop                   square_avg                          -> 1
+#   rmsprop_momentum          + momentum_buffer                   -> 2
+#   rmsprop_centered          + grad_avg                          -> 2
+#   rmsprop_momentum_centered all three                           -> 3
 #
-# This is the single source of truth for that number; nothing else in the
-# package should restate it.
+# An optimizer OBJECT is counted by the slots it actually holds, so the number
+# follows its options (an optimizer_sgd() object allocates its velocity even
+# with momentum = 0, hence 1). This is the single source of truth for that
+# number; nothing else in the package should restate it.
+.AG_OPT_STATE_MULT <- c(adam = 2, adamw = 2, sgd = 1, sgd_plain = 0,
+                        rmsprop = 1, rmsprop_momentum = 2, rmsprop_centered = 2,
+                        rmsprop_momentum_centered = 3)
+
 .ag_opt_state_multiplier <- function(optimizer) {
-  switch(optimizer,
-         adam      = 2,
-         sgd       = 1,
-         sgd_plain = 0,
-         stop("ggmlR: unknown optimizer '", optimizer,
-              "'. Use \"adam\", \"sgd\" or \"sgd_plain\".", call. = FALSE))
+  if (inherits(optimizer, "ag_optimizer_adam"))    return(2)
+  if (inherits(optimizer, "ag_optimizer_sgd"))     return(1)
+  if (inherits(optimizer, "ag_optimizer_rmsprop")) return(length(.ag_rmsprop_slots(optimizer)))
+  if (is.character(optimizer) && length(optimizer) == 1L &&
+      optimizer %in% names(.AG_OPT_STATE_MULT))
+    return(unname(.AG_OPT_STATE_MULT[optimizer]))
+  stop("ggmlR: unknown optimizer '", format(optimizer)[1L], "'. Use an optimizer ",
+       "object or one of: ", paste0('"', names(.AG_OPT_STATE_MULT), '"', collapse = ", "),
+       ".", call. = FALSE)
 }
 
 #' Estimate the memory a training run needs
@@ -65,8 +78,11 @@
 #'   (e.g. \code{list(c(256, 128), c(128))}), or a single such vector.
 #' @param batch_size Batch size the activations are sized for. Activations
 #'   scale with it; weights and optimizer state do not.
-#' @param optimizer One of \code{"adam"} (keeps m and v), \code{"sgd"} (keeps a
-#'   velocity, i.e. momentum > 0) or \code{"sgd_plain"} (no state).
+#' @param optimizer An optimizer object (counted by the state slots it holds)
+#'   or one of \code{"adam"}, \code{"adamw"} (m and v), \code{"sgd"} (a
+#'   velocity), \code{"sgd_plain"} (no state), \code{"rmsprop"},
+#'   \code{"rmsprop_momentum"}, \code{"rmsprop_centered"},
+#'   \code{"rmsprop_momentum_centered"} (1 to 3 slots). Default \code{"adam"}.
 #' @param activation_frac Activations as a fraction of the weight bytes, per
 #'   unit of batch. The default 0.01 reproduces the measured tape composition
 #'   for a dense stack (\code{inst/scripts/measure_ag_tape_memory.R}: activations
@@ -92,10 +108,9 @@
 #' }
 ag_estimate_training_memory <- function(shapes,
                                         batch_size = 32L,
-                                        optimizer = c("adam", "sgd", "sgd_plain"),
+                                        optimizer = "adam",
                                         activation_frac = 0.01,
                                         quiet = FALSE) {
-  optimizer <- match.arg(optimizer)
   if (is.numeric(shapes)) shapes <- list(shapes)
   if (!is.list(shapes) || length(shapes) == 0L)
     stop("ggmlR: `shapes` must be a non-empty list of dimension vectors.",
@@ -129,7 +144,8 @@ ag_estimate_training_memory <- function(shapes,
   mb <- function(x) x / 1024^2
   if (!isTRUE(quiet)) {
     cat(sprintf("Training memory estimate (%s, batch %d)\n",
-                optimizer, as.integer(batch_size)))
+                if (is.character(optimizer)) optimizer else class(optimizer)[1L],
+                as.integer(batch_size)))
     cat(sprintf("  parameters      : %s\n", format(n_par, big.mark = " ")))
     cat(sprintf("  weights         : %8.2f MB\n", mb(w_bytes)))
     cat(sprintf("  gradients       : %8.2f MB\n", mb(g_bytes)))

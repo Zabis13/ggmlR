@@ -269,7 +269,7 @@ ag_capture_step <- function(fn, params = NULL, optimizer, max_grad_norm = NULL) 
   if (!is.null(params) && (!is.list(params) || !all(vapply(params, .ag_capture_is_param, logical(1)))))
     stop("ag_capture_step: params must be a list of ag_tensors or ag_buffers", call. = FALSE)
   if (!inherits(optimizer, "ag_optimizer_adam"))
-    stop("ag_capture_step: only optimizer_adam() is supported", call. = FALSE)
+    stop("ag_capture_step: only optimizer_adam() and optimizer_adamw() are supported", call. = FALSE)
   # One recording: shapes are fixed. Kept in an env of its own, so that
   # ag_capture_free() finds only recordings in it.
   cache <- new.env(parent = emptyenv())
@@ -450,7 +450,7 @@ ag_capture_set <- function(f, max_grad_norm) {
 # What the first version records: Adam's fused device step, nothing else.
 .ag_capture_check_opt <- function(opt) {
   if (!inherits(opt, "ag_optimizer_adam"))
-    stop("ag_capture_step: only optimizer_adam() is supported", call. = FALSE)
+    stop("ag_capture_step: only optimizer_adam() and optimizer_adamw() are supported", call. = FALSE)
   if (opt$accumulate_steps > 1L)
     stop("ag_capture_step: gradient accumulation (accumulate_steps > 1) is not ",
          "supported", call. = FALSE)
@@ -710,17 +710,16 @@ ag_capture_set <- function(f, max_grad_norm) {
     if (length(out_ptrs) == 1L) root <- ggml_cont(cx, root)
   }
 
-  ctx_graph <- ggml_init(.ag_graph_ctx_bytes(), no_alloc = TRUE)
-  if (is.null(ctx_graph))
-    stop("ag_capture: failed to create a ggml context for the graph", call. = FALSE)
   # The outputs first, then the ag_set_rows() writes in the order they were
   # made: a read of the written buffer reaches the graph before the write.
+  # Gradients are roots of their own: not reachable from the outputs. Sized
+  # for the recording (.ag_graph_build): an unrolled loop with its backward
+  # outgrows ggml's default 8192 nodes.
   roots <- c(if (!is.null(root)) list(root) else out_ptrs,
-             lapply(effects, function(h) h$ptr))
-  graph <- ggml_build_forward_expand(ctx_graph, roots[[1L]])
-  for (p in roots[-1L]) ggml_graph_expand(graph, p)
-  # Gradients are roots of their own: not reachable from the outputs.
-  for (it in grad_items) ggml_graph_expand(graph, it$g)
+             lapply(effects, function(h) h$ptr), lapply(grad_items, function(it) it$g))
+  gb <- .ag_graph_build(roots, "capture graph")
+  ctx_graph <- gb$ctx
+  graph <- gb$graph
 
   # One buffer per context for every node the recording built.
   for (cx in st[[slots$ctxs]]) .ag_ctx_flush(cx)
@@ -738,12 +737,9 @@ ag_capture_set <- function(f, max_grad_norm) {
       ggml_opt_step_adamw(cx, .ag_handle_of(it$p)$ptr,
                           .Call("R_ggml_leaf_alias", cx, it$g, PACKAGE = "ggmlR"),
                           opt$m[[it$i]]$ptr, opt$v[[it$i]]$ptr, hp_ptr))
-    ctx_graph_opt <- ggml_init(.ag_graph_ctx_bytes(), no_alloc = TRUE)
-    if (is.null(ctx_graph_opt))
-      stop("ag_capture_step: failed to create a ggml context for the Adam graph",
-           call. = FALSE)
-    graph_opt <- ggml_build_forward_expand(ctx_graph_opt, nodes[[1L]])
-    for (nd in nodes[-1L]) ggml_graph_expand(graph_opt, nd)
+    gb_opt <- .ag_graph_build(nodes, "capture Adam graph")
+    ctx_graph_opt <- gb_opt$ctx
+    graph_opt <- gb_opt$graph
   }
 
   cap <- new.env(parent = emptyenv())

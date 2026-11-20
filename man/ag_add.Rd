@@ -9,8 +9,8 @@ ag_add(A, B)
 \arguments{
 \item{A}{ag_tensor or numeric matrix}
 
-\item{B}{ag_tensor or numeric matrix (may be \code{[m,1]} or \code{[1,n]}
-for broadcasting)}
+\item{B}{ag_tensor or numeric matrix (may be \code{[m,1]}, \code{[1,n]} or
+\code{[1,1]} for broadcasting)}
 }
 \value{
 ag_tensor

@@ -65,3 +65,4 @@
 ^tests/testthat/test-sc-seurat\.R$
 ^tests/testthat/test-sc-seurat-compat\.R$
 ^vignettes/single-cell-seurat\.Rmd$
+^data-raw$

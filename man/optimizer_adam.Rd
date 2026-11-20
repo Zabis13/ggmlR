@@ -55,6 +55,8 @@ An optimizer environment with \code{step(grads)}, \code{zero_grad()},
   f16 spacing still accumulate. \code{state()} includes these master
   weights, and \code{load_state()} installs them as the parameter values;
   load the optimizer state after the model's own weights.
+
+  No weight decay: for decoupled decay use \code{\link{optimizer_adamw}}.
 }
 \description{
 Create an Adam optimizer

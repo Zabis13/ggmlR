@@ -370,19 +370,17 @@ ag_local_mode <- function(graph = NULL, matmul_precision = NULL, envir = parent.
   # Throwaway context for the graph itself. Ownership runs one way -- the cgraph
   # holds pointers to tensors that live in the residency context, and ggml_free
   # releases only this context's own mem_buffer -- the same argument .ag_run_op
-  # makes for its per-op graph (R/ag_device.R).
-  ctx_graph <- ggml_init(.ag_graph_ctx_bytes(), no_alloc = TRUE)
-  if (is.null(ctx_graph))
-    stop("ggmlR: failed to create a ggml context for the deferred graph.",
-         call. = FALSE)
-  on.exit(ggml_free(ctx_graph), add = TRUE)
-
+  # makes for its per-op graph (R/ag_device.R). Sized for the queue
+  # (.ag_graph_build): a long queue outgrows ggml's default 8192 nodes.
+  #
   # A failure here belongs to one of the queued operations, but surfaces at
   # whatever read triggered the drain -- name what was queued, and how to get
   # the error at its own call site.
+  gb <- NULL
+  on.exit(if (!is.null(gb)) ggml_free(gb$ctx), add = TRUE)
   tryCatch({
-    graph <- ggml_build_forward_expand(ctx_graph, nodes[[1L]])
-    for (i in seq_along(nodes)[-1L]) ggml_graph_expand(graph, nodes[[i]])
+    gb <- .ag_graph_build(nodes, "deferred graph")
+    graph <- gb$graph
     status <- .ag_graph_compute(backend, graph, "deferred graph")
     # The compute reports failure as a status, not an error. Only a complete
     # success makes this queue's handles "computed"; after anything else they

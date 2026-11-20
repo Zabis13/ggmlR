@@ -51,6 +51,15 @@ extern SEXP R_ggml_sparse_lognorm(SEXP backend_ptr, SEXP vals_, SEXP factor_,
 extern SEXP R_umap_sgd_cpu(SEXP embedding, SEXP from_, SEXP to_, SEXP weights_,
                            SEXP n_, SEXP ne_, SEXP n_epochs_, SEXP n_neg_,
                            SEXP a_, SEXP b_, SEXP alpha0_, SEXP gamma_, SEXP seed_);
+// Prioritized replay sum/min tree (r_per_tree.c)
+extern SEXP R_per_new(SEXP capacity_, SEXP alpha_);
+extern SEXP R_per_set(SEXP ptr, SEXP idx_, SEXP raw_);
+extern SEXP R_per_sample(SEXP ptr, SEXP u_);
+extern SEXP R_per_leaf(SEXP ptr, SEXP idx_);
+extern SEXP R_per_stats(SEXP ptr);
+extern SEXP R_per_raw(SEXP ptr);
+extern SEXP R_per_set_alpha(SEXP ptr, SEXP alpha_);
+extern SEXP R_per_set_max(SEXP ptr, SEXP max_);
 
 // Backend scheduler functions (defined in r_interface_scheduler.c)
 extern SEXP R_ggml_backend_sched_new(SEXP backends_list, SEXP parallel, SEXP graph_size);
@@ -849,6 +858,9 @@ SEXP R_ggml_sgn(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_step(SEXP ctx_ptr, SEXP a_ptr);
 SEXP R_ggml_build_forward_expand(SEXP ctx_ptr, SEXP tensor_ptr);
 SEXP R_ggml_build_forward_expand_grads(SEXP ctx_ptr, SEXP tensor_ptr, SEXP graph_size);
+SEXP R_ggml_graph_count_reachable(SEXP roots);
+SEXP R_ggml_graph_overhead_custom(SEXP size, SEXP grads);
+SEXP R_ggml_build_forward_expand_sized(SEXP ctx_ptr, SEXP tensor_ptr, SEXP size);
 SEXP R_ggml_graph_expand(SEXP graph_ptr, SEXP tensor_ptr);
 SEXP R_ggml_graph_order(SEXP graph_ptr, SEXP tensor_ptr);
 SEXP R_ggml_graph_compute(SEXP ctx_ptr, SEXP graph_ptr);
@@ -1152,6 +1164,9 @@ SEXP R_ggml_pool_2d_back(SEXP ctx_ptr, SEXP a_ptr, SEXP af_ptr, SEXP op,
 SEXP R_ggml_im2col(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                    SEXP s0, SEXP s1, SEXP p0, SEXP p1,
                    SEXP d0, SEXP d1, SEXP is_2D, SEXP dst_type);
+SEXP R_ggml_im2col_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP ne,
+                        SEXP s0, SEXP s1, SEXP p0, SEXP p1,
+                        SEXP d0, SEXP d1, SEXP is_2D);
 SEXP R_ggml_conv_1d_dw(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
                        SEXP s0, SEXP p0, SEXP d0);
 SEXP R_ggml_conv_2d_dw(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
@@ -1439,6 +1454,9 @@ static const R_CallMethodDef CallEntries[] = {
     // Graph building and execution
     {"R_ggml_build_forward_expand", (DL_FUNC) &R_ggml_build_forward_expand, 2},
     {"R_ggml_build_forward_expand_grads", (DL_FUNC) &R_ggml_build_forward_expand_grads, 3},
+    {"R_ggml_graph_count_reachable", (DL_FUNC) &R_ggml_graph_count_reachable, 1},
+    {"R_ggml_graph_overhead_custom", (DL_FUNC) &R_ggml_graph_overhead_custom, 2},
+    {"R_ggml_build_forward_expand_sized", (DL_FUNC) &R_ggml_build_forward_expand_sized, 3},
     {"R_ggml_graph_expand",         (DL_FUNC) &R_ggml_graph_expand,         2},
     {"R_ggml_graph_order",          (DL_FUNC) &R_ggml_graph_order,          2},
     {"R_ggml_graph_compute",        (DL_FUNC) &R_ggml_graph_compute,        2},
@@ -1744,6 +1762,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_pool_2d",           (DL_FUNC) &R_ggml_pool_2d,           9},
     {"R_ggml_pool_2d_back",      (DL_FUNC) &R_ggml_pool_2d_back,      10},
     {"R_ggml_im2col",            (DL_FUNC) &R_ggml_im2col,            11},
+    {"R_ggml_im2col_back",       (DL_FUNC) &R_ggml_im2col_back,       11},
 
     // Quantization functions
     {"R_ggml_quantize_init",             (DL_FUNC) &R_ggml_quantize_init,             1},
@@ -1785,6 +1804,14 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_matmul_f64",               (DL_FUNC) &R_ggml_matmul_f64,                6},
     {"R_ggml_sparse_lognorm",           (DL_FUNC) &R_ggml_sparse_lognorm,            6},
     {"R_umap_sgd_cpu",                  (DL_FUNC) &R_umap_sgd_cpu,                  13},
+    {"R_per_new",                       (DL_FUNC) &R_per_new,                       2},
+    {"R_per_set",                       (DL_FUNC) &R_per_set,                       3},
+    {"R_per_sample",                    (DL_FUNC) &R_per_sample,                    2},
+    {"R_per_leaf",                      (DL_FUNC) &R_per_leaf,                      2},
+    {"R_per_stats",                     (DL_FUNC) &R_per_stats,                     1},
+    {"R_per_raw",                       (DL_FUNC) &R_per_raw,                       1},
+    {"R_per_set_alpha",                 (DL_FUNC) &R_per_set_alpha,                 2},
+    {"R_per_set_max",                   (DL_FUNC) &R_per_set_max,                   2},
 
     // Backend scheduler functions
     {"R_ggml_backend_sched_new",                (DL_FUNC) &R_ggml_backend_sched_new,                3},

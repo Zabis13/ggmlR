@@ -222,6 +222,117 @@ SEXP R_ggml_build_forward_expand_grads(SEXP ctx_ptr, SEXP tensor_ptr, SEXP graph
     return R_MakeExternalPtr(graph, R_NilValue, R_NilValue);
 }
 
+// ---- graphs sized for their work ------------------------------------------
+//
+// ggml_new_graph() holds GGML_DEFAULT_GRAPH_SIZE = 8192 nodes, and an unrolled
+// loop (an LSTM over 128 steps with its backward) needs more; the overflow is
+// a GGML_ASSERT in ggml_visit_parents_graph. The ag_* graphs are therefore
+// built at the size of the work: the number of distinct tensors reachable from
+// the roots through src[] -- what ggml_build_forward_expand visits -- bounds
+// both the node and the leaf count, and the hash set (2x that) holds them.
+// Counted iteratively: ggml's own visit is recursive, and the count must not
+// be what overflows the stack first.
+
+typedef struct { const void ** keys; size_t cap; size_t n; } rg_pset;
+
+static size_t rg_hash(const void * p, size_t cap) {
+    uintptr_t x = (uintptr_t) p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    return (size_t) x & (cap - 1);
+}
+
+// 1 if p was new, 0 if seen, -1 when out of memory
+static int rg_pset_add(rg_pset * s, const void * p) {
+    if (2 * (s->n + 1) > s->cap) {
+        size_t nc = s->cap ? 2 * s->cap : 1024;
+        const void ** nk = (const void **) calloc(nc, sizeof(void *));
+        if (nk == NULL) return -1;
+        for (size_t i = 0; i < s->cap; i++) {
+            if (s->keys[i] == NULL) continue;
+            size_t h = rg_hash(s->keys[i], nc);
+            while (nk[h] != NULL) h = (h + 1) & (nc - 1);
+            nk[h] = s->keys[i];
+        }
+        free(s->keys);
+        s->keys = nk;
+        s->cap = nc;
+    }
+    size_t h = rg_hash(p, s->cap);
+    while (s->keys[h] != NULL) {
+        if (s->keys[h] == p) return 0;
+        h = (h + 1) & (s->cap - 1);
+    }
+    s->keys[h] = p;
+    s->n++;
+    return 1;
+}
+
+// Number of distinct tensors reachable from a list of tensor pointers.
+SEXP R_ggml_graph_count_reachable(SEXP roots) {
+    if (!isNewList(roots)) error("roots must be a list of tensor pointers");
+    R_xlen_t nr = XLENGTH(roots);
+    for (R_xlen_t i = 0; i < nr; i++) {
+        if (R_ExternalPtrAddr(VECTOR_ELT(roots, i)) == NULL)
+            error("root %d is a NULL tensor pointer", (int) i + 1);
+    }
+    rg_pset seen = { NULL, 0, 0 };
+    size_t st_cap = 1024, st_n = 0;
+    struct ggml_tensor ** st = (struct ggml_tensor **) malloc(st_cap * sizeof(*st));
+    if (st == NULL) error("out of memory counting graph nodes");
+    int oom = 0;
+    for (R_xlen_t i = 0; i < nr && !oom; i++) {
+        st_n = 0;
+        st[st_n++] = (struct ggml_tensor *) R_ExternalPtrAddr(VECTOR_ELT(roots, i));
+        while (st_n > 0 && !oom) {
+            struct ggml_tensor * t = st[--st_n];
+            int added = rg_pset_add(&seen, t);
+            if (added < 0) { oom = 1; break; }
+            if (added == 0) continue;
+            for (int k = 0; k < GGML_MAX_SRC; k++) {
+                if (t->src[k] == NULL) continue;
+                if (st_n == st_cap) {
+                    struct ggml_tensor ** ns =
+                        (struct ggml_tensor **) realloc(st, 2 * st_cap * sizeof(*st));
+                    if (ns == NULL) { oom = 1; break; }
+                    st = ns;
+                    st_cap *= 2;
+                }
+                st[st_n++] = t->src[k];
+            }
+        }
+    }
+    size_t n = seen.n;
+    free(st);
+    free(seen.keys);
+    if (oom) error("out of memory counting graph nodes");
+    return ScalarReal((double) n);
+}
+
+// Bytes a graph of `size` nodes takes in its context (no gradients).
+SEXP R_ggml_graph_overhead_custom(SEXP size_sexp, SEXP grads_sexp) {
+    double size = asReal(size_sexp);
+    if (!(size >= 1)) error("graph size must be >= 1");
+    return ScalarReal((double) ggml_graph_overhead_custom((size_t) size, asLogical(grads_sexp)));
+}
+
+// ggml_build_forward_expand into a graph of `size` nodes (no gradients); the
+// context must hold ggml_graph_overhead_custom(size, FALSE).
+SEXP R_ggml_build_forward_expand_sized(SEXP ctx_ptr, SEXP tensor_ptr, SEXP size_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
+    if (ctx == NULL || tensor == NULL) {
+        error("Invalid pointer (context or tensor is NULL)");
+    }
+    double size = asReal(size_sexp);
+    if (!(size >= 1)) error("graph size must be >= 1");
+    struct ggml_cgraph * graph = ggml_new_graph_custom(ctx, (size_t) size, false);
+    if (graph == NULL) {
+        error("Failed to create computation graph");
+    }
+    ggml_build_forward_expand(graph, tensor);
+    return R_MakeExternalPtr(graph, R_NilValue, R_NilValue);
+}
+
 SEXP R_ggml_build_forward_expand(SEXP ctx_ptr, SEXP tensor_ptr) {
     struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
     struct ggml_tensor * tensor = (struct ggml_tensor *) R_ExternalPtrAddr(tensor_ptr);
@@ -4277,6 +4388,58 @@ SEXP R_ggml_im2col(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr,
 
     if (result == NULL) {
         error("Failed to create im2col operation");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
+// Backward of im2col: scatter-add the column gradient back onto the image.
+// a = gradient of the im2col output, b = the convolution kernel (only its KW,
+// KH are read), ne = the shape of the im2col input (4 values). This is the
+// order the kernels read (src0 = gradient, src1 = kernel; CPU
+// ggml_compute_forward_im2col_back_f32, Vulkan ggml_vk_im2col_back) and the
+// order ggml-graph.c's IM2COL rule calls it with (upstream's ggml.h comments
+// had them swapped; ours are corrected). F32 only: Vulkan's supports_op
+// requires both sources F32.
+SEXP R_ggml_im2col_back(SEXP ctx_ptr, SEXP a_ptr, SEXP b_ptr, SEXP ne_sexp,
+                        SEXP s0_sexp, SEXP s1_sexp,
+                        SEXP p0_sexp, SEXP p1_sexp,
+                        SEXP d0_sexp, SEXP d1_sexp,
+                        SEXP is_2D_sexp) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    struct ggml_tensor * b = (struct ggml_tensor *) R_ExternalPtrAddr(b_ptr);
+
+    if (ctx == NULL || a == NULL || b == NULL) {
+        error("Invalid pointer");
+    }
+    if (a->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32) {
+        error("ggml_im2col_back: kernel and gradient must be F32");
+    }
+    if (XLENGTH(ne_sexp) != 4) {
+        error("ggml_im2col_back: ne must have 4 values");
+    }
+
+    int64_t ne[4];
+    SEXP ne_real = PROTECT(coerceVector(ne_sexp, REALSXP));
+    for (int i = 0; i < 4; i++) {
+        double v = REAL(ne_real)[i];
+        if (!(v >= 1)) {
+            UNPROTECT(1);
+            error("ggml_im2col_back: ne values must be >= 1");
+        }
+        ne[i] = (int64_t) v;
+    }
+    UNPROTECT(1);
+
+    struct ggml_tensor * result = ggml_im2col_back(ctx, a, b, ne,
+        asInteger(s0_sexp), asInteger(s1_sexp),
+        asInteger(p0_sexp), asInteger(p1_sexp),
+        asInteger(d0_sexp), asInteger(d1_sexp),
+        asLogical(is_2D_sexp));
+
+    if (result == NULL) {
+        error("Failed to create im2col_back operation");
     }
 
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);

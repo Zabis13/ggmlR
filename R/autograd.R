@@ -370,6 +370,16 @@ ag_matmul <- function(A, B) {
   out
 }
 
+# Host broadcast of b over a for add / sub, as ggml_add does on the device:
+# each axis of size 1 in b is repeated to a's size, both at once for [1, 1].
+.ag_bcast_b <- function(a_data, b_data) {
+  if (is.null(dim(b_data)) || is.null(dim(a_data))) return(b_data)
+  nr <- nrow(a_data); nc <- ncol(a_data)
+  if (nrow(b_data) == 1L && nr > 1L) b_data <- b_data[rep(1L, nr), , drop = FALSE]
+  if (ncol(b_data) == 1L && nc > 1L) b_data <- b_data[, rep(1L, nc), drop = FALSE]
+  b_data
+}
+
 #' Element-wise addition with broadcasting
 #'
 #' Computes \code{A + B}. If \code{B} is \code{[m, 1]} and \code{A} is
@@ -377,8 +387,8 @@ ag_matmul <- function(A, B) {
 #' vectors).
 #'
 #' @param A ag_tensor or numeric matrix
-#' @param B ag_tensor or numeric matrix (may be \code{[m,1]} or \code{[1,n]}
-#'   for broadcasting)
+#' @param B ag_tensor or numeric matrix (may be \code{[m,1]}, \code{[1,n]} or
+#'   \code{[1,1]} for broadcasting)
 #' @return ag_tensor
 #' @export
 ag_add <- function(A, B) {
@@ -406,18 +416,7 @@ ag_add <- function(A, B) {
     b_data <- .ag_data(B)
     b_orig <- b_data
 
-    # Broadcasting: if b is [m, 1] and a is [m, n], broadcast
-    needs_broadcast <- !is.null(dim(b_data)) && !is.null(dim(a_data)) &&
-      ((ncol(b_data) == 1L && ncol(a_data) > 1L) ||
-       (nrow(b_data) == 1L && nrow(a_data) > 1L))
-
-    if (needs_broadcast) {
-      if (ncol(b_data) == 1L && ncol(a_data) > 1L) {
-        b_data <- matrix(b_data[, 1L], nrow = nrow(b_data), ncol = ncol(a_data))
-      } else {
-        b_data <- matrix(b_data[1L, ], nrow = nrow(a_data), ncol = ncol(b_data), byrow = TRUE)
-      }
-    }
+    b_data <- .ag_bcast_b(a_data, b_data)
     out    <- ag_tensor(a_data + b_data, device = device)
     out_sh <- c(nrow(a_data), ncol(a_data))
   }
@@ -434,14 +433,13 @@ ag_add <- function(A, B) {
         # Shapes through the accessors: b_orig may be a device handle, and
         # nrow()/ncol() on one return NULL. Only the SHAPE is needed to pick the
         # reduction, so nothing is materialised here.
+        # Each broadcast axis is reduced, [1, 1] on both.
         b_dim <- .ag_dim(b_orig)
-        if (!is.null(b_dim) && b_dim[2L] == 1L && ncol(grad_out) > 1L) {
-          gb <- matrix(rowSums(grad_out), ncol = 1L)
-        } else if (!is.null(b_dim) && b_dim[1L] == 1L && nrow(grad_out) > 1L) {
-          gb <- matrix(colSums(grad_out), nrow = 1L)
-        } else {
-          gb <- grad_out
-        }
+        gb <- grad_out
+        if (!is.null(b_dim) && b_dim[1L] == 1L && nrow(gb) > 1L)
+          gb <- matrix(colSums(gb), nrow = 1L)
+        if (!is.null(b_dim) && b_dim[2L] == 1L && ncol(gb) > 1L)
+          gb <- matrix(rowSums(gb), ncol = 1L)
       }
       list(A = ga, B = gb)
     }
@@ -479,17 +477,7 @@ ag_sub <- function(A, B) {
     b_data <- .ag_data(B)
     b_orig <- b_data
 
-    # Broadcasting: expand b to match a shape for elementwise computation
-    needs_broadcast <- !is.null(dim(b_data)) && !is.null(dim(a_data)) &&
-      ((ncol(b_data) == 1L && ncol(a_data) > 1L) ||
-       (nrow(b_data) == 1L && nrow(a_data) > 1L))
-    if (needs_broadcast) {
-      if (ncol(b_data) == 1L && ncol(a_data) > 1L) {
-        b_data <- matrix(b_data[, 1L], nrow = nrow(b_data), ncol = ncol(a_data))
-      } else {
-        b_data <- matrix(b_data[1L, ], nrow = nrow(a_data), ncol = ncol(b_data), byrow = TRUE)
-      }
-    }
+    b_data <- .ag_bcast_b(a_data, b_data)
     out <- ag_tensor(a_data - b_data, device = device)
   }
   out$requires_grad <- (is_ag_tensor(A) && A$requires_grad) ||
@@ -1528,6 +1516,8 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
 #'   f16 spacing still accumulate. \code{state()} includes these master
 #'   weights, and \code{load_state()} installs them as the parameter values;
 #'   load the optimizer state after the model's own weights.
+#'
+#'   No weight decay: for decoupled decay use \code{\link{optimizer_adamw}}.
 #' @export
 #' @examples
 #' \donttest{
@@ -1536,6 +1526,54 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
 #' }
 optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
                            eps = 1e-8, accumulate_steps = 1L, average = TRUE) {
+  .ag_optimizer_adam_impl(params, lr, beta1, beta2, eps, accumulate_steps,
+                          average, weight_decay = 0, type = "adam")
+}
+
+#' Create an AdamW optimizer
+#'
+#' Adam with decoupled weight decay (Loshchilov & Hutter), as
+#' \code{torch.optim.AdamW}: every step first shrinks the weight,
+#' \code{w <- w * (1 - lr * weight_decay)}, then applies the Adam update. The
+#' decay is not added to the gradient, so it does not enter the moments (that
+#' would be L2 regularisation). It scales with the current \code{lr}, so a
+#' learning-rate schedule changes it too.
+#'
+#' Everything else -- device step, F32 master weights, accumulation,
+#' \code{state()} / \code{load_state()}, \code{\link{ag_capture_step}} -- is
+#' as for \code{\link{optimizer_adam}}; the object inherits from
+#' \code{ag_optimizer_adam}.
+#'
+#' @inheritParams optimizer_adam
+#' @param weight_decay Decoupled weight decay factor (default 0.01), \code{>= 0}.
+#' @return An optimizer environment, class
+#'   \code{c("ag_optimizer_adamw", "ag_optimizer_adam")}.
+#' @export
+#' @examples
+#' \donttest{
+#' w <- ag_param(matrix(runif(4), 2, 2))
+#' opt <- optimizer_adamw(list(w = w), lr = 1e-3, weight_decay = 0.01)
+#' }
+optimizer_adamw <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
+                            eps = 1e-8, weight_decay = 0.01,
+                            accumulate_steps = 1L, average = TRUE) {
+  if (!is.numeric(weight_decay) || length(weight_decay) != 1L || !(weight_decay >= 0))
+    stop("optimizer_adamw: weight_decay must be a non-negative number", call. = FALSE)
+  .ag_optimizer_adam_impl(params, lr, beta1, beta2, eps, accumulate_steps,
+                          average, weight_decay = weight_decay, type = "adamw")
+}
+
+# Hyperparameters recorded in state(). weight_decay only when non-zero, so a
+# state saved before AdamW existed loads into optimizer_adam without a warning.
+.ag_adam_hyper <- function(env) {
+  h <- list(lr = env$lr, beta1 = env$beta1, beta2 = env$beta2, eps = env$eps)
+  if (env$weight_decay != 0) h$weight_decay <- env$weight_decay
+  h
+}
+
+.ag_optimizer_adam_impl <- function(params, lr, beta1, beta2, eps,
+                                    accumulate_steps, average,
+                                    weight_decay, type) {
   stopifnot(is.list(params))
   accumulate_steps <- as.integer(accumulate_steps)
   if (is.na(accumulate_steps) || accumulate_steps < 1L) {
@@ -1548,6 +1586,8 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
   env$beta1  <- beta1
   env$beta2  <- beta2
   env$eps    <- eps
+  env$weight_decay <- weight_decay   # decoupled (AdamW); 0 for optimizer_adam
+  env$type   <- type
   env$t      <- 0L
   env$accumulate_steps <- accumulate_steps
   env$average          <- isTRUE(average)
@@ -1628,7 +1668,9 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
       # Read-modify-write on the parameter: see the SGD step above and
       # inst/docs/ag_data_contract.md.
       w <- .ag_data_mut(p)
-      .ag_opt_store_weight(p, w - env$lr * m_hat / (sqrt(v_hat) + env$eps))
+      # Decoupled decay first (AdamW), as the native kernel: w*(1 - lr*wd) - ...
+      .ag_opt_store_weight(p, w * (1 - env$lr * env$weight_decay) -
+                              env$lr * m_hat / (sqrt(v_hat) + env$eps))
     }
 
     # Fused when enabled and every item is eligible (F32, live handles); the
@@ -1653,14 +1695,24 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
   }
 
   # Checkpoint support (see .ag_opt_state): m, v, t and accum_count.
-  env$state <- function() .ag_opt_state(env, "adam", c("m", "v"),
-    list(lr = env$lr, beta1 = env$beta1, beta2 = env$beta2, eps = env$eps),
-    master = TRUE)
-  env$load_state <- function(state) .ag_opt_load_state(env, state, "adam", c("m", "v"),
-    list(lr = env$lr, beta1 = env$beta1, beta2 = env$beta2, eps = env$eps))
+  env$state <- function() .ag_opt_state(env, env$type, c("m", "v"),
+    .ag_adam_hyper(env), master = TRUE)
+  env$load_state <- function(state) .ag_opt_load_state(env, state, env$type, c("m", "v"),
+    .ag_adam_hyper(env))
 
-  class(env) <- "ag_optimizer_adam"
+  class(env) <- if (identical(type, "adamw")) c("ag_optimizer_adamw", "ag_optimizer_adam")
+                else "ag_optimizer_adam"
   env
+}
+
+#' @export
+print.ag_optimizer_adamw <- function(x, ...) {
+  cat("AdamW optimizer | lr =", x$lr,
+      "| beta1 =", x$beta1, "| beta2 =", x$beta2,
+      "| weight_decay =", x$weight_decay,
+      "| step =", x$t,
+      "| params:", length(x$params), "\n")
+  invisible(x)
 }
 
 #' @export
@@ -1955,6 +2007,42 @@ ag_exp <- function(x) {
     ag_record(out, grad_fn, list(x = x), op = "elemwise_mul", mult = e_snap)
   }
   out
+}
+
+# sin / cos share one body: `f` the R function, `gpu` the device op, `df` the
+# derivative as a function of x (on the same device as the forward).
+.ag_trig <- function(x, f, gpu, df) {
+  device <- if (is_ag_tensor(x)) x$device else "cpu"
+  out <- if (device == "gpu") .ag_wrap_result(gpu(.ag_operand(x)), device) else
+    ag_tensor(f(.ag_data(x)), device = device, dtype = .ag_device_state$dtype)
+  out$requires_grad <- is_ag_tensor(x) && x$requires_grad
+  if (out$requires_grad) {
+    d_snap <- df(x)
+    grad_fn <- function(grad_out) list(x = grad_out * .ag_as_matrix(d_snap))
+    out$grad_fn <- grad_fn
+    ag_record(out, grad_fn, list(x = x), op = "elemwise_mul", mult = d_snap)
+  }
+  out
+}
+
+#' Element-wise sine and cosine
+#'
+#' @param x ag_tensor
+#' @return ag_tensor
+#' @export
+ag_sin <- function(x) {
+  .ag_trig(x, sin, .ag_gpu_sin, function(x) {
+    if (is_ag_tensor(x) && x$device == "gpu") .ag_gpu_cos(.ag_operand(x)) else cos(.ag_data(x))
+  })
+}
+
+#' @rdname ag_sin
+#' @export
+ag_cos <- function(x) {
+  .ag_trig(x, cos, .ag_gpu_cos, function(x) {
+    if (is_ag_tensor(x) && x$device == "gpu") .ag_gpu_scale(.ag_gpu_sin(.ag_operand(x)), -1) else
+      -sin(.ag_data(x))
+  })
 }
 
 #' Reshape tensor

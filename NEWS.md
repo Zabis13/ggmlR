@@ -1,3 +1,12 @@
+# ggmlR 0.8.9.4
+
+* RL building blocks for `ag_*`: `ag_gae()`, `ag_discounted_returns()`, `ag_nstep_targets()`, `ag_huber_loss()`, `ag_entropy()`, `ag_normal_log_prob()`, and target networks with `ag_soft_update()` / `ag_hard_update()`.
+* `ag_replay_buffer()` — replay on the device, uniform or prioritized (`ag_per_sampler()`), with save/load.
+* `optimizer_adamw()` and `optimizer_rmsprop()`; AdamW also runs fused on the device and under `ag_capture_step()`.
+* Recurrent and convolutional layers: `ag_lstm()` / `ag_gru()` (and their cells) and `ag_conv2d()` / `ag_conv2d_layer()`, with PyTorch's weight layout; convolutions train on the GPU under `ag_capture_step()`.
+* New elementwise ops with gradients: `ag_div()`, `ag_sqrt()`, `ag_abs()`, `ag_minimum()`, `ag_maximum()`, `ag_where()`, `ag_softplus()`, `ag_logsumexp()`, `ag_sin()`, `ag_cos()`, `ag_detach()`.
+* `ggml_im2col_back()` — the backward of `ggml_im2col()`, on the CPU and Vulkan.
+
 # ggmlR 0.8.9.3
 
 * `ggml_out_prod_rowsum()` — `ggml_out_prod()` plus the row sums of `a`, on the CPU and on Vulkan; the `ag_*` backward uses it to get a dense layer's weight and bias gradients in one node (fused epilogue).

@@ -2211,8 +2211,8 @@ extern "C" {
 
     GGML_API struct ggml_tensor * ggml_im2col_back(
         struct ggml_context * ctx,
-        struct ggml_tensor  * a,  // convolution kernel
-        struct ggml_tensor  * b,  // gradient of im2col output
+        struct ggml_tensor  * a,  // gradient of im2col output (src0; the kernels read it first)
+        struct ggml_tensor  * b,  // convolution kernel, only KW and KH are read (src1)
         int64_t             * ne, // shape of im2col input
         int                   s0, // stride dimension 0
         int                   s1, // stride dimension 1

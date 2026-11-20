@@ -34,8 +34,14 @@ M  <- matrix(rnorm(15), 5, 3)
 R1 <- matrix(rnorm(3), 1, 3)          # row vector, broadcast down rows
 C1 <- matrix(rnorm(5), 5, 1)          # column vector, broadcast across columns
 EDGE <- matrix(c(-0.5, 0.5, -0.2, 0.3, -0.9, 0.8, 0.5, -0.5, 0.1, 0, 0.7, -0.7, 0.25, -0.25, 0.45), 5, 3)
+S1 <- matrix(0.7, 1, 1)               # scalar, broadcast over both axes
 
 cases <- list(
+  add_same   = list(f = ag_add, x = list(M, M * 0.3)),
+  add_row    = list(f = ag_add, x = list(M, R1)),
+  add_col    = list(f = ag_add, x = list(M, C1)),
+  add_scal   = list(f = ag_add, x = list(M, S1)),
+  sub_scal   = list(f = ag_sub, x = list(M, S1)),
   sub_same   = list(f = ag_sub, x = list(M, M * 0.3)),
   sub_row    = list(f = ag_sub, x = list(M, R1)),
   sub_col    = list(f = ag_sub, x = list(M, C1)),
@@ -52,6 +58,8 @@ cases <- list(
   mean_rows  = list(f = function(x) ag_mean(x, dim = 1L), x = list(M)),
   mean_cols  = list(f = function(x) ag_mean(x, dim = 2L), x = list(M)),
   exp        = list(f = ag_exp, x = list(M)),
+  sin        = list(f = ag_sin, x = list(M)),
+  cos        = list(f = ag_cos, x = list(M)),
   clamp_edge = list(f = function(x) ag_clamp(x, -0.5, 0.5), x = list(EDGE)),
   clamp_inf  = list(f = function(x) ag_clamp(x, -Inf, 0.2), x = list(M)))
 

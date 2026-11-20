@@ -954,18 +954,20 @@ Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM),
 
 | Category | Functions |
 |---|---|
-| Linear | `ag_matmul`, `ag_add`, `ag_sub`, `ag_mul`, `ag_scale` |
-| Activations | `ag_relu`, `ag_sigmoid`, `ag_tanh`, `ag_softmax` |
-| Reductions | `ag_sum`, `ag_mean` (with `dim`, `keepdim`) |
-| Math | `ag_log`, `ag_exp`, `ag_pow`, `ag_clamp` |
+| Linear | `ag_matmul`, `ag_add`, `ag_sub`, `ag_mul`, `ag_div`, `ag_scale` |
+| Activations | `ag_relu`, `ag_sigmoid`, `ag_tanh`, `ag_softmax`, `ag_softplus`, `ag_silu` |
+| Reductions | `ag_sum`, `ag_mean` (with `dim`, `keepdim`), `ag_logsumexp` |
+| Math | `ag_log`, `ag_exp`, `ag_pow`, `ag_clamp`, `ag_sqrt`, `ag_abs`, `ag_sin`, `ag_cos`, `ag_minimum`, `ag_maximum`, `ag_where`, `ag_detach` |
 | Shape | `ag_reshape`, `ag_transpose`, `ag_slice_rows`, `ag_concat_rows` |
 | Device buffers | `ag_buffer`, `ag_buffer_write`, `ag_buffer_read`, `ag_buffer_free`, `ag_get_rows`, `ag_buffer_copy_from` (see [Device buffers](#device-buffers)) |
 | Action selection | `ag_log_softmax`, `ag_argmax`, `ag_sample_categorical`, `ag_sample_normal`, `ag_gather`, `ag_rand` (see [Action selection on the device](#action-selection-on-the-device)) |
 | Attention | `ag_multihead_attention`, `ag_flash_attention` (all heads in one fused op) |
-| Loss | `ag_mse_loss`, `ag_cross_entropy_loss`, `ag_softmax_cross_entropy_loss` |
-| Layers | `ag_linear`, `ag_batch_norm`, `ag_layer_norm`, `ag_dropout`, `ag_embedding` |
+| Loss | `ag_mse_loss`, `ag_cross_entropy_loss`, `ag_softmax_cross_entropy_loss`, `ag_huber_loss`, `ag_smooth_l1_loss` |
+| Layers | `ag_linear`, `ag_conv2d_layer`, `ag_lstm`, `ag_gru` (and `ag_lstm_cell`, `ag_gru_cell`), `ag_batch_norm`, `ag_layer_norm`, `ag_rms_norm`, `ag_dropout`, `ag_embedding` |
 | Containers | `ag_sequential` |
-| Optimizers | `optimizer_sgd`, `optimizer_adam` |
+| Convolution | `ag_conv2d` (see [Reinforcement learning building blocks](#reinforcement-learning-building-blocks)) |
+| Optimizers | `optimizer_sgd`, `optimizer_adam`, `optimizer_adamw`, `optimizer_rmsprop` |
+| Reinforcement learning | `ag_gae`, `ag_discounted_returns`, `ag_nstep_targets`, `ag_entropy`, `ag_normal_log_prob`, `ag_normal_entropy`, `ag_soft_update`, `ag_hard_update`, `ag_replay_buffer`, `ag_per_sampler` (see [Reinforcement learning building blocks](#reinforcement-learning-building-blocks)) |
 | Schedulers | `lr_scheduler_step`, `lr_scheduler_cosine` (SGDR via `T_mult`), `lr_scheduler_onecycle`, `lr_scheduler_cyclic`, `lr_scheduler_warmup_cosine` |
 | Memory | `ag_checkpoint` (recompute a segment instead of storing its activations) |
 | Utilities | `clip_grad_norm`, `clip_grad_value`, `check_grad_anomaly`, `ag_gradcheck`, `dp_train` |
@@ -1364,6 +1366,65 @@ r <- act(x = obs, key = matrix(runif(2), 2, 1))   # r$a: 0-based actions, r$logp
   with the other outputs: exact up to 2^24 classes in f32, 2048 in f16.
 * Mask illegal actions by adding a large finite negative number (`-1e4`) before
   the softmax.
+
+### Reinforcement learning building blocks
+
+The pieces an on-policy (PPO) or off-policy (DQN, SAC, TD3) agent is built
+from, on top of the ops above. Layouts follow the rest of the engine
+(`[features, batch]`); rollouts are `[T, n_envs]`.
+
+```r
+# Returns: terminated and truncated are kept apart; a truncated step is
+# bootstrapped from the value of its final observation (next_values).
+g <- ag_gae(rewards, values, terminated, truncated, next_values = v_final,
+            last_value = v_last, gamma = 0.99, lambda = 0.95)
+g$advantages; g$returns
+
+# Off-policy: replay on the device, prioritized, and a Polyak target network
+rb <- ag_replay_buffer(obs_dim = 8, act_dim = 1, capacity = 100000, n_envs = 16,
+                       prioritized = TRUE)
+rb$add(obs, act, reward, terminated, truncated, next_obs)   # one step of 16 envs
+b <- rb$sample(256, beta = 0.4)                 # b$idx (0-based), b$weights
+x <- rb$gather(b$idx)                           # [rows, 256] on the device
+q_in <- rb$slice(x, c("obs", "act")); r <- rb$field(x, "reward")
+rb$update_priorities(b$idx, td_errors)
+ag_soft_update(q_target, q_net, tau = 0.005)    # target first
+
+# Pixels: Nature-CNN encoder, images as [C*H*W, B] columns (W fastest)
+conv1 <- ag_conv2d_layer(4, 32, kernel_size = 8, in_hw = c(84, 84), stride = 4)
+conv2 <- ag_conv2d_layer(32, 64, kernel_size = 4, in_hw = conv1$out_shape[2:3], stride = 2)
+h <- ag_relu(conv2$forward(ag_relu(conv1$forward(ag_scale(frames, 1 / 255)))))
+
+# Memory: an LSTM over a rollout, state reset where an episode starts
+lstm <- ag_lstm(input_size = 64, hidden_size = 128)
+r <- lstm$forward(xs, state = h0, starts = episode_starts)   # xs: list of T [64, B]
+```
+
+* **Losses**: `ag_huber_loss()` / `ag_smooth_l1_loss()` for TD errors,
+  `ag_entropy()` of a categorical policy from its logits,
+  `ag_normal_log_prob()` / `ag_normal_entropy()` for Gaussian policies.
+* **Optimizers**: `optimizer_adamw()` (decoupled weight decay) runs in the
+  fused device kernel and under `ag_capture_step()`; `optimizer_rmsprop()`
+  (as in A2C / the DQN paper, with `momentum` and `centered`).
+* **Prioritized replay** samples stratified, proportional to
+  \|δ\|^α; importance weights are normalised by the maximum over the whole
+  buffer, not the batch (as in the paper). `ag_per_sampler()` is the sampler
+  alone, for any storage.
+* **Recurrent layers** use PyTorch's weight layout and gate order (weights
+  copy one to one); `init = "rl"` (default) starts with orthogonal recurrent
+  weights and an LSTM forget bias of 1, `init = "torch"` reproduces PyTorch.
+  `layer$cell$forward(x, state)` runs single steps during a rollout with the
+  same weights.
+* **Convolution** weights are `[OC, C*KH*KW]` in PyTorch's order; a torch
+  kernel `w` (`[OC, C, KH, KW]`) becomes `matrix(aperm(w, c(1, 4, 3, 2)), OC)`.
+  On the GPU the forward is one graph and the backward a graph rule
+  (`im2col` is recomputed, not stored), so a convolutional policy trains under
+  `ag_capture_step()` with a fixed batch size. On the CPU the convolution is a
+  reference implementation in R, not a fast path. Scaling pixels (`/ 255`) is
+  the caller's.
+* **Matmul precision**: convolutions follow `ag_matmul_precision()` like every
+  other matmul; on an fp16/coopmat Vulkan device the default keeps tiles in
+  f16 (~4e-4 relative).
 
 ### Budgeting a training run
 

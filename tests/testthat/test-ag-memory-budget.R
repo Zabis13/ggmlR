@@ -63,7 +63,8 @@ test_that("bad input is refused rather than silently estimated", {
   expect_error(ag_estimate_training_memory(list()), "non-empty")
   expect_error(ag_estimate_training_memory(list(c(-1, 4))), "positive")
   expect_error(ag_estimate_training_memory(list(c(4, NA))), "positive")
-  expect_error(ag_estimate_training_memory(list(c(4, 4)), optimizer = "rmsprop"))
+  expect_error(ag_estimate_training_memory(list(c(4, 4)), optimizer = "nadam"),
+               "unknown optimizer .*rmsprop_momentum_centered")
 })
 
 test_that("the report is printed, and quiet suppresses it", {

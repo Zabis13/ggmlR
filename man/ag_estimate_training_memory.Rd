@@ -7,7 +7,7 @@
 ag_estimate_training_memory(
   shapes,
   batch_size = 32L,
-  optimizer = c("adam", "sgd", "sgd_plain"),
+  optimizer = "adam",
   activation_frac = 0.01,
   quiet = FALSE
 )
@@ -19,8 +19,11 @@ ag_estimate_training_memory(
 \item{batch_size}{Batch size the activations are sized for. Activations
 scale with it; weights and optimizer state do not.}
 
-\item{optimizer}{One of \code{"adam"} (keeps m and v), \code{"sgd"} (keeps a
-velocity, i.e. momentum > 0) or \code{"sgd_plain"} (no state).}
+\item{optimizer}{An optimizer object (counted by the state slots it holds)
+or one of \code{"adam"}, \code{"adamw"} (m and v), \code{"sgd"} (a
+velocity), \code{"sgd_plain"} (no state), \code{"rmsprop"},
+\code{"rmsprop_momentum"}, \code{"rmsprop_centered"},
+\code{"rmsprop_momentum_centered"} (1 to 3 slots). Default \code{"adam"}.}
 
 \item{activation_frac}{Activations as a fraction of the weight bytes, per
 unit of batch. The default 0.01 reproduces the measured tape composition

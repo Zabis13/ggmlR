@@ -607,8 +607,34 @@ ag_to_device <- function(tensor, device) {
 # cgraph is allocated inside the context, so the context must be able to hold
 # ggml_graph_overhead() no matter how small the op is. Asking ggml for the
 # figure keeps this correct if the default or the struct layout changes.
-.ag_graph_ctx_bytes <- function() {
-  as.double(ggml_graph_overhead()) + 64 * 1024   # + slack for object headers
+.ag_graph_ctx_bytes <- function(size = NULL) {
+  oh <- if (is.null(size)) ggml_graph_overhead()
+        else .Call("R_ggml_graph_overhead_custom", as.double(size), FALSE, PACKAGE = "ggmlR")
+  as.double(oh) + 64 * 1024   # + slack for object headers
+}
+
+# A graph over `roots` (a list of tensor pointers) in a throwaway context sized
+# for it. ggml_new_graph() holds GGML_DEFAULT_GRAPH_SIZE = 8192 nodes; an
+# unrolled loop exceeds that (an LSTM over 128 steps with its backward: ~10k)
+# and the overflow is a GGML_ASSERT. Size = the distinct tensors reachable from
+# the roots (counted in C, iteratively), at least 8192 -- so small graphs are
+# built exactly as before. Used where graphs grow with the work: the deferred
+# graph, the graph backward and ag_capture recordings; a single op keeps the
+# default. Returns list(ctx, graph); the caller frees ctx.
+.ag_graph_build <- function(roots, what) {
+  n <- .Call("R_ggml_graph_count_reachable", roots, PACKAGE = "ggmlR")
+  size <- max(8192, n + 16)
+  ctx <- ggml_init(.ag_graph_ctx_bytes(size), no_alloc = TRUE)
+  if (is.null(ctx))
+    stop("ggmlR: failed to create a ggml context for the ", what, " (", size, " nodes)",
+         call. = FALSE)
+  graph <- tryCatch({
+    g <- .Call("R_ggml_build_forward_expand_sized", ctx, roots[[1L]], size,
+               PACKAGE = "ggmlR")
+    for (r in roots[-1L]) ggml_graph_expand(g, r)
+    g
+  }, error = function(e) { ggml_free(ctx); stop(e) })
+  list(ctx = ctx, graph = graph, size = size)
 }
 
 # Execute a ggml graph for a single result node and return its data as a matrix.
@@ -1044,6 +1070,24 @@ GGML_PREC_F32 <- 10L
   )
 }
 
+.ag_gpu_sin <- function(x_data) {
+  .ag_run_op(
+    op_fn    = function(ctx, ptrs) ggml_sin(ctx, ptrs[[1L]]),
+    inputs   = list(x_data),
+    out_shape = .ag_dim(x_data),
+    resident  = .ag_is_handle(x_data)
+  )
+}
+
+.ag_gpu_cos <- function(x_data) {
+  .ag_run_op(
+    op_fn    = function(ctx, ptrs) ggml_cos(ctx, ptrs[[1L]]),
+    inputs   = list(x_data),
+    out_shape = .ag_dim(x_data),
+    resident  = .ag_is_handle(x_data)
+  )
+}
+
 .ag_gpu_silu <- function(x_data) {
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_silu(ctx, ptrs[[1L]]),
@@ -1327,6 +1371,7 @@ GGML_PREC_F32 <- 10L
   bc1 <- 1 - b1^env$t                     # bias correction, m
   bc2 <- 1 - b2^env$t                     # bias correction, v
   lr <- env$lr; eps <- env$eps
+  keep <- 1 - lr * (env$weight_decay %||% 0)   # AdamW decoupled decay; 1 for Adam
 
   # scope = "pass" and out = <persistent handle> is the combination that makes
   # this free of leaks: the intermediates are garbage the moment the step ends
@@ -1370,7 +1415,8 @@ GGML_PREC_F32 <- 10L
                num <- ggml_scale(ctx, ptrs[[2L]], lr / bc1)
                den <- ggml_scale_bias(ctx,
                         ggml_sqrt(ctx, ggml_scale(ctx, ptrs[[3L]], 1 / bc2)), 1, eps)
-               ggml_sub(ctx, ptrs[[1L]], ggml_div(ctx, num, den))
+               w <- if (keep != 1) ggml_scale(ctx, ptrs[[1L]], keep) else ptrs[[1L]]
+               ggml_sub(ctx, w, ggml_div(ctx, num, den))
              },
              inputs = list(mw, new_m, new_v), out_shape = sh, dtype = "f32",
              scope = "pass", resident = TRUE)
@@ -1414,7 +1460,7 @@ GGML_PREC_F32 <- 10L
 # backend may run them in any order.
 #
 # Same formula as .ag_adam_step_device_impl and the host step (eps outside the
-# square root, bias correction as 1/bc factors, no weight decay: wd = 0 makes
+# square root, bias correction as 1/bc factors, decoupled weight decay env$weight_decay -- 0 for Adam, which makes
 # the kernel's decay factor exactly 1.0f). Not bit-identical to the per-op path:
 # lr * (m * (1/bc1)) rounds differently from (lr / bc1) * m, about 1 ULP a step.
 # And one SYSTEMATIC difference: the kernel takes beta2 as float and forms
@@ -1472,7 +1518,7 @@ GGML_PREC_F32 <- 10L
 # The 7 values in the order the kernel reads them: alpha, beta1, beta2, eps,
 # weight decay, 1/(1 - beta1^t), 1/(1 - beta2^t).
 .ag_adam_hp_values <- function(env, t) {
-  c(env$lr, env$beta1, env$beta2, env$eps, 0,
+  c(env$lr, env$beta1, env$beta2, env$eps, env$weight_decay %||% 0,
     1 / (1 - env$beta1^t), 1 / (1 - env$beta2^t))
 }
 
