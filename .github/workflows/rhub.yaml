@@ -31,6 +31,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 'R CMD check --as-cran' needs checkbashisms (from devscripts) to check configure/cleanup
+      - name: Install checkbashisms
+        if: matrix.config.r == 'rchk'
+        run: |
+          if command -v checkbashisms >/dev/null 2>&1; then exit 0; fi
+          SUDO=""; if [ "$(id -u)" != "0" ]; then SUDO="sudo"; fi
+          $SUDO apt-get update -qq
+          $SUDO apt-get install -y --no-install-recommends devscripts
+        shell: bash
+
       - uses: r-lib/actions/setup-r@v2
         if: ${{ !matrix.config.container }}
         with:
