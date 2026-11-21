@@ -1015,6 +1015,32 @@ GGML_PREC_F32 <- 10L
   )
 }
 
+# A [nr, nc] tensor of zeros made on the device (one ggml_fill node over a
+# shape-only leaf): nothing is uploaded, so it can be recorded by ag_capture.
+# The type is the compute dtype, as for every other op result.
+.ag_gpu_zeros <- function(nr, nc) {
+  nr <- as.integer(nr); nc <- as.integer(nc)
+  gt <- .ag_dtype_to_ggml(.ag_compute_dtype(.ag_device_state$dtype))
+  .ag_run_op(
+    op_fn    = function(ctx, ptrs) ggml_fill(ctx, ggml_new_tensor_2d(ctx, gt, nr, nc), 0),
+    inputs   = list(),
+    out_shape = c(nr, nc),
+    resident  = TRUE
+  )
+}
+
+# s * x + b with numbers s, b: one ggml_scale_bias node, nothing uploaded (so it
+# can be recorded by ag_capture).
+.ag_gpu_scale_bias <- function(x_data, s, b) {
+  s <- as.double(s); b <- as.double(b)
+  .ag_run_op(
+    op_fn    = function(ctx, ptrs) ggml_scale_bias(ctx, ptrs[[1L]], s, b),
+    inputs   = list(x_data),
+    out_shape = .ag_dim(x_data),
+    resident  = .ag_is_handle(x_data)
+  )
+}
+
 .ag_gpu_relu <- function(x_data) {
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_relu(ctx, ptrs[[1L]]),
@@ -1103,6 +1129,16 @@ GGML_PREC_F32 <- 10L
 .ag_gpu_rms_norm <- function(x_data, eps) {
   .ag_run_op(
     op_fn    = function(ctx, ptrs) ggml_rms_norm(ctx, ptrs[[1L]], eps = eps),
+    inputs   = list(x_data),
+    out_shape = .ag_dim(x_data),
+    resident  = .ag_is_handle(x_data)
+  )
+}
+
+# LayerNorm without affine: (x - mean) / sqrt(var + eps) per column (ne0).
+.ag_gpu_layer_norm <- function(x_data, eps) {
+  .ag_run_op(
+    op_fn    = function(ctx, ptrs) ggml_norm(ctx, ptrs[[1L]], eps = eps),
     inputs   = list(x_data),
     out_shape = .ag_dim(x_data),
     resident  = .ag_is_handle(x_data)

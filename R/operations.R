@@ -1827,6 +1827,20 @@ ggml_scale_bias <- function(ctx, a, s, b) {
   .Call("R_ggml_scale_bias", ctx, a, as.numeric(s), as.numeric(b), PACKAGE = "ggmlR")
 }
 
+#' Fill (Graph)
+#'
+#' Creates a graph node: a tensor of the shape and type of \code{a} with every
+#' element set to \code{c}. The values of \code{a} are not read.
+#'
+#' @param ctx GGML context
+#' @param a Tensor giving the shape and type
+#' @param c Fill value
+#' @return Tensor representing the fill operation
+#' @export
+ggml_fill <- function(ctx, a, c) {
+  .Call("R_ggml_fill", ctx, a, as.numeric(c), PACKAGE = "ggmlR")
+}
+
 #' Clamp (Graph)
 #'
 #' Creates a graph node for clamping values to a range: clamp(x, min, max)

@@ -380,11 +380,47 @@ ag_matmul <- function(A, B) {
   b_data
 }
 
+# A plain number (not an ag_tensor): a length-1 numeric, with or without dim.
+.ag_num_scalar <- function(v)
+  !is_ag_tensor(v) && is.numeric(v) && length(v) == 1L && !is.na(v)
+
+# On the GPU an operand must be an ag_tensor, a matrix or one number: a bare
+# vector has no shape to broadcast by, and used to die in .ag_run_op's vapply.
+.ag_check_no_bare_vector <- function(A, B, fn) {
+  for (v in list(A, B))
+    if (!is_ag_tensor(v) && is.numeric(v) && is.null(dim(v)) && length(v) > 1L)
+      stop(sprintf(paste0("%s: an operand is a vector of length %d; on the GPU pass a ",
+                          "matrix (e.g. [%d, 1] or [1, %d]), an ag_tensor or one number"),
+                   fn, length(v), length(v), length(v)), call. = FALSE)
+  invisible(NULL)
+}
+
+# s * x + b with numbers s and b, x an ag_tensor or matrix. Recorded as the
+# "scale" op (dx = g * s): the shift has no gradient.
+.ag_affine_scalar <- function(x, s, b) {
+  s <- as.double(s); b <- as.double(b)
+  device <- if (is_ag_tensor(x)) x$device else "cpu"
+  if (device == "gpu") {
+    out <- .ag_wrap_result(.ag_gpu_scale_bias(.ag_operand(x), s, b), device)
+  } else {
+    out <- ag_tensor(.ag_data(x) * s + b, device = device)
+  }
+  out$requires_grad <- is_ag_tensor(x) && isTRUE(x$requires_grad)
+  if (out$requires_grad) {
+    grad_fn <- function(grad_out) list(x = grad_out * s)
+    out$grad_fn <- grad_fn
+    ag_record(out, grad_fn, list(x = x), op = "scale", scalar = s)
+  }
+  out
+}
+
 #' Element-wise addition with broadcasting
 #'
 #' Computes \code{A + B}. If \code{B} is \code{[m, 1]} and \code{A} is
 #' \code{[m, n]}, \code{B} is broadcast across columns (useful for bias
-#' vectors).
+#' vectors). Either operand may be a plain number; on the GPU that is one
+#' \code{ggml_scale_bias} node with nothing uploaded, so it can be recorded by
+#' \code{\link{ag_capture}}.
 #'
 #' @param A ag_tensor or numeric matrix
 #' @param B ag_tensor or numeric matrix (may be \code{[m,1]}, \code{[1,n]} or
@@ -393,6 +429,12 @@ ag_matmul <- function(A, B) {
 #' @export
 ag_add <- function(A, B) {
   device <- .ag_result_device(A, B)
+  if (device == "gpu") {
+    # A plain number: s * x + b in one node, no [1, 1] upload.
+    .ag_check_no_bare_vector(A, B, "ag_add")
+    if (.ag_num_scalar(B)) return(.ag_affine_scalar(A, 1, B))
+    if (.ag_num_scalar(A)) return(.ag_affine_scalar(B, 1, A))
+  }
 
   if (device == "gpu") {
     # Operands, not numbers -- and no manual broadcast.
@@ -458,12 +500,21 @@ ag_add <- function(A, B) {
 
 #' Element-wise subtraction
 #'
+#' Computes \code{A - B}. Either operand may be a plain number, as in
+#' \code{\link{ag_add}}.
+#'
 #' @param A ag_tensor or numeric matrix
 #' @param B ag_tensor or numeric matrix
 #' @return ag_tensor
 #' @export
 ag_sub <- function(A, B) {
   device <- .ag_result_device(A, B)
+  if (device == "gpu") {
+    # A plain number: s * x + b in one node, no [1, 1] upload.
+    .ag_check_no_bare_vector(A, B, "ag_sub")
+    if (.ag_num_scalar(B)) return(.ag_affine_scalar(A, 1, -B))
+    if (.ag_num_scalar(A)) return(.ag_affine_scalar(B, -1, A))
+  }
 
   if (device == "gpu") {
     # Operands stay on the device (a pending node in graph mode); ggml_sub
@@ -1761,7 +1812,8 @@ print.ag_optimizer_adam <- function(x, ...) {
 #' @param gain Multiplier for the string initialisations (e.g. \code{sqrt(2)}
 #'   for tanh/ReLU layers, \code{0.01} for a policy head). A function or matrix
 #'   \code{init} carries its own scale, so \code{gain} must stay 1 with them.
-#' @return List with \code{W}, \code{b}, \code{forward(x)}, \code{params()}
+#' @return List with \code{W}, \code{b}, \code{forward(x)}, \code{parameters()}
+#'   (and \code{params()}, the same function, kept for compatibility)
 #' @export
 #' @examples
 #' \donttest{
@@ -1787,8 +1839,12 @@ ag_linear <- function(in_features, out_features, activation = NULL,
     )
   }
 
-  list(W = W, b = b, forward = forward,
-       params = function() list(W = W, b = b))
+  # $parameters() is the method (as every other layer and torch); $params() is
+  # an alias kept for existing code -- the same function, so the same list in
+  # the same order (save / load and the optimizers depend on it).
+  parameters <- function() list(W = W, b = b)
+  list(W = W, b = b, forward = forward, parameters = parameters,
+       params = parameters)
 }
 
 # Initial weight matrix [out, in] for ag_linear(). Validation first, so a bad
@@ -2075,7 +2131,10 @@ ag_reshape <- function(x, nrow, ncol) {
       list(x = matrix(grad_out, orig_shape[1L], orig_shape[2L]))
     }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    # op record: the graph backward (ag_capture_step) reshapes g back to
+    # [nrow_x, ncol_x] in one node instead of falling back to the closures.
+    ag_record(out, grad_fn, list(x = x), op = "reshape",
+              nrow_x = as.integer(orig_shape[1L]), ncol_x = as.integer(orig_shape[2L]))
   }
   out
 }

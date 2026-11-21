@@ -34,8 +34,7 @@ between the two APIs. The normalization itself is a single tape node
 (\code{ggml_rms_norm} / \code{ggml_rms_norm_back}); \code{gamma} and
 \code{beta} are an ordinary \code{\link{ag_mul}} and \code{\link{ag_add}}.
 All three run in the graph backward, so the layer can be part of an
-\code{\link{ag_capture_step}} recording -- which \code{\link{ag_layer_norm}},
-computed in R, cannot.
+\code{\link{ag_capture_step}} recording, as can \code{\link{ag_layer_norm}}.
 }
 \examples{
 \donttest{

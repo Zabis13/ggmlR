@@ -6,6 +6,8 @@
 * Recurrent and convolutional layers: `ag_lstm()` / `ag_gru()` (and their cells) and `ag_conv2d()` / `ag_conv2d_layer()`, with PyTorch's weight layout; convolutions train on the GPU under `ag_capture_step()`.
 * New elementwise ops with gradients: `ag_div()`, `ag_sqrt()`, `ag_abs()`, `ag_minimum()`, `ag_maximum()`, `ag_where()`, `ag_softplus()`, `ag_logsumexp()`, `ag_sin()`, `ag_cos()`, `ag_detach()`.
 * `ggml_im2col_back()` — the backward of `ggml_im2col()`, on the CPU and Vulkan.
+* `ag_conv_transpose2d()` — transposed convolution for upsampling in decoders, with stride, padding, output padding and dilation; on the GPU it trains in one graph and can be recorded by `ag_capture_step()`.
+* `ag_layer_norm()` now runs on the GPU and its backward is part of the graph, so models with LayerNorm (transformers, recurrent world models) can be trained under `ag_capture_step()`.
 
 # ggmlR 0.8.9.3
 

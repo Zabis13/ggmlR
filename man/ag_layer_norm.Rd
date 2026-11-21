@@ -35,7 +35,11 @@ small or varying batch sizes.
 
 The backward pass is exact: because \code{mu} and \code{sigma} are computed
 from the same example being normalized, their contribution to the gradient is
-included rather than treated as constant.
+included rather than treated as constant. The normalization is a single tape
+node (\code{ggml_norm} / \code{ggml_norm_back}); \code{gamma} and
+\code{beta} are an ordinary \code{\link{ag_mul}} and \code{\link{ag_add}}.
+On the GPU all three stay on the device and run in the graph backward, so
+the layer can be part of an \code{\link{ag_capture_step}} recording.
 }
 \examples{
 \donttest{

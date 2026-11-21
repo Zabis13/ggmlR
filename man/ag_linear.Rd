@@ -39,7 +39,8 @@ for tanh/ReLU layers, \code{0.01} for a policy head). A function or matrix
 \code{init} carries its own scale, so \code{gain} must stay 1 with them.}
 }
 \value{
-List with \code{W}, \code{b}, \code{forward(x)}, \code{params()}
+List with \code{W}, \code{b}, \code{forward(x)}, \code{parameters()}
+  (and \code{params()}, the same function, kept for compatibility)
 }
 \description{
 Returns a closure-based layer.  Because ag_param uses environment semantics,

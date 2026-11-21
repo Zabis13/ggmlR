@@ -212,8 +212,12 @@ ag_gru <- function(input_size, hidden_size, init = c("rl", "torch")) {
 .ag_rnn_state <- function(kind, state, starts, H, B, device) {
   names_ <- if (kind == "lstm") c("h", "c") else "h"
   if (is.null(state)) {
+    # On the device of the input, B from the input (so it follows a batch size
+    # that changes between calls). On the GPU the zeros are made there (one
+    # ggml_fill node): no upload, so an ag_capture recording needs no h0.
     return(stats::setNames(lapply(names_, function(n)
-      ag_tensor(matrix(0, H, B), device = device)), names_))
+      if (device == "gpu") .ag_wrap_result(.ag_gpu_zeros(H, B), device)
+      else ag_tensor(matrix(0, H, B), device = device)), names_))
   }
   if (!is.list(state) || !all(names_ %in% names(state)))
     stop(sprintf("ag_%s_cell: state must be list(%s)", kind,

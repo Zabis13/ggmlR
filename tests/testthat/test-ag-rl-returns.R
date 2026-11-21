@@ -200,3 +200,38 @@ test_that("bad input is refused", {
   expect_error(ag_gae(r, r, r, last_value = 1:3), "last_value")
   expect_error(ag_nstep_targets(r, r, r, n = 0), "positive integer")
 })
+
+test_that("continues: returns are the DreamerV3 lambda-return", {
+  set.seed(11)
+  T <- 15; n <- 3; g <- 0.997; l <- 0.95
+  r <- matrix(rnorm(T * n), T, n); v <- matrix(rnorm(T * n), T, n)
+  cc <- matrix(runif(T * n), T, n); boot <- rnorm(n)
+  ref <- matrix(0, T, n); nxt <- boot
+  for (t in T:1) {
+    vn <- if (t < T) v[t + 1, ] else boot
+    ref[t, ] <- r[t, ] + g * cc[t, ] * ((1 - l) * vn + l * nxt)
+    nxt <- ref[t, ]
+  }
+  got <- ag_gae(r, v, continues = cc, last_value = boot, gamma = g, lambda = l)
+  expect_equal(got$returns, ref, tolerance = 1e-12)
+  expect_equal(got$advantages, ref - v, tolerance = 1e-12)
+})
+
+test_that("continues = 1 keeps the old result; 1 - terminated equals terminated", {
+  set.seed(12)
+  T <- 12; n <- 4
+  r <- matrix(rnorm(T * n), T, n); v <- matrix(rnorm(T * n), T, n)
+  term <- matrix(runif(T * n) < 0.2, T, n); boot <- rnorm(n)
+  old <- ag_gae(r, v, term, last_value = boot)
+  expect_identical(ag_gae(r, v, term, last_value = boot,
+                          continues = matrix(1, T, n)), old)
+  soft <- ag_gae(r, v, continues = 1 - term * 1, last_value = boot)
+  expect_equal(soft, old, tolerance = 1e-12)
+})
+
+test_that("continues: bad input is refused", {
+  r <- matrix(0, 4, 2)
+  expect_error(ag_gae(r, r), "give terminated, continues, or both")
+  expect_error(ag_gae(r, r, continues = r + 1.5), "continues must be in \\[0, 1\\]")
+  expect_error(ag_gae(r, r, continues = matrix(1, 4, 3)), "continues is \\[4, 3\\]")
+})

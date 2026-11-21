@@ -108,7 +108,8 @@
 #'
 #' @param rewards Numeric \code{[T, n_envs]} (a vector for one environment).
 #' @param values Numeric \code{[T, n_envs]}, \eqn{V(s_t)}.
-#' @param terminated Logical or 0/1 \code{[T, n_envs]}.
+#' @param terminated Logical or 0/1 \code{[T, n_envs]}, or \code{NULL} (no
+#'   terminal steps; then \code{continues} is required).
 #' @param truncated Logical or 0/1 \code{[T, n_envs]}, or \code{NULL}.
 #' @param next_values Numeric \code{[T, n_envs]}: value of the final
 #'   observation, read only on truncated steps (other entries may be NA).
@@ -119,6 +120,15 @@
 #' @param lambda GAE \eqn{\lambda} in \code{[0, 1]}: 0 gives the one-step TD
 #'   error, 1 the Monte-Carlo return minus \code{values}.
 #' @param turn_sign 1 (default) or -1, one number or one per environment.
+#' @param continues \code{ag_gae} only. Numeric \code{[T, n_envs]} in
+#'   \code{[0, 1]}, or \code{NULL} (all 1): soft probability \eqn{c_t} that the
+#'   episode goes on after step t, e.g. a learned continue head in imagined
+#'   rollouts (DreamerV3). It scales the discount of step t:
+#'   \eqn{\delta_t = r_t + \gamma c_t V_{next} - V(s_t)},
+#'   \eqn{A_t = \delta_t + \gamma \lambda c_t (1 - done_t) A_{t+1}}, so
+#'   \code{returns} is the DreamerV3 \eqn{\lambda}-return
+#'   \eqn{R_t = r_t + \gamma c_t ((1 - \lambda) V_{next} + \lambda R_{t+1})}.
+#'   Combines with \code{terminated} / \code{truncated} by multiplication.
 #' @return \code{ag_gae}: list of \code{advantages} and \code{returns}, both
 #'   \code{[T, n_envs]}. \code{ag_discounted_returns}: the \code{[T, n_envs]}
 #'   matrix of returns.
@@ -128,12 +138,22 @@
 #' r <- matrix(1, 4, 2); v <- matrix(0.5, 4, 2)
 #' term <- matrix(c(FALSE, TRUE, FALSE, FALSE), 4, 2)
 #' ag_gae(r, v, term, last_value = c(0.5, 0.5), gamma = 0.99, lambda = 0.95)$advantages
-ag_gae <- function(rewards, values, terminated, truncated = NULL, next_values = NULL,
-                   last_value = 0, gamma = 0.99, lambda = 0.95, turn_sign = 1) {
+ag_gae <- function(rewards, values, terminated = NULL, truncated = NULL,
+                   next_values = NULL, last_value = 0, gamma = 0.99, lambda = 0.95,
+                   turn_sign = 1, continues = NULL) {
   r <- .ag_rl_mat(rewards, "rewards")
   d <- dim(r)
   v <- .ag_rl_mat(values, "values", d)
+  if (is.null(terminated)) {
+    if (is.null(continues))
+      stop("ag_gae: give terminated, continues, or both", call. = FALSE)
+    terminated <- matrix(FALSE, d[1L], d[2L])
+  }
   f <- .ag_rl_flags(d, terminated, truncated, next_values, "ag_gae")
+  cm <- if (is.null(continues)) matrix(1, d[1L], d[2L]) else
+    .ag_rl_mat(continues, "continues", d)
+  if (any(cm < 0 | cm > 1))
+    stop("ag_gae: continues must be in [0, 1]", call. = FALSE)
   gamma  <- .ag_rl_scalar(gamma, "gamma")
   lambda <- .ag_rl_scalar(lambda, "lambda")
   s    <- .ag_rl_sign(turn_sign, d[2L])
@@ -141,9 +161,9 @@ ag_gae <- function(rewards, values, terminated, truncated = NULL, next_values = 
   adv <- matrix(0, d[1L], d[2L])
   a <- numeric(d[2L])
   for (t in rev(seq_len(d[1L]))) {
-    nxt   <- s * .ag_rl_next(f, t, cont)
+    nxt   <- s * cm[t, ] * .ag_rl_next(f, t, cont)
     delta <- r[t, ] + gamma * nxt - v[t, ]
-    a     <- delta + gamma * lambda * (1 - f$done[t, ]) * s * a
+    a     <- delta + gamma * lambda * (1 - f$done[t, ]) * cm[t, ] * s * a
     adv[t, ] <- a
     cont  <- v[t, ]
   }

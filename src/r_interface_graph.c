@@ -1555,6 +1555,21 @@ SEXP R_ggml_scale_bias(SEXP ctx_ptr, SEXP a_ptr, SEXP s, SEXP b) {
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+// ggml_fill: a tensor of a's shape with every element c (a is only read for
+// its shape and type).
+SEXP R_ggml_fill(SEXP ctx_ptr, SEXP a_ptr, SEXP c) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+    struct ggml_tensor * result = ggml_fill(ctx, a, (float) asReal(c));
+    if (result == NULL) {
+        error("Failed to create fill operation");
+    }
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 SEXP R_ggml_clamp(SEXP ctx_ptr, SEXP a_ptr, SEXP min_val, SEXP max_val) {
     struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
     struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);

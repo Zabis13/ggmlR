@@ -15,5 +15,6 @@ ag_sub(A, B)
 ag_tensor
 }
 \description{
-Element-wise subtraction
+Computes \code{A - B}. Either operand may be a plain number, as in
+\code{\link{ag_add}}.
 }

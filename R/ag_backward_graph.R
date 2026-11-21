@@ -272,7 +272,8 @@ ag_backward_resident <- function(on = TRUE) {
 .AG_BWD_GRAPH_OPS <- c("matmul", "add", "loss_const", "elemwise_mul",
                        "transpose", "softmax", "scale", "mul", "flash_attn",
                        "sub", "log", "sum", "log_softmax", "slice_rows",
-                       "concat_rows", "silu", "rms_norm", "conv2d")
+                       "concat_rows", "silu", "rms_norm", "conv2d", "reshape", "conv_transpose2d",
+                       "layer_norm")
 
 # Can this tape run as one graph?
 #
@@ -444,7 +445,8 @@ ag_backward_profile_report <- function() {
   # overflowing one.
   # A conv2d rule emits ~20 tensors (reshapes, permute, im2col, im2col_back,
   # two reductions), well above the per-node 8: each gets 24 more.
-  n_conv <- sum(vapply(nodes, function(nd) identical(nd$op, "conv2d"), logical(1L)))
+  n_conv <- sum(vapply(nodes, function(nd) isTRUE(nd$op %in% c("conv2d", "conv_transpose2d")),
+                      logical(1L)))
   ctx <- .ag_ctx_ensure(8L * length(nodes) + 24L * n_conv + 16L)
 
   # Host matrices that must reach the device, collected while emitting and
@@ -670,6 +672,15 @@ ag_backward_profile_report <- function() {
         accumulate(as.character(x$id),
                    ggml_rms_norm_back(ctx, g, const(nd$x_snap), nd$eps))
 
+    } else if (identical(nd$op, "layer_norm")) {
+      # dx = (g - mean(g) - y * mean(g * y)) / s per column: one
+      # ggml_norm_back node, (dy, x, eps) -- NORM_BACK is ggmlR's own op
+      # (CPU ops-elemwise.cpp, Vulkan norm_back), absent upstream.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad))
+        accumulate(as.character(x$id),
+                   ggml_norm_back(ctx, g, const(nd$x_snap), nd$eps))
+
     } else if (identical(nd$op, "conv2d")) {
       # ag_conv2d (R/ag_conv.R). g is [OC*OH*OW, B] (W fastest, then H, C).
       # With gt = g as [OC, P*B] (P = OW*OH) and cols = im2col(x) [K, P*B]:
@@ -711,6 +722,45 @@ ag_backward_profile_report <- function() {
                              cf$OC, B)
         s <- ggml_sum_rows(ctx, ggml_cont(ctx, ggml_transpose(ctx, s)))   # [1, OC]
         accumulate(as.character(Bs$id), ggml_reshape_2d(ctx, s, cf$OC, 1L))
+      }
+
+    } else if (identical(nd$op, "conv_transpose2d")) {
+      # ag_conv_transpose2d (R/ag_conv.R), cf = the DUAL conv2d: its input is
+      # the transpose's output (g), its output the transpose's input (x).
+      #   cols = im2col(g)                    [K, P*B], P = IW_t*IH_t
+      #   dx   = forward of the dual conv2d:  t(W) %*% cols, permuted back
+      #   dW   = x_t %*% t(cols)              out_prod (shared ne1 = P*B)
+      #   db   = per-channel sum of g
+      cf <- nd$conf; B <- nd$batch; P <- cf$OW * cf$OH
+      X <- inp$x; Wt <- inp$weight; Bs <- inp$bias
+      need <- function(t) is_ag_tensor(t) && isTRUE(t$requires_grad)
+      gc <- if (ggml_is_contiguous(g)) g else ggml_cont(ctx, g)
+      if (need(X) || need(Wt)) {
+        kshape <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, cf$KW, cf$KH, cf$IC, 1L)
+        g4 <- ggml_reshape_4d(ctx, gc, cf$IW, cf$IH, cf$IC, B)
+        cols <- ggml_im2col(ctx, kshape, g4, cf$sW, cf$sH, cf$pW, cf$pH, cf$dW, cf$dH,
+                            TRUE, GGML_TYPE_F32)
+        cols <- ggml_reshape_2d(ctx, cols, cf$K, P * B)
+      }
+      if (need(X)) {
+        wt <- ggml_cont(ctx, ggml_transpose(ctx, const(nd$w_snap)))   # [K, IC_t]
+        y  <- .ag_mul_mat(ctx, wt, cols)                              # [IC_t, P*B]
+        y  <- ggml_reshape_4d(ctx, y, cf$OC, cf$OW, cf$OH, B)
+        y  <- ggml_cont(ctx, ggml_permute(ctx, y, 2L, 0L, 1L, 3L))     # [OW, OH, IC_t, B]
+        accumulate(as.character(X$id), ggml_reshape_2d(ctx, y, cf$OW * cf$OH * cf$OC, B))
+      }
+      if (need(Wt)) {
+        x4 <- ggml_reshape_4d(ctx, const(nd$x_snap), cf$OW, cf$OH, cf$OC, B)
+        xt <- ggml_reshape_2d(ctx, ggml_cont(ctx, ggml_permute(ctx, x4, 1L, 2L, 0L, 3L)),
+                              cf$OC, P * B)                           # [IC_t, P*B]
+        accumulate(as.character(Wt$id), ggml_out_prod(ctx, xt, cols))
+      }
+      if (isTRUE(nd$has_bias) && need(Bs)) {
+        Q <- cf$IW * cf$IH
+        s <- ggml_reshape_2d(ctx, ggml_sum_rows(ctx, ggml_reshape_2d(ctx, gc, Q, cf$IC * B)),
+                             cf$IC, B)
+        s <- ggml_sum_rows(ctx, ggml_cont(ctx, ggml_transpose(ctx, s)))   # [1, OC_t]
+        accumulate(as.character(Bs$id), ggml_reshape_2d(ctx, s, cf$IC, 1L))
       }
 
     } else if (identical(nd$op, "log_softmax")) {
@@ -798,6 +848,17 @@ ag_backward_profile_report <- function() {
       x <- inp$x
       if (is_ag_tensor(x) && isTRUE(x$requires_grad))
         accumulate(as.character(x$id), ggml_cont(ctx, ggml_transpose(ctx, g)))
+
+    } else if (identical(nd$op, "reshape")) {
+      # dx = g reshaped back to x's [nrow_x, ncol_x]: column-major order is
+      # kept, so it is the same data under the old shape. reshape needs a
+      # contiguous source; the result is made contiguous as in the forward.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad)) {
+        src <- if (ggml_is_contiguous(g)) g else ggml_cont(ctx, g)
+        accumulate(as.character(x$id),
+                   ggml_cont(ctx, ggml_reshape_2d(ctx, src, nd$nrow_x, nd$ncol_x)))
+      }
 
     } else if (identical(nd$op, "slice_rows")) {
       # dx = g in rows from+1..from+n, zero elsewhere: one pad node with zero

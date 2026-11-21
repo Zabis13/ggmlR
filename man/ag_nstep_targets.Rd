@@ -18,7 +18,8 @@ ag_nstep_targets(
 
 \item{next_values}{Numeric \code{[T, n_envs]}, \eqn{V(s_{t+1})}.}
 
-\item{terminated}{Logical or 0/1 \code{[T, n_envs]}.}
+\item{terminated}{Logical or 0/1 \code{[T, n_envs]}, or \code{NULL} (no
+terminal steps; then \code{continues} is required).}
 
 \item{truncated}{Logical or 0/1 \code{[T, n_envs]}, or \code{NULL}.}
 

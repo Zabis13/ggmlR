@@ -371,7 +371,11 @@ ag_eval.ag_batch_norm  <- function(model) { model$training <- FALSE; invisible(m
 #'
 #' The backward pass is exact: because \code{mu} and \code{sigma} are computed
 #' from the same example being normalized, their contribution to the gradient is
-#' included rather than treated as constant.
+#' included rather than treated as constant. The normalization is a single tape
+#' node (\code{ggml_norm} / \code{ggml_norm_back}); \code{gamma} and
+#' \code{beta} are an ordinary \code{\link{ag_mul}} and \code{\link{ag_add}}.
+#' On the GPU all three stay on the device and run in the graph backward, so
+#' the layer can be part of an \code{\link{ag_capture_step}} recording.
 #'
 #' @param normalized_shape Number of features to normalize over (the number of
 #'   rows of the input).
@@ -418,64 +422,21 @@ ag_layer_norm <- function(normalized_shape, eps = 1e-5,
   }
 
   env$forward <- function(x) {
-    x_data <- .ag_data(x)
-    if (!is.matrix(x_data)) x_data <- matrix(x_data, ncol = 1L)
-    d <- nrow(x_data)
-    n <- ncol(x_data)
+    # Shape only: a resident x is read through its handle, never downloaded
+    # (as in ag_rms_norm).
+    xs <- if (is_ag_tensor(x)) {
+      h <- .ag_handle_of(x); if (!is.null(h)) h else .ag_data(x)
+    } else x
+    d <- if (.ag_is_handle(xs) || !is.null(dim(xs))) .ag_nrow(xs) else length(xs)
     if (d != env$normalized_shape) {
       stop(sprintf("ag_layer_norm: expected %d features, got %d",
                    env$normalized_shape, d))
     }
-
-    # Statistics per column (per example), over the feature axis
-    mu    <- colMeans(x_data)
-    var   <- colMeans((x_data - rep(mu, each = d))^2)
-    sd    <- sqrt(var + env$eps)
-    x_hat <- (x_data - rep(mu, each = d)) / rep(sd, each = d)
-
-    g_data <- if (env$elementwise_affine) as.numeric(.ag_data(env$gamma)) else rep(1.0, d)
-    b_data <- if (env$elementwise_affine) as.numeric(.ag_data(env$beta))  else rep(0.0, d)
-    y_data <- g_data * x_hat + b_data
-
-    out <- ag_tensor(y_data)
-
-    inputs <- list(x = x)
-    if (env$elementwise_affine) {
-      inputs$gamma <- env$gamma
-      inputs$beta  <- env$beta
-    }
-    needs_grad <- any(vapply(inputs, function(i) {
-      is_ag_tensor(i) && isTRUE(i$requires_grad)
-    }, logical(1)))
-    out$requires_grad <- needs_grad
-
-    if (needs_grad) {
-      # snapshot forward values for the closure
-      xh_snap <- x_hat
-      sd_snap <- sd
-      g_snap  <- g_data
-      affine  <- env$elementwise_affine
-
-      grad_fn <- function(grad_out) {
-        res <- list()
-        if (affine) {
-          # dgamma = sum_n grad_out * x_hat ; dbeta = sum_n grad_out
-          res$gamma <- matrix(rowSums(grad_out * xh_snap), d, 1L)
-          res$beta  <- matrix(rowSums(grad_out), d, 1L)
-        }
-        # dx = (g - mean(g) - x_hat * mean(g * x_hat)) / sd,  g = grad_out * gamma
-        g  <- grad_out * g_snap
-        res$x <- (g - rep(colMeans(g), each = d) -
-                    xh_snap * rep(colMeans(g * xh_snap), each = d)) /
-                 rep(sd_snap, each = d)
-        res
-      }
-
-      out$grad_fn <- grad_fn
-      ag_record(out, grad_fn, inputs)
-    }
-
-    out
+    # One tape node for the normalisation (ggml_norm / ggml_norm_back), gamma
+    # and beta an ordinary ag_mul / ag_add: all run in the graph backward.
+    y <- .ag_layer_normalize(x, env$eps)
+    if (env$elementwise_affine) y <- ag_add(ag_mul(y, env$gamma), env$beta)
+    y
   }
 
   env$parameters <- function() {
@@ -538,6 +499,42 @@ ag_eval.ag_layer_norm  <- function(model) { model$training <- FALSE; invisible(m
   out
 }
 
+# (x - mean) / sqrt(var + eps) per column, var the biased (population)
+# variance, as torch.nn.LayerNorm. One tape node "layer_norm": forward
+# ggml_norm on the GPU, graph backward one ggml_norm_back node.
+.ag_layer_normalize <- function(x, eps) {
+  device <- if (is_ag_tensor(x)) x$device else "cpu"
+  if (device == "gpu") {
+    x_data <- .ag_operand(x)
+    out    <- .ag_wrap_result(.ag_gpu_layer_norm(x_data, eps), device)
+  } else {
+    x_data <- .ag_data(x)
+    if (!is.matrix(x_data)) x_data <- matrix(x_data, ncol = 1L)
+    d  <- nrow(x_data)
+    xc <- x_data - rep(colMeans(x_data), each = d)
+    out <- ag_tensor(xc / rep(sqrt(colMeans(xc^2) + eps), each = d), device = device)
+  }
+  out$requires_grad <- is_ag_tensor(x) && x$requires_grad
+  if (out$requires_grad) {
+    x_snap <- x_data
+    grad_fn <- function(grad_out) {
+      # y = (x - mu) / s, s = sqrt(var + eps), per column:
+      # dx = (g - mean(g) - y * mean(g * y)) / s
+      xm <- .ag_as_matrix(x_snap)
+      d  <- nrow(xm)
+      xc <- xm - rep(colMeans(xm), each = d)
+      s  <- sqrt(colMeans(xc^2) + eps)
+      y  <- xc / rep(s, each = d)
+      list(x = (grad_out - rep(colMeans(grad_out), each = d) -
+                  y * rep(colMeans(grad_out * y), each = d)) / rep(s, each = d))
+    }
+    out$grad_fn <- grad_fn
+    ag_record(out, grad_fn, list(x = x), op = "layer_norm", x_snap = x_snap,
+              eps = eps)
+  }
+  out
+}
+
 #' Create an RMS Normalization layer
 #'
 #' Normalizes each example (column) by its root mean square over the
@@ -552,8 +549,7 @@ ag_eval.ag_layer_norm  <- function(model) { model$training <- FALSE; invisible(m
 #' (\code{ggml_rms_norm} / \code{ggml_rms_norm_back}); \code{gamma} and
 #' \code{beta} are an ordinary \code{\link{ag_mul}} and \code{\link{ag_add}}.
 #' All three run in the graph backward, so the layer can be part of an
-#' \code{\link{ag_capture_step}} recording -- which \code{\link{ag_layer_norm}},
-#' computed in R, cannot.
+#' \code{\link{ag_capture_step}} recording, as can \code{\link{ag_layer_norm}}.
 #'
 #' @param normalized_shape Number of features to normalize over (the number of
 #'   rows of the input).

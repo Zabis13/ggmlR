@@ -18,5 +18,7 @@ ag_tensor
 \description{
 Computes \code{A + B}. If \code{B} is \code{[m, 1]} and \code{A} is
 \code{[m, n]}, \code{B} is broadcast across columns (useful for bias
-vectors).
+vectors). Either operand may be a plain number; on the GPU that is one
+\code{ggml_scale_bias} node with nothing uploaded, so it can be recorded by
+\code{\link{ag_capture}}.
 }

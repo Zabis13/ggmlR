@@ -963,9 +963,9 @@ Same model on an **8× Tesla V100-32GB** host (2× Xeon E5-2698 v4, 256 GB RAM),
 | Action selection | `ag_log_softmax`, `ag_argmax`, `ag_sample_categorical`, `ag_sample_normal`, `ag_gather`, `ag_rand` (see [Action selection on the device](#action-selection-on-the-device)) |
 | Attention | `ag_multihead_attention`, `ag_flash_attention` (all heads in one fused op) |
 | Loss | `ag_mse_loss`, `ag_cross_entropy_loss`, `ag_softmax_cross_entropy_loss`, `ag_huber_loss`, `ag_smooth_l1_loss` |
-| Layers | `ag_linear`, `ag_conv2d_layer`, `ag_lstm`, `ag_gru` (and `ag_lstm_cell`, `ag_gru_cell`), `ag_batch_norm`, `ag_layer_norm`, `ag_rms_norm`, `ag_dropout`, `ag_embedding` |
+| Layers | `ag_linear`, `ag_conv2d_layer`, `ag_conv_transpose2d_layer`, `ag_lstm`, `ag_gru` (and `ag_lstm_cell`, `ag_gru_cell`), `ag_batch_norm`, `ag_layer_norm`, `ag_rms_norm`, `ag_dropout`, `ag_embedding` |
 | Containers | `ag_sequential` |
-| Convolution | `ag_conv2d` (see [Reinforcement learning building blocks](#reinforcement-learning-building-blocks)) |
+| Convolution | `ag_conv2d`, `ag_conv_transpose2d` (see [Reinforcement learning building blocks](#reinforcement-learning-building-blocks)) |
 | Optimizers | `optimizer_sgd`, `optimizer_adam`, `optimizer_adamw`, `optimizer_rmsprop` |
 | Reinforcement learning | `ag_gae`, `ag_discounted_returns`, `ag_nstep_targets`, `ag_entropy`, `ag_normal_log_prob`, `ag_normal_entropy`, `ag_soft_update`, `ag_hard_update`, `ag_replay_buffer`, `ag_per_sampler` (see [Reinforcement learning building blocks](#reinforcement-learning-building-blocks)) |
 | Schedulers | `lr_scheduler_step`, `lr_scheduler_cosine` (SGDR via `T_mult`), `lr_scheduler_onecycle`, `lr_scheduler_cyclic`, `lr_scheduler_warmup_cosine` |
@@ -1398,6 +1398,14 @@ h <- ag_relu(conv2$forward(ag_relu(conv1$forward(ag_scale(frames, 1 / 255)))))
 # Memory: an LSTM over a rollout, state reset where an episode starts
 lstm <- ag_lstm(input_size = 64, hidden_size = 128)
 r <- lstm$forward(xs, state = h0, starts = episode_starts)   # xs: list of T [64, B]
+
+# Model-based (DreamerV3): categorical latents, a pixel decoder, λ-returns
+probs <- ag_softmax(ag_reshape(logits, 32, 32 * B))          # 32 groups of 32 classes
+up  <- ag_conv_transpose2d_layer(64, 32, kernel_size = 4, in_hw = c(8, 8),
+                                 stride = 2, padding = 1)      # 8x8 -> 16x16
+img <- up$forward(ag_layer_norm(64 * 8 * 8)$forward(h))
+lr  <- ag_gae(rewards, values, continues = cont_prob,          # soft continue head
+              last_value = v_last, gamma = 0.997, lambda = 0.95)$returns
 ```
 
 * **Losses**: `ag_huber_loss()` / `ag_smooth_l1_loss()` for TD errors,
@@ -1422,6 +1430,23 @@ r <- lstm$forward(xs, state = h0, starts = episode_starts)   # xs: list of T [64
   `ag_capture_step()` with a fixed batch size. On the CPU the convolution is a
   reference implementation in R, not a fast path. Scaling pixels (`/ 255`) is
   the caller's.
+* **Transposed convolution** (`ag_conv_transpose2d()`, for decoders) takes the
+  weight `[C, OC*KH*KW]` of a torch `ConvTranspose2d` (`[C, OC, KH, KW]` →
+  `matrix(aperm(w, c(1, 4, 3, 2)), C)`) and supports stride, padding,
+  `output_padding` (< stride) and dilation; `groups` must be 1. It is the
+  input gradient of `ag_conv2d()`, so it needs no kernels of its own and its
+  backward runs in the graph, like the convolution's.
+* **World models**: `ag_reshape()` and `ag_layer_norm()` (on the GPU now) run
+  in the graph backward; `ag_gae(continues = )` takes the soft continuation
+  probabilities of imagined rollouts, and `returns` is then DreamerV3's
+  λ-return. Inside a recording, constants must not be uploaded: plain numbers
+  in `ag_add()` / `ag_sub()` are fine, RNN cells make their zero state on the
+  device, anything else comes in as an argument.
+* **Recorded RSSM**: `inst/examples/rssm_capture.R` trains a small DreamerV3-style
+  world model (GRU, 8 × 8 categorical latents, straight-through samples,
+  free-bits KL) over T = 16 steps. On a Radeon RX 9070 one training step takes
+  298 ms uncaptured and 14.3 ms under `ag_capture_step()` (×20.8, bit-identical
+  losses).
 * **Matmul precision**: convolutions follow `ag_matmul_precision()` like every
   other matmul; on an fp16/coopmat Vulkan device the default keeps tiles in
   f16 (~4e-4 relative).

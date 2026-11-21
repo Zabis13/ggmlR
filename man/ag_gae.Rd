@@ -8,13 +8,14 @@
 ag_gae(
   rewards,
   values,
-  terminated,
+  terminated = NULL,
   truncated = NULL,
   next_values = NULL,
   last_value = 0,
   gamma = 0.99,
   lambda = 0.95,
-  turn_sign = 1
+  turn_sign = 1,
+  continues = NULL
 )
 
 ag_discounted_returns(
@@ -32,7 +33,8 @@ ag_discounted_returns(
 
 \item{values}{Numeric \code{[T, n_envs]}, \eqn{V(s_t)}.}
 
-\item{terminated}{Logical or 0/1 \code{[T, n_envs]}.}
+\item{terminated}{Logical or 0/1 \code{[T, n_envs]}, or \code{NULL} (no
+terminal steps; then \code{continues} is required).}
 
 \item{truncated}{Logical or 0/1 \code{[T, n_envs]}, or \code{NULL}.}
 
@@ -49,6 +51,16 @@ Required when any step is truncated.}
 error, 1 the Monte-Carlo return minus \code{values}.}
 
 \item{turn_sign}{1 (default) or -1, one number or one per environment.}
+
+\item{continues}{\code{ag_gae} only. Numeric \code{[T, n_envs]} in
+\code{[0, 1]}, or \code{NULL} (all 1): soft probability \eqn{c_t} that the
+episode goes on after step t, e.g. a learned continue head in imagined
+rollouts (DreamerV3). It scales the discount of step t:
+\eqn{\delta_t = r_t + \gamma c_t V_{next} - V(s_t)},
+\eqn{A_t = \delta_t + \gamma \lambda c_t (1 - done_t) A_{t+1}}, so
+\code{returns} is the DreamerV3 \eqn{\lambda}-return
+\eqn{R_t = r_t + \gamma c_t ((1 - \lambda) V_{next} + \lambda R_{t+1})}.
+Combines with \code{terminated} / \code{truncated} by multiplication.}
 }
 \value{
 \code{ag_gae}: list of \code{advantages} and \code{returns}, both
