@@ -932,6 +932,12 @@ ag_capture_set <- function(f, max_grad_norm) {
   cap$alive <- FALSE
   # the recorded command buffers point at the buffers freed below
   .ag_capture_vk_rec_free(cap)
+  # An async backend keeps pointers to the tensors of graphs computed since
+  # its last synchronize (Vulkan: the unsynced-node lists it checks the next
+  # graph against). Synchronize before the tensors and buffers go, or the next
+  # compute reads freed memory.
+  if (!is.null(cap$backend))
+    tryCatch(ggml_backend_synchronize(cap$backend), error = function(e) NULL)
   for (b in cap$bufs) tryCatch(ggml_backend_buffer_free(b), error = function(e) NULL)
   for (x in c(cap$ctxs, list(cap$ctx_graph, cap$ctx_graph_opt)))
     if (!is.null(x)) tryCatch(ggml_free(x), error = function(e) NULL)

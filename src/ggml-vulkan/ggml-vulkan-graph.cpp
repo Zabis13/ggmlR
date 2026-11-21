@@ -3083,7 +3083,14 @@ void * ggml_backend_vk_graph_record(ggml_backend_t backend, ggml_cgraph * cgraph
         return nullptr;
     }
 
-    ggml_vk_synchronize(ctx);           // nothing pending, context cleaned up
+    // Nothing pending, and the context's per-graph state cleared as by
+    // ggml_backend_vk_synchronize(). ggml_vk_synchronize() alone only waits:
+    // it leaves unsynced_nodes_written/read holding tensors of earlier async
+    // graphs (which their owner may have freed since -- the build below
+    // dereferences them) and prealloc_y_last_tensor_used, which would let the
+    // recording skip a conversion into prealloc_y that a replay then lacks.
+    ggml_vk_synchronize(ctx);
+    ggml_vk_graph_cleanup(ctx);
 
     ggml_vk_graph_rec * rec = new ggml_vk_graph_rec();
     rec->device = ctx->device;
@@ -3111,9 +3118,12 @@ void * ggml_backend_vk_graph_record(ggml_backend_t backend, ggml_cgraph * cgraph
     g_vk_rec = nullptr;
     std::swap(ctx->compute_cmd_pool, rec->pool);
 
-    // signals the empty submits made for the fences, resets the context's
-    // state (sync lists, contexts) as after any graph
+    // signals the empty submits made for the fences; then the context's state
+    // (sync lists pointing at this graph's tensors, contexts, its own command
+    // pool) is reset as after any graph. The cleanup touches the context's
+    // pool only -- the recording's pool was swapped back out above.
     ggml_vk_synchronize(ctx);
+    ggml_vk_graph_cleanup(ctx);
 
     if (status != GGML_STATUS_SUCCESS || rec->failed || rec->stale || rec->bufs.empty()) {
         ggml_vk_graph_rec_destroy(rec);
@@ -3143,7 +3153,13 @@ int ggml_backend_vk_graph_replay(ggml_backend_t backend, void * rec_ptr, int n) 
     if (n < 1) return 0;
     if (rec->stale) return 1;
 
-    ggml_vk_synchronize(ctx);           // earlier work first, then the replays
+    // Earlier work first, then the replays. The cleanup drops the earlier
+    // graphs' sync lists (their tensors may be freed before the next compute)
+    // and prealloc_y_last_tensor_used: the replay overwrites prealloc_y, so a
+    // later graph must not skip its conversion on the strength of that cache.
+    // The recording itself lives in rec->pool and is not touched.
+    ggml_vk_synchronize(ctx);
+    ggml_vk_graph_cleanup(ctx);
 
     std::vector<vk::CommandBuffer> cbs;
     cbs.reserve((size_t) n * (rec->bufs.size() + 1));

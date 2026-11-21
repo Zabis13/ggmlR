@@ -1,11 +1,70 @@
-# 2-D convolution (R/ag_conv.R): forward and gradients against libtorch on
-# fixed numbers (fixtures/ag_conv_torch.rds, made by data-raw/ag_conv_torch_ref.R,
-# float64), stored in torch's layout and converted here, so the test also pins
-# the layout (image W-H-C, weight C-KH-KW). CPU and GPU, f16, gradcheck, layer.
+# 2-D convolution (R/ag_conv.R): forward and gradients against a direct loop
+# over the PyTorch definition, float64, in torch's layout (x [B, C, H, W],
+# weight [OC, C, KH, KW], output and its gradient weights G [B, OC, OH, OW])
+# and converted here, so the test also pins the layout (image W-H-C, weight
+# C-KH-KW). The loop itself is anchored to a few libtorch values (torch 0.16.3,
+# float64, same inputs; it matched libtorch to 1e-14 on every value).
+# CPU and GPU, f16, gradcheck, layer.
 
 conv_has_gpu <- function() ggml_vulkan_available() && ggml_vulkan_device_count() > 0L
 conv_devices <- function() c("cpu", if (conv_has_gpu()) "gpu")
-conv_ref <- function() readRDS(test_path("fixtures", "ag_conv_torch.rds"))
+
+conv_cfgs <- list(
+  list(name = "3x3, batch 2",                B = 2L, C = 2L, H = 7L,  W = 6L,  OC = 3L, k = c(3L, 3L), s = c(1L, 1L), p = c(0L, 0L), d = c(1L, 1L)),
+  list(name = "non-square kernel and image", B = 3L, C = 3L, H = 9L,  W = 11L, OC = 2L, k = c(2L, 4L), s = c(2L, 1L), p = c(1L, 2L), d = c(1L, 1L)),
+  list(name = "padding and dilation",        B = 2L, C = 2L, H = 10L, W = 9L,  OC = 2L, k = c(3L, 3L), s = c(1L, 1L), p = c(2L, 2L), d = c(2L, 2L)),
+  list(name = "uncovered tail",              B = 2L, C = 1L, H = 11L, W = 10L, OC = 2L, k = c(4L, 3L), s = c(3L, 4L), p = c(0L, 0L), d = c(1L, 1L)),
+  list(name = "Nature-CNN conv1, stride 4",  B = 2L, C = 4L, H = 20L, W = 20L, OC = 3L, k = c(8L, 8L), s = c(4L, 4L), p = c(0L, 0L), d = c(1L, 1L)))
+
+# Forward and the gradients of sum(y * G) by the definition, torch layout.
+conv_loop <- function(cf, x, w, b, G) {
+  B <- cf$B; C <- cf$C; OC <- cf$OC
+  OH <- dim(G)[3L]; OW <- dim(G)[4L]
+  y <- array(rep(b, each = B), c(B, OC, OH, OW))
+  dx <- array(0, dim(x)); dw <- array(0, dim(w))
+  for (oh in seq_len(OH)) for (ow in seq_len(OW)) {
+    g <- matrix(G[, , oh, ow], B, OC)
+    for (kh in seq_len(cf$k[1L])) for (kw in seq_len(cf$k[2L])) {
+      ih <- (oh - 1L) * cf$s[1L] - cf$p[1L] + (kh - 1L) * cf$d[1L] + 1L
+      iw <- (ow - 1L) * cf$s[2L] - cf$p[2L] + (kw - 1L) * cf$d[2L] + 1L
+      if (ih < 1L || ih > cf$H || iw < 1L || iw > cf$W) next
+      xs <- matrix(x[, , ih, iw], B, C); wk <- matrix(w[, , kh, kw], OC, C)
+      y[, , oh, ow] <- y[, , oh, ow] + xs %*% t(wk)
+      dx[, , ih, iw] <- dx[, , ih, iw] + g %*% wk
+      dw[, , kh, kw] <- dw[, , kh, kw] + crossprod(g, xs)
+    }
+  }
+  list(y = y, dx = dx, dw = dw, db = apply(G, 2L, sum))
+}
+
+# Inputs: the seed and draw order the libtorch anchors were computed with.
+conv_ref_gen <- function() {
+  set.seed(20261120)
+  lapply(conv_cfgs, function(cf) {
+    oh <- (c(cf$H, cf$W) + 2L * cf$p - cf$d * (cf$k - 1L) - 1L) %/% cf$s + 1L
+    x <- array(runif(cf$B * cf$C * cf$H * cf$W, -1, 1), c(cf$B, cf$C, cf$H, cf$W))
+    w <- array(rnorm(cf$OC * cf$C * prod(cf$k), sd = 0.3), c(cf$OC, cf$C, cf$k))
+    b <- rnorm(cf$OC)
+    G <- array(rnorm(cf$B * cf$OC * prod(oh)), c(cf$B, cf$OC, oh))
+    c(cf, list(x = x, w = w, b = b, G = G), conv_loop(cf, x, w, b, G))
+  })
+}
+conv_refs <- conv_ref_gen()
+conv_ref <- function() conv_refs
+
+test_that("the loop reference matches libtorch", {
+  r <- conv_ref()
+  a <- r[[2L]]
+  expect_equal(c(a$y[1, 1, 1, 1], a$y[3, 2, 5, 12]), c(-1.67512801840765, 1.72170655333497), tolerance = 1e-12)
+  expect_equal(c(a$dx[1, 1, 2, 3], a$dx[3, 3, 9, 11]), c(0.361043210217603, 0.4309000404157), tolerance = 1e-12)
+  expect_equal(c(a$dw[1, 1, 1, 1], a$dw[2, 3, 2, 4]), c(6.64869062876027, -4.27913448958988), tolerance = 1e-12)
+  expect_equal(a$db, c(-4.38904024213406, -5.80119266434984), tolerance = 1e-12)
+  a <- r[[5L]]
+  expect_equal(c(a$y[1, 1, 1, 1], a$y[2, 3, 4, 4]), c(3.4698294282794, -1.80612621210221), tolerance = 1e-12)
+  expect_equal(c(a$dx[1, 1, 2, 3], a$dx[2, 4, 20, 20]), c(-0.74218650738974, 0.0792149218615202), tolerance = 1e-12)
+  expect_equal(c(a$dw[1, 1, 1, 1], a$dw[3, 4, 8, 8]), c(3.4538073430239, 2.80176823337274), tolerance = 1e-12)
+  expect_equal(a$db, c(2.16911892623756, 1.07077876764477, 6.37846898327965), tolerance = 1e-12)
+})
 
 # torch [B, C, H, W] -> ggmlR [C*H*W, B]; torch [OC, C, KH, KW] -> [OC, C*KH*KW]
 conv_img <- function(a) matrix(aperm(a, c(4L, 3L, 2L, 1L)), ncol = dim(a)[1L])
