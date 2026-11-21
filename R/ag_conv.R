@@ -281,9 +281,6 @@ print.ag_conv2d_layer <- function(x, ...) {
 
 # ---- device path ------------------------------------------------------------
 
-.ag_f32 <- function(ctx, t)
-  if (ggml_tensor_type(t) == GGML_TYPE_F32) t else ggml_cast(ctx, t, GGML_TYPE_F32)
-
 # Forward graph: x [C*H*W, B], w [OC, K], b [OC, 1] or NULL -> [OC*OH*OW, B].
 .ag_conv2d_graph <- function(ctx, x, w, b, cf, B) {
   x4 <- ggml_reshape_4d(ctx, .ag_f32(ctx, x), cf$IW, cf$IH, cf$IC, B)
