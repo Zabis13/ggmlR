@@ -2,9 +2,12 @@
 % Please edit documentation in R/operations.R
 \name{ggml_sub}
 \alias{ggml_sub}
+\alias{ggml_sub_inplace}
 \title{Element-wise Subtraction (Graph)}
 \usage{
 ggml_sub(ctx, a, b)
+
+ggml_sub_inplace(ctx, a, b)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -18,6 +21,9 @@ Tensor representing the subtraction operation (a - b)
 }
 \description{
 Creates a graph node for element-wise subtraction.
+}
+\details{
+\code{ggml_sub_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 }
 \examples{
 \donttest{

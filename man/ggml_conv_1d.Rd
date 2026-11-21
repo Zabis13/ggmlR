@@ -2,9 +2,12 @@
 % Please edit documentation in R/operations.R
 \name{ggml_conv_1d}
 \alias{ggml_conv_1d}
+\alias{ggml_conv_1d_dw}
 \title{1D Convolution (Graph)}
 \usage{
 ggml_conv_1d(ctx, a, b, s0 = 1L, p0 = 0L, d0 = 1L)
+
+ggml_conv_1d_dw(ctx, a, b, s0 = 1L, p0 = 0L, d0 = 1L)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -24,4 +27,9 @@ Convolved tensor
 }
 \description{
 Applies 1D convolution to input data.
+}
+\details{
+\code{ggml_conv_1d_dw()}: Applies depthwise 1D convolution: each input channel is convolved with its
+own kernel.
+Returns: Convolved tensor
 }

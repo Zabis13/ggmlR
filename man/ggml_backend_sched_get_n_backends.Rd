@@ -2,16 +2,39 @@
 % Please edit documentation in R/scheduler.R
 \name{ggml_backend_sched_get_n_backends}
 \alias{ggml_backend_sched_get_n_backends}
-\title{Get number of backends in scheduler}
+\alias{ggml_backend_sched_get_backend}
+\alias{ggml_backend_sched_get_n_splits}
+\alias{ggml_backend_sched_get_n_copies}
+\title{Scheduler Information}
 \usage{
 ggml_backend_sched_get_n_backends(sched)
+
+ggml_backend_sched_get_backend(sched, index = 0L)
+
+ggml_backend_sched_get_n_splits(sched)
+
+ggml_backend_sched_get_n_copies(sched)
 }
 \arguments{
 \item{sched}{Scheduler pointer}
+
+\item{index}{Backend index (0-based)}
 }
 \value{
 Integer count of backends
 }
 \description{
 Returns the number of backends managed by the scheduler.
+}
+\details{
+\code{ggml_backend_sched_get_backend()}: Returns a specific backend from the scheduler by index.
+Returns: Backend pointer
+
+\code{ggml_backend_sched_get_n_splits()}: Returns the number of splits in the last computed graph.
+Higher numbers indicate more distribution across backends.
+Returns: Integer count of splits
+
+\code{ggml_backend_sched_get_n_copies()}: Returns the number of tensor copies made in the last computed graph.
+Copies occur when data needs to be transferred between backends.
+Returns: Integer count of copies
 }

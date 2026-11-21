@@ -13,7 +13,7 @@ ggml_vulkan_available <- function() {
   .Call("R_ggml_vulkan_is_available", PACKAGE = "ggmlR")
 }
 
-#' Get number of Vulkan devices
+#' Vulkan Device Information
 #'
 #' Returns the number of available Vulkan-capable GPU devices.
 #'
@@ -29,12 +29,9 @@ ggml_vulkan_device_count <- function() {
   .Call("R_ggml_vulkan_device_count", PACKAGE = "ggmlR")
 }
 
-#' List all Vulkan devices
-#'
-#' Returns detailed information about all available Vulkan devices.
-#'
-#' @return List of device information (index, name, memory)
-#' @export
+#' @rdname ggml_vulkan_device_count
+#' @details \code{ggml_vulkan_list_devices()}: Returns detailed information about all available Vulkan devices.
+#' Returns: List of device information (index, name, memory)
 #' @examples
 #' \donttest{
 #' if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
@@ -42,39 +39,29 @@ ggml_vulkan_device_count <- function() {
 #'   print(devices)
 #' }
 #' }
+#' @export
 ggml_vulkan_list_devices <- function() {
   .Call("R_ggml_vulkan_list_devices", PACKAGE = "ggmlR")
 }
 
-#' Get Vulkan device description
-#'
-#' Returns a human-readable description of the specified Vulkan device.
-#'
+#' @rdname ggml_vulkan_device_count
+#' @details \code{ggml_vulkan_device_description()}: Returns a human-readable description of the specified Vulkan device.
+#' Returns: Character string with device description
 #' @param device Device index (0-based)
-#' @return Character string with device description
-#' @export
 #' @examples
 #' \donttest{
 #' if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
 #'   ggml_vulkan_device_description(0)
 #' }
 #' }
+#' @export
 ggml_vulkan_device_description <- function(device = 0L) {
   .Call("R_ggml_vulkan_device_description", as.integer(device), PACKAGE = "ggmlR")
 }
 
-#' Get Vulkan device memory
-#'
-#' Returns free and total memory for the specified Vulkan device.
-#'
-#' @param device Device index (0-based)
-#' @return Named list with 'free' and 'total' memory in bytes, and
-#'   'max_tensor_size': the largest single tensor in bytes the device can bind
-#'   (\code{NA} if unknown). Ops with a larger input or output do not run on
-#'   this device and fall back to CPU, so callers that split work (e.g. tiled
-#'   VAE decode) should keep every tensor below it, not only the total below
-#'   'free'.
-#' @export
+#' @rdname ggml_vulkan_device_count
+#' @details \code{ggml_vulkan_device_memory()}: Returns free and total memory for the specified Vulkan device.
+#' Returns: Named list with 'free' and 'total' memory in bytes, and 'max_tensor_size': the largest single tensor in bytes the device can bind (\code{NA} if unknown). Ops with a larger input or output do not run on this device and fall back to CPU, so callers that split work (e.g. tiled VAE decode) should keep every tensor below it, not only the total below 'free'.
 #' @examples
 #' \donttest{
 #' if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
@@ -83,6 +70,7 @@ ggml_vulkan_device_description <- function(device = 0L) {
 #'   cat("Total:", mem$total / 1e9, "GB\n")
 #' }
 #' }
+#' @export
 ggml_vulkan_device_memory <- function(device = 0L) {
   .Call("R_ggml_vulkan_device_memory", as.integer(device), PACKAGE = "ggmlR")
 }
@@ -464,7 +452,7 @@ ggml_vulkan_split_buffer_type <- function(n_devices = ggml_vulkan_device_count()
         probe_N, probe_K, PACKAGE = "ggmlR")
 }
 
-#' Initialize Vulkan backend
+#' Vulkan Backend Lifecycle
 #'
 #' Creates a Vulkan backend for the specified device.
 #' The backend must be freed with ggml_vulkan_free() when done.
@@ -484,13 +472,10 @@ ggml_vulkan_init <- function(device = 0L) {
   .Call("R_ggml_vulkan_init", as.integer(device), PACKAGE = "ggmlR")
 }
 
-#' Free Vulkan backend
-#'
-#' Releases resources associated with the Vulkan backend.
-#'
+#' @rdname ggml_vulkan_init
+#' @details \code{ggml_vulkan_free()}: Releases resources associated with the Vulkan backend.
+#' Returns: NULL (invisible)
 #' @param backend Vulkan backend pointer from ggml_vulkan_init()
-#' @return NULL (invisible)
-#' @export
 #' @examples
 #' \donttest{
 #' if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
@@ -498,17 +483,14 @@ ggml_vulkan_init <- function(device = 0L) {
 #'   ggml_vulkan_free(backend)
 #' }
 #' }
+#' @export
 ggml_vulkan_free <- function(backend) {
   invisible(.Call("R_ggml_vulkan_free", backend, PACKAGE = "ggmlR"))
 }
 
-#' Check if backend is Vulkan
-#'
-#' Returns TRUE if the given backend is a Vulkan backend.
-#'
-#' @param backend Backend pointer
-#' @return Logical indicating if backend is Vulkan
-#' @export
+#' @rdname ggml_vulkan_init
+#' @details \code{ggml_vulkan_is_backend()}: Returns TRUE if the given backend is a Vulkan backend.
+#' Returns: Logical indicating if backend is Vulkan
 #' @examples
 #' \donttest{
 #' if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
@@ -522,17 +504,14 @@ ggml_vulkan_free <- function(backend) {
 #'   ggml_backend_free(cpu_backend)
 #' }
 #' }
+#' @export
 ggml_vulkan_is_backend <- function(backend) {
   .Call("R_ggml_vulkan_is_backend", backend, PACKAGE = "ggmlR")
 }
 
-#' Get Vulkan backend name
-#'
-#' Returns the name of the Vulkan backend (includes device info).
-#'
-#' @param backend Vulkan backend pointer
-#' @return Character string with backend name
-#' @export
+#' @rdname ggml_vulkan_init
+#' @details \code{ggml_vulkan_backend_name()}: Returns the name of the Vulkan backend (includes device info).
+#' Returns: Character string with backend name
 #' @examples
 #' \donttest{
 #' if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
@@ -541,16 +520,14 @@ ggml_vulkan_is_backend <- function(backend) {
 #'   ggml_vulkan_free(backend)
 #' }
 #' }
+#' @export
 ggml_vulkan_backend_name <- function(backend) {
   .Call("R_ggml_vulkan_backend_name", backend, PACKAGE = "ggmlR")
 }
 
-#' Get Vulkan device capabilities
-#'
-#' Returns hardware capabilities for the specified Vulkan device.
-#'
-#' @param device Device index (0-based, default 0)
-#' @return Named list: coopmat_support, coopmat1_fa_support, fp16, subgroup_size, subgroup_no_shmem
+#' @rdname ggml_vulkan_device_count
+#' @details \code{ggml_vulkan_device_caps()}: Returns hardware capabilities for the specified Vulkan device.
+#' Returns: Named list: coopmat_support, coopmat1_fa_support, fp16, subgroup_size, subgroup_no_shmem
 #' @export
 ggml_vulkan_device_caps <- function(device = 0L) {
   .Call("R_ggml_vulkan_device_caps", as.integer(device), PACKAGE = "ggmlR")

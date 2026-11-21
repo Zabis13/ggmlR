@@ -2,9 +2,48 @@
 % Please edit documentation in R/operations.R
 \name{ggml_conv_2d}
 \alias{ggml_conv_2d}
+\alias{ggml_conv_2d_direct}
+\alias{ggml_conv_2d_dw}
+\alias{ggml_conv_2d_dw_direct}
 \title{2D Convolution (Graph)}
 \usage{
 ggml_conv_2d(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L, d0 = 1L, d1 = 1L)
+
+ggml_conv_2d_direct(
+  ctx,
+  a,
+  b,
+  s0 = 1L,
+  s1 = 1L,
+  p0 = 0L,
+  p1 = 0L,
+  d0 = 1L,
+  d1 = 1L
+)
+
+ggml_conv_2d_dw(
+  ctx,
+  a,
+  b,
+  s0 = 1L,
+  s1 = 1L,
+  p0 = 0L,
+  p1 = 0L,
+  d0 = 1L,
+  d1 = 1L
+)
+
+ggml_conv_2d_dw_direct(
+  ctx,
+  a,
+  b,
+  s0 = 1L,
+  s1 = 1L,
+  p0 = 0L,
+  p1 = 0L,
+  d0 = 1L,
+  d1 = 1L
+)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -30,4 +69,15 @@ Convolved tensor
 }
 \description{
 Applies 2D convolution to input data.
+}
+\details{
+\code{ggml_conv_2d_direct()}: Applies 2D convolution using the direct algorithm (no im2col).
+Returns: Convolved tensor
+
+\code{ggml_conv_2d_dw()}: Applies depthwise 2D convolution: each input channel is convolved with its
+own kernel. Uses the im2col-based path.
+Returns: Convolved tensor
+
+\code{ggml_conv_2d_dw_direct()}: Direct depthwise 2D convolution without an explicit im2col intermediate.
+Returns: Convolved tensor
 }

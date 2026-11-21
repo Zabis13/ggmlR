@@ -2,9 +2,22 @@
 % Please edit documentation in R/operations.R
 \name{ggml_conv_3d}
 \alias{ggml_conv_3d}
+\alias{ggml_conv_3d_direct}
 \title{3D Convolution (Graph)}
 \usage{
 ggml_conv_3d(ctx, a, b, IC, s = 1L, p = 0L, d = 1L)
+
+ggml_conv_3d_direct(
+  ctx,
+  a,
+  b,
+  s = 1L,
+  p = 0L,
+  d = 1L,
+  n_channels,
+  n_batch,
+  n_channels_out
+)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -20,6 +33,12 @@ ggml_conv_3d(ctx, a, b, IC, s = 1L, p = 0L, d = 1L)
 \item{p}{Padding, same form as \code{s}}
 
 \item{d}{Dilation, same form as \code{s}}
+
+\item{n_channels}{Number of input channels (IC)}
+
+\item{n_batch}{Batch size (N)}
+
+\item{n_channels_out}{Number of output channels (OC)}
 }
 \value{
 Tensor \code{[OW, OH, OD, OC * N]}
@@ -28,6 +47,11 @@ Tensor \code{[OW, OH, OD, OC * N]}
 3D convolution built from \code{\link{ggml_im2col_3d}} and a matrix
 multiply. The kernel type sets the im2col type, so an F16 kernel computes
 in F16.
+}
+\details{
+\code{ggml_conv_3d_direct()}: 3D convolution as a single op (\code{GGML_OP_CONV_3D}), without the
+im2col buffer of \code{\link{ggml_conv_3d}}. Same layout and result.
+Returns: F32 tensor \code{[OW, OH, OD, OC * N]}
 }
 \seealso{
 \code{\link{ggml_conv_3d_direct}}

@@ -239,7 +239,7 @@ ggml_ops_registry <- function(op = NULL) {
 #' @return A \code{\link{ggml_result}}: \code{embedding} is cells x
 #'   \code{n_components}; \code{metadata} holds \code{stdev} (component standard
 #'   deviations), \code{loadings} (features x components) and \code{backend}.
-#' @keywords internal
+#' @noRd
 .ggmlr_pca_gpu <- function(mat, n_components = 50L, center = TRUE,
                            backend = c("vulkan", "cpu"), chunk_size = NULL) {
   backend <- match.arg(backend)
@@ -366,7 +366,7 @@ ggml_ops_registry <- function(op = NULL) {
 #' @return A \code{\link{ggml_result}} whose \code{embedding} is the normalised
 #'   features x cells matrix; \code{metadata$kind = "transform"},
 #'   \code{metadata$layer = "data"}.
-#' @keywords internal
+#' @noRd
 .ggmlr_normalize_gpu <- function(mat, scale_factor = 1e4,
                                  backend = c("vulkan", "cpu"),
                                  chunk_size = NULL) {
@@ -494,7 +494,7 @@ ggml_ops_registry <- function(op = NULL) {
 #' @return A \code{\link{ggml_result}} whose \code{embedding} is the scaled
 #'   features x cells matrix; \code{metadata$kind = "transform"},
 #'   \code{metadata$layer = "scale.data"}.
-#' @keywords internal
+#' @noRd
 .ggmlr_scale_gpu <- function(mat, max_value = 10, backend = c("vulkan", "cpu"),
                              scale_backend = c("cpu", "vulkan"),
                              chunk_size = NULL) {
@@ -615,7 +615,7 @@ ggml_ops_registry <- function(op = NULL) {
 #'   \code{embedding} a data.frame of two columns: \code{largest_gene} (chr, the
 #'   feature name, \code{NA} for empty cells) and \code{percent.Largest.Gene}
 #'   (dbl, \code{max / colSum * 100}, 0 for empty cells), one row per cell.
-#' @keywords internal
+#' @noRd
 .ggmlr_largest_gene <- function(mat, backend = c("vulkan", "cpu"),
                                 chunk_size = NULL) {
   match.arg(backend)                        # accepted but unused (CPU-only op)

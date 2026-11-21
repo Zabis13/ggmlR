@@ -241,7 +241,7 @@
 #' @return A history data frame, one row per epoch, as
 #'   \code{\link{ggml_fit_opt}} returns.
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 #' @seealso \code{\link{ggml_fit_opt}} for the in-memory dataset path.
 ggml_fit_opt_gen <- function(sched, ctx_compute, inputs, outputs, generator,
                              steps_per_epoch = NULL,

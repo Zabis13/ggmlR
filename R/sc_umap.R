@@ -523,7 +523,7 @@
 #'   \code{n_components}. \code{metadata} records the a/b curve parameters and the
 #'   per-phase backend (\code{backend_dist}, \code{backend_sgd}); the summary
 #'   \code{backend} is \code{"vulkan"} only when both phases ran on the GPU.
-#' @keywords internal
+#' @noRd
 .ggmlr_umap_gpu <- function(mat, n_components = 2L, n_neighbors = 15L,
                             min_dist = 0.1, spread = 1, n_epochs = 200L,
                             gpu_neighbor_max_cells = NULL,
@@ -635,7 +635,7 @@
 #' @return A \code{\link{ggml_result}} with \code{metadata$kind = "graph"} and
 #'   the two graphs (\code{nn}, \code{snn}) as sparse matrices in
 #'   \code{metadata}; \code{embedding} is the SNN graph (the one clustering uses).
-#' @keywords internal
+#' @noRd
 .ggmlr_neighbors_gpu <- function(mat, n_neighbors = 20L, prune_snn = 1 / 15,
                                  gpu_neighbor_max_cells = NULL,
                                  backend = c("vulkan", "cpu"),

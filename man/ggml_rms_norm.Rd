@@ -2,9 +2,12 @@
 % Please edit documentation in R/operations.R
 \name{ggml_rms_norm}
 \alias{ggml_rms_norm}
+\alias{ggml_rms_norm_inplace}
 \title{RMS Normalization (Graph)}
 \usage{
 ggml_rms_norm(ctx, a, eps = 1e-05)
+
+ggml_rms_norm_inplace(ctx, a, eps = 1e-05)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -20,6 +23,9 @@ Tensor representing the RMS normalization operation
 Creates a graph node for RMS (Root Mean Square) normalization.
 Normalizes by x / sqrt(mean(x^2) + eps). CRITICAL for LLaMA models.
 }
+\details{
+\code{ggml_rms_norm_inplace()} is the in-place variant: it modifies its input and returns a view of it.
+}
 \examples{
 \donttest{
 ctx <- ggml_init(16 * 1024 * 1024)
@@ -30,6 +36,15 @@ graph <- ggml_build_forward_expand(ctx, result)
 ggml_graph_compute(ctx, graph)
 output <- ggml_get_f32(result)
 # sqrt(mean(output^2)) should be ~1
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_rms_norm_inplace(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
 ggml_free(ctx)
 }
 }

@@ -2,9 +2,120 @@
 % Please edit documentation in R/operations.R
 \name{ggml_rope}
 \alias{ggml_rope}
+\alias{ggml_rope_inplace}
+\alias{ggml_rope_ext}
+\alias{ggml_rope_set_offset}
+\alias{ggml_rope_ext_inplace}
+\alias{ggml_rope_multi}
+\alias{ggml_rope_multi_inplace}
+\alias{ggml_rope_ext_back}
+\alias{ggml_rope_multi_back}
 \title{Rotary Position Embedding (Graph)}
 \usage{
 ggml_rope(ctx, a, b, n_dims, mode = 0L)
+
+ggml_rope_inplace(ctx, a, b, n_dims, mode = 0L)
+
+ggml_rope_ext(
+  ctx,
+  a,
+  b,
+  c = NULL,
+  n_dims,
+  mode = 0L,
+  n_ctx_orig = 0L,
+  freq_base = 10000,
+  freq_scale = 1,
+  ext_factor = 0,
+  attn_factor = 1,
+  beta_fast = 32,
+  beta_slow = 1
+)
+
+ggml_rope_set_offset(a, n_offs)
+
+ggml_rope_ext_inplace(
+  ctx,
+  a,
+  b,
+  c = NULL,
+  n_dims,
+  mode = 0L,
+  n_ctx_orig = 0L,
+  freq_base = 10000,
+  freq_scale = 1,
+  ext_factor = 0,
+  attn_factor = 1,
+  beta_fast = 32,
+  beta_slow = 1
+)
+
+ggml_rope_multi(
+  ctx,
+  a,
+  b,
+  c = NULL,
+  n_dims,
+  sections = c(0L, 0L, 0L, 0L),
+  mode = 0L,
+  n_ctx_orig = 0L,
+  freq_base = 10000,
+  freq_scale = 1,
+  ext_factor = 0,
+  attn_factor = 1,
+  beta_fast = 32,
+  beta_slow = 1
+)
+
+ggml_rope_multi_inplace(
+  ctx,
+  a,
+  b,
+  c = NULL,
+  n_dims,
+  sections = c(0L, 0L, 0L, 0L),
+  mode = 0L,
+  n_ctx_orig = 0L,
+  freq_base = 10000,
+  freq_scale = 1,
+  ext_factor = 0,
+  attn_factor = 1,
+  beta_fast = 32,
+  beta_slow = 1
+)
+
+ggml_rope_ext_back(
+  ctx,
+  a,
+  b,
+  c = NULL,
+  n_dims,
+  mode = 0L,
+  n_ctx_orig = 0L,
+  freq_base = 10000,
+  freq_scale = 1,
+  ext_factor = 0,
+  attn_factor = 1,
+  beta_fast = 32,
+  beta_slow = 1
+)
+
+ggml_rope_multi_back(
+  ctx,
+  a,
+  b,
+  c = NULL,
+  n_dims,
+  sections = c(0L, 0L, 0L, 0L),
+  mode = 0L,
+  n_ctx_orig = 0L,
+  freq_base = 10000,
+  freq_scale = 1,
+  ext_factor = 0,
+  attn_factor = 1,
+  beta_fast = 32,
+  beta_slow = 1
+)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -16,6 +127,26 @@ ggml_rope(ctx, a, b, n_dims, mode = 0L)
 \item{n_dims}{Number of dimensions to apply rotation to (usually head_dim)}
 
 \item{mode}{RoPE mode: GGML_ROPE_TYPE_NORM (0), GGML_ROPE_TYPE_NEOX (2), etc.}
+
+\item{c}{Optional frequency factors tensor (NULL for default)}
+
+\item{n_ctx_orig}{Original context length the model was trained on}
+
+\item{freq_base}{Base frequency for RoPE (default 10000 for most models)}
+
+\item{freq_scale}{Frequency scale factor (1.0 = no scaling)}
+
+\item{ext_factor}{YaRN extension factor (0.0 to disable)}
+
+\item{attn_factor}{Attention scale factor (typically 1.0)}
+
+\item{beta_fast}{YaRN parameter for fast dimensions}
+
+\item{beta_slow}{YaRN parameter for slow dimensions}
+
+\item{n_offs}{Number of leading dims to leave unrotated (non-negative, even)}
+
+\item{sections}{Integer vector of length 4 specifying dimension sections for MRoPE}
 }
 \value{
 Tensor with same shape as input, with rotary embeddings applied
@@ -33,6 +164,46 @@ Key benefits of RoPE:
 - Relative position information emerges naturally from rotation
 - Better extrapolation to longer sequences than absolute embeddings
 - No additional parameters needed
+
+\code{ggml_rope_inplace()} is the in-place variant: it modifies its input and returns a view of it.
+
+\code{ggml_rope_ext()}: Creates a graph node for extended RoPE with frequency scaling parameters.
+Supports context extension techniques like YaRN, Linear Scaling, etc.
+Returns: Tensor with extended RoPE applied
+
+This extended version supports various context extension techniques:
+
+- **Linear Scaling**: Set freq_scale = original_ctx / new_ctx
+- **YaRN**: Set ext_factor > 0 with appropriate beta_fast/beta_slow
+- **NTK-aware**: Adjust freq_base for NTK-style scaling
+
+Common freq_base values:
+- LLaMA 1/2: 10000
+- LLaMA 3: 500000
+- Mistral: 10000
+- Phi-3: 10000
+
+\code{ggml_rope_set_offset()}: Restricts an existing RoPE node to the dims \code{[n_offs, n_offs + n_dims)}
+of each row; the dims before and after are passed through unrotated.
+Modifies the node in place and returns it. Errors when \code{n_offs + n_dims}
+exceeds the row length \code{ne[0]}.
+Returns: \code{a}
+
+\code{ggml_rope_ext_inplace()} is the in-place variant: it modifies its input and returns a view of it.
+
+\code{ggml_rope_multi()}: Creates a graph node for multi-dimensional RoPE (MRoPE) used in vision transformers.
+Supports separate rotation for different positional dimensions (e.g., height, width, time).
+Returns: Tensor with multi-dimensional RoPE applied
+
+\code{ggml_rope_multi_inplace()} is the in-place variant: it modifies its input and returns a view of it.
+
+\code{ggml_rope_ext_back()}: Backward pass for extended RoPE (Rotary Position Embedding).
+Used during training to compute gradients through RoPE.
+Returns: Gradient tensor for the input
+
+\code{ggml_rope_multi_back()}: Gradient node for \code{\link{ggml_rope_multi}}.  Takes the same geometry
+arguments as the forward op, which is what makes the rotation invertible.
+Returns: Gradient w.r.t. the rotated input
 }
 \examples{
 \donttest{
@@ -45,6 +216,23 @@ pos <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 16)
 ggml_set_i32(pos, 0:15)
 # Apply RoPE
 q_rope <- ggml_rope(ctx, q, pos, 8, GGML_ROPE_TYPE_NORM)
+graph <- ggml_build_forward_expand(ctx, q_rope)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+q <- ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 64, 8, 32, 1)
+ggml_set_f32(q, rnorm(64 * 8 * 32))
+pos <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 32)
+ggml_set_i32(pos, 0:31)
+# Standard RoPE with default freq_base
+q_rope <- ggml_rope_ext(ctx, q, pos, NULL,
+                        n_dims = 64, mode = 0L,
+                        n_ctx_orig = 4096,
+                        freq_base = 10000, freq_scale = 1.0,
+                        ext_factor = 0.0, attn_factor = 1.0,
+                        beta_fast = 32, beta_slow = 1)
 graph <- ggml_build_forward_expand(ctx, q_rope)
 ggml_graph_compute(ctx, graph)
 ggml_free(ctx)

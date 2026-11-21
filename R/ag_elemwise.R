@@ -19,21 +19,15 @@ ag_div <- function(A, B) {
   ag_mul(A, ag_pow(B, -1))
 }
 
-#' Element-wise square root
-#'
-#' \code{x^0.5}; the gradient is infinite at 0.
-#'
-#' @param x ag_tensor
-#' @return ag_tensor
+#' @rdname ag_exp
+#' @details \code{ag_sqrt()}: \code{x^0.5}; the gradient is infinite at 0.
+#' Returns: ag_tensor
 #' @export
 ag_sqrt <- function(x) ag_pow(x, 0.5)
 
-#' Element-wise absolute value
-#'
-#' \code{relu(x) + relu(-x)}; the gradient at 0 is 0.
-#'
-#' @param x ag_tensor
-#' @return ag_tensor
+#' @rdname ag_exp
+#' @details \code{ag_abs()}: \code{relu(x) + relu(-x)}; the gradient at 0 is 0.
+#' Returns: ag_tensor
 #' @export
 ag_abs <- function(x) ag_add(ag_relu(x), ag_relu(ag_scale(x, -1)))
 
@@ -79,15 +73,12 @@ ag_where <- function(cond, A, B) {
   ag_add(B, ag_mul(cond, ag_sub(A, B)))
 }
 
-#' Element-wise softplus
-#'
-#' \code{log(1 + exp(x))} in the stable form
+#' @rdname ag_exp
+#' @details \code{ag_softplus()}: \code{log(1 + exp(x))} in the stable form
 #' \code{relu(x) - log(sigmoid(|x|))}: \code{sigmoid(|x|)} lies in
 #' \code{[0.5, 1]}, so nothing overflows or underflows. Gradient
 #' \code{sigmoid(x)}.
-#'
-#' @param x ag_tensor
-#' @return ag_tensor
+#' Returns: ag_tensor
 #' @export
 ag_softplus <- function(x) ag_sub(ag_relu(x), ag_log(ag_sigmoid(ag_abs(x))))
 

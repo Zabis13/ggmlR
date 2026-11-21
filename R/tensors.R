@@ -100,14 +100,10 @@ ggml_new_tensor_2d <- function(ctx, type = GGML_TYPE_F32, ne0, ne1) {
         as.numeric(ne0), as.numeric(ne1))
 }
 
-#' Create 3D Tensor
-#' @param ctx GGML context
-#' @param type Data type (default GGML_TYPE_F32)
-#' @param ne0 Size of dimension 0
-#' @param ne1 Size of dimension 1
+#' @rdname ggml_new_tensor
+#' @details \code{ggml_new_tensor_3d()}: 
+#' Returns: Tensor pointer
 #' @param ne2 Size of dimension 2
-#' @return Tensor pointer
-#' @export
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(1024 * 1024)
@@ -115,20 +111,16 @@ ggml_new_tensor_2d <- function(ctx, type = GGML_TYPE_F32, ne0, ne1) {
 #' ggml_nelements(t)
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_new_tensor_3d <- function(ctx, type = GGML_TYPE_F32, ne0, ne1, ne2) {
   .Call("R_ggml_new_tensor_3d", ctx, as.integer(type),
         as.numeric(ne0), as.numeric(ne1), as.numeric(ne2))
 }
 
-#' Create 4D Tensor
-#' @param ctx GGML context
-#' @param type Data type (default GGML_TYPE_F32)
-#' @param ne0 Size of dimension 0
-#' @param ne1 Size of dimension 1
-#' @param ne2 Size of dimension 2
+#' @rdname ggml_new_tensor
+#' @details \code{ggml_new_tensor_4d()}: 
+#' Returns: Tensor pointer
 #' @param ne3 Size of dimension 3
-#' @return Tensor pointer
-#' @export
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(1024 * 1024)
@@ -136,6 +128,7 @@ ggml_new_tensor_3d <- function(ctx, type = GGML_TYPE_F32, ne0, ne1, ne2) {
 #' ggml_nelements(t)
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_new_tensor_4d <- function(ctx, type = GGML_TYPE_F32, ne0, ne1, ne2, ne3) {
   .Call("R_ggml_new_tensor_4d", ctx, as.integer(type),
         as.numeric(ne0), as.numeric(ne1), as.numeric(ne2), as.numeric(ne3))
@@ -161,7 +154,7 @@ ggml_dup_tensor <- function(ctx, tensor) {
   .Call("R_ggml_dup_tensor", ctx, tensor)
 }
 
-#' Create Tensor with Arbitrary Dimensions
+#' Create New Tensors
 #'
 #' Generic tensor constructor for creating tensors with 1-4 dimensions.
 #' This is more flexible than the ggml_new_tensor_Nd functions.
@@ -332,7 +325,7 @@ ggml_n_dims <- function(tensor) {
   .Call("R_ggml_n_dims", tensor)
 }
 
-#' Check if Tensor is Contiguous
+#' Tensor Contiguity Checks
 #'
 #' Returns TRUE if tensor data is stored contiguously in memory
 #'

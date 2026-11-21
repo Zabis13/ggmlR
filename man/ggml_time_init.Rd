@@ -2,9 +2,21 @@
 % Please edit documentation in R/ggml.R
 \name{ggml_time_init}
 \alias{ggml_time_init}
-\title{Initialize GGML Timer}
+\alias{ggml_time_ms}
+\alias{ggml_time_us}
+\alias{ggml_cycles}
+\alias{ggml_cycles_per_ms}
+\title{Timing Utilities}
 \usage{
 ggml_time_init()
+
+ggml_time_ms()
+
+ggml_time_us()
+
+ggml_cycles()
+
+ggml_cycles_per_ms()
 }
 \value{
 NULL (invisible)
@@ -13,11 +25,44 @@ NULL (invisible)
 Initializes the GGML timing system. Call this once at the beginning
 of the program before using ggml_time_ms() or ggml_time_us().
 }
+\details{
+\code{ggml_time_ms()}: Returns the current time in milliseconds since the timer was initialized.
+Returns: Numeric value representing milliseconds
+
+\code{ggml_time_us()}: Returns the current time in microseconds since the timer was initialized.
+More precise than ggml_time_ms() for micro-benchmarking.
+Returns: Numeric value representing microseconds
+
+\code{ggml_cycles()}: Returns the current CPU cycle count. Useful for low-level benchmarking.
+Returns: Numeric value representing CPU cycles
+
+\code{ggml_cycles_per_ms()}: Returns an estimate of CPU cycles per millisecond.
+Useful for converting cycle counts to time.
+Returns: Numeric value representing cycles per millisecond
+}
 \examples{
 \donttest{
 ggml_time_init()
 start <- ggml_time_ms()
 Sys.sleep(0.01)
 elapsed <- ggml_time_ms() - start
+}
+\donttest{
+ggml_time_init()
+start <- ggml_time_ms()
+Sys.sleep(0.01)
+elapsed <- ggml_time_ms() - start
+}
+\donttest{
+ggml_time_init()
+start <- ggml_time_us()
+Sys.sleep(0.001)
+elapsed <- ggml_time_us() - start
+}
+\donttest{
+ggml_cycles()
+}
+\donttest{
+ggml_cycles_per_ms()
 }
 }

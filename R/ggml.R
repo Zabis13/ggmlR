@@ -29,12 +29,10 @@ ggml_free <- function(ctx) {
   invisible(.Call("R_ggml_free", ctx, PACKAGE = "ggmlR"))
 }
 
-#' Create 1D tensor
-#' @param ctx GGML context
-#' @param type Data type (e.g., GGML_TYPE_F32)
+#' @rdname ggml_new_tensor
+#' @details \code{ggml_new_tensor_1d()}: 
+#' Returns: Tensor pointer
 #' @param ne0 Number of elements
-#' @return Tensor pointer
-#' @export
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(1024 * 1024)
@@ -42,17 +40,15 @@ ggml_free <- function(ctx) {
 #' ggml_nelements(tensor)
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_new_tensor_1d <- function(ctx, type, ne0) {
   .Call("R_ggml_new_tensor_1d", ctx, as.integer(type), as.numeric(ne0), PACKAGE = "ggmlR")
 }
 
-#' Create 2D tensor
-#' @param ctx GGML context
-#' @param type Data type (e.g., GGML_TYPE_F32)
-#' @param ne0 Number of rows
+#' @rdname ggml_new_tensor
+#' @details \code{ggml_new_tensor_2d()}: 
+#' Returns: Tensor pointer
 #' @param ne1 Number of columns
-#' @return Tensor pointer
-#' @export
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(1024 * 1024)
@@ -60,6 +56,7 @@ ggml_new_tensor_1d <- function(ctx, type, ne0) {
 #' ggml_nelements(tensor)
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_new_tensor_2d <- function(ctx, type, ne0, ne1) {
   .Call("R_ggml_new_tensor_2d", ctx, as.integer(type), as.numeric(ne0), as.numeric(ne1), PACKAGE = "ggmlR")
 }
@@ -280,7 +277,7 @@ ggml_reset <- function(ctx) {
   invisible(.Call("R_ggml_reset", ctx))
 }
 
-#' Initialize GGML Timer
+#' Timing Utilities
 #'
 #' Initializes the GGML timing system. Call this once at the beginning
 #' of the program before using ggml_time_ms() or ggml_time_us().
@@ -298,12 +295,9 @@ ggml_time_init <- function() {
   invisible(.Call("R_ggml_time_init"))
 }
 
-#' Get Time in Milliseconds
-#'
-#' Returns the current time in milliseconds since the timer was initialized.
-#'
-#' @return Numeric value representing milliseconds
-#' @export
+#' @rdname ggml_time_init
+#' @details \code{ggml_time_ms()}: Returns the current time in milliseconds since the timer was initialized.
+#' Returns: Numeric value representing milliseconds
 #' @examples
 #' \donttest{
 #' ggml_time_init()
@@ -311,17 +305,15 @@ ggml_time_init <- function() {
 #' Sys.sleep(0.01)
 #' elapsed <- ggml_time_ms() - start
 #' }
+#' @export
 ggml_time_ms <- function() {
   .Call("R_ggml_time_ms")
 }
 
-#' Get Time in Microseconds
-#'
-#' Returns the current time in microseconds since the timer was initialized.
+#' @rdname ggml_time_init
+#' @details \code{ggml_time_us()}: Returns the current time in microseconds since the timer was initialized.
 #' More precise than ggml_time_ms() for micro-benchmarking.
-#'
-#' @return Numeric value representing microseconds
-#' @export
+#' Returns: Numeric value representing microseconds
 #' @examples
 #' \donttest{
 #' ggml_time_init()
@@ -329,35 +321,32 @@ ggml_time_ms <- function() {
 #' Sys.sleep(0.001)
 #' elapsed <- ggml_time_us() - start
 #' }
+#' @export
 ggml_time_us <- function() {
   .Call("R_ggml_time_us")
 }
 
-#' Get CPU Cycles
-#'
-#' Returns the current CPU cycle count. Useful for low-level benchmarking.
-#'
-#' @return Numeric value representing CPU cycles
-#' @export
+#' @rdname ggml_time_init
+#' @details \code{ggml_cycles()}: Returns the current CPU cycle count. Useful for low-level benchmarking.
+#' Returns: Numeric value representing CPU cycles
 #' @examples
 #' \donttest{
 #' ggml_cycles()
 #' }
+#' @export
 ggml_cycles <- function() {
   .Call("R_ggml_cycles")
 }
 
-#' Get CPU Cycles per Millisecond
-#'
-#' Returns an estimate of CPU cycles per millisecond.
+#' @rdname ggml_time_init
+#' @details \code{ggml_cycles_per_ms()}: Returns an estimate of CPU cycles per millisecond.
 #' Useful for converting cycle counts to time.
-#'
-#' @return Numeric value representing cycles per millisecond
-#' @export
+#' Returns: Numeric value representing cycles per millisecond
 #' @examples
 #' \donttest{
 #' ggml_cycles_per_ms()
 #' }
+#' @export
 ggml_cycles_per_ms <- function() {
   .Call("R_ggml_cycles_per_ms")
 }

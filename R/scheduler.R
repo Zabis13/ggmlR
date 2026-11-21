@@ -90,7 +90,7 @@ ggml_backend_sched_reserve <- function(sched, graph) {
   .Call("R_ggml_backend_sched_reserve", sched, graph, PACKAGE = "ggmlR")
 }
 
-#' Get number of backends in scheduler
+#' Scheduler Information
 #'
 #' Returns the number of backends managed by the scheduler.
 #'
@@ -101,43 +101,34 @@ ggml_backend_sched_get_n_backends <- function(sched) {
   .Call("R_ggml_backend_sched_get_n_backends", sched, PACKAGE = "ggmlR")
 }
 
-#' Get backend from scheduler
-#'
-#' Returns a specific backend from the scheduler by index.
-#'
-#' @param sched Scheduler pointer
+#' @rdname ggml_backend_sched_get_n_backends
+#' @details \code{ggml_backend_sched_get_backend()}: Returns a specific backend from the scheduler by index.
+#' Returns: Backend pointer
 #' @param index Backend index (0-based)
-#' @return Backend pointer
 #' @export
 ggml_backend_sched_get_backend <- function(sched, index = 0L) {
   .Call("R_ggml_backend_sched_get_backend", sched, as.integer(index), PACKAGE = "ggmlR")
 }
 
-#' Get number of graph splits
-#'
-#' Returns the number of splits in the last computed graph.
+#' @rdname ggml_backend_sched_get_n_backends
+#' @details \code{ggml_backend_sched_get_n_splits()}: Returns the number of splits in the last computed graph.
 #' Higher numbers indicate more distribution across backends.
-#'
-#' @param sched Scheduler pointer
-#' @return Integer count of splits
+#' Returns: Integer count of splits
 #' @export
 ggml_backend_sched_get_n_splits <- function(sched) {
   .Call("R_ggml_backend_sched_get_n_splits", sched, PACKAGE = "ggmlR")
 }
 
-#' Get number of tensor copies
-#'
-#' Returns the number of tensor copies made in the last computed graph.
+#' @rdname ggml_backend_sched_get_n_backends
+#' @details \code{ggml_backend_sched_get_n_copies()}: Returns the number of tensor copies made in the last computed graph.
 #' Copies occur when data needs to be transferred between backends.
-#'
-#' @param sched Scheduler pointer
-#' @return Integer count of copies
+#' Returns: Integer count of copies
 #' @export
 ggml_backend_sched_get_n_copies <- function(sched) {
   .Call("R_ggml_backend_sched_get_n_copies", sched, PACKAGE = "ggmlR")
 }
 
-#' Set tensor backend assignment
+#' Scheduler Tensor Backend Assignment
 #'
 #' Manually assigns a specific tensor to run on a specific backend.
 #' This overrides automatic scheduling.
@@ -152,18 +143,14 @@ ggml_backend_sched_set_tensor_backend <- function(sched, tensor, backend) {
                   sched, tensor, backend, PACKAGE = "ggmlR"))
 }
 
-#' Get tensor backend assignment
-#'
-#' Returns which backend a tensor is assigned to.
+#' @rdname ggml_backend_sched_set_tensor_backend
+#' @details \code{ggml_backend_sched_get_tensor_backend()}: Returns which backend a tensor is assigned to.
 #'
 #' Assignments are only meaningful once the scheduler has actually placed the
 #' graph --- that is, after \code{\link{ggml_backend_sched_graph_compute}}.
 #' After \code{\link{ggml_backend_sched_reserve}} alone, or for a tensor from a
 #' different graph, the assignment may not exist and this returns \code{NULL}.
-#'
-#' @param sched Scheduler pointer
-#' @param tensor Tensor pointer
-#' @return Backend pointer, or NULL if the tensor is not assigned to one
+#' Returns: Backend pointer, or NULL if the tensor is not assigned to one
 #' @export
 ggml_backend_sched_get_tensor_backend <- function(sched, tensor) {
   .Call("R_ggml_backend_sched_get_tensor_backend", sched, tensor, PACKAGE = "ggmlR")
@@ -182,7 +169,7 @@ ggml_backend_sched_alloc_graph <- function(sched, graph) {
   .Call("R_ggml_backend_sched_alloc_graph", sched, graph, PACKAGE = "ggmlR")
 }
 
-#' Compute graph using scheduler
+#' Scheduler Graph Compute
 #'
 #' Computes a graph by distributing work across multiple backends.
 #' This is the main function for multi-GPU computation.
@@ -229,14 +216,10 @@ ggml_backend_sched_graph_compute <- function(sched, graph) {
   .Call("R_ggml_backend_sched_graph_compute", sched, graph, PACKAGE = "ggmlR")
 }
 
-#' Compute graph asynchronously
-#'
-#' Computes a graph asynchronously across backends.
+#' @rdname ggml_backend_sched_graph_compute
+#' @details \code{ggml_backend_sched_graph_compute_async()}: Computes a graph asynchronously across backends.
 #' Use ggml_backend_sched_synchronize() to wait for completion.
-#'
-#' @param sched Scheduler pointer
-#' @param graph Graph pointer
-#' @return Status code (0 = success)
+#' Returns: Status code (0 = success)
 #' @export
 ggml_backend_sched_graph_compute_async <- function(sched, graph) {
   .Call("R_ggml_backend_sched_graph_compute_async", sched, graph, PACKAGE = "ggmlR")

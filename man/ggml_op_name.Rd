@@ -2,12 +2,26 @@
 % Please edit documentation in R/operations.R
 \name{ggml_op_name}
 \alias{ggml_op_name}
-\title{Get Operation Name}
+\alias{ggml_op_symbol}
+\alias{ggml_unary_op_name}
+\alias{ggml_op_desc}
+\alias{ggml_get_unary_op}
+\title{Operation Information}
 \usage{
 ggml_op_name(op)
+
+ggml_op_symbol(op)
+
+ggml_unary_op_name(op)
+
+ggml_op_desc(tensor)
+
+ggml_get_unary_op(tensor)
 }
 \arguments{
 \item{op}{GGML operation constant}
+
+\item{tensor}{Tensor pointer}
 }
 \value{
 Character string with operation name
@@ -15,11 +29,17 @@ Character string with operation name
 \description{
 Returns the string name of a GGML operation.
 }
-\seealso{
-Other op_info: 
-\code{\link{ggml_get_unary_op}()},
-\code{\link{ggml_op_desc}()},
-\code{\link{ggml_op_symbol}()},
-\code{\link{ggml_unary_op_name}()}
+\details{
+\code{ggml_op_symbol()}: Returns the mathematical symbol for a GGML operation.
+Returns: Character string with operation symbol
+
+\code{ggml_unary_op_name()}: Returns the string name of a GGML unary operation.
+Returns: Character string with operation name
+
+\code{ggml_op_desc()}: Returns a description of the operation that produces a tensor.
+Returns: Character string describing the operation
+
+\code{ggml_get_unary_op()}: Returns the unary operation type for a unary operation tensor.
+Returns: Integer unary operation type
 }
 \concept{op_info}

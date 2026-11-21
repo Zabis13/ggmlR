@@ -30,15 +30,6 @@ ggml_free(ctx)
 \seealso{
 Other tensor_layout: 
 \code{\link{ggml_are_same_stride}()},
-\code{\link{ggml_count_equal}()},
-\code{\link{ggml_is_contiguous_0}()},
-\code{\link{ggml_is_contiguous_1}()},
-\code{\link{ggml_is_contiguous_2}()},
-\code{\link{ggml_is_contiguous_channels}()},
-\code{\link{ggml_is_contiguous_rows}()},
-\code{\link{ggml_is_contiguous_to_1}()},
-\code{\link{ggml_is_contiguous_to_2}()},
-\code{\link{ggml_is_contiguous_to_3}()},
-\code{\link{ggml_is_contiguously_allocated}()}
+\code{\link{ggml_count_equal}()}
 }
 \concept{tensor_layout}

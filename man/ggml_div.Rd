@@ -2,9 +2,12 @@
 % Please edit documentation in R/operations.R
 \name{ggml_div}
 \alias{ggml_div}
+\alias{ggml_div_inplace}
 \title{Element-wise Division (Graph)}
 \usage{
 ggml_div(ctx, a, b)
+
+ggml_div_inplace(ctx, a, b)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -18,6 +21,9 @@ Tensor representing the division operation (a / b)
 }
 \description{
 Creates a graph node for element-wise division.
+}
+\details{
+\code{ggml_div_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 }
 \examples{
 \donttest{

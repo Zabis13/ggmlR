@@ -109,26 +109,22 @@ ggml_build_backward_expand <- function(ctx, graph) {
   invisible(.Call("R_ggml_build_backward_expand", ctx, graph, PACKAGE = "ggmlR"))
 }
 
-#' Get the Gradient Tensor of a Node
-#'
-#' Returns the tensor holding \code{d(output)/d(node)} after
+#' @rdname ggml_graph_n_nodes
+#' @details \code{ggml_graph_get_grad()}: Returns the tensor holding \code{d(output)/d(node)} after
 #' \code{\link{ggml_build_backward_expand}} has added the backward pass and the
 #' graph has been computed.
 #'
 #' Returns \code{NULL} when the node has no gradient in this graph -- because it
 #' was never marked with \code{\link{ggml_set_param}}, or because nothing
 #' differentiable connects it to the output.
-#'
-#' @param graph Graph carrying a backward pass
+#' Returns: The gradient tensor, or \code{NULL}
 #' @param node Tensor whose gradient is wanted
-#' @return The gradient tensor, or \code{NULL}
-#' @seealso \code{\link{ggml_build_backward_expand}}
 #' @export
 ggml_graph_get_grad <- function(graph, node) {
   .Call("R_ggml_graph_get_grad", graph, node, PACKAGE = "ggmlR")
 }
 
-#' @rdname ggml_graph_get_grad
+#' @rdname ggml_graph_n_nodes
 #' @return For \code{ggml_graph_get_grad_acc()}, the gradient accumulator
 #'   tensor, or \code{NULL}
 #' @export
@@ -209,7 +205,7 @@ ggml_graph_compute <- function(ctx, graph) {
   invisible(.Call("R_ggml_graph_compute", ctx, graph, PACKAGE = "ggmlR"))
 }
 
-#' Get Number of Nodes in Graph
+#' Graph Inspection
 #' 
 #' Returns the number of computation nodes in the graph
 #'
@@ -251,14 +247,10 @@ ggml_graph_reset <- function(graph) {
   invisible(.Call("R_ggml_graph_reset", graph, PACKAGE = "ggmlR"))
 }
 
-#' Get Graph Node
-#'
-#' Gets a specific node (tensor) from the computation graph by index
-#'
-#' @param graph Graph object
+#' @rdname ggml_graph_n_nodes
+#' @details \code{ggml_graph_node()}: Gets a specific node (tensor) from the computation graph by index
+#' Returns: Tensor pointer
 #' @param i Node index (0-based, negative indices count from end)
-#' @return Tensor pointer
-#' @export
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -269,27 +261,23 @@ ggml_graph_reset <- function(graph) {
 #' output <- ggml_graph_node(graph, -1)
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_graph_node <- function(graph, i) {
   .Call("R_ggml_graph_node", graph, as.integer(i), PACKAGE = "ggmlR")
 }
 
-#' Get Graph Overhead
-#'
-#' Returns the memory overhead required for a computation graph
-#'
-#' @return Size in bytes
+#' @rdname ggml_graph_n_nodes
+#' @details \code{ggml_graph_overhead()}: Returns the memory overhead required for a computation graph
+#' Returns: Size in bytes
 #' @export
 ggml_graph_overhead <- function() {
   .Call("R_ggml_graph_overhead", PACKAGE = "ggmlR")
 }
 
-#' Get Tensor from Graph by Name
-#'
-#' Finds a tensor in the computation graph by its name
-#'
-#' @param graph Graph object
+#' @rdname ggml_graph_n_nodes
+#' @details \code{ggml_graph_get_tensor()}: Finds a tensor in the computation graph by its name
+#' Returns: Tensor pointer or NULL if not found
 #' @param name Character string with tensor name
-#' @return Tensor pointer or NULL if not found
 #' @export
 ggml_graph_get_tensor <- function(graph, name) {
   .Call("R_ggml_graph_get_tensor", graph, as.character(name), PACKAGE = "ggmlR")
@@ -350,7 +338,7 @@ ggml_graph_dump_dot <- function(graph, leafs = NULL, filename) {
 # Graph Allocator Functions
 # ============================================================================
 
-#' Create Graph Allocator
+#' Graph Allocator
 #'
 #' Creates a new graph allocator for efficient memory management.
 #' The allocator can automatically allocate and reuse memory for graph tensors.
@@ -376,39 +364,29 @@ ggml_gallocr_new <- function() {
   .Call("R_ggml_gallocr_new", PACKAGE = "ggmlR")
 }
 
-#' Free Graph Allocator
-#'
-#' Frees a graph allocator and all associated buffers.
-#'
+#' @rdname ggml_gallocr_new
+#' @details \code{ggml_gallocr_free()}: Frees a graph allocator and all associated buffers.
+#' Returns: No return value, called for side effects
 #' @param galloc Graph allocator object
-#' @return No return value, called for side effects
 #' @export
 ggml_gallocr_free <- function(galloc) {
   invisible(.Call("R_ggml_gallocr_free", galloc, PACKAGE = "ggmlR"))
 }
 
-#' Reserve Memory for Graph
-#'
-#' Pre-allocates memory for a graph. This is optional but recommended
+#' @rdname ggml_gallocr_new
+#' @details \code{ggml_gallocr_reserve()}: Pre-allocates memory for a graph. This is optional but recommended
 #' when running the same graph multiple times to avoid reallocation.
-#'
-#' @param galloc Graph allocator object
+#' Returns: TRUE on success, FALSE on failure
 #' @param graph Graph object
-#' @return TRUE on success, FALSE on failure
 #' @export
 ggml_gallocr_reserve <- function(galloc, graph) {
   .Call("R_ggml_gallocr_reserve", galloc, graph, PACKAGE = "ggmlR")
 }
 
-#' Allocate Memory for Graph
-#'
-#' Allocates memory for all tensors in the computation graph.
+#' @rdname ggml_gallocr_new
+#' @details \code{ggml_gallocr_alloc_graph()}: Allocates memory for all tensors in the computation graph.
 #' This must be called before computing the graph.
-#'
-#' @param galloc Graph allocator object
-#' @param graph Graph object
-#' @return TRUE on success, FALSE on failure
-#' @export
+#' Returns: TRUE on success, FALSE on failure
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -426,17 +404,15 @@ ggml_gallocr_reserve <- function(galloc, graph) {
 #' ggml_gallocr_free(galloc)
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_gallocr_alloc_graph <- function(galloc, graph) {
   .Call("R_ggml_gallocr_alloc_graph", galloc, graph, PACKAGE = "ggmlR")
 }
 
-#' Get Graph Allocator Buffer Size
-#'
-#' Returns the size of the buffer used by the graph allocator.
-#'
-#' @param galloc Graph allocator object
+#' @rdname ggml_gallocr_new
+#' @details \code{ggml_gallocr_get_buffer_size()}: Returns the size of the buffer used by the graph allocator.
+#' Returns: Size in bytes
 #' @param buffer_id Buffer ID (default: 0 for single-buffer allocator)
-#' @return Size in bytes
 #' @export
 ggml_gallocr_get_buffer_size <- function(galloc, buffer_id = 0L) {
   .Call("R_ggml_gallocr_get_buffer_size", galloc, as.integer(buffer_id),
@@ -447,7 +423,7 @@ ggml_gallocr_get_buffer_size <- function(galloc, buffer_id = 0L) {
 # Backend Tensor Functions
 # ============================================================================
 
-#' Set Tensor Data via Backend
+#' Backend Tensor Data Access
 #'
 #' Sets tensor data using the backend API. This works with tensors
 #' allocated on any backend, not just CPU.
@@ -509,17 +485,11 @@ nn_tensor_values <- function(tensor, data) {
   data
 }
 
-#' Get Tensor Data via Backend
-#'
-#' Gets tensor data using the backend API. This works with tensors
+#' @rdname ggml_backend_tensor_set_data
+#' @details \code{ggml_backend_tensor_get_data()}: Gets tensor data using the backend API. This works with tensors
 #' allocated on any backend, not just CPU.
-#'
-#' @param tensor Tensor pointer
-#' @param offset Byte offset (default: 0)
+#' Returns: R vector with tensor data: integer for \code{I32}, double otherwise. \code{I64} values come back as doubles, with a warning when any exceeds \eqn{2^{53}}{2^53} in magnitude (precision is lost there).
 #' @param n_elements Number of elements to retrieve (NULL for all)
-#' @return R vector with tensor data: integer for \code{I32}, double otherwise.
-#'   \code{I64} values come back as doubles, with a warning when any exceeds
-#'   \eqn{2^{53}}{2^53} in magnitude (precision is lost there).
 #' @export
 ggml_backend_tensor_get_data <- function(tensor, offset = 0, n_elements = NULL) {
   .Call("R_ggml_backend_tensor_get", tensor, as.numeric(offset),
@@ -543,34 +513,25 @@ ggml_backend_alloc_ctx_tensors <- function(ctx, backend) {
 # Backend Buffer Functions
 # ============================================================================
 
-#' Free Backend Buffer
-#'
-#' Frees a backend buffer and all associated memory.
-#'
-#' @param buffer Backend buffer object
-#' @return No return value, called for side effects
+#' @rdname ggml_backend_buffer_clear
+#' @details \code{ggml_backend_buffer_free()}: Frees a backend buffer and all associated memory.
+#' Returns: No return value, called for side effects
 #' @export
 ggml_backend_buffer_free <- function(buffer) {
   invisible(.Call("R_ggml_backend_buffer_free", buffer, PACKAGE = "ggmlR"))
 }
 
-#' Get Backend Buffer Size
-#'
-#' Returns the total size of a backend buffer.
-#'
-#' @param buffer Backend buffer object
-#' @return Size in bytes
+#' @rdname ggml_backend_buffer_clear
+#' @details \code{ggml_backend_buffer_get_size()}: Returns the total size of a backend buffer.
+#' Returns: Size in bytes
 #' @export
 ggml_backend_buffer_get_size <- function(buffer) {
   .Call("R_ggml_backend_buffer_get_size", buffer, PACKAGE = "ggmlR")
 }
 
-#' Get Backend Buffer Name
-#'
-#' Returns the name/type of a backend buffer.
-#'
-#' @param buffer Backend buffer object
-#' @return Character string with buffer name
+#' @rdname ggml_backend_buffer_clear
+#' @details \code{ggml_backend_buffer_name()}: Returns the name/type of a backend buffer.
+#' Returns: Character string with buffer name
 #' @export
 ggml_backend_buffer_name <- function(buffer) {
   .Call("R_ggml_backend_buffer_name", buffer, PACKAGE = "ggmlR")
@@ -580,18 +541,13 @@ ggml_backend_buffer_name <- function(buffer) {
 # Graph Introspection
 # ============================================================================
 
-#' Create a View of a Subgraph
-#'
-#' Creates a view of a portion of a computation graph, containing nodes
+#' @rdname ggml_graph_cpy
+#' @details \code{ggml_graph_view()}: Creates a view of a portion of a computation graph, containing nodes
 #' from index i0 to i1 (exclusive). The view shares the underlying nodes
 #' but does not include leaf tensors or gradients.
-#'
-#' @param graph External pointer to computation graph
+#' Returns: External pointer to graph view
 #' @param i0 Start index (0-based, inclusive)
 #' @param i1 End index (exclusive)
-#' @return External pointer to graph view
-#' @export
-#' @family graph
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -602,6 +558,7 @@ ggml_backend_buffer_name <- function(buffer) {
 #' view <- ggml_graph_view(graph, 0, n_nodes)
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_graph_view <- function(graph, i0, i1) {
   .Call("R_ggml_graph_view", graph, as.integer(i0), as.integer(i1),
         PACKAGE = "ggmlR")
@@ -655,26 +612,23 @@ ggml_are_same_layout <- function(a, b) {
 # they were unreachable from R.
 # ============================================================================
 
-#' Duplicate a Computation Graph
-#'
-#' Copies \code{graph} into \code{ctx}.  With \code{force_grads = TRUE} the copy
+#' @rdname ggml_graph_cpy
+#' @details \code{ggml_graph_dup()}: Copies \code{graph} into \code{ctx}.  With \code{force_grads = TRUE} the copy
 #' carries gradient storage even when the original does not, which is one way to
 #' turn a plain forward graph into one that
 #' \code{\link{ggml_build_backward_expand}} accepts.
-#'
+#' Returns: A new graph object (external pointer)
 #' @param ctx GGML context to allocate the copy in
 #' @param graph Graph to duplicate
 #' @param force_grads Logical; give the copy gradient storage (default
 #'   \code{FALSE})
-#' @return A new graph object (external pointer)
-#' @seealso \code{\link{ggml_build_forward_expand_grads}}
 #' @export
 ggml_graph_dup <- function(ctx, graph, force_grads = FALSE) {
   .Call("R_ggml_graph_dup", ctx, graph, as.logical(force_grads),
         PACKAGE = "ggmlR")
 }
 
-#' Copy One Graph's Nodes Into Another
+#' Graph Copies and Views
 #'
 #' Copies the contents of \code{src} into \code{dst}, which must already have
 #' room for them.  Unlike \code{\link{ggml_graph_dup}} this allocates nothing.
@@ -715,14 +669,11 @@ ggml_graph_add_node <- function(graph, tensor) {
   invisible(.Call("R_ggml_graph_add_node", graph, tensor, PACKAGE = "ggmlR"))
 }
 
-#' Create a Graph Allocator for a Specific Buffer Type
-#'
-#' Like \code{\link{ggml_gallocr_new}}, but allocates from the given buffer type
+#' @rdname ggml_gallocr_new
+#' @details \code{ggml_gallocr_new_buft()}: Like \code{\link{ggml_gallocr_new}}, but allocates from the given buffer type
 #' rather than the CPU default -- so a graph can be allocated in GPU memory.
-#'
+#' Returns: Graph allocator object (external pointer)
 #' @param buft Buffer type (e.g. from \code{ggml_backend_get_default_buffer_type()})
-#' @return Graph allocator object (external pointer)
-#' @seealso \code{\link{ggml_gallocr_new}}, \code{\link{ggml_gallocr_alloc_graph}}
 #' @export
 ggml_gallocr_new_buft <- function(buft) {
   .Call("R_ggml_gallocr_new_buft", buft, PACKAGE = "ggmlR")

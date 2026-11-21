@@ -45,7 +45,7 @@
 #'
 #' @param on `TRUE` to record, `FALSE` to stop, `NA` to query.
 #' @return The previous state, invisibly.
-#' @keywords internal
+#' @noRd
 ag_forward_profile <- function(on = TRUE) {
   old <- isTRUE(.ag_fwd$prof)
   if (!is.na(on)) {
@@ -55,7 +55,7 @@ ag_forward_profile <- function(on = TRUE) {
   invisible(old)
 }
 
-#' @rdname ag_forward_profile
+#' @noRd
 #' @keywords internal
 ag_forward_profile_reset <- function() {
   .ag_fwd$totals <- NULL
@@ -64,7 +64,7 @@ ag_forward_profile_reset <- function() {
   invisible(NULL)
 }
 
-#' @rdname ag_forward_profile
+#' @noRd
 #' @keywords internal
 ag_forward_profile_report <- function() {
   if (is.null(.ag_fwd$totals) || .ag_fwd$n == 0L) {

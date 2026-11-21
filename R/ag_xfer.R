@@ -46,7 +46,7 @@
 #'
 #' @param on `TRUE` to count, `FALSE` to stop, `NA` to only query the state.
 #' @return Invisibly, the previous state.
-#' @keywords internal
+#' @noRd
 ag_xfer_count <- function(on = TRUE) {
   old <- .ag_xfer$enabled
   if (!is.na(on)) {
@@ -56,7 +56,7 @@ ag_xfer_count <- function(on = TRUE) {
   invisible(old)
 }
 
-#' @rdname ag_xfer_count
+#' @noRd
 #' @keywords internal
 ag_xfer_reset <- function() {
   .ag_xfer$counts <- new.env(parent = emptyenv())
@@ -98,7 +98,7 @@ ag_xfer_reset <- function() {
 #'
 #' @param n Maximum number of sites to print.
 #' @return A data frame of sites, directions, counts and bytes, invisibly.
-#' @keywords internal
+#' @noRd
 ag_xfer_report <- function(n = 40L) {
   if (is.null(.ag_xfer$counts)) {
     message("ag_xfer_report(): counting was never enabled.")
@@ -167,7 +167,7 @@ ag_xfer_report <- function(n = 40L) {
 #'
 #' @param reset \code{TRUE} to zero the counters after reading them.
 #' @return A named numeric vector of launches per site (total in \code{"total"}).
-#' @keywords internal
+#' @noRd
 ag_launch_count <- function(reset = FALSE) {
   v <- unlist(.ag_launch$by_site)
   if (is.null(v)) v <- numeric(0)

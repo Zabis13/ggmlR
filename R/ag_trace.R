@@ -33,7 +33,7 @@
 #'
 #' @param on `TRUE` to trace, `FALSE` to stop, `NA` to only query the state.
 #' @return The previous state, invisibly.
-#' @keywords internal
+#' @noRd
 ag_trace_data <- function(on = TRUE) {
   old <- .ag_trace$enabled
   if (!is.na(on)) {
@@ -43,7 +43,7 @@ ag_trace_data <- function(on = TRUE) {
   invisible(old)
 }
 
-#' @rdname ag_trace_data
+#' @noRd
 #' @keywords internal
 ag_trace_data_reset <- function() {
   .ag_trace$counts <- new.env(parent = emptyenv())
@@ -109,7 +109,7 @@ ag_trace_data_reset <- function() {
 #'
 #' @param n Maximum number of call sites to print.
 #' @return A data frame of sites and counts, invisibly.
-#' @keywords internal
+#' @noRd
 ag_trace_data_report <- function(n = 40L) {
   if (is.null(.ag_trace$counts)) {
     message("ag_trace_data_report(): tracing was never enabled.")

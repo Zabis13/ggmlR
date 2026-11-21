@@ -2,9 +2,12 @@
 % Please edit documentation in R/graph.R
 \name{ggml_backend_tensor_set_data}
 \alias{ggml_backend_tensor_set_data}
-\title{Set Tensor Data via Backend}
+\alias{ggml_backend_tensor_get_data}
+\title{Backend Tensor Data Access}
 \usage{
 ggml_backend_tensor_set_data(tensor, data, offset = 0)
+
+ggml_backend_tensor_get_data(tensor, offset = 0, n_elements = NULL)
 }
 \arguments{
 \item{tensor}{Tensor pointer}
@@ -12,6 +15,8 @@ ggml_backend_tensor_set_data(tensor, data, offset = 0)
 \item{data}{R vector with data to set}
 
 \item{offset}{Byte offset (default: 0)}
+
+\item{n_elements}{Number of elements to retrieve (NULL for all)}
 }
 \value{
 No return value, called for side effects
@@ -29,4 +34,8 @@ Integer and logical data are accepted for float tensors and
   An \code{F64} tensor takes doubles as they are. An \code{I64} tensor
   takes integers or whole-valued doubles within \eqn{\pm 2^{53}}{+-2^53}
   (where doubles are exact); anything else stops with an error.
+
+\code{ggml_backend_tensor_get_data()}: Gets tensor data using the backend API. This works with tensors
+allocated on any backend, not just CPU.
+Returns: R vector with tensor data: integer for \code{I32}, double otherwise. \code{I64} values come back as doubles, with a warning when any exceeds \eqn{2^{53}}{2^53} in magnitude (precision is lost there).
 }

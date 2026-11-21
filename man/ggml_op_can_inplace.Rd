@@ -22,8 +22,4 @@ This is useful for memory optimization.
 can_inplace <- ggml_op_can_inplace(1L)
 }
 }
-\seealso{
-Other graph: 
-\code{\link{ggml_graph_view}()}
-}
 \concept{graph}

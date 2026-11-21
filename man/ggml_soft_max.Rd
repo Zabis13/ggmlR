@@ -2,14 +2,45 @@
 % Please edit documentation in R/operations.R
 \name{ggml_soft_max}
 \alias{ggml_soft_max}
-\title{Softmax (Graph)}
+\alias{ggml_soft_max_inplace}
+\alias{ggml_soft_max_ext}
+\alias{ggml_soft_max_ext_inplace}
+\alias{ggml_soft_max_ext_back_inplace}
+\alias{ggml_soft_max_ext_back}
+\alias{ggml_soft_max_add_sinks}
+\title{Softmax Operations (Graph)}
 \usage{
 ggml_soft_max(ctx, a)
+
+ggml_soft_max_inplace(ctx, a)
+
+ggml_soft_max_ext(ctx, a, mask = NULL, scale = 1, max_bias = 0)
+
+ggml_soft_max_ext_inplace(ctx, a, mask = NULL, scale = 1, max_bias = 0)
+
+ggml_soft_max_ext_back_inplace(ctx, a, b, scale = 1, max_bias = 0)
+
+ggml_soft_max_ext_back(ctx, a, b, scale = 1, max_bias = 0)
+
+ggml_soft_max_add_sinks(tensor, sinks)
 }
 \arguments{
 \item{ctx}{GGML context}
 
 \item{a}{Input tensor}
+
+\item{mask}{Optional attention mask tensor (F16 or F32). NULL for no mask.
+Shape must be broadcastable to input tensor.}
+
+\item{scale}{Scaling factor, typically 1/sqrt(head_dim)}
+
+\item{max_bias}{Maximum ALiBi bias (0.0 to disable ALiBi)}
+
+\item{b}{Gradient tensor from upstream}
+
+\item{tensor}{A softmax node}
+
+\item{sinks}{Sink logits, one per head}
 }
 \value{
 Tensor representing the softmax operation
@@ -17,6 +48,34 @@ Tensor representing the softmax operation
 \description{
 Creates a graph node for softmax operation.
 CRITICAL for attention mechanisms.
+}
+\details{
+\code{ggml_soft_max_inplace()} is the in-place variant: it modifies its input and returns a view of it.
+
+\code{ggml_soft_max_ext()}: Creates a graph node for fused softmax operation with optional masking
+and ALiBi (Attention with Linear Biases) support.
+Computes: softmax(a * scale + mask * (ALiBi slope))
+CRITICAL for efficient attention computation in transformers.
+Returns: Tensor representing the scaled and masked softmax
+
+This extended softmax is commonly used in transformer attention:
+1. Scale attention scores by 1/sqrt(d_k) for numerical stability
+2. Apply attention mask (e.g., causal mask, padding mask)
+3. Optionally apply ALiBi position bias
+4. Compute softmax
+
+All these operations are fused for efficiency.
+
+\code{ggml_soft_max_ext_inplace()} is the in-place variant: it modifies its input and returns a view of it.
+
+\code{ggml_soft_max_ext_back_inplace()} is the in-place variant: it modifies its input and returns a view of it.
+
+\code{ggml_soft_max_ext_back()}: Backward pass for extended softmax operation.
+Returns: Gradient tensor for the input
+
+\code{ggml_soft_max_add_sinks()}: The \code{\link{ggml_soft_max_ext}} counterpart of
+\code{\link{ggml_flash_attn_ext_add_sinks}}.
+Returns: The tensor (for chaining)
 }
 \examples{
 \donttest{
@@ -28,6 +87,24 @@ graph <- ggml_build_forward_expand(ctx, result)
 ggml_graph_compute(ctx, graph)
 output <- ggml_get_f32(result)
 # Output sums to 1.0
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(1, 2, 3, 4))
+result <- ggml_soft_max_inplace(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+scores <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 10, 10)
+ggml_set_f32(scores, rnorm(100))
+attn <- ggml_soft_max_ext(ctx, scores, NULL, 1.0, max_bias = 0.0)
+graph <- ggml_build_forward_expand(ctx, attn)
+ggml_graph_compute(ctx, graph)
 ggml_free(ctx)
 }
 }

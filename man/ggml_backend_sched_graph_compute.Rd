@@ -2,9 +2,12 @@
 % Please edit documentation in R/scheduler.R
 \name{ggml_backend_sched_graph_compute}
 \alias{ggml_backend_sched_graph_compute}
-\title{Compute graph using scheduler}
+\alias{ggml_backend_sched_graph_compute_async}
+\title{Scheduler Graph Compute}
 \usage{
 ggml_backend_sched_graph_compute(sched, graph)
+
+ggml_backend_sched_graph_compute_async(sched, graph)
 }
 \arguments{
 \item{sched}{Scheduler pointer}
@@ -17,6 +20,11 @@ Status code (0 = success)
 \description{
 Computes a graph by distributing work across multiple backends.
 This is the main function for multi-GPU computation.
+}
+\details{
+\code{ggml_backend_sched_graph_compute_async()}: Computes a graph asynchronously across backends.
+Use ggml_backend_sched_synchronize() to wait for completion.
+Returns: Status code (0 = success)
 }
 \examples{
 \donttest{

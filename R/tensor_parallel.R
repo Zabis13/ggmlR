@@ -20,7 +20,7 @@
 #' @param n Number of shards.
 #' @return A list of integer vectors of row indices (1-based), length \code{n};
 #'   empty vectors are dropped.
-#' @keywords internal
+#' @noRd
 .ggmlr_batch_shards <- function(M, n) {
   if (n <= 1L) return(list(seq_len(M)))
   base <- M %/% n
@@ -114,7 +114,7 @@ ggml_tp_dp_forward <- function(W, X, replicas,
 #' @param src Source tensor (stage N output), Vulkan-backed.
 #' @param dst Destination tensor (stage N+1 input), Vulkan-backed, same size.
 #' @return Invisibly 0 on success; errors on a shape/buffer mismatch.
-#' @keywords internal
+#' @noRd
 ggml_vulkan_stage_handoff <- function(src, dst) {
   invisible(.Call("R_ggml_vk_stage_handoff", src, dst, PACKAGE = "ggmlR"))
 }

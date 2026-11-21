@@ -2,11 +2,14 @@
 % Please edit documentation in R/ggml.R, R/operations.R
 \name{ggml_add}
 \alias{ggml_add}
+\alias{ggml_add_inplace}
 \title{Add tensors}
 \usage{
 ggml_add(ctx, a, b)
 
 ggml_add(ctx, a, b)
+
+ggml_add_inplace(ctx, a, b)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -23,6 +26,9 @@ Tensor representing the addition operation
 \description{
 Creates a graph node for element-wise addition. Must be computed using
 ggml_build_forward_expand() and ggml_graph_compute().
+}
+\details{
+\code{ggml_add_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 }
 \examples{
 \donttest{
@@ -44,6 +50,18 @@ b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
 ggml_set_f32(a, c(1, 2, 3, 4, 5))
 ggml_set_f32(b, c(5, 4, 3, 2, 1))
 result <- ggml_add(ctx, a, b)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_get_f32(result)
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+b <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 5)
+ggml_set_f32(a, c(1, 2, 3, 4, 5))
+ggml_set_f32(b, c(5, 4, 3, 2, 1))
+result <- ggml_add_inplace(ctx, a, b)
 graph <- ggml_build_forward_expand(ctx, result)
 ggml_graph_compute(ctx, graph)
 ggml_get_f32(result)

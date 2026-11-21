@@ -277,17 +277,8 @@ ggml_mul_mat_set_hint <- function(a, hint) {
 # In-place Operations (Memory-efficient, 2-3x savings for inference)
 # ============================================================================
 
-#' Element-wise Addition In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise addition.
-#' Result is stored in tensor a, saving memory allocation.
-#' Returns a view of the modified tensor.
-#'
-#' @param ctx GGML context
-#' @param a First tensor (will be modified in-place)
-#' @param b Second tensor (same shape as a)
-#' @return View of tensor a with the addition result
-#' @export
+#' @rdname ggml_add
+#' @details \code{ggml_add_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(1024 * 1024)
@@ -301,267 +292,153 @@ ggml_mul_mat_set_hint <- function(a, hint) {
 #' ggml_get_f32(result)
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_add_inplace <- function(ctx, a, b) {
   .Call("R_ggml_add_inplace", ctx, a, b, PACKAGE = "ggmlR")
 }
 
-#' Element-wise Subtraction In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise subtraction.
-#' Result is stored in tensor a, saving memory allocation.
-#'
-#' @param ctx GGML context
-#' @param a First tensor (will be modified in-place)
-#' @param b Second tensor (same shape as a)
-#' @return View of tensor a with the subtraction result
+#' @rdname ggml_sub
+#' @details \code{ggml_sub_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_sub_inplace <- function(ctx, a, b) {
   .Call("R_ggml_sub_inplace", ctx, a, b, PACKAGE = "ggmlR")
 }
 
-#' Element-wise Multiplication In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise multiplication.
-#' Result is stored in tensor a, saving memory allocation.
-#'
-#' @param ctx GGML context
-#' @param a First tensor (will be modified in-place)
-#' @param b Second tensor (same shape as a)
-#' @return View of tensor a with the multiplication result
+#' @rdname ggml_mul
+#' @details \code{ggml_mul_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_mul_inplace <- function(ctx, a, b) {
   .Call("R_ggml_mul_inplace", ctx, a, b, PACKAGE = "ggmlR")
 }
 
-#' Element-wise Division In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise division.
-#' Result is stored in tensor a, saving memory allocation.
-#'
-#' @param ctx GGML context
-#' @param a First tensor (will be modified in-place)
-#' @param b Second tensor (same shape as a)
-#' @return View of tensor a with the division result
+#' @rdname ggml_div
+#' @details \code{ggml_div_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_div_inplace <- function(ctx, a, b) {
   .Call("R_ggml_div_inplace", ctx, a, b, PACKAGE = "ggmlR")
 }
 
-#' Square In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise square: x^2
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with squared values
+#' @rdname ggml_sqr
+#' @details \code{ggml_sqr_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_sqr_inplace <- function(ctx, a) {
   .Call("R_ggml_sqr_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Square Root In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise square root.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with square root values
+#' @rdname ggml_sqrt
+#' @details \code{ggml_sqrt_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_sqrt_inplace <- function(ctx, a) {
   .Call("R_ggml_sqrt_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Exponential In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise exponential: e^x
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with exponential values
+#' @rdname ggml_exp
+#' @details \code{ggml_exp_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_exp_inplace <- function(ctx, a) {
   .Call("R_ggml_exp_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Natural Logarithm In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise natural logarithm.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with log values
+#' @rdname ggml_log
+#' @details \code{ggml_log_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_log_inplace <- function(ctx, a) {
   .Call("R_ggml_log_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Absolute Value In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise absolute value.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with absolute values
+#' @rdname ggml_abs
+#' @details \code{ggml_abs_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_abs_inplace <- function(ctx, a) {
   .Call("R_ggml_abs_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Negation In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise negation: -x
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with negated values
+#' @rdname ggml_neg
+#' @details \code{ggml_neg_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_neg_inplace <- function(ctx, a) {
   .Call("R_ggml_neg_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Ceiling In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise ceiling.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with ceiling values
+#' @rdname ggml_ceil
+#' @details \code{ggml_ceil_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_ceil_inplace <- function(ctx, a) {
   .Call("R_ggml_ceil_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Floor In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise floor.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with floor values
+#' @rdname ggml_floor
+#' @details \code{ggml_floor_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_floor_inplace <- function(ctx, a) {
   .Call("R_ggml_floor_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Round In-place (Graph)
-#'
-#' Creates a graph node for in-place element-wise rounding.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with rounded values
+#' @rdname ggml_round
+#' @details \code{ggml_round_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_round_inplace <- function(ctx, a) {
   .Call("R_ggml_round_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' ReLU Activation In-place (Graph)
-#'
-#' Creates a graph node for in-place ReLU activation: max(0, x)
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with ReLU applied
+#' @rdname ggml_relu
+#' @details \code{ggml_relu_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_relu_inplace <- function(ctx, a) {
   .Call("R_ggml_relu_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' GELU Activation In-place (Graph)
-#'
-#' Creates a graph node for in-place GELU (Gaussian Error Linear Unit) activation.
-#' CRITICAL for GPT models with memory efficiency.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with GELU applied
+#' @rdname ggml_gelu
+#' @details \code{ggml_gelu_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_gelu_inplace <- function(ctx, a) {
   .Call("R_ggml_gelu_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' SiLU Activation In-place (Graph)
-#'
-#' Creates a graph node for in-place SiLU (Sigmoid Linear Unit) activation.
-#' CRITICAL for LLaMA models with memory efficiency.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with SiLU applied
+#' @rdname ggml_silu
+#' @details \code{ggml_silu_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_silu_inplace <- function(ctx, a) {
   .Call("R_ggml_silu_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Sigmoid Activation In-place (Graph)
-#'
-#' Creates a graph node for in-place sigmoid activation: 1 / (1 + e^(-x))
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with sigmoid applied
+#' @rdname ggml_sigmoid
+#' @details \code{ggml_sigmoid_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_sigmoid_inplace <- function(ctx, a) {
   .Call("R_ggml_sigmoid_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Tanh Activation In-place (Graph)
-#'
-#' Creates a graph node for in-place hyperbolic tangent activation.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with tanh applied
+#' @rdname ggml_tanh
+#' @details \code{ggml_tanh_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_tanh_inplace <- function(ctx, a) {
   .Call("R_ggml_tanh_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Softplus Activation In-place (Graph)
-#'
-#' Creates a graph node for in-place softplus activation: log(1 + e^x)
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with softplus applied
+#' @rdname ggml_softplus
+#' @details \code{ggml_softplus_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_softplus_inplace <- function(ctx, a) {
   .Call("R_ggml_softplus_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' ELU Activation In-place (Graph)
-#'
-#' Creates a graph node for in-place ELU (Exponential Linear Unit) activation.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of tensor a with ELU applied
+#' @rdname ggml_elu
+#' @details \code{ggml_elu_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_elu_inplace <- function(ctx, a) {
   .Call("R_ggml_elu_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Scale Tensor In-place (Graph)
-#'
-#' Creates a graph node for in-place scaling: a * s
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @param s Scalar value to multiply by
-#' @return View of tensor a with scaled values
+#' @rdname ggml_scale
+#' @details \code{ggml_scale_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_scale_inplace <- function(ctx, a, s) {
   .Call("R_ggml_scale_inplace", ctx, a, as.numeric(s), PACKAGE = "ggmlR")
 }
 
-#' Duplicate Tensor In-place (Graph)
-#'
-#' Creates a graph node for in-place tensor duplication.
-#' Returns a view of the input tensor.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor
-#' @return View of tensor a
+#' @rdname ggml_dup
+#' @details \code{ggml_dup_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_dup_inplace <- function(ctx, a) {
   .Call("R_ggml_dup_inplace", ctx, a, PACKAGE = "ggmlR")
@@ -720,15 +597,8 @@ ggml_rms_norm <- function(ctx, a, eps = 1e-5) {
   .Call("R_ggml_rms_norm", ctx, a, as.numeric(eps), PACKAGE = "ggmlR")
 }
 
-#' Layer Normalization In-place (Graph)
-#'
-#' Creates a graph node for in-place layer normalization.
-#' Returns a view of the input tensor.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @param eps Epsilon value for numerical stability (default: 1e-5)
-#' @return View of input tensor with layer normalization applied
+#' @rdname ggml_norm
+#' @details \code{ggml_norm_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -744,16 +614,8 @@ ggml_norm_inplace <- function(ctx, a, eps = 1e-5) {
   .Call("R_ggml_norm_inplace", ctx, a, as.numeric(eps), PACKAGE = "ggmlR")
 }
 
-#' RMS Normalization In-place (Graph)
-#'
-#' Creates a graph node for in-place RMS normalization.
-#' Returns a view of the input tensor.
-#' CRITICAL for LLaMA models when memory efficiency is important.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @param eps Epsilon value for numerical stability (default: 1e-5)
-#' @return View of input tensor with RMS normalization applied
+#' @rdname ggml_rms_norm
+#' @details \code{ggml_rms_norm_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -796,15 +658,8 @@ ggml_group_norm <- function(ctx, a, n_groups, eps = 1e-5) {
   .Call("R_ggml_group_norm", ctx, a, as.integer(n_groups), as.numeric(eps), PACKAGE = "ggmlR")
 }
 
-#' Group Normalization In-place (Graph)
-#'
-#' Creates a graph node for in-place group normalization.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @param n_groups Number of groups
-#' @param eps Epsilon for numerical stability (default 1e-5)
-#' @return View of input tensor with group norm applied
+#' @rdname ggml_group_norm
+#' @details \code{ggml_group_norm_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -846,14 +701,8 @@ ggml_l2_norm <- function(ctx, a, eps = 1e-5) {
   .Call("R_ggml_l2_norm", ctx, a, as.numeric(eps), PACKAGE = "ggmlR")
 }
 
-#' L2 Normalization In-place (Graph)
-#'
-#' Creates a graph node for in-place L2 normalization.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @param eps Epsilon for numerical stability (default 1e-5)
-#' @return View of input tensor with L2 norm applied
+#' @rdname ggml_l2_norm
+#' @details \code{ggml_l2_norm_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -906,7 +755,7 @@ ggml_norm_back <- function(ctx, a, b, eps = 1e-5) {
 # Softmax
 # ============================================================================
 
-#' Softmax (Graph)
+#' Softmax Operations (Graph)
 #'
 #' Creates a graph node for softmax operation.
 #' CRITICAL for attention mechanisms.
@@ -931,14 +780,8 @@ ggml_soft_max <- function(ctx, a) {
   .Call("R_ggml_soft_max", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Softmax In-place (Graph)
-#'
-#' Creates a graph node for in-place softmax operation.
-#' Returns a view of the input tensor.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @return View of input tensor with softmax applied
+#' @rdname ggml_soft_max
+#' @details \code{ggml_soft_max_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -954,21 +797,16 @@ ggml_soft_max_inplace <- function(ctx, a) {
   .Call("R_ggml_soft_max_inplace", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Extended Softmax with Masking and Scaling (Graph)
-#'
-#' Creates a graph node for fused softmax operation with optional masking
+#' @rdname ggml_soft_max
+#' @details \code{ggml_soft_max_ext()}: Creates a graph node for fused softmax operation with optional masking
 #' and ALiBi (Attention with Linear Biases) support.
 #' Computes: softmax(a * scale + mask * (ALiBi slope))
 #' CRITICAL for efficient attention computation in transformers.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (typically attention scores)
+#' Returns: Tensor representing the scaled and masked softmax
 #' @param mask Optional attention mask tensor (F16 or F32). NULL for no mask.
 #'   Shape must be broadcastable to input tensor.
 #' @param scale Scaling factor, typically 1/sqrt(head_dim)
 #' @param max_bias Maximum ALiBi bias (0.0 to disable ALiBi)
-#' @return Tensor representing the scaled and masked softmax
-#'
 #' @details
 #' This extended softmax is commonly used in transformer attention:
 #' 1. Scale attention scores by 1/sqrt(d_k) for numerical stability
@@ -994,32 +832,17 @@ ggml_soft_max_ext <- function(ctx, a, mask = NULL, scale = 1.0, max_bias = 0.0) 
         as.numeric(scale), as.numeric(max_bias), PACKAGE = "ggmlR")
 }
 
-#' Extended Softmax Inplace (Graph)
-#'
-#' Creates a graph node for extended softmax, modifying input tensor in place.
-#' Returns a view of the input tensor.
-#'
-#' @inheritParams ggml_soft_max_ext
-#' @return View of input tensor with softmax applied in place
+#' @rdname ggml_soft_max
+#' @details \code{ggml_soft_max_ext_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
-#' @family softmax
 ggml_soft_max_ext_inplace <- function(ctx, a, mask = NULL, scale = 1.0, max_bias = 0.0) {
   .Call("R_ggml_soft_max_ext_inplace", ctx, a, mask,
         as.numeric(scale), as.numeric(max_bias), PACKAGE = "ggmlR")
 }
 
-#' Extended Softmax Backward Inplace (Graph)
-#'
-#' Creates a graph node for the backward pass of extended softmax, modifying in place.
-#'
-#' @param ctx GGML context
-#' @param a Gradient tensor from upstream
-#' @param b Softmax output from forward pass
-#' @param scale Scaling factor used in forward pass
-#' @param max_bias Maximum ALiBi bias used in forward pass
-#' @return View of input tensor with gradient computed in place
+#' @rdname ggml_soft_max
+#' @details \code{ggml_soft_max_ext_back_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
-#' @family softmax
 ggml_soft_max_ext_back_inplace <- function(ctx, a, b, scale = 1.0, max_bias = 0.0) {
   .Call("R_ggml_soft_max_ext_back_inplace", ctx, a, b,
         as.numeric(scale), as.numeric(max_bias), PACKAGE = "ggmlR")
@@ -1397,7 +1220,7 @@ ggml_view_tensor <- function(ctx, src) {
   .Call("R_ggml_view_tensor", ctx, src, PACKAGE = "ggmlR")
 }
 
-#' Reshape to 1D (Graph)
+#' Reshape Tensor (Graph)
 #'
 #' Reshapes tensor to 1D with ne0 elements
 #'
@@ -1418,15 +1241,10 @@ ggml_reshape_1d <- function(ctx, a, ne0) {
   .Call("R_ggml_reshape_1d", ctx, a, as.numeric(ne0), PACKAGE = "ggmlR")
 }
 
-#' Reshape to 2D (Graph)
-#'
-#' Reshapes tensor to 2D with shape (ne0, ne1)
-#'
-#' @param ctx GGML context
-#' @param a Input tensor
-#' @param ne0 Size of dimension 0
+#' @rdname ggml_reshape_1d
+#' @details \code{ggml_reshape_2d()}: Reshapes tensor to 2D with shape (ne0, ne1)
+#' Returns: Reshaped tensor
 #' @param ne1 Size of dimension 1
-#' @return Reshaped tensor
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -1440,16 +1258,10 @@ ggml_reshape_2d <- function(ctx, a, ne0, ne1) {
   .Call("R_ggml_reshape_2d", ctx, a, as.numeric(ne0), as.numeric(ne1), PACKAGE = "ggmlR")
 }
 
-#' Reshape to 3D (Graph)
-#'
-#' Reshapes tensor to 3D with shape (ne0, ne1, ne2)
-#'
-#' @param ctx GGML context
-#' @param a Input tensor
-#' @param ne0 Size of dimension 0
-#' @param ne1 Size of dimension 1
+#' @rdname ggml_reshape_1d
+#' @details \code{ggml_reshape_3d()}: Reshapes tensor to 3D with shape (ne0, ne1, ne2)
+#' Returns: Reshaped tensor
 #' @param ne2 Size of dimension 2
-#' @return Reshaped tensor
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -1464,17 +1276,10 @@ ggml_reshape_3d <- function(ctx, a, ne0, ne1, ne2) {
         as.numeric(ne2), PACKAGE = "ggmlR")
 }
 
-#' Reshape to 4D (Graph)
-#'
-#' Reshapes tensor to 4D with shape (ne0, ne1, ne2, ne3)
-#'
-#' @param ctx GGML context
-#' @param a Input tensor
-#' @param ne0 Size of dimension 0
-#' @param ne1 Size of dimension 1
-#' @param ne2 Size of dimension 2
+#' @rdname ggml_reshape_1d
+#' @details \code{ggml_reshape_4d()}: Reshapes tensor to 4D with shape (ne0, ne1, ne2, ne3)
+#' Returns: Reshaped tensor
 #' @param ne3 Size of dimension 3
-#' @return Reshaped tensor
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -1868,15 +1673,8 @@ ggml_clamp <- function(ctx, a, min_val, max_val) {
   .Call("R_ggml_clamp", ctx, a, as.numeric(min_val), as.numeric(max_val), PACKAGE = "ggmlR")
 }
 
-#' Clamp In Place (Graph)
-#'
-#' Like \code{\link{ggml_clamp}}, but the result is a view of \code{a}: the
-#' clamped values overwrite \code{a}'s memory instead of going to a new tensor.
-#' Since ggml 0.27 \code{ggml_clamp} returns a new tensor; this is the former
-#' behaviour.
-#'
-#' @inheritParams ggml_clamp
-#' @return View of \code{a} with values clamped to [min_val, max_val]
+#' @rdname ggml_clamp
+#' @details \code{ggml_clamp_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_clamp_inplace <- function(ctx, a, min_val, max_val) {
   .Call("R_ggml_clamp_inplace", ctx, a, as.numeric(min_val), as.numeric(max_val), PACKAGE = "ggmlR")
@@ -2113,7 +1911,7 @@ GGML_GLU_OP_GEGLU_ERF <- 4L
 #' @export
 GGML_GLU_OP_GEGLU_QUICK <- 5L
 
-#' Generic GLU (Gated Linear Unit) (Graph)
+#' Gated Linear Unit Operations (Graph)
 #'
 #' Creates a graph node for GLU operation with specified gating type.
 #' GLU splits the input tensor in half along the first dimension,
@@ -2145,17 +1943,12 @@ ggml_glu <- function(ctx, a, op, swapped = FALSE) {
   .Call("R_ggml_glu", ctx, a, as.integer(op), as.logical(swapped), PACKAGE = "ggmlR")
 }
 
-#' ReGLU (ReLU Gated Linear Unit) (Graph)
-#'
-#' Creates a graph node for ReGLU operation.
+#' @rdname ggml_glu
+#' @details \code{ggml_reglu()}: Creates a graph node for ReGLU operation.
 #' ReGLU uses ReLU as the activation function on the first half.
 #'
 #' Formula: output = ReLU(x) * gate
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (first dimension must be even)
-#' @return Tensor with half the first dimension of input
-#' @export
+#' Returns: Tensor with half the first dimension of input
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -2167,22 +1960,18 @@ ggml_glu <- function(ctx, a, op, swapped = FALSE) {
 #' result <- ggml_get_f32(r)  # Shape: 4x3
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_reglu <- function(ctx, a) {
   .Call("R_ggml_reglu", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' GeGLU (GELU Gated Linear Unit) (Graph)
-#'
-#' Creates a graph node for GeGLU operation.
+#' @rdname ggml_glu
+#' @details \code{ggml_geglu()}: Creates a graph node for GeGLU operation.
 #' GeGLU uses GELU as the activation function on the first half.
 #' CRITICAL for models like GPT-NeoX and Falcon.
 #'
 #' Formula: output = GELU(x) * gate
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (first dimension must be even)
-#' @return Tensor with half the first dimension of input
-#' @export
+#' Returns: Tensor with half the first dimension of input
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -2194,22 +1983,18 @@ ggml_reglu <- function(ctx, a) {
 #' result <- ggml_get_f32(r)  # Shape: 4x3
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_geglu <- function(ctx, a) {
   .Call("R_ggml_geglu", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' SwiGLU (Swish/SiLU Gated Linear Unit) (Graph)
-#'
-#' Creates a graph node for SwiGLU operation.
+#' @rdname ggml_glu
+#' @details \code{ggml_swiglu()}: Creates a graph node for SwiGLU operation.
 #' SwiGLU uses SiLU (Swish) as the activation function on the first half.
 #' CRITICAL for LLaMA, Mistral, and many modern LLMs.
 #'
 #' Formula: output = SiLU(x) * gate
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (first dimension must be even)
-#' @return Tensor with half the first dimension of input
-#' @export
+#' Returns: Tensor with half the first dimension of input
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(16 * 1024 * 1024)
@@ -2221,94 +2006,65 @@ ggml_geglu <- function(ctx, a) {
 #' result <- ggml_get_f32(r)  # Shape: 4x3
 #' ggml_free(ctx)
 #' }
+#' @export
 ggml_swiglu <- function(ctx, a) {
   .Call("R_ggml_swiglu", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' GeGLU Quick (Fast GeGLU) (Graph)
-#'
-#' Creates a graph node for fast GeGLU approximation.
+#' @rdname ggml_glu
+#' @details \code{ggml_geglu_quick()}: Creates a graph node for fast GeGLU approximation.
 #' Uses faster but less accurate GELU approximation for gating.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (first dimension must be even)
-#' @return Tensor with half the first dimension of input
+#' Returns: Tensor with half the first dimension of input
 #' @export
 ggml_geglu_quick <- function(ctx, a) {
   .Call("R_ggml_geglu_quick", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Generic GLU Split (Graph)
-#'
-#' Creates a graph node for GLU with separate input and gate tensors.
+#' @rdname ggml_glu
+#' @details \code{ggml_glu_split()}: Creates a graph node for GLU with separate input and gate tensors.
 #' Unlike standard GLU which splits a single tensor, this takes two separate tensors.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (the values to be gated)
+#' Returns: Tensor with same shape as input tensors
 #' @param b Gate tensor (same shape as a)
-#' @param op GLU operation type (GGML_GLU_OP_REGLU, GGML_GLU_OP_GEGLU, etc.)
-#' @return Tensor with same shape as input tensors
 #' @export
 ggml_glu_split <- function(ctx, a, b, op) {
   .Call("R_ggml_glu_split", ctx, a, b, as.integer(op), PACKAGE = "ggmlR")
 }
 
-#' ReGLU Split (Graph)
-#'
-#' Creates a graph node for ReGLU with separate input and gate tensors.
+#' @rdname ggml_glu
+#' @details \code{ggml_reglu_split()}: Creates a graph node for ReGLU with separate input and gate tensors.
 #'
 #' Formula: output = ReLU(a) * b
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (the values to be gated)
-#' @param b Gate tensor (same shape as a)
-#' @return Tensor with same shape as input tensors
+#' Returns: Tensor with same shape as input tensors
 #' @export
 ggml_reglu_split <- function(ctx, a, b) {
   .Call("R_ggml_reglu_split", ctx, a, b, PACKAGE = "ggmlR")
 }
 
-#' GeGLU Split (Graph)
-#'
-#' Creates a graph node for GeGLU with separate input and gate tensors.
+#' @rdname ggml_glu
+#' @details \code{ggml_geglu_split()}: Creates a graph node for GeGLU with separate input and gate tensors.
 #'
 #' Formula: output = GELU(a) * b
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (the values to be gated)
-#' @param b Gate tensor (same shape as a)
-#' @return Tensor with same shape as input tensors
+#' Returns: Tensor with same shape as input tensors
 #' @export
 ggml_geglu_split <- function(ctx, a, b) {
   .Call("R_ggml_geglu_split", ctx, a, b, PACKAGE = "ggmlR")
 }
 
-#' SwiGLU Split (Graph)
-#'
-#' Creates a graph node for SwiGLU with separate input and gate tensors.
+#' @rdname ggml_glu
+#' @details \code{ggml_swiglu_split()}: Creates a graph node for SwiGLU with separate input and gate tensors.
 #'
 #' Formula: output = SiLU(a) * b
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (the values to be gated)
-#' @param b Gate tensor (same shape as a)
-#' @return Tensor with same shape as input tensors
+#' Returns: Tensor with same shape as input tensors
 #' @export
 ggml_swiglu_split <- function(ctx, a, b) {
   .Call("R_ggml_swiglu_split", ctx, a, b, PACKAGE = "ggmlR")
 }
 
-#' SwiGLU with Clamped Inputs (Graph)
-#'
-#' SwiGLU whose inputs are clamped before they meet: the gate from above, the
+#' @rdname ggml_glu
+#' @details \code{ggml_swiglu_clamp()}: SwiGLU whose inputs are clamped before they meet: the gate from above, the
 #' value from both sides, \code{silu(min(a, limit)) * clamp(b, -limit, limit)}.
-#'
-#' @param ctx GGML context
-#' @param a Gate tensor, or, when \code{b} is NULL, a tensor whose first half
-#'   along dim 0 is the gate and second half the value
-#' @param b Value tensor (same shape as \code{a}), or NULL
+#' Returns: Tensor; same shape as \code{a}, or half its dim 0 when \code{b} is NULL
 #' @param limit Clamp bound (positive)
-#' @return Tensor; same shape as \code{a}, or half its dim 0 when \code{b} is NULL
 #' @export
 ggml_swiglu_clamp <- function(ctx, a, b = NULL, limit) {
   .Call("R_ggml_swiglu_clamp", ctx, a, b, as.numeric(limit), PACKAGE = "ggmlR")
@@ -2449,14 +2205,8 @@ ggml_diag_mask_inf <- function(ctx, a, n_past) {
   .Call("R_ggml_diag_mask_inf", ctx, a, as.integer(n_past), PACKAGE = "ggmlR")
 }
 
-#' Diagonal Mask with -Inf In-place (Graph)
-#'
-#' In-place version of ggml_diag_mask_inf. Returns a view of the input tensor.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @param n_past Number of past tokens
-#' @return View of input tensor with elements above diagonal set to -Inf
+#' @rdname ggml_diag_mask_inf
+#' @details \code{ggml_diag_mask_inf_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_diag_mask_inf_inplace <- function(ctx, a, n_past) {
   .Call("R_ggml_diag_mask_inf_inplace", ctx, a, as.integer(n_past), PACKAGE = "ggmlR")
@@ -2562,32 +2312,18 @@ ggml_rope <- function(ctx, a, b, n_dims, mode = 0L) {
   .Call("R_ggml_rope", ctx, a, b, as.integer(n_dims), as.integer(mode), PACKAGE = "ggmlR")
 }
 
-#' Rotary Position Embedding In-place (Graph)
-#'
-#' In-place version of ggml_rope. Returns a view of the input tensor.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor (will be modified in-place)
-#' @param b Position tensor (int32)
-#' @param n_dims Number of dimensions to apply rotation to
-#' @param mode RoPE mode
-#' @return View of input tensor with RoPE applied
+#' @rdname ggml_rope
+#' @details \code{ggml_rope_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
 ggml_rope_inplace <- function(ctx, a, b, n_dims, mode = 0L) {
   .Call("R_ggml_rope_inplace", ctx, a, b, as.integer(n_dims), as.integer(mode), PACKAGE = "ggmlR")
 }
 
-#' Extended RoPE with Frequency Scaling (Graph)
-#'
-#' Creates a graph node for extended RoPE with frequency scaling parameters.
+#' @rdname ggml_rope
+#' @details \code{ggml_rope_ext()}: Creates a graph node for extended RoPE with frequency scaling parameters.
 #' Supports context extension techniques like YaRN, Linear Scaling, etc.
-#'
-#' @param ctx GGML context
-#' @param a Input tensor
-#' @param b Position tensor (int32)
+#' Returns: Tensor with extended RoPE applied
 #' @param c Optional frequency factors tensor (NULL for default)
-#' @param n_dims Number of dimensions to apply rotation to
-#' @param mode RoPE mode
 #' @param n_ctx_orig Original context length the model was trained on
 #' @param freq_base Base frequency for RoPE (default 10000 for most models)
 #' @param freq_scale Frequency scale factor (1.0 = no scaling)
@@ -2595,8 +2331,6 @@ ggml_rope_inplace <- function(ctx, a, b, n_dims, mode = 0L) {
 #' @param attn_factor Attention scale factor (typically 1.0)
 #' @param beta_fast YaRN parameter for fast dimensions
 #' @param beta_slow YaRN parameter for slow dimensions
-#' @return Tensor with extended RoPE applied
-#'
 #' @details
 #' This extended version supports various context extension techniques:
 #'
@@ -2642,33 +2376,22 @@ ggml_rope_ext <- function(ctx, a, b, c = NULL,
         PACKAGE = "ggmlR")
 }
 
-#' Partial RoPE Offset (Graph)
-#'
-#' Restricts an existing RoPE node to the dims \code{[n_offs, n_offs + n_dims)}
+#' @rdname ggml_rope
+#' @details \code{ggml_rope_set_offset()}: Restricts an existing RoPE node to the dims \code{[n_offs, n_offs + n_dims)}
 #' of each row; the dims before and after are passed through unrotated.
 #' Modifies the node in place and returns it. Errors when \code{n_offs + n_dims}
 #' exceeds the row length \code{ne[0]}.
-#'
-#' @param a RoPE node: the result of \code{ggml_rope()}, \code{ggml_rope_ext()},
-#'   \code{ggml_rope_multi()} or a RoPE backward node
-#'   (not vision RoPE)
+#' Returns: \code{a}
 #' @param n_offs Number of leading dims to leave unrotated (non-negative, even)
-#' @return \code{a}
 #' @export
 ggml_rope_set_offset <- function(a, n_offs) {
   .Call("R_ggml_rope_set_offset", a, as.integer(n_offs), PACKAGE = "ggmlR")
 }
 
 
-#' Extended RoPE Inplace (Graph)
-#'
-#' Creates a graph node for extended RoPE, modifying input tensor in place.
-#' Returns a view of the input tensor.
-#'
-#' @inheritParams ggml_rope_ext
-#' @return View of input tensor with RoPE applied in place
+#' @rdname ggml_rope
+#' @details \code{ggml_rope_ext_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
-#' @family rope
 ggml_rope_ext_inplace <- function(ctx, a, b, c = NULL,
                                    n_dims, mode = 0L, n_ctx_orig = 0L,
                                    freq_base = 10000.0, freq_scale = 1.0,
@@ -2682,16 +2405,12 @@ ggml_rope_ext_inplace <- function(ctx, a, b, c = NULL,
         PACKAGE = "ggmlR")
 }
 
-#' Multi-RoPE for Vision Models (Graph)
-#'
-#' Creates a graph node for multi-dimensional RoPE (MRoPE) used in vision transformers.
+#' @rdname ggml_rope
+#' @details \code{ggml_rope_multi()}: Creates a graph node for multi-dimensional RoPE (MRoPE) used in vision transformers.
 #' Supports separate rotation for different positional dimensions (e.g., height, width, time).
-#'
-#' @inheritParams ggml_rope_ext
+#' Returns: Tensor with multi-dimensional RoPE applied
 #' @param sections Integer vector of length 4 specifying dimension sections for MRoPE
-#' @return Tensor with multi-dimensional RoPE applied
 #' @export
-#' @family rope
 ggml_rope_multi <- function(ctx, a, b, c = NULL,
                              n_dims, sections = c(0L, 0L, 0L, 0L),
                              mode = 0L, n_ctx_orig = 0L,
@@ -2706,14 +2425,9 @@ ggml_rope_multi <- function(ctx, a, b, c = NULL,
         PACKAGE = "ggmlR")
 }
 
-#' Multi-RoPE Inplace (Graph)
-#'
-#' Creates a graph node for multi-dimensional RoPE, modifying input in place.
-#'
-#' @inheritParams ggml_rope_multi
-#' @return View of input tensor with MRoPE applied in place
+#' @rdname ggml_rope
+#' @details \code{ggml_rope_multi_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 #' @export
-#' @family rope
 ggml_rope_multi_inplace <- function(ctx, a, b, c = NULL,
                                      n_dims, sections = c(0L, 0L, 0L, 0L),
                                      mode = 0L, n_ctx_orig = 0L,
@@ -2788,19 +2502,17 @@ ggml_flash_attn_ext <- function(ctx, q, k, v, mask = NULL,
         PACKAGE = "ggmlR")
 }
 
-#' Sparse K/V Bound for Flash Attention (Graph)
-#'
-#' Declares that every row of the mask of an existing
+#' @rdname ggml_flash_attn_ext_set_prec
+#' @details \code{ggml_flash_attn_ext_set_n_kv_max()}: Declares that every row of the mask of an existing
 #' \code{ggml_flash_attn_ext()} node has at most \code{n_kv_max} finite
 #' entries (the rest are \code{-Inf}). The Vulkan backend may then gather only
 #' those K/V positions instead of scanning the whole sequence; the CPU backend
 #' ignores the bound. \code{0} disables it. The bound is a promise: rows with
 #' more finite entries give wrong results on Vulkan.
 #' Modifies the node in place and returns it.
-#'
+#' Returns: \code{a}
 #' @param a FLASH_ATTN_EXT node: the result of \code{ggml_flash_attn_ext()}
 #' @param n_kv_max Upper bound on finite mask entries per row (non-negative)
-#' @return \code{a}
 #' @export
 ggml_flash_attn_ext_set_n_kv_max <- function(a, n_kv_max) {
   .Call("R_ggml_flash_attn_ext_set_n_kv_max", a, as.integer(n_kv_max),
@@ -2811,7 +2523,7 @@ ggml_flash_attn_ext_set_n_kv_max <- function(a, n_kv_max) {
 # View Operations with Offset
 # ============================================================================
 
-#' 1D View with Byte Offset (Graph)
+#' Tensor Views (Graph)
 #'
 #' Creates a 1D view of a tensor starting at a byte offset.
 #' The view shares memory with the source tensor.
@@ -2834,61 +2546,37 @@ ggml_view_1d <- function(ctx, a, ne0, offset = 0) {
   .Call("R_ggml_view_1d", ctx, a, as.numeric(ne0), as.numeric(offset), PACKAGE = "ggmlR")
 }
 
-#' 2D View with Byte Offset (Graph)
-#'
-#' Creates a 2D view of a tensor starting at a byte offset.
+#' @rdname ggml_view_1d
+#' @details \code{ggml_view_2d()}: Creates a 2D view of a tensor starting at a byte offset.
 #' The view shares memory with the source tensor.
-#'
-#' @param ctx GGML context
-#' @param a Source tensor
-#' @param ne0 Size of dimension 0
+#' Returns: View tensor
 #' @param ne1 Size of dimension 1
 #' @param nb1 Stride for dimension 1 (in bytes)
-#' @param offset Byte offset from the start of tensor data
-#' @return View tensor
 #' @export
 ggml_view_2d <- function(ctx, a, ne0, ne1, nb1, offset = 0) {
   .Call("R_ggml_view_2d", ctx, a, as.numeric(ne0), as.numeric(ne1),
         as.numeric(nb1), as.numeric(offset), PACKAGE = "ggmlR")
 }
 
-#' 3D View with Byte Offset (Graph)
-#'
-#' Creates a 3D view of a tensor starting at a byte offset.
+#' @rdname ggml_view_1d
+#' @details \code{ggml_view_3d()}: Creates a 3D view of a tensor starting at a byte offset.
 #' The view shares memory with the source tensor.
-#'
-#' @param ctx GGML context
-#' @param a Source tensor
-#' @param ne0 Size of dimension 0
-#' @param ne1 Size of dimension 1
+#' Returns: View tensor
 #' @param ne2 Size of dimension 2
-#' @param nb1 Stride for dimension 1 (in bytes)
 #' @param nb2 Stride for dimension 2 (in bytes)
-#' @param offset Byte offset from the start of tensor data
-#' @return View tensor
 #' @export
 ggml_view_3d <- function(ctx, a, ne0, ne1, ne2, nb1, nb2, offset = 0) {
   .Call("R_ggml_view_3d", ctx, a, as.numeric(ne0), as.numeric(ne1), as.numeric(ne2),
         as.numeric(nb1), as.numeric(nb2), as.numeric(offset), PACKAGE = "ggmlR")
 }
 
-#' 4D View with Byte Offset (Graph)
-#'
-#' Creates a 4D view of a tensor starting at a byte offset.
+#' @rdname ggml_view_1d
+#' @details \code{ggml_view_4d()}: Creates a 4D view of a tensor starting at a byte offset.
 #' The view shares memory with the source tensor.
 #' CRITICAL for KV-cache operations in transformers.
-#'
-#' @param ctx GGML context
-#' @param a Source tensor
-#' @param ne0 Size of dimension 0
-#' @param ne1 Size of dimension 1
-#' @param ne2 Size of dimension 2
+#' Returns: View tensor
 #' @param ne3 Size of dimension 3
-#' @param nb1 Stride for dimension 1 (in bytes)
-#' @param nb2 Stride for dimension 2 (in bytes)
 #' @param nb3 Stride for dimension 3 (in bytes)
-#' @param offset Byte offset from the start of tensor data
-#' @return View tensor
 #' @export
 ggml_view_4d <- function(ctx, a, ne0, ne1, ne2, ne3, nb1, nb2, nb3, offset = 0) {
   .Call("R_ggml_view_4d", ctx, a, as.numeric(ne0), as.numeric(ne1),
@@ -2897,17 +2585,14 @@ ggml_view_4d <- function(ctx, a, ne0, ne1, ne2, ne3, nb1, nb2, nb3, offset = 0) 
         as.numeric(offset), PACKAGE = "ggmlR")
 }
 
-#' 5D View with Byte Offset (Graph)
-#'
-#' Creates a 5D view of a tensor starting at a byte offset. The view shares
+#' @rdname ggml_view_1d
+#' @details \code{ggml_view_5d()}: Creates a 5D view of a tensor starting at a byte offset. The view shares
 #' memory with the source tensor. With strides that are not the natural
 #' contiguous ones it reorders axes without a copy -- e.g. swapping dims 3
 #' and 4, which \code{\link{ggml_permute}} cannot do (it only moves dims 0-3).
-#'
-#' @inheritParams ggml_view_4d
+#' Returns: View tensor
 #' @param ne4 Size of dimension 4
 #' @param nb4 Stride for dimension 4 (in bytes)
-#' @return View tensor
 #' @examples
 #' \donttest{
 #' ctx <- ggml_init(1024 * 1024)
@@ -3234,41 +2919,20 @@ ggml_get_rows_back <- function(ctx, a, b, c) {
   .Call("R_ggml_get_rows_back", ctx, a, b, c, PACKAGE = "ggmlR")
 }
 
-#' Softmax Backward Extended (Graph)
-#'
-#' Backward pass for extended softmax operation.
-#'
-#' @param ctx GGML context
-#' @param a Softmax output tensor (from forward pass)
+#' @rdname ggml_soft_max
+#' @details \code{ggml_soft_max_ext_back()}: Backward pass for extended softmax operation.
+#' Returns: Gradient tensor for the input
 #' @param b Gradient tensor from upstream
-#' @param scale Scale factor (same as forward pass)
-#' @param max_bias Maximum ALiBi bias (same as forward pass)
-#' @return Gradient tensor for the input
 #' @export
 ggml_soft_max_ext_back <- function(ctx, a, b, scale = 1.0, max_bias = 0.0) {
   .Call("R_ggml_soft_max_ext_back", ctx, a, b,
         as.numeric(scale), as.numeric(max_bias), PACKAGE = "ggmlR")
 }
 
-#' RoPE Extended Backward (Graph)
-#'
-#' Backward pass for extended RoPE (Rotary Position Embedding).
+#' @rdname ggml_rope
+#' @details \code{ggml_rope_ext_back()}: Backward pass for extended RoPE (Rotary Position Embedding).
 #' Used during training to compute gradients through RoPE.
-#'
-#' @param ctx GGML context
-#' @param a Gradient tensor from upstream (gradients of ggml_rope_ext result)
-#' @param b Position tensor (same as forward pass)
-#' @param c Optional frequency factors tensor (NULL for default)
-#' @param n_dims Number of dimensions for rotation
-#' @param mode RoPE mode
-#' @param n_ctx_orig Original context length
-#' @param freq_base Base frequency
-#' @param freq_scale Frequency scale factor
-#' @param ext_factor Extension factor (YaRN)
-#' @param attn_factor Attention factor
-#' @param beta_fast YaRN fast beta
-#' @param beta_slow YaRN slow beta
-#' @return Gradient tensor for the input
+#' Returns: Gradient tensor for the input
 #' @export
 ggml_rope_ext_back <- function(ctx, a, b, c = NULL,
                                n_dims, mode = 0L, n_ctx_orig = 0L,
@@ -3570,12 +3234,9 @@ GGML_SCALE_MODE_BICUBIC <- 2L
 # Additional Utility Functions
 # ============================================================================
 
-#' Get Type Size in Bytes
-#'
-#' Returns the size in bytes for all elements in a block for a given type.
-#'
-#' @param type GGML type constant (e.g., GGML_TYPE_F32)
-#' @return Size in bytes
+#' @rdname ggml_type_name
+#' @details \code{ggml_type_size()}: Returns the size in bytes for all elements in a block for a given type.
+#' Returns: Size in bytes
 #' @export
 ggml_type_size <- function(type) {
   .Call("R_ggml_type_size", as.integer(type), PACKAGE = "ggmlR")
@@ -3627,15 +3288,10 @@ ggml_set_name <- function(tensor, name) {
   .Call("R_ggml_set_name", tensor, as.character(name), PACKAGE = "ggmlR")
 }
 
-#' Set Tensor as Trainable Parameter
-#'
-#' Marks a tensor as a trainable parameter for backpropagation.
+#' @rdname ggml_set_input
+#' @details \code{ggml_set_param()}: Marks a tensor as a trainable parameter for backpropagation.
 #' The optimizer will compute gradients for this tensor during training.
-#'
-#' @param tensor Tensor pointer
-#' @return The tensor (for chaining)
-#' @seealso \code{\link{ggml_set_loss}}, which marks the other end of the
-#'   backward pass, and \code{\link{ggml_build_backward_expand}}.
+#' Returns: The tensor (for chaining)
 #' @export
 ggml_set_param <- function(tensor) {
   .Call("R_ggml_set_param", tensor, PACKAGE = "ggmlR")
@@ -3685,27 +3341,21 @@ ggml_opt_step_adamw <- function(ctx, a, grad, m, v, adamw_params) {
         PACKAGE = "ggmlR")
 }
 
-#' Mark a Tensor as the Loss
-#'
-#' Marks a tensor as the quantity to differentiate.
+#' @rdname ggml_set_input
+#' @details \code{ggml_set_loss()}: Marks a tensor as the quantity to differentiate.
 #' \code{\link{ggml_build_backward_expand}} requires the graph to contain one --
 #' together with at least one \code{\link{ggml_set_param}} tensor, these are the
 #' two ends of the backward pass.
 #'
 #' A graph missing either is rejected with an error rather than aborting inside
 #' ggml.
-#'
-#' @param tensor Tensor pointer, usually a scalar produced by
-#'   \code{\link{ggml_sum}} or a loss op
-#' @return The tensor (for chaining)
-#' @seealso \code{\link{ggml_set_param}},
-#'   \code{\link{ggml_build_forward_expand_grads}}
+#' Returns: The tensor (for chaining)
 #' @export
 ggml_set_loss <- function(tensor) {
   .Call("R_ggml_set_loss", tensor, PACKAGE = "ggmlR")
 }
 
-#' Mark Tensor as Input
+#' Tensor Role Flags
 #'
 #' @param tensor Tensor pointer
 #' @return The tensor (for chaining)
@@ -3714,10 +3364,9 @@ ggml_set_input <- function(tensor) {
   .Call("R_ggml_set_input", tensor, PACKAGE = "ggmlR")
 }
 
-#' Mark Tensor as Output
-#'
-#' @param tensor Tensor pointer
-#' @return The tensor (for chaining)
+#' @rdname ggml_set_input
+#' @details \code{ggml_set_output()}: 
+#' Returns: The tensor (for chaining)
 #' @export
 ggml_set_output <- function(tensor) {
   .Call("R_ggml_set_output", tensor, PACKAGE = "ggmlR")
@@ -3840,20 +3489,9 @@ ggml_conv_2d <- function(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L, d0 = 1L,
         PACKAGE = "ggmlR")
 }
 
-#' Direct 2D Convolution (Graph)
-#'
-#' Applies 2D convolution using the direct algorithm (no im2col).
-#'
-#' @param ctx GGML context
-#' @param a Convolution kernel tensor
-#' @param b Input data tensor
-#' @param s0 Stride dimension 0 (default 1)
-#' @param s1 Stride dimension 1 (default 1)
-#' @param p0 Padding dimension 0 (default 0)
-#' @param p1 Padding dimension 1 (default 0)
-#' @param d0 Dilation dimension 0 (default 1)
-#' @param d1 Dilation dimension 1 (default 1)
-#' @return Convolved tensor
+#' @rdname ggml_conv_2d
+#' @details \code{ggml_conv_2d_direct()}: Applies 2D convolution using the direct algorithm (no im2col).
+#' Returns: Convolved tensor
 #' @export
 ggml_conv_2d_direct <- function(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L, d0 = 1L, d1 = 1L) {
   .Call("R_ggml_conv_2d_direct", ctx, a, b,
@@ -3881,18 +3519,10 @@ ggml_conv_transpose_1d <- function(ctx, a, b, s0 = 1L, p0 = 0L, d0 = 1L) {
         PACKAGE = "ggmlR")
 }
 
-#' Depthwise 1D Convolution (Graph)
-#'
-#' Applies depthwise 1D convolution: each input channel is convolved with its
+#' @rdname ggml_conv_1d
+#' @details \code{ggml_conv_1d_dw()}: Applies depthwise 1D convolution: each input channel is convolved with its
 #' own kernel.
-#'
-#' @param ctx GGML context
-#' @param a Convolution kernel tensor
-#' @param b Input data tensor
-#' @param s0 Stride (default 1)
-#' @param p0 Padding (default 0)
-#' @param d0 Dilation (default 1)
-#' @return Convolved tensor
+#' Returns: Convolved tensor
 #' @export
 ggml_conv_1d_dw <- function(ctx, a, b, s0 = 1L, p0 = 0L, d0 = 1L) {
   .Call("R_ggml_conv_1d_dw", ctx, a, b,
@@ -3900,18 +3530,10 @@ ggml_conv_1d_dw <- function(ctx, a, b, s0 = 1L, p0 = 0L, d0 = 1L) {
         PACKAGE = "ggmlR")
 }
 
-#' Depthwise 2D Convolution (Graph)
-#'
-#' Applies depthwise 2D convolution: each input channel is convolved with its
+#' @rdname ggml_conv_2d
+#' @details \code{ggml_conv_2d_dw()}: Applies depthwise 2D convolution: each input channel is convolved with its
 #' own kernel. Uses the im2col-based path.
-#'
-#' @param ctx GGML context
-#' @param a Convolution kernel tensor
-#' @param b Input data tensor
-#' @param s0,s1 Strides along dim 0 and 1 (default 1)
-#' @param p0,p1 Padding along dim 0 and 1 (default 0)
-#' @param d0,d1 Dilation along dim 0 and 1 (default 1)
-#' @return Convolved tensor
+#' Returns: Convolved tensor
 #' @export
 ggml_conv_2d_dw <- function(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L,
                             d0 = 1L, d1 = 1L) {
@@ -3921,12 +3543,9 @@ ggml_conv_2d_dw <- function(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L,
         PACKAGE = "ggmlR")
 }
 
-#' Depthwise 2D Convolution, direct (Graph)
-#'
-#' Direct depthwise 2D convolution without an explicit im2col intermediate.
-#'
-#' @inheritParams ggml_conv_2d_dw
-#' @return Convolved tensor
+#' @rdname ggml_conv_2d
+#' @details \code{ggml_conv_2d_dw_direct()}: Direct depthwise 2D convolution without an explicit im2col intermediate.
+#' Returns: Convolved tensor
 #' @export
 ggml_conv_2d_dw_direct <- function(ctx, a, b, s0 = 1L, s1 = 1L, p0 = 0L, p1 = 0L,
                                    d0 = 1L, d1 = 1L) {
@@ -4238,22 +3857,13 @@ ggml_conv_3d <- function(ctx, a, b, IC, s = 1L, p = 0L, d = 1L) {
         PACKAGE = "ggmlR")
 }
 
-#' Direct 3D Convolution (Graph)
-#'
-#' 3D convolution as a single op (\code{GGML_OP_CONV_3D}), without the
+#' @rdname ggml_conv_3d
+#' @details \code{ggml_conv_3d_direct()}: 3D convolution as a single op (\code{GGML_OP_CONV_3D}), without the
 #' im2col buffer of \code{\link{ggml_conv_3d}}. Same layout and result.
-#'
-#' @param ctx GGML context
-#' @param a Kernel tensor \code{[KW, KH, KD, IC * OC]}
-#' @param b Input tensor \code{[IW, IH, ID, IC * N]}
-#' @param s Stride: one value for all axes or \code{c(width, height, depth)}
-#' @param p Padding, same form as \code{s}
-#' @param d Dilation, same form as \code{s}
+#' Returns: F32 tensor \code{[OW, OH, OD, OC * N]}
 #' @param n_channels Number of input channels (IC)
 #' @param n_batch Batch size (N)
 #' @param n_channels_out Number of output channels (OC)
-#' @return F32 tensor \code{[OW, OH, OD, OC * N]}
-#' @seealso \code{\link{ggml_conv_3d}}
 #' @export
 ggml_conv_3d_direct <- function(ctx, a, b, s = 1L, p = 0L, d = 1L,
                                 n_channels, n_batch, n_channels_out) {
@@ -4400,7 +4010,7 @@ ggml_quantize_chunk <- function(type, src, nrows, n_per_row) {
 # Type System Functions
 # ============================================================================
 
-#' Get Type Name
+#' Type Information
 #'
 #' Returns the string name of a GGML type.
 #'
@@ -4415,62 +4025,47 @@ ggml_type_name <- function(type) {
   .Call("R_ggml_type_name", as.integer(type), PACKAGE = "ggmlR")
 }
 
-#' Get Type Size as Float
-#'
-#' Returns the size in bytes of a GGML type as a floating-point number.
+#' @rdname ggml_type_name
+#' @details \code{ggml_type_sizef()}: Returns the size in bytes of a GGML type as a floating-point number.
 #' For quantized types, this is the average bytes per element.
-#'
-#' @param type GGML type constant
-#' @return Numeric size in bytes (can be fractional for quantized types)
-#' @export
-#' @family type_system
+#' Returns: Numeric size in bytes (can be fractional for quantized types)
 #' @examples
 #' ggml_type_sizef(GGML_TYPE_F32)  # 4.0
 #' ggml_type_sizef(GGML_TYPE_F16)  # 2.0
+#' @export
 ggml_type_sizef <- function(type) {
   .Call("R_ggml_type_sizef", as.integer(type), PACKAGE = "ggmlR")
 }
 
-#' Get Block Size
-#'
-#' Returns the block size for a GGML type. Quantized types process
+#' @rdname ggml_type_name
+#' @details \code{ggml_blck_size()}: Returns the block size for a GGML type. Quantized types process
 #' data in blocks (e.g., 32 elements for Q4_0).
-#'
-#' @param type GGML type constant
-#' @return Integer block size
-#' @export
-#' @family type_system
+#' Returns: Integer block size
 #' @examples
 #' ggml_blck_size(GGML_TYPE_F32)  # 1
 #' ggml_blck_size(GGML_TYPE_Q4_0) # 32
+#' @export
 ggml_blck_size <- function(type) {
   .Call("R_ggml_blck_size", as.integer(type), PACKAGE = "ggmlR")
 }
 
-#' Check If Type is Quantized
-#'
-#' Returns TRUE if the GGML type is a quantized format.
-#'
-#' @param type GGML type constant
-#' @return Logical indicating if type is quantized
-#' @export
-#' @family type_system
+#' @rdname ggml_type_name
+#' @details \code{ggml_is_quantized()}: Returns TRUE if the GGML type is a quantized format.
+#' Returns: Logical indicating if type is quantized
 #' @examples
 #' ggml_is_quantized(GGML_TYPE_F32)  # FALSE
 #' ggml_is_quantized(GGML_TYPE_Q4_0) # TRUE
+#' @export
 ggml_is_quantized <- function(type) {
   .Call("R_ggml_is_quantized", as.integer(type), PACKAGE = "ggmlR")
 }
 
-#' Convert ftype to ggml_type
-#'
-#' Converts a file type (ftype) to the corresponding GGML type.
+#' @rdname ggml_type_name
+#' @details \code{ggml_ftype_to_ggml_type()}: Converts a file type (ftype) to the corresponding GGML type.
 #' Used when loading quantized models.
-#'
+#' Returns: Integer GGML type
 #' @param ftype File type constant
-#' @return Integer GGML type
 #' @export
-#' @family type_system
 ggml_ftype_to_ggml_type <- function(ftype) {
   .Call("R_ggml_ftype_to_ggml_type", as.integer(ftype), PACKAGE = "ggmlR")
 }
@@ -4479,7 +4074,7 @@ ggml_ftype_to_ggml_type <- function(ftype) {
 # Operation Info Functions
 # ============================================================================
 
-#' Get Operation Name
+#' Operation Information
 #'
 #' Returns the string name of a GGML operation.
 #'
@@ -4491,50 +4086,35 @@ ggml_op_name <- function(op) {
   .Call("R_ggml_op_name", as.integer(op), PACKAGE = "ggmlR")
 }
 
-#' Get Operation Symbol
-#'
-#' Returns the mathematical symbol for a GGML operation.
-#'
-#' @param op GGML operation constant
-#' @return Character string with operation symbol
+#' @rdname ggml_op_name
+#' @details \code{ggml_op_symbol()}: Returns the mathematical symbol for a GGML operation.
+#' Returns: Character string with operation symbol
 #' @export
-#' @family op_info
 ggml_op_symbol <- function(op) {
   .Call("R_ggml_op_symbol", as.integer(op), PACKAGE = "ggmlR")
 }
 
-#' Get Unary Operation Name
-#'
-#' Returns the string name of a GGML unary operation.
-#'
-#' @param op GGML unary operation constant
-#' @return Character string with operation name
+#' @rdname ggml_op_name
+#' @details \code{ggml_unary_op_name()}: Returns the string name of a GGML unary operation.
+#' Returns: Character string with operation name
 #' @export
-#' @family op_info
 ggml_unary_op_name <- function(op) {
   .Call("R_ggml_unary_op_name", as.integer(op), PACKAGE = "ggmlR")
 }
 
-#' Get Operation Description from Tensor
-#'
-#' Returns a description of the operation that produces a tensor.
-#'
+#' @rdname ggml_op_name
+#' @details \code{ggml_op_desc()}: Returns a description of the operation that produces a tensor.
+#' Returns: Character string describing the operation
 #' @param tensor Tensor pointer
-#' @return Character string describing the operation
 #' @export
-#' @family op_info
 ggml_op_desc <- function(tensor) {
   .Call("R_ggml_op_desc", tensor, PACKAGE = "ggmlR")
 }
 
-#' Get Unary Operation from Tensor
-#'
-#' Returns the unary operation type for a unary operation tensor.
-#'
-#' @param tensor Tensor pointer (must be a unary operation result)
-#' @return Integer unary operation type
+#' @rdname ggml_op_name
+#' @details \code{ggml_get_unary_op()}: Returns the unary operation type for a unary operation tensor.
+#' Returns: Integer unary operation type
 #' @export
-#' @family op_info
 ggml_get_unary_op <- function(tensor) {
   .Call("R_ggml_get_unary_op", tensor, PACKAGE = "ggmlR")
 }
@@ -4543,332 +4123,197 @@ ggml_get_unary_op <- function(tensor) {
 # CPU Feature Detection Functions
 # ============================================================================
 
-#' CPU Feature Detection - SSE3
-#'
-#' Check if the CPU supports SSE3 instructions.
-#'
-#' @return Logical indicating SSE3 support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
-#' @examples
-#' ggml_cpu_has_sse3()
 ggml_cpu_has_sse3 <- function() {
   .Call("R_ggml_cpu_has_sse3", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - SSSE3
-#'
-#' Check if the CPU supports SSSE3 instructions.
-#'
-#' @return Logical indicating SSSE3 support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_ssse3 <- function() {
   .Call("R_ggml_cpu_has_ssse3", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - AVX
-#'
-#' Check if the CPU supports AVX instructions.
-#'
-#' @return Logical indicating AVX support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_avx <- function() {
   .Call("R_ggml_cpu_has_avx", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - AVX-VNNI
-#'
-#' Check if the CPU supports AVX-VNNI instructions.
-#'
-#' @return Logical indicating AVX-VNNI support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_avx_vnni <- function() {
   .Call("R_ggml_cpu_has_avx_vnni", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - AVX2
-#'
-#' Check if the CPU supports AVX2 instructions.
-#' AVX2 provides 256-bit SIMD operations for faster matrix math.
-#'
-#' @return Logical indicating AVX2 support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_avx2 <- function() {
   .Call("R_ggml_cpu_has_avx2", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - BMI2
-#'
-#' Check if the CPU supports BMI2 (Bit Manipulation Instructions 2).
-#'
-#' @return Logical indicating BMI2 support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_bmi2 <- function() {
   .Call("R_ggml_cpu_has_bmi2", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - F16C
-#'
-#' Check if the CPU supports F16C instructions for float16 conversion.
-#'
-#' @return Logical indicating F16C support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_f16c <- function() {
   .Call("R_ggml_cpu_has_f16c", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - FMA
-#'
-#' Check if the CPU supports FMA (Fused Multiply-Add) instructions.
-#' FMA allows matrix operations to run faster by combining operations.
-#'
-#' @return Logical indicating FMA support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_fma <- function() {
   .Call("R_ggml_cpu_has_fma", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - AVX-512
-#'
-#' Check if the CPU supports AVX-512 instructions.
-#' AVX-512 provides 512-bit SIMD for maximum throughput.
-#'
-#' @return Logical indicating AVX-512 support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_avx512 <- function() {
   .Call("R_ggml_cpu_has_avx512", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - AVX-512 VBMI
-#'
-#' Check if the CPU supports AVX-512 VBMI instructions.
-#'
-#' @return Logical indicating AVX-512 VBMI support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_avx512_vbmi <- function() {
   .Call("R_ggml_cpu_has_avx512_vbmi", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - AVX-512 VNNI
-#'
-#' Check if the CPU supports AVX-512 VNNI instructions.
-#' VNNI accelerates neural network inference with int8/int16 dot products.
-#'
-#' @return Logical indicating AVX-512 VNNI support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_avx512_vnni <- function() {
   .Call("R_ggml_cpu_has_avx512_vnni", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - AVX-512 BF16
-#'
-#' Check if the CPU supports AVX-512 BF16 (bfloat16) instructions.
-#'
-#' @return Logical indicating AVX-512 BF16 support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_avx512_bf16 <- function() {
   .Call("R_ggml_cpu_has_avx512_bf16", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - AMX INT8
-#'
-#' Check if the CPU supports AMX INT8 (Advanced Matrix Extensions).
-#' AMX provides hardware acceleration for matrix operations on Intel CPUs.
-#'
-#' @return Logical indicating AMX INT8 support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_amx_int8 <- function() {
   .Call("R_ggml_cpu_has_amx_int8", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - NEON (ARM)
-#'
-#' Check if the CPU supports ARM NEON instructions.
-#' NEON is ARM's SIMD extension for vectorized operations.
-#'
-#' @return Logical indicating NEON support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_neon <- function() {
   .Call("R_ggml_cpu_has_neon", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - ARM FMA
-#'
-#' Check if the CPU supports ARM FMA (Fused Multiply-Add).
-#'
-#' @return Logical indicating ARM FMA support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_arm_fma <- function() {
   .Call("R_ggml_cpu_has_arm_fma", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - FP16 Vector Arithmetic (ARM)
-#'
-#' Check if the CPU supports ARM half-precision FP16 vector arithmetic.
-#'
-#' @return Logical indicating FP16 VA support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_fp16_va <- function() {
   .Call("R_ggml_cpu_has_fp16_va", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - Dot Product (ARM)
-#'
-#' Check if the CPU supports ARM dot product instructions.
-#' Accelerates int8 matrix multiplication common in quantized models.
-#'
-#' @return Logical indicating dot product support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_dotprod <- function() {
   .Call("R_ggml_cpu_has_dotprod", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - INT8 Matrix Multiply (ARM)
-#'
-#' Check if the CPU supports ARM INT8 matrix multiplication.
-#'
-#' @return Logical indicating INT8 MATMUL support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_matmul_int8 <- function() {
   .Call("R_ggml_cpu_has_matmul_int8", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - SVE (ARM)
-#'
-#' Check if the CPU supports ARM SVE (Scalable Vector Extension).
-#'
-#' @return Logical indicating SVE support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_sve <- function() {
   .Call("R_ggml_cpu_has_sve", PACKAGE = "ggmlR")
 }
 
-#' Get SVE Vector Length (ARM)
-#'
-#' Returns the SVE vector length in bytes (0 if not supported).
-#'
-#' @return Integer vector length in bytes
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_get_sve_cnt <- function() {
   .Call("R_ggml_cpu_get_sve_cnt", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - SME (ARM)
-#'
-#' Check if the CPU supports ARM SME (Scalable Matrix Extension).
-#'
-#' @return Logical indicating SME support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_sme <- function() {
   .Call("R_ggml_cpu_has_sme", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - SME2 (ARM)
-#'
-#' Check if the CPU supports ARM SME2 (Scalable Matrix Extension 2).
-#'
-#' @return Logical indicating SME2 support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_sme2 <- function() {
   .Call("R_ggml_cpu_has_sme2", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - RISC-V Vector
-#'
-#' Check if the CPU supports RISC-V Vector extension.
-#'
-#' @return Logical indicating RISC-V V support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_riscv_v <- function() {
   .Call("R_ggml_cpu_has_riscv_v", PACKAGE = "ggmlR")
 }
 
-#' Get RISC-V Vector Length
-#'
-#' Returns the RISC-V RVV vector length in bytes (0 if not supported).
-#'
-#' @return Integer vector length in bytes
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_get_rvv_vlen <- function() {
   .Call("R_ggml_cpu_get_rvv_vlen", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - VSX (PowerPC)
-#'
-#' Check if the CPU supports PowerPC VSX instructions.
-#'
-#' @return Logical indicating VSX support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_vsx <- function() {
   .Call("R_ggml_cpu_has_vsx", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - VXE (IBM z/Architecture)
-#'
-#' Check if the CPU supports IBM z/Architecture VXE instructions.
-#'
-#' @return Logical indicating VXE support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_vxe <- function() {
   .Call("R_ggml_cpu_has_vxe", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - WebAssembly SIMD
-#'
-#' Check if the CPU/environment supports WebAssembly SIMD.
-#'
-#' @return Logical indicating WASM SIMD support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_wasm_simd <- function() {
   .Call("R_ggml_cpu_has_wasm_simd", PACKAGE = "ggmlR")
 }
 
-#' CPU Feature Detection - Llamafile
-#'
-#' Check if llamafile optimizations are available.
-#'
-#' @return Logical indicating llamafile support
+#' @rdname ggml_cpu_features
 #' @export
-#' @family cpu_features
 ggml_cpu_has_llamafile <- function() {
   .Call("R_ggml_cpu_has_llamafile", PACKAGE = "ggmlR")
 }
 
-#' Get All CPU Features
+#' CPU Feature Detection
 #'
-#' Returns a named list of all CPU feature detection results.
-#' Useful for diagnostics and optimizing computation.
+#' \code{ggml_cpu_features()} returns a named list of all CPU feature
+#' detection results. Useful for diagnostics and optimizing computation.
 #'
-#' @return Named list with feature names and logical values
+#' Each \code{ggml_cpu_has_*()} function checks a single CPU feature:
+#' \describe{
+#'   \item{x86}{SSE3, SSSE3, AVX, AVX-VNNI, AVX2 (256-bit SIMD), BMI2, F16C,
+#'     FMA, AVX-512, AVX-512 VBMI / VNNI / BF16, AMX-INT8.}
+#'   \item{ARM}{NEON, ARM FMA, FP16 vector arithmetic, dot product,
+#'     INT8 matrix multiply, SVE, SME, SME2.}
+#'   \item{Other}{RISC-V Vector, PowerPC VSX, IBM z/Architecture VXE,
+#'     WebAssembly SIMD, llamafile optimizations.}
+#' }
+#' \code{ggml_cpu_get_sve_cnt()} and \code{ggml_cpu_get_rvv_vlen()} return
+#' the SVE / RISC-V vector length in bytes (0 if not supported).
+#'
+#' @return \code{ggml_cpu_features()}: named list with feature names and
+#'   values. \code{ggml_cpu_has_*()}: logical. \code{ggml_cpu_get_*()}:
+#'   integer vector length in bytes.
 #' @export
-#' @family cpu_features
 #' @examples
+#' ggml_cpu_has_avx2()
 #' features <- ggml_cpu_features()
 #' print(features)
 #' # On typical x86-64: sse3=TRUE, avx=TRUE, avx2=TRUE, ...
@@ -4912,118 +4357,82 @@ ggml_cpu_features <- function() {
 # Tensor Layout/Contiguity Functions
 # ============================================================================
 
-#' Check Tensor Contiguity (Dimension 0)
-#'
-#' Check if tensor is contiguous. Same as \code{ggml_is_contiguous}.
-#'
-#' @param tensor Tensor pointer
-#' @return Logical indicating contiguity
+#' @rdname ggml_is_contiguous
+#' @details \code{ggml_is_contiguous_0()}: Check if tensor is contiguous. Same as \code{ggml_is_contiguous}.
+#' Returns: Logical indicating contiguity
 #' @export
-#' @family tensor_layout
 ggml_is_contiguous_0 <- function(tensor) {
   .Call("R_ggml_is_contiguous_0", tensor, PACKAGE = "ggmlR")
 }
 
-#' Check Tensor Contiguity (Dimensions >= 1)
-#'
-#' Check if tensor is contiguous for dimensions >= 1.
+#' @rdname ggml_is_contiguous
+#' @details \code{ggml_is_contiguous_1()}: Check if tensor is contiguous for dimensions >= 1.
 #' Allows non-contiguous first dimension.
-#'
-#' @param tensor Tensor pointer
-#' @return Logical indicating contiguity for dims >= 1
+#' Returns: Logical indicating contiguity for dims >= 1
 #' @export
-#' @family tensor_layout
 ggml_is_contiguous_1 <- function(tensor) {
   .Call("R_ggml_is_contiguous_1", tensor, PACKAGE = "ggmlR")
 }
 
-#' Check Tensor Contiguity (Dimensions >= 2)
-#'
-#' Check if tensor is contiguous for dimensions >= 2.
+#' @rdname ggml_is_contiguous
+#' @details \code{ggml_is_contiguous_2()}: Check if tensor is contiguous for dimensions >= 2.
 #' Allows non-contiguous first two dimensions.
-#'
-#' @param tensor Tensor pointer
-#' @return Logical indicating contiguity for dims >= 2
+#' Returns: Logical indicating contiguity for dims >= 2
 #' @export
-#' @family tensor_layout
 ggml_is_contiguous_2 <- function(tensor) {
   .Call("R_ggml_is_contiguous_2", tensor, PACKAGE = "ggmlR")
 }
 
-#' Check Tensor Contiguity (dims < 1)
-#'
-#' Check whether the first 1 dimension(s) of a tensor are packed (dims
+#' @rdname ggml_is_contiguous
+#' @details \code{ggml_is_contiguous_to_1()}: Check whether the first 1 dimension(s) of a tensor are packed (dims
 #' \code{0 .. 1 - 1} in ggml order); the higher dimensions may have any stride.
-#'
-#' @param tensor Tensor pointer
-#' @return Logical indicating contiguity for dims < 1
+#' Returns: Logical indicating contiguity for dims < 1
 #' @export
-#' @family tensor_layout
 ggml_is_contiguous_to_1 <- function(tensor) {
   .Call("R_ggml_is_contiguous_to_1", tensor, PACKAGE = "ggmlR")
 }
 
-#' Check Tensor Contiguity (dims < 2)
-#'
-#' Check whether the first 2 dimension(s) of a tensor are packed (dims
+#' @rdname ggml_is_contiguous
+#' @details \code{ggml_is_contiguous_to_2()}: Check whether the first 2 dimension(s) of a tensor are packed (dims
 #' \code{0 .. 2 - 1} in ggml order); the higher dimensions may have any stride.
-#'
-#' @param tensor Tensor pointer
-#' @return Logical indicating contiguity for dims < 2
+#' Returns: Logical indicating contiguity for dims < 2
 #' @export
-#' @family tensor_layout
 ggml_is_contiguous_to_2 <- function(tensor) {
   .Call("R_ggml_is_contiguous_to_2", tensor, PACKAGE = "ggmlR")
 }
 
-#' Check Tensor Contiguity (dims < 3)
-#'
-#' Check whether the first 3 dimension(s) of a tensor are packed (dims
+#' @rdname ggml_is_contiguous
+#' @details \code{ggml_is_contiguous_to_3()}: Check whether the first 3 dimension(s) of a tensor are packed (dims
 #' \code{0 .. 3 - 1} in ggml order); the higher dimensions may have any stride.
-#'
-#' @param tensor Tensor pointer
-#' @return Logical indicating contiguity for dims < 3
+#' Returns: Logical indicating contiguity for dims < 3
 #' @export
-#' @family tensor_layout
 ggml_is_contiguous_to_3 <- function(tensor) {
   .Call("R_ggml_is_contiguous_to_3", tensor, PACKAGE = "ggmlR")
 }
 
-#' Check If Tensor is Contiguously Allocated
-#'
-#' Check if tensor data is contiguously allocated in memory.
+#' @rdname ggml_is_contiguous
+#' @details \code{ggml_is_contiguously_allocated()}: Check if tensor data is contiguously allocated in memory.
 #' Different from contiguous layout - this checks the actual allocation.
-#'
-#' @param tensor Tensor pointer
-#' @return Logical indicating if data is contiguously allocated
+#' Returns: Logical indicating if data is contiguously allocated
 #' @export
-#' @family tensor_layout
 ggml_is_contiguously_allocated <- function(tensor) {
   .Call("R_ggml_is_contiguously_allocated", tensor, PACKAGE = "ggmlR")
 }
 
-#' Check Channel-wise Contiguity
-#'
-#' Check if tensor has contiguous channels (important for CNN operations).
+#' @rdname ggml_is_contiguous
+#' @details \code{ggml_is_contiguous_channels()}: Check if tensor has contiguous channels (important for CNN operations).
 #' Data for each channel should be stored contiguously.
-#'
-#' @param tensor Tensor pointer
-#' @return Logical indicating channel-wise contiguity
+#' Returns: Logical indicating channel-wise contiguity
 #' @export
-#' @family tensor_layout
 ggml_is_contiguous_channels <- function(tensor) {
   .Call("R_ggml_is_contiguous_channels", tensor, PACKAGE = "ggmlR")
 }
 
-#' Check Row-wise Contiguity
-#'
-#' Check if tensor has contiguous rows (important for matrix operations).
+#' @rdname ggml_is_contiguous
+#' @details \code{ggml_is_contiguous_rows()}: Check if tensor has contiguous rows (important for matrix operations).
 #' Each row should be stored contiguously in memory.
-#'
-#' @param tensor Tensor pointer
-#' @return Logical indicating row-wise contiguity
+#' Returns: Logical indicating row-wise contiguity
 #' @export
-#' @family tensor_layout
 ggml_is_contiguous_rows <- function(tensor) {
   .Call("R_ggml_is_contiguous_rows", tensor, PACKAGE = "ggmlR")
 }
@@ -5115,22 +4524,18 @@ ggml_timestep_embedding <- function(ctx, timesteps, dim, max_period = 10000L) {
 # CPU-side Tensor Data Access (indexed)
 # ============================================================================
 
-#' Set Single Float Value by N-D Index
-#'
-#' Sets a single f32 value in the tensor at position [i0, i1, i2, i3].
+#' @rdname ggml_get_f32_nd
+#' @details \code{ggml_set_f32_nd()}: Sets a single f32 value in the tensor at position [i0, i1, i2, i3].
 #' This is a direct data write, not a graph operation.
-#'
-#' @param tensor Tensor pointer
-#' @param i0,i1,i2,i3 Indices (0-based)
+#' Returns: NULL (invisible)
 #' @param value Float value to set
-#' @return NULL (invisible)
 #' @export
 ggml_set_f32_nd <- function(tensor, i0, i1 = 0, i2 = 0, i3 = 0, value) {
   invisible(.Call("R_ggml_set_f32_nd", tensor, as.numeric(i0), as.numeric(i1),
                   as.numeric(i2), as.numeric(i3), as.numeric(value), PACKAGE = "ggmlR"))
 }
 
-#' Get Single Float Value by N-D Index
+#' N-dimensional Element Access
 #'
 #' Gets a single f32 value from the tensor at position [i0, i1, i2, i3].
 #' Works with any tensor type (auto-converts to float).
@@ -5144,27 +4549,18 @@ ggml_get_f32_nd <- function(tensor, i0, i1 = 0, i2 = 0, i3 = 0) {
         as.numeric(i2), as.numeric(i3), PACKAGE = "ggmlR")
 }
 
-#' Get Single Int32 Value by N-D Index
-#'
-#' Gets a single i32 value from the tensor at position [i0, i1, i2, i3].
-#'
-#' @param tensor Tensor pointer
-#' @param i0,i1,i2,i3 Indices (0-based)
-#' @return Integer value
+#' @rdname ggml_get_f32_nd
+#' @details \code{ggml_get_i32_nd()}: Gets a single i32 value from the tensor at position [i0, i1, i2, i3].
+#' Returns: Integer value
 #' @export
 ggml_get_i32_nd <- function(tensor, i0, i1 = 0, i2 = 0, i3 = 0) {
   .Call("R_ggml_get_i32_nd", tensor, as.numeric(i0), as.numeric(i1),
         as.numeric(i2), as.numeric(i3), PACKAGE = "ggmlR")
 }
 
-#' Set Single Int32 Value by N-D Index
-#'
-#' Sets a single i32 value in the tensor at position [i0, i1, i2, i3].
-#'
-#' @param tensor Tensor pointer
-#' @param i0,i1,i2,i3 Indices (0-based)
-#' @param value Integer value to set
-#' @return NULL (invisible)
+#' @rdname ggml_get_f32_nd
+#' @details \code{ggml_set_i32_nd()}: Sets a single i32 value in the tensor at position [i0, i1, i2, i3].
+#' Returns: NULL (invisible)
 #' @export
 ggml_set_i32_nd <- function(tensor, i0, i1 = 0, i2 = 0, i3 = 0, value) {
   invisible(.Call("R_ggml_set_i32_nd", tensor, as.numeric(i0), as.numeric(i1),
@@ -5732,14 +5128,10 @@ ggml_cumsum <- function(ctx, a) {
   .Call("R_ggml_cumsum", ctx, a, PACKAGE = "ggmlR")
 }
 
-#' Multi-RoPE Backward (Graph)
-#'
-#' Gradient node for \code{\link{ggml_rope_multi}}.  Takes the same geometry
+#' @rdname ggml_rope
+#' @details \code{ggml_rope_multi_back()}: Gradient node for \code{\link{ggml_rope_multi}}.  Takes the same geometry
 #' arguments as the forward op, which is what makes the rotation invertible.
-#'
-#' @inheritParams ggml_rope_multi
-#' @return Gradient w.r.t. the rotated input
-#' @seealso \code{\link{ggml_rope_multi}}
+#' Returns: Gradient w.r.t. the rotated input
 #' @export
 ggml_rope_multi_back <- function(ctx, a, b, c = NULL,
                                  n_dims, sections = c(0L, 0L, 0L, 0L),
@@ -5755,7 +5147,7 @@ ggml_rope_multi_back <- function(ctx, a, b, c = NULL,
         PACKAGE = "ggmlR")
 }
 
-#' Set Flash-Attention Precision
+#' Flash Attention Settings
 #'
 #' Sets the precision a \code{ggml_flash_attn_ext()} node computes in.
 #' \code{GGML_PREC_F32} raises accuracy at some cost in speed.
@@ -5770,38 +5162,30 @@ ggml_flash_attn_ext_set_prec <- function(tensor, prec) {
         PACKAGE = "ggmlR")
 }
 
-#' Get Flash-Attention Precision
-#'
-#' @param tensor A flash-attention node
-#' @return The precision constant currently set on the node
-#' @seealso \code{\link{ggml_flash_attn_ext_set_prec}}
+#' @rdname ggml_flash_attn_ext_set_prec
+#' @details \code{ggml_flash_attn_ext_get_prec()}: 
+#' Returns: The precision constant currently set on the node
 #' @export
 ggml_flash_attn_ext_get_prec <- function(tensor) {
   .Call("R_ggml_flash_attn_ext_get_prec", tensor, PACKAGE = "ggmlR")
 }
 
-#' Attach Attention Sinks to a Flash-Attention Node
-#'
-#' Adds per-head "sink" logits, an always-available extra key that lets a query
+#' @rdname ggml_flash_attn_ext_set_prec
+#' @details \code{ggml_flash_attn_ext_add_sinks()}: Adds per-head "sink" logits, an always-available extra key that lets a query
 #' attend to nothing in particular.
-#'
-#' @param tensor A flash-attention node
+#' Returns: The tensor (for chaining)
 #' @param sinks Sink logits, one per head
-#' @return The tensor (for chaining)
-#' @seealso \code{\link{ggml_soft_max_add_sinks}}
 #' @export
 ggml_flash_attn_ext_add_sinks <- function(tensor, sinks) {
   .Call("R_ggml_flash_attn_ext_add_sinks", tensor, sinks, PACKAGE = "ggmlR")
 }
 
-#' Attach Attention Sinks to a Softmax Node
-#'
-#' The \code{\link{ggml_soft_max_ext}} counterpart of
+#' @rdname ggml_soft_max
+#' @details \code{ggml_soft_max_add_sinks()}: The \code{\link{ggml_soft_max_ext}} counterpart of
 #' \code{\link{ggml_flash_attn_ext_add_sinks}}.
-#'
+#' Returns: The tensor (for chaining)
 #' @param tensor A softmax node
 #' @param sinks Sink logits, one per head
-#' @return The tensor (for chaining)
 #' @export
 ggml_soft_max_add_sinks <- function(tensor, sinks) {
   .Call("R_ggml_soft_max_add_sinks", tensor, sinks, PACKAGE = "ggmlR")

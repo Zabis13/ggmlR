@@ -1,13 +1,27 @@
-## Submission (0.8.8.1)
+## Submission (0.8.10)
 
-This release fixes two test failures reported on
-r-devel-linux-x86_64-fedora-gcc for 0.8.8 (test-ag-tape-memory.R).
+This is a resubmission addressing the NOTE on r-devel-windows-x86_64:
 
-`ag_tape_memory()` identified shared objects via `tracemem()`, which errors
-on R builds configured without memory profiling. Deduplication was then
-silently disabled and shared storage was counted several times. The object
-address is now read through a small registered C routine, independent of
-the R build configuration.
+    Overall checktime 11 min > 10 min
+
+Most of the check time on that platform is spent compiling the bundled
+GGML C/C++ library, which we cannot reduce without dropping functionality.
+We have reduced the remaining check time instead:
+
+* **Documentation**: the manual was reduced from 866 to 544 Rd pages
+  (Rd source from ~37,600 to ~22,800 lines). Closely related functions
+  (in-place variants, 1D-5D views/reshapes, type/op information,
+  backend and scheduler accessors, quantization routines, etc.) now share
+  a single help page via `@rdname`; internal helpers are no longer
+  rendered (`@noRd`); large `@family` cross-link lists, which grew
+  quadratically with family size, were replaced by overview pages. Locally
+  this cuts PDF manual build time by ~46% and HTML/Rd processing by ~50%.
+
+* **Tests**: twelve more slow test files were moved to the extended suite
+  that runs only when `NOT_CRAN=true`; the remaining tests run with the
+  2-thread cap required by CRAN policy.
+
+All examples together run in under 2 seconds locally.
 
 ## R CMD check results
 

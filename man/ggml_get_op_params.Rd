@@ -2,12 +2,33 @@
 % Please edit documentation in R/logging.R
 \name{ggml_get_op_params}
 \alias{ggml_get_op_params}
-\title{Get Tensor Operation Parameters}
+\alias{ggml_set_op_params}
+\alias{ggml_get_op_params_i32}
+\alias{ggml_set_op_params_i32}
+\alias{ggml_get_op_params_f32}
+\alias{ggml_set_op_params_f32}
+\title{Operation Parameters}
 \usage{
 ggml_get_op_params(tensor)
+
+ggml_set_op_params(tensor, params)
+
+ggml_get_op_params_i32(tensor, index)
+
+ggml_set_op_params_i32(tensor, index, value)
+
+ggml_get_op_params_f32(tensor, index)
+
+ggml_set_op_params_f32(tensor, index, value)
 }
 \arguments{
 \item{tensor}{External pointer to tensor}
+
+\item{params}{Raw vector of parameters (max 64 bytes)}
+
+\item{index}{0-based index (0-15 for 64-byte op_params)}
+
+\item{value}{Numeric value to set}
 }
 \value{
 Raw vector of op_params bytes
@@ -16,13 +37,24 @@ Raw vector of op_params bytes
 Returns the raw op_params bytes from a tensor. These parameters
 control operation-specific behavior (e.g., precision, mode).
 }
+\details{
+\code{ggml_set_op_params()}: Sets the raw op_params bytes for a tensor.
+Returns: NULL invisibly
+
+\code{ggml_get_op_params_i32()}: Gets a single int32 value from tensor op_params at given index.
+Returns: Integer value
+
+\code{ggml_set_op_params_i32()}: Sets a single int32 value in tensor op_params at given index.
+Returns: NULL invisibly
+
+\code{ggml_get_op_params_f32()}: Gets a single float value from tensor op_params at given index.
+Returns: Numeric value
+
+\code{ggml_set_op_params_f32()}: Sets a single float value in tensor op_params at given index.
+Returns: NULL invisibly
+}
 \seealso{
 Other tensor: 
-\code{\link{ggml_are_same_layout}()},
-\code{\link{ggml_get_op_params_f32}()},
-\code{\link{ggml_get_op_params_i32}()},
-\code{\link{ggml_set_op_params}()},
-\code{\link{ggml_set_op_params_f32}()},
-\code{\link{ggml_set_op_params_i32}()}
+\code{\link{ggml_are_same_layout}()}
 }
 \concept{tensor}

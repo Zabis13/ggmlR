@@ -2,9 +2,15 @@
 % Please edit documentation in R/backend.R
 \name{ggml_backend_tensor_set_async}
 \alias{ggml_backend_tensor_set_async}
-\title{Set tensor data asynchronously}
+\alias{ggml_backend_tensor_get_async}
+\alias{ggml_backend_tensor_copy_async}
+\title{Asynchronous Tensor Transfers}
 \usage{
 ggml_backend_tensor_set_async(backend, tensor, data, offset = 0, size = NULL)
+
+ggml_backend_tensor_get_async(backend, tensor, offset = 0, size)
+
+ggml_backend_tensor_copy_async(backend_src, backend_dst, src, dst)
 }
 \arguments{
 \item{backend}{External pointer to backend}
@@ -16,76 +22,28 @@ ggml_backend_tensor_set_async(backend, tensor, data, offset = 0, size = NULL)
 \item{offset}{Byte offset (default 0)}
 
 \item{size}{Number of bytes to copy}
+
+\item{backend_src}{Source backend}
+
+\item{backend_dst}{Destination backend}
+
+\item{src}{Source tensor}
+
+\item{dst}{Destination tensor}
 }
 \value{
 NULL invisibly
 }
 \description{
-Set tensor data asynchronously
+Asynchronous Tensor Transfers
+}
+\details{
+\code{ggml_backend_tensor_get_async()}: 
+Returns: Double vector of \code{ceiling(size / 8)} elements carrying the raw bytes (reinterpret with \code{writeBin}/\code{readBin}); bytes past \code{size} are zero. Filled only after \code{ggml_backend_synchronize()}.
+
+\code{ggml_backend_tensor_copy_async()}: 
+Returns: NULL invisibly
 }
 \seealso{
-Other backend: 
-\code{\link{ggml_backend_buffer_clear}()},
-\code{\link{ggml_backend_buffer_get_usage}()},
-\code{\link{ggml_backend_buffer_is_host}()},
-\code{\link{ggml_backend_buffer_is_multi_buffer}()},
-\code{\link{ggml_backend_buffer_reset}()},
-\code{\link{ggml_backend_buffer_set_usage}()},
-\code{\link{ggml_backend_buffer_usage_any}()},
-\code{\link{ggml_backend_buffer_usage_compute}()},
-\code{\link{ggml_backend_buffer_usage_weights}()},
-\code{\link{ggml_backend_buft_get_alignment}()},
-\code{\link{ggml_backend_buft_get_max_size}()},
-\code{\link{ggml_backend_buft_is_host}()},
-\code{\link{ggml_backend_buft_name}()},
-\code{\link{ggml_backend_dev_buffer_type}()},
-\code{\link{ggml_backend_dev_by_name}()},
-\code{\link{ggml_backend_dev_by_type}()},
-\code{\link{ggml_backend_dev_count}()},
-\code{\link{ggml_backend_dev_description}()},
-\code{\link{ggml_backend_dev_get}()},
-\code{\link{ggml_backend_dev_get_props}()},
-\code{\link{ggml_backend_dev_host_buffer_type}()},
-\code{\link{ggml_backend_dev_init}()},
-\code{\link{ggml_backend_dev_memory}()},
-\code{\link{ggml_backend_dev_name}()},
-\code{\link{ggml_backend_dev_offload_op}()},
-\code{\link{ggml_backend_dev_supports_buft}()},
-\code{\link{ggml_backend_dev_supports_op}()},
-\code{\link{ggml_backend_dev_type}()},
-\code{\link{ggml_backend_device_register}()},
-\code{\link{ggml_backend_device_type_accel}()},
-\code{\link{ggml_backend_device_type_cpu}()},
-\code{\link{ggml_backend_device_type_gpu}()},
-\code{\link{ggml_backend_device_type_igpu}()},
-\code{\link{ggml_backend_event_free}()},
-\code{\link{ggml_backend_event_new}()},
-\code{\link{ggml_backend_event_record}()},
-\code{\link{ggml_backend_event_synchronize}()},
-\code{\link{ggml_backend_event_wait}()},
-\code{\link{ggml_backend_get_device}()},
-\code{\link{ggml_backend_graph_compute_async}()},
-\code{\link{ggml_backend_graph_plan_compute}()},
-\code{\link{ggml_backend_graph_plan_create}()},
-\code{\link{ggml_backend_graph_plan_free}()},
-\code{\link{ggml_backend_init_best}()},
-\code{\link{ggml_backend_init_by_name}()},
-\code{\link{ggml_backend_init_by_type}()},
-\code{\link{ggml_backend_load}()},
-\code{\link{ggml_backend_load_all}()},
-\code{\link{ggml_backend_meta_device}()},
-\code{\link{ggml_backend_multi_buffer_alloc_buffer}()},
-\code{\link{ggml_backend_multi_buffer_set_usage}()},
-\code{\link{ggml_backend_reg_by_name}()},
-\code{\link{ggml_backend_reg_count}()},
-\code{\link{ggml_backend_reg_dev_count}()},
-\code{\link{ggml_backend_reg_dev_get}()},
-\code{\link{ggml_backend_reg_get}()},
-\code{\link{ggml_backend_reg_name}()},
-\code{\link{ggml_backend_register}()},
-\code{\link{ggml_backend_synchronize}()},
-\code{\link{ggml_backend_tensor_copy_async}()},
-\code{\link{ggml_backend_tensor_get_async}()},
-\code{\link{ggml_backend_unload}()}
+\link{ggmlR-backend}
 }
-\concept{backend}

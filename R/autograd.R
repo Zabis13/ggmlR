@@ -153,7 +153,7 @@ ag_param <- function(data, device = .ag_device_state$device,
 #' Check if object is an ag_tensor
 #' @param x Any R object to test.
 #' @return \code{TRUE} if \code{x} is an \code{ag_tensor} object, \code{FALSE} otherwise.
-#' @keywords internal
+#' @noRd
 is_ag_tensor <- function(x) inherits(x, "ag_tensor")
 
 #' Extract the value of an ag_tensor as an R matrix
@@ -662,12 +662,9 @@ ag_scale <- function(x, scalar) {
   out
 }
 
-#' ReLU activation
-#'
-#' Applies the rectified linear unit: \eqn{\max(0, x)}.
-#'
-#' @param x ag_tensor
-#' @return ag_tensor
+#' @rdname ag_exp
+#' @details \code{ag_relu()}: Applies the rectified linear unit: \eqn{\max(0, x)}.
+#' Returns: ag_tensor
 #' @export
 ag_relu <- function(x) {
   device <- if (is_ag_tensor(x)) x$device else "cpu"
@@ -696,12 +693,9 @@ ag_relu <- function(x) {
   out
 }
 
-#' Sigmoid activation
-#'
-#' Applies \eqn{1 / (1 + e^{-x})}.
-#'
-#' @param x ag_tensor
-#' @return ag_tensor
+#' @rdname ag_exp
+#' @details \code{ag_sigmoid()}: Applies \eqn{1 / (1 + e^{-x})}.
+#' Returns: ag_tensor
 #' @export
 ag_sigmoid <- function(x) {
   device <- if (is_ag_tensor(x)) x$device else "cpu"
@@ -727,19 +721,16 @@ ag_sigmoid <- function(x) {
   out
 }
 
-#' SiLU (Swish) activation
-#'
-#' Applies \eqn{x / (1 + e^{-x})}, the activation of the feed-forward half of
+#' @rdname ag_exp
+#' @details \code{ag_silu()}: Applies \eqn{x / (1 + e^{-x})}, the activation of the feed-forward half of
 #' \code{\link{ggml_layer_transformer_block}}. One node on the tape (forward
 #' \code{ggml_silu}, backward \code{ggml_silu_back}) rather than the three of
 #' \code{ag_mul(x, ag_sigmoid(x))}, and it runs in the graph backward, so it can
 #' be part of an \code{\link{ag_capture_step}} recording.
-#'
-#' @param x ag_tensor
-#' @return ag_tensor of the same shape as \code{x}
-#' @export
+#' Returns: ag_tensor of the same shape as \code{x}
 #' @examples
 #' ag_silu(ag_tensor(matrix(c(-2, 0, 2), 3, 1)))
+#' @export
 ag_silu <- function(x) {
   device <- if (is_ag_tensor(x)) x$device else "cpu"
   if (device == "gpu") {
@@ -765,10 +756,9 @@ ag_silu <- function(x) {
   out
 }
 
-#' Tanh activation
-#'
-#' @param x ag_tensor
-#' @return ag_tensor
+#' @rdname ag_exp
+#' @details \code{ag_tanh()}: 
+#' Returns: ag_tensor
 #' @export
 ag_tanh <- function(x) {
   device <- if (is_ag_tensor(x)) x$device else "cpu"
@@ -1431,33 +1421,10 @@ AG_OPT_STATE_VERSION <- 1L
   params
 }
 
-#' Create an SGD optimizer
-#'
-#' @param params List of ag_param tensors, named or not (names are used only
-#'   for display). The same tensor listed twice is kept once, with a warning.
-#' @param lr Learning rate (default 0.01)
+#' @rdname optimizer_adam
+#' @details \code{optimizer_sgd()}: 
+#' Returns: An optimizer environment with \code{step(grads)}, \code{zero_grad()}, \code{state()} and \code{load_state(state)}. \code{state()} returns a versioned list (moments as host double matrices, \code{t}, \code{accum_count}); \code{load_state()} checks the type, parameter count, names (when both sides have them) and shapes before writing anything, restores \code{t} and \code{accum_count}, and does NOT restore hyperparameters (it warns when they differ). Exact continuation holds on the same device and dtype; CPU <-> GPU in f32 continues within float tolerance; across f16 and f32 it cannot be exact. Only read saved states you trust (\code{readRDS}).
 #' @param momentum Momentum factor (default 0)
-#' @param accumulate_steps Number of \code{backward()} passes to accumulate
-#'   before a call to \code{$step()} updates the weights (default 1, no
-#'   accumulation).  With \code{k > 1} the first \code{k - 1} calls to
-#'   \code{$step()} only count, and the \code{k}-th applies the update and
-#'   resets the counter, so a micro-batch loop needs no bookkeeping of its own.
-#' @param average When accumulating, divide the accumulated gradient by
-#'   \code{accumulate_steps} (default \code{TRUE}).  That is what makes
-#'   \code{k} micro-batches equivalent to one batch of \code{k} times the size
-#'   for an averaging loss such as \code{\link{ag_mse_loss}}; set it to
-#'   \code{FALSE} for a summing loss, where the plain sum is already right.
-#' @return An optimizer environment with \code{step(grads)}, \code{zero_grad()},
-#'   \code{state()} and \code{load_state(state)}. \code{state()} returns a
-#'   versioned list (moments as host double matrices, \code{t},
-#'   \code{accum_count}); \code{load_state()} checks the type, parameter
-#'   count, names (when both sides have them) and shapes before writing
-#'   anything, restores \code{t} and \code{accum_count}, and does NOT restore
-#'   hyperparameters (it warns when they differ). Exact continuation holds on
-#'   the same device and dtype; CPU <-> GPU in f32 continues within float
-#'   tolerance; across f16 and f32 it cannot be exact. Only read saved states
-#'   you trust (\code{readRDS}).
-#' @export
 #' @examples
 #' \donttest{
 #' w <- ag_param(matrix(runif(4), 2, 2))
@@ -1466,6 +1433,7 @@ AG_OPT_STATE_VERSION <- 1L
 #' # accumulate 4 micro-batches per update
 #' opt4 <- optimizer_sgd(list(w = w), lr = 0.01, accumulate_steps = 4L)
 #' }
+#' @export
 optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
                           accumulate_steps = 1L, average = TRUE) {
   stopifnot(is.list(params))
@@ -1533,7 +1501,7 @@ optimizer_sgd <- function(params, lr = 0.01, momentum = 0.0,
   env
 }
 
-#' Create an Adam optimizer
+#' Autograd Optimizers
 #'
 #' @param params List of ag_param tensors, named or not (names are used only
 #'   for display). The same tensor listed twice is kept once, with a warning.
@@ -1581,9 +1549,8 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
                           average, weight_decay = 0, type = "adam")
 }
 
-#' Create an AdamW optimizer
-#'
-#' Adam with decoupled weight decay (Loshchilov & Hutter), as
+#' @rdname optimizer_adam
+#' @details \code{optimizer_adamw()}: Adam with decoupled weight decay (Loshchilov & Hutter), as
 #' \code{torch.optim.AdamW}: every step first shrinks the weight,
 #' \code{w <- w * (1 - lr * weight_decay)}, then applies the Adam update. The
 #' decay is not added to the gradient, so it does not enter the moments (that
@@ -1594,17 +1561,14 @@ optimizer_adam <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
 #' \code{state()} / \code{load_state()}, \code{\link{ag_capture_step}} -- is
 #' as for \code{\link{optimizer_adam}}; the object inherits from
 #' \code{ag_optimizer_adam}.
-#'
-#' @inheritParams optimizer_adam
+#' Returns: An optimizer environment, class \code{c("ag_optimizer_adamw", "ag_optimizer_adam")}.
 #' @param weight_decay Decoupled weight decay factor (default 0.01), \code{>= 0}.
-#' @return An optimizer environment, class
-#'   \code{c("ag_optimizer_adamw", "ag_optimizer_adam")}.
-#' @export
 #' @examples
 #' \donttest{
 #' w <- ag_param(matrix(runif(4), 2, 2))
 #' opt <- optimizer_adamw(list(w = w), lr = 1e-3, weight_decay = 0.01)
 #' }
+#' @export
 optimizer_adamw <- function(params, lr = 1e-3, beta1 = 0.9, beta2 = 0.999,
                             eps = 1e-8, weight_decay = 0.01,
                             accumulate_steps = 1L, average = TRUE) {
@@ -2016,10 +1980,9 @@ ag_mean <- function(x, dim = NULL, keepdim = FALSE) {
   out
 }
 
-#' Element-wise natural logarithm
-#'
-#' @param x ag_tensor
-#' @return ag_tensor
+#' @rdname ag_exp
+#' @details \code{ag_log()}: 
+#' Returns: ag_tensor
 #' @export
 ag_log <- function(x) {
   device <- if (is_ag_tensor(x)) x$device else "cpu"
@@ -2040,7 +2003,7 @@ ag_log <- function(x) {
   out
 }
 
-#' Element-wise exponential
+#' Element-wise Unary Operations (autograd)
 #'
 #' @param x ag_tensor
 #' @return ag_tensor
@@ -2081,10 +2044,9 @@ ag_exp <- function(x) {
   out
 }
 
-#' Element-wise sine and cosine
-#'
-#' @param x ag_tensor
-#' @return ag_tensor
+#' @rdname ag_exp
+#' @details \code{ag_sin()}: 
+#' Returns: ag_tensor
 #' @export
 ag_sin <- function(x) {
   .ag_trig(x, sin, .ag_gpu_sin, function(x) {
@@ -2092,7 +2054,7 @@ ag_sin <- function(x) {
   })
 }
 
-#' @rdname ag_sin
+#' @rdname ag_exp
 #' @export
 ag_cos <- function(x) {
   .ag_trig(x, cos, .ag_gpu_cos, function(x) {

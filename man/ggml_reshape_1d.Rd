@@ -2,9 +2,18 @@
 % Please edit documentation in R/operations.R
 \name{ggml_reshape_1d}
 \alias{ggml_reshape_1d}
-\title{Reshape to 1D (Graph)}
+\alias{ggml_reshape_2d}
+\alias{ggml_reshape_3d}
+\alias{ggml_reshape_4d}
+\title{Reshape Tensor (Graph)}
 \usage{
 ggml_reshape_1d(ctx, a, ne0)
+
+ggml_reshape_2d(ctx, a, ne0, ne1)
+
+ggml_reshape_3d(ctx, a, ne0, ne1, ne2)
+
+ggml_reshape_4d(ctx, a, ne0, ne1, ne2, ne3)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -12,6 +21,12 @@ ggml_reshape_1d(ctx, a, ne0)
 \item{a}{Input tensor}
 
 \item{ne0}{Size of dimension 0}
+
+\item{ne1}{Size of dimension 1}
+
+\item{ne2}{Size of dimension 2}
+
+\item{ne3}{Size of dimension 3}
 }
 \value{
 Reshaped tensor
@@ -19,12 +34,43 @@ Reshaped tensor
 \description{
 Reshapes tensor to 1D with ne0 elements
 }
+\details{
+\code{ggml_reshape_2d()}: Reshapes tensor to 2D with shape (ne0, ne1)
+Returns: Reshaped tensor
+
+\code{ggml_reshape_3d()}: Reshapes tensor to 3D with shape (ne0, ne1, ne2)
+Returns: Reshaped tensor
+
+\code{ggml_reshape_4d()}: Reshapes tensor to 4D with shape (ne0, ne1, ne2, ne3)
+Returns: Reshaped tensor
+}
 \examples{
 \donttest{
 ctx <- ggml_init(16 * 1024 * 1024)
 a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 4)
 ggml_set_f32(a, 1:12)
 result <- ggml_reshape_1d(ctx, a, 12)
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 12)
+ggml_set_f32(a, 1:12)
+result <- ggml_reshape_2d(ctx, a, 3, 4)
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 24)
+ggml_set_f32(a, 1:24)
+result <- ggml_reshape_3d(ctx, a, 2, 3, 4)
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 120)
+ggml_set_f32(a, 1:120)
+result <- ggml_reshape_4d(ctx, a, 2, 3, 4, 5)
 ggml_free(ctx)
 }
 }

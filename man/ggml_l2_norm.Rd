@@ -2,9 +2,12 @@
 % Please edit documentation in R/operations.R
 \name{ggml_l2_norm}
 \alias{ggml_l2_norm}
+\alias{ggml_l2_norm_inplace}
 \title{L2 Normalization (Graph)}
 \usage{
 ggml_l2_norm(ctx, a, eps = 1e-05)
+
+ggml_l2_norm_inplace(ctx, a, eps = 1e-05)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -21,6 +24,9 @@ Creates a graph node for L2 normalization (unit norm).
 Normalizes vectors to unit length: x / ||x||_2.
 Used in RWKV v7 and embedding normalization.
 }
+\details{
+\code{ggml_l2_norm_inplace()} is the in-place variant: it modifies its input and returns a view of it.
+}
 \examples{
 \donttest{
 ctx <- ggml_init(16 * 1024 * 1024)
@@ -30,6 +36,15 @@ result <- ggml_l2_norm(ctx, a)
 graph <- ggml_build_forward_expand(ctx, result)
 ggml_graph_compute(ctx, graph)
 output <- ggml_get_f32(result)  # [0.6, 0, 0, 0.8] unit vector
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4)
+ggml_set_f32(a, c(3, 0, 0, 4))
+result <- ggml_l2_norm_inplace(ctx, a)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
 ggml_free(ctx)
 }
 }

@@ -2,9 +2,24 @@
 % Please edit documentation in R/vulkan.R
 \name{ggml_vulkan_device_count}
 \alias{ggml_vulkan_device_count}
-\title{Get number of Vulkan devices}
+\alias{ggml_vulkan_list_devices}
+\alias{ggml_vulkan_device_description}
+\alias{ggml_vulkan_device_memory}
+\alias{ggml_vulkan_device_caps}
+\title{Vulkan Device Information}
 \usage{
 ggml_vulkan_device_count()
+
+ggml_vulkan_list_devices()
+
+ggml_vulkan_device_description(device = 0L)
+
+ggml_vulkan_device_memory(device = 0L)
+
+ggml_vulkan_device_caps(device = 0L)
+}
+\arguments{
+\item{device}{Device index (0-based)}
 }
 \value{
 Integer count of Vulkan devices (0 if Vulkan not available)
@@ -12,10 +27,41 @@ Integer count of Vulkan devices (0 if Vulkan not available)
 \description{
 Returns the number of available Vulkan-capable GPU devices.
 }
+\details{
+\code{ggml_vulkan_list_devices()}: Returns detailed information about all available Vulkan devices.
+Returns: List of device information (index, name, memory)
+
+\code{ggml_vulkan_device_description()}: Returns a human-readable description of the specified Vulkan device.
+Returns: Character string with device description
+
+\code{ggml_vulkan_device_memory()}: Returns free and total memory for the specified Vulkan device.
+Returns: Named list with 'free' and 'total' memory in bytes, and 'max_tensor_size': the largest single tensor in bytes the device can bind (\code{NA} if unknown). Ops with a larger input or output do not run on this device and fall back to CPU, so callers that split work (e.g. tiled VAE decode) should keep every tensor below it, not only the total below 'free'.
+
+\code{ggml_vulkan_device_caps()}: Returns hardware capabilities for the specified Vulkan device.
+Returns: Named list: coopmat_support, coopmat1_fa_support, fp16, subgroup_size, subgroup_no_shmem
+}
 \examples{
 \donttest{
 if (ggml_vulkan_available()) {
   ggml_vulkan_device_count()
+}
+}
+\donttest{
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  devices <- ggml_vulkan_list_devices()
+  print(devices)
+}
+}
+\donttest{
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  ggml_vulkan_device_description(0)
+}
+}
+\donttest{
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  mem <- ggml_vulkan_device_memory(0)
+  cat("Free:", mem$free / 1e9, "GB\n")
+  cat("Total:", mem$total / 1e9, "GB\n")
 }
 }
 }

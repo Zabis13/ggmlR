@@ -2,9 +2,36 @@
 % Please edit documentation in R/operations.R
 \name{ggml_glu}
 \alias{ggml_glu}
-\title{Generic GLU (Gated Linear Unit) (Graph)}
+\alias{ggml_reglu}
+\alias{ggml_geglu}
+\alias{ggml_swiglu}
+\alias{ggml_geglu_quick}
+\alias{ggml_glu_split}
+\alias{ggml_reglu_split}
+\alias{ggml_geglu_split}
+\alias{ggml_swiglu_split}
+\alias{ggml_swiglu_clamp}
+\title{Gated Linear Unit Operations (Graph)}
 \usage{
 ggml_glu(ctx, a, op, swapped = FALSE)
+
+ggml_reglu(ctx, a)
+
+ggml_geglu(ctx, a)
+
+ggml_swiglu(ctx, a)
+
+ggml_geglu_quick(ctx, a)
+
+ggml_glu_split(ctx, a, b, op)
+
+ggml_reglu_split(ctx, a, b)
+
+ggml_geglu_split(ctx, a, b)
+
+ggml_swiglu_split(ctx, a, b)
+
+ggml_swiglu_clamp(ctx, a, b = NULL, limit)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -14,6 +41,10 @@ ggml_glu(ctx, a, op, swapped = FALSE)
 \item{op}{GLU operation type (GGML_GLU_OP_REGLU, GGML_GLU_OP_GEGLU, etc.)}
 
 \item{swapped}{If TRUE, swap x and gate halves (default FALSE)}
+
+\item{b}{Gate tensor (same shape as a)}
+
+\item{limit}{Clamp bound (positive)}
 }
 \value{
 Tensor with shape [n/2, ...] where n is the first dimension of input
@@ -26,6 +57,53 @@ applies an activation to the first half (x), and multiplies it with the second h
 \details{
 Formula: output = activation(x) * gate
 where x and gate are the two halves of the input tensor.
+
+\code{ggml_reglu()}: Creates a graph node for ReGLU operation.
+ReGLU uses ReLU as the activation function on the first half.
+
+Formula: output = ReLU(x) * gate
+Returns: Tensor with half the first dimension of input
+
+\code{ggml_geglu()}: Creates a graph node for GeGLU operation.
+GeGLU uses GELU as the activation function on the first half.
+CRITICAL for models like GPT-NeoX and Falcon.
+
+Formula: output = GELU(x) * gate
+Returns: Tensor with half the first dimension of input
+
+\code{ggml_swiglu()}: Creates a graph node for SwiGLU operation.
+SwiGLU uses SiLU (Swish) as the activation function on the first half.
+CRITICAL for LLaMA, Mistral, and many modern LLMs.
+
+Formula: output = SiLU(x) * gate
+Returns: Tensor with half the first dimension of input
+
+\code{ggml_geglu_quick()}: Creates a graph node for fast GeGLU approximation.
+Uses faster but less accurate GELU approximation for gating.
+Returns: Tensor with half the first dimension of input
+
+\code{ggml_glu_split()}: Creates a graph node for GLU with separate input and gate tensors.
+Unlike standard GLU which splits a single tensor, this takes two separate tensors.
+Returns: Tensor with same shape as input tensors
+
+\code{ggml_reglu_split()}: Creates a graph node for ReGLU with separate input and gate tensors.
+
+Formula: output = ReLU(a) * b
+Returns: Tensor with same shape as input tensors
+
+\code{ggml_geglu_split()}: Creates a graph node for GeGLU with separate input and gate tensors.
+
+Formula: output = GELU(a) * b
+Returns: Tensor with same shape as input tensors
+
+\code{ggml_swiglu_split()}: Creates a graph node for SwiGLU with separate input and gate tensors.
+
+Formula: output = SiLU(a) * b
+Returns: Tensor with same shape as input tensors
+
+\code{ggml_swiglu_clamp()}: SwiGLU whose inputs are clamped before they meet: the gate from above, the
+value from both sides, \code{silu(min(a, limit)) * clamp(b, -limit, limit)}.
+Returns: Tensor; same shape as \code{a}, or half its dim 0 when \code{b} is NULL
 }
 \examples{
 \donttest{
@@ -38,6 +116,36 @@ r <- ggml_glu(ctx, a, GGML_GLU_OP_SWIGLU, FALSE)
 graph <- ggml_build_forward_expand(ctx, r)
 ggml_graph_compute(ctx, graph)
 result <- ggml_get_f32(r)  # Shape: 5x4
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 3)
+ggml_set_f32(a, rnorm(24))
+r <- ggml_reglu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # Shape: 4x3
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 3)
+ggml_set_f32(a, rnorm(24))
+r <- ggml_geglu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # Shape: 4x3
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 8, 3)
+ggml_set_f32(a, rnorm(24))
+r <- ggml_swiglu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, r)
+ggml_graph_compute(ctx, graph)
+result <- ggml_get_f32(r)  # Shape: 4x3
 ggml_free(ctx)
 }
 }

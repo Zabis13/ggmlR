@@ -35,15 +35,13 @@ moment (default \code{FALSE})}
 
 \item{accumulate_steps}{Number of \code{backward()} passes to accumulate
 before a call to \code{$step()} updates the weights (default 1, no
-accumulation).  With \code{k > 1} the first \code{k - 1} calls to
-\code{$step()} only count, and the \code{k}-th applies the update and
-resets the counter, so a micro-batch loop needs no bookkeeping of its own.}
+accumulation).  The bias-correction counter advances only on a real
+update, so accumulating \code{k} micro-batches behaves like one step on
+the larger batch rather than like \code{k} steps.}
 
 \item{average}{When accumulating, divide the accumulated gradient by
-\code{accumulate_steps} (default \code{TRUE}).  That is what makes
-\code{k} micro-batches equivalent to one batch of \code{k} times the size
-for an averaging loss such as \code{\link{ag_mse_loss}}; set it to
-\code{FALSE} for a summing loss, where the plain sum is already right.}
+\code{accumulate_steps} (default \code{TRUE}).  See
+\code{\link{optimizer_sgd}}.}
 }
 \value{
 An optimizer environment with \code{step(grads)}, \code{zero_grad()},

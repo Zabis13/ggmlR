@@ -30,11 +30,6 @@ ggml_free(ctx)
 }
 \seealso{
 Other tensor: 
-\code{\link{ggml_get_op_params}()},
-\code{\link{ggml_get_op_params_f32}()},
-\code{\link{ggml_get_op_params_i32}()},
-\code{\link{ggml_set_op_params}()},
-\code{\link{ggml_set_op_params_f32}()},
-\code{\link{ggml_set_op_params_i32}()}
+\code{\link{ggml_get_op_params}()}
 }
 \concept{tensor}

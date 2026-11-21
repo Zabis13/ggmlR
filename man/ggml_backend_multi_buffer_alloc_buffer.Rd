@@ -2,12 +2,22 @@
 % Please edit documentation in R/backend.R
 \name{ggml_backend_multi_buffer_alloc_buffer}
 \alias{ggml_backend_multi_buffer_alloc_buffer}
-\title{Allocate multi-buffer}
+\alias{ggml_backend_buffer_is_multi_buffer}
+\alias{ggml_backend_multi_buffer_set_usage}
+\title{Backend Multi-buffers}
 \usage{
 ggml_backend_multi_buffer_alloc_buffer(buffers)
+
+ggml_backend_buffer_is_multi_buffer(buffer)
+
+ggml_backend_multi_buffer_set_usage(buffer, usage)
 }
 \arguments{
 \item{buffers}{List of backend buffer external pointers}
+
+\item{buffer}{External pointer to buffer}
+
+\item{usage}{Usage constant (from ggml_backend_buffer_usage_*)}
 }
 \value{
 External pointer to multi-buffer
@@ -15,6 +25,13 @@ External pointer to multi-buffer
 \description{
 Creates a buffer that combines multiple backend buffers into one.
 Useful for managing memory across different backends.
+}
+\details{
+\code{ggml_backend_buffer_is_multi_buffer()}: 
+Returns: Logical indicating if buffer is a multi-buffer
+
+\code{ggml_backend_multi_buffer_set_usage()}: 
+Returns: NULL invisibly
 }
 \examples{
 \donttest{
@@ -33,68 +50,5 @@ ggml_free(ctx2)
 }
 }
 \seealso{
-Other backend: 
-\code{\link{ggml_backend_buffer_clear}()},
-\code{\link{ggml_backend_buffer_get_usage}()},
-\code{\link{ggml_backend_buffer_is_host}()},
-\code{\link{ggml_backend_buffer_is_multi_buffer}()},
-\code{\link{ggml_backend_buffer_reset}()},
-\code{\link{ggml_backend_buffer_set_usage}()},
-\code{\link{ggml_backend_buffer_usage_any}()},
-\code{\link{ggml_backend_buffer_usage_compute}()},
-\code{\link{ggml_backend_buffer_usage_weights}()},
-\code{\link{ggml_backend_buft_get_alignment}()},
-\code{\link{ggml_backend_buft_get_max_size}()},
-\code{\link{ggml_backend_buft_is_host}()},
-\code{\link{ggml_backend_buft_name}()},
-\code{\link{ggml_backend_dev_buffer_type}()},
-\code{\link{ggml_backend_dev_by_name}()},
-\code{\link{ggml_backend_dev_by_type}()},
-\code{\link{ggml_backend_dev_count}()},
-\code{\link{ggml_backend_dev_description}()},
-\code{\link{ggml_backend_dev_get}()},
-\code{\link{ggml_backend_dev_get_props}()},
-\code{\link{ggml_backend_dev_host_buffer_type}()},
-\code{\link{ggml_backend_dev_init}()},
-\code{\link{ggml_backend_dev_memory}()},
-\code{\link{ggml_backend_dev_name}()},
-\code{\link{ggml_backend_dev_offload_op}()},
-\code{\link{ggml_backend_dev_supports_buft}()},
-\code{\link{ggml_backend_dev_supports_op}()},
-\code{\link{ggml_backend_dev_type}()},
-\code{\link{ggml_backend_device_register}()},
-\code{\link{ggml_backend_device_type_accel}()},
-\code{\link{ggml_backend_device_type_cpu}()},
-\code{\link{ggml_backend_device_type_gpu}()},
-\code{\link{ggml_backend_device_type_igpu}()},
-\code{\link{ggml_backend_event_free}()},
-\code{\link{ggml_backend_event_new}()},
-\code{\link{ggml_backend_event_record}()},
-\code{\link{ggml_backend_event_synchronize}()},
-\code{\link{ggml_backend_event_wait}()},
-\code{\link{ggml_backend_get_device}()},
-\code{\link{ggml_backend_graph_compute_async}()},
-\code{\link{ggml_backend_graph_plan_compute}()},
-\code{\link{ggml_backend_graph_plan_create}()},
-\code{\link{ggml_backend_graph_plan_free}()},
-\code{\link{ggml_backend_init_best}()},
-\code{\link{ggml_backend_init_by_name}()},
-\code{\link{ggml_backend_init_by_type}()},
-\code{\link{ggml_backend_load}()},
-\code{\link{ggml_backend_load_all}()},
-\code{\link{ggml_backend_meta_device}()},
-\code{\link{ggml_backend_multi_buffer_set_usage}()},
-\code{\link{ggml_backend_reg_by_name}()},
-\code{\link{ggml_backend_reg_count}()},
-\code{\link{ggml_backend_reg_dev_count}()},
-\code{\link{ggml_backend_reg_dev_get}()},
-\code{\link{ggml_backend_reg_get}()},
-\code{\link{ggml_backend_reg_name}()},
-\code{\link{ggml_backend_register}()},
-\code{\link{ggml_backend_synchronize}()},
-\code{\link{ggml_backend_tensor_copy_async}()},
-\code{\link{ggml_backend_tensor_get_async}()},
-\code{\link{ggml_backend_tensor_set_async}()},
-\code{\link{ggml_backend_unload}()}
+\link{ggmlR-backend}
 }
-\concept{backend}

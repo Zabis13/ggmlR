@@ -2,9 +2,21 @@
 % Please edit documentation in R/operations.R
 \name{ggml_view_1d}
 \alias{ggml_view_1d}
-\title{1D View with Byte Offset (Graph)}
+\alias{ggml_view_2d}
+\alias{ggml_view_3d}
+\alias{ggml_view_4d}
+\alias{ggml_view_5d}
+\title{Tensor Views (Graph)}
 \usage{
 ggml_view_1d(ctx, a, ne0, offset = 0)
+
+ggml_view_2d(ctx, a, ne0, ne1, nb1, offset = 0)
+
+ggml_view_3d(ctx, a, ne0, ne1, ne2, nb1, nb2, offset = 0)
+
+ggml_view_4d(ctx, a, ne0, ne1, ne2, ne3, nb1, nb2, nb3, offset = 0)
+
+ggml_view_5d(ctx, a, ne0, ne1, ne2, ne3, ne4, nb1, nb2, nb3, nb4, offset = 0)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -14,6 +26,22 @@ ggml_view_1d(ctx, a, ne0, offset = 0)
 \item{ne0}{Number of elements in the view}
 
 \item{offset}{Byte offset from the start of tensor data}
+
+\item{ne1}{Size of dimension 1}
+
+\item{nb1}{Stride for dimension 1 (in bytes)}
+
+\item{ne2}{Size of dimension 2}
+
+\item{nb2}{Stride for dimension 2 (in bytes)}
+
+\item{ne3}{Size of dimension 3}
+
+\item{nb3}{Stride for dimension 3 (in bytes)}
+
+\item{ne4}{Size of dimension 4}
+
+\item{nb4}{Stride for dimension 4 (in bytes)}
 }
 \value{
 View tensor
@@ -22,12 +50,40 @@ View tensor
 Creates a 1D view of a tensor starting at a byte offset.
 The view shares memory with the source tensor.
 }
+\details{
+\code{ggml_view_2d()}: Creates a 2D view of a tensor starting at a byte offset.
+The view shares memory with the source tensor.
+Returns: View tensor
+
+\code{ggml_view_3d()}: Creates a 3D view of a tensor starting at a byte offset.
+The view shares memory with the source tensor.
+Returns: View tensor
+
+\code{ggml_view_4d()}: Creates a 4D view of a tensor starting at a byte offset.
+The view shares memory with the source tensor.
+CRITICAL for KV-cache operations in transformers.
+Returns: View tensor
+
+\code{ggml_view_5d()}: Creates a 5D view of a tensor starting at a byte offset. The view shares
+memory with the source tensor. With strides that are not the natural
+contiguous ones it reorders axes without a copy -- e.g. swapping dims 3
+and 4, which \code{\link{ggml_permute}} cannot do (it only moves dims 0-3).
+Returns: View tensor
+}
 \examples{
 \donttest{
 ctx <- ggml_init(16 * 1024 * 1024)
 a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 100)
 # View elements 10-19 (offset = 10 * 4 bytes = 40)
 v <- ggml_view_1d(ctx, a, 10, 40)
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(1024 * 1024)
+x <- ggml_new_tensor(ctx, GGML_TYPE_F32, 5L, c(4, 3, 2, 5, 6))
+nb <- ggml_tensor_nb(x)
+# dims 3 and 4 swapped: [4, 3, 2, 6, 5]
+v <- ggml_view_5d(ctx, x, 4, 3, 2, 6, 5, nb[2], nb[3], nb[5], nb[4])
 ggml_free(ctx)
 }
 }

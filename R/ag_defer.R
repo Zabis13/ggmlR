@@ -70,7 +70,7 @@
 #'
 #' @param on `TRUE` to defer, `FALSE` to compute per operation, `NA` to query.
 #' @return The previous state, invisibly.
-#' @keywords internal
+#' @noRd
 ag_defer_forward <- function(on = TRUE) {
   old <- .ag_defer_enabled()
   if (!is.na(on)) .ag_defer$enabled <- isTRUE(on)

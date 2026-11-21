@@ -122,7 +122,7 @@
 #' @param on `TRUE` to use the graph path where possible, `FALSE` to always use
 #'   closures, `NA` to only query the current state.
 #' @return The previous state, invisibly.
-#' @keywords internal
+#' @noRd
 ag_backward_graph <- function(on = TRUE) {
   # isTRUE(), not the raw field: $enabled starts NULL when the setting has only
   # ever come from the environment variable, and returning NULL breaks the
@@ -133,7 +133,7 @@ ag_backward_graph <- function(on = TRUE) {
   invisible(old)
 }
 
-#' @rdname ag_backward_graph
+#' @noRd
 #' @keywords internal
 ag_backward_path <- function() .ag_bwd$last_path
 
@@ -171,7 +171,7 @@ ag_backward_path <- function() .ag_bwd$last_path
 #'
 #' @param reset \code{TRUE} to clear the counts after reading them.
 #' @return A named numeric vector: reason -> number of backward() calls.
-#' @keywords internal
+#' @noRd
 ag_backward_fallbacks <- function(reset = FALSE) {
   v <- unlist(.ag_bwd$fallbacks)
   if (is.null(v)) v <- numeric(0)
@@ -220,7 +220,7 @@ ag_backward_fallbacks <- function(reset = FALSE) {
 #' @param on `TRUE` to keep gradients resident, `FALSE` to download them as
 #'   before, `NA` to only query the current state.
 #' @return The previous state, invisibly.
-#' @keywords internal
+#' @noRd
 ag_backward_resident <- function(on = TRUE) {
   # Always a length-1 logical, never NULL: the value is meant to be handed
   # straight back to restore the setting, and a NULL round-trip fails inside
@@ -331,7 +331,7 @@ ag_backward_resident <- function(on = TRUE) {
 #' @param on `TRUE` to record per-stage timings on every graph backward,
 #'   `FALSE` to stop, `NA` to query.
 #' @return The previous state, invisibly.
-#' @keywords internal
+#' @noRd
 ag_backward_profile <- function(on = TRUE) {
   old <- .ag_bwd$prof
   if (!is.na(on)) {
@@ -341,7 +341,7 @@ ag_backward_profile <- function(on = TRUE) {
   invisible(old)
 }
 
-#' @rdname ag_backward_profile
+#' @noRd
 #' @keywords internal
 ag_backward_profile_reset <- function() {
   .ag_bwd$prof_totals <- NULL
@@ -349,7 +349,7 @@ ag_backward_profile_reset <- function() {
   invisible(NULL)
 }
 
-#' @rdname ag_backward_profile
+#' @noRd
 #' @keywords internal
 ag_backward_profile_report <- function() {
   if (is.null(.ag_bwd$prof_totals) || .ag_bwd$prof_n == 0L) {

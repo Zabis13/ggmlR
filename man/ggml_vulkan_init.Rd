@@ -2,12 +2,23 @@
 % Please edit documentation in R/vulkan.R
 \name{ggml_vulkan_init}
 \alias{ggml_vulkan_init}
-\title{Initialize Vulkan backend}
+\alias{ggml_vulkan_free}
+\alias{ggml_vulkan_is_backend}
+\alias{ggml_vulkan_backend_name}
+\title{Vulkan Backend Lifecycle}
 \usage{
 ggml_vulkan_init(device = 0L)
+
+ggml_vulkan_free(backend)
+
+ggml_vulkan_is_backend(backend)
+
+ggml_vulkan_backend_name(backend)
 }
 \arguments{
 \item{device}{Device index (0-based, default 0)}
+
+\item{backend}{Vulkan backend pointer from ggml_vulkan_init()}
 }
 \value{
 Vulkan backend pointer
@@ -16,7 +27,42 @@ Vulkan backend pointer
 Creates a Vulkan backend for the specified device.
 The backend must be freed with ggml_vulkan_free() when done.
 }
+\details{
+\code{ggml_vulkan_free()}: Releases resources associated with the Vulkan backend.
+Returns: NULL (invisible)
+
+\code{ggml_vulkan_is_backend()}: Returns TRUE if the given backend is a Vulkan backend.
+Returns: Logical indicating if backend is Vulkan
+
+\code{ggml_vulkan_backend_name()}: Returns the name of the Vulkan backend (includes device info).
+Returns: Character string with backend name
+}
 \examples{
+\donttest{
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  backend <- ggml_vulkan_init(0)
+  print(ggml_vulkan_backend_name(backend))
+  ggml_vulkan_free(backend)
+}
+}
+\donttest{
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  backend <- ggml_vulkan_init(0)
+  ggml_vulkan_free(backend)
+}
+}
+\donttest{
+if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
+  vk_backend <- ggml_vulkan_init(0)
+  cpu_backend <- ggml_backend_cpu_init()
+
+  ggml_vulkan_is_backend(vk_backend)  # TRUE
+  ggml_vulkan_is_backend(cpu_backend) # FALSE
+
+  ggml_vulkan_free(vk_backend)
+  ggml_backend_free(cpu_backend)
+}
+}
 \donttest{
 if (ggml_vulkan_available() && ggml_vulkan_device_count() > 0) {
   backend <- ggml_vulkan_init(0)

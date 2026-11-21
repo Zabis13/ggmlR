@@ -5,113 +5,103 @@
 # Loss Type Constants
 # ============================================================================
 
-#' Loss type: Mean
+#' Loss and optimizer type constants
 #'
-#' Returns the constant for mean loss type.
-#' Custom loss - reduces outputs to mean value.
+#' Integer constants selecting the loss function and the optimizer for
+#' \code{\link{ggml_opt_init}}, \code{\link{ggml_opt_fit}} and related
+#' training functions.
 #'
-#' @return Integer constant for mean loss
+#' Loss types:
+#' \describe{
+#'   \item{\code{ggml_opt_loss_type_mean()}}{Custom loss: reduces outputs to
+#'     their mean value.}
+#'   \item{\code{ggml_opt_loss_type_sum()}}{Custom loss: reduces outputs to
+#'     their sum.}
+#'   \item{\code{ggml_opt_loss_type_cross_entropy()}}{Cross entropy, for
+#'     classification. Softmaxes its input across the class axis, so it
+#'     expects logits.}
+#'   \item{\code{ggml_opt_loss_type_mse()}}{Mean squared error, for
+#'     regression.}
+#'   \item{\code{ggml_opt_loss_type_weighted_mse()}}{Per-datapoint weighted
+#'     MSE: \code{sum(w * (pred - y)^2) / nelements}, where \code{w} is a
+#'     per-sample weight supplied via \code{\link{ggml_opt_dataset_weights}}.}
+#'   \item{\code{ggml_opt_loss_type_mae()}}{Mean absolute error (L1),
+#'     \code{mean(|pred - y|)}. Its gradient is \code{sgn(pred - y)}, so a
+#'     far-off datapoint pulls no harder than a near one -- which is what
+#'     makes it more robust to outliers than MSE, at the cost of a gradient
+#'     that does not vanish as the fit improves.}
+#'   \item{\code{ggml_opt_loss_type_huber()}}{Huber (smooth L1) loss with
+#'     \code{delta = 1} (fixed, the usual default): \code{0.5 * e^2} where
+#'     \code{|e| <= 1} and \code{|e| - 0.5} beyond it. Quadratic near zero,
+#'     so unlike MAE the gradient vanishes at the optimum, and linear far out,
+#'     so unlike MSE a single outlier cannot dominate the batch.}
+#'   \item{\code{ggml_opt_loss_type_binary_cross_entropy()}}{Element-wise
+#'     binary cross-entropy, \code{mean(-[y*log(p) + (1-y)*log(1-p)])}.
+#'     Unlike cross entropy, it treats every output as an independent
+#'     Bernoulli and expects \emph{probabilities} -- so the model's last layer
+#'     should end in a sigmoid. It is the loss for multi-label targets and for
+#'     a single-unit binary output. Inputs are clamped away from 0 and 1
+#'     internally, since \code{log(0)} would otherwise poison the whole
+#'     batch.}
+#' }
+#'
+#' Optimizer types:
+#' \describe{
+#'   \item{\code{ggml_opt_optimizer_type_adamw()}}{AdamW: Adam with weight
+#'     decay, recommended for most tasks.}
+#'   \item{\code{ggml_opt_optimizer_type_sgd()}}{Stochastic gradient descent:
+#'     simpler but may require tuning.}
+#' }
+#'
+#' @return Integer constant.
+#' @seealso \link{ggmlR-optimization} for the full list of training functions.
+#' @name ggml_opt_loss_type
+NULL
+
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_loss_type_mean <- function() {
   .Call("R_ggml_opt_loss_type_mean")
 }
 
-#' Loss type: Sum
-#'
-#' Returns the constant for sum loss type.
-#' Custom loss - reduces outputs to sum value.
-#'
-#' @return Integer constant for sum loss
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_loss_type_sum <- function() {
   .Call("R_ggml_opt_loss_type_sum")
 }
 
-#' Loss type: Cross Entropy
-#'
-#' Returns the constant for cross entropy loss type.
-#' Use for classification tasks.
-#'
-#' @return Integer constant for cross entropy loss
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_loss_type_cross_entropy <- function() {
   .Call("R_ggml_opt_loss_type_cross_entropy")
 }
 
-#' Loss type: Mean Squared Error
-#'
-#' Returns the constant for MSE loss type.
-#' Use for regression tasks.
-#'
-#' @return Integer constant for MSE loss
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_loss_type_mse <- function() {
   .Call("R_ggml_opt_loss_type_mse")
 }
 
-#' Loss type: Weighted Mean Squared Error
-#'
-#' Returns the constant for per-datapoint weighted MSE loss type. Computes
-#' \code{sum(w * (pred - y)^2) / nelements}, where \code{w} is a per-sample
-#' weight supplied via \code{\link{ggml_opt_dataset_weights}}.
-#'
-#' @return Integer constant for weighted MSE loss
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_loss_type_weighted_mse <- function() {
   .Call("R_ggml_opt_loss_type_weighted_mse")
 }
 
-#' Loss type: Mean Absolute Error
-#'
-#' Returns the constant for MAE (L1) loss, \code{mean(|pred - y|)}.  Its
-#' gradient is \code{sgn(pred - y)}, so a far-off datapoint pulls no harder than
-#' a near one -- which is what makes it more robust to outliers than MSE, at the
-#' cost of a gradient that does not vanish as the fit improves.
-#'
-#' @return Integer constant for MAE loss
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_loss_type_mae <- function() {
   .Call("R_ggml_opt_loss_type_mae")
 }
 
-#' Loss type: Huber (smooth L1)
-#'
-#' Returns the constant for the Huber loss with \code{delta = 1}:
-#' \code{0.5 * e^2} where \code{|e| <= 1} and \code{|e| - 0.5} beyond it.
-#' Quadratic near zero, so unlike MAE the gradient vanishes at the optimum, and
-#' linear far out, so unlike MSE a single outlier cannot dominate the batch.
-#'
-#' \code{delta} is fixed at 1, the usual default.
-#'
-#' @return Integer constant for Huber loss
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_loss_type_huber <- function() {
   .Call("R_ggml_opt_loss_type_huber")
 }
 
-#' Loss type: Binary Cross-Entropy
-#'
-#' Returns the constant for element-wise binary cross-entropy,
-#' \code{mean(-[y*log(p) + (1-y)*log(1-p)])}.
-#'
-#' Unlike \code{\link{ggml_opt_loss_type_cross_entropy}}, which softmaxes its
-#' own input across a class axis and therefore expects logits, this one treats
-#' every output as an independent Bernoulli and expects \emph{probabilities} --
-#' so the model's last layer should end in a sigmoid.  It is the loss for
-#' multi-label targets and for a single-unit binary output.  Inputs are clamped
-#' away from 0 and 1 internally, since \code{log(0)} would otherwise poison the
-#' whole batch.
-#'
-#' @return Integer constant for binary cross-entropy loss
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_loss_type_binary_cross_entropy <- function() {
   .Call("R_ggml_opt_loss_type_binary_cross_entropy")
 }
@@ -120,26 +110,14 @@ ggml_opt_loss_type_binary_cross_entropy <- function() {
 # Optimizer Type Constants
 # ============================================================================
 
-#' Optimizer type: AdamW
-#'
-#' Returns the constant for AdamW optimizer.
-#' Adam with weight decay - recommended for most tasks.
-#'
-#' @return Integer constant for AdamW optimizer
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_optimizer_type_adamw <- function() {
   .Call("R_ggml_opt_optimizer_type_adamw")
 }
 
-#' Optimizer type: SGD
-#'
-#' Returns the constant for SGD optimizer.
-#' Stochastic gradient descent - simpler but may require tuning.
-#'
-#' @return Integer constant for SGD optimizer
+#' @rdname ggml_opt_loss_type
 #' @export
-#' @family optimization
 ggml_opt_optimizer_type_sgd <- function() {
   .Call("R_ggml_opt_optimizer_type_sgd")
 }
@@ -148,81 +126,37 @@ ggml_opt_optimizer_type_sgd <- function() {
 # Dataset Functions
 # ============================================================================
 
-#' Create a new optimization dataset
+#' Optimization datasets
 #'
-#' Creates a dataset for training with specified data and label types.
+#' Create, inspect and batch a dataset for \code{ggml-opt} training.
 #'
-#' @param type_data GGML type for data tensor (e.g., GGML_TYPE_F32)
-#' @param type_label GGML type for label tensor (e.g., GGML_TYPE_F32)
-#' @param ne_datapoint Number of elements per datapoint
-#' @param ne_label Number of elements per label (0 if no labels)
-#' @param ndata Total number of datapoints
-#' @param ndata_shard Shard size for shuffling (1 is fine for most cases)
-#' @return External pointer to dataset
-#' @export
-#' @family optimization
-ggml_opt_dataset_init <- function(type_data, type_label, ne_datapoint, ne_label, ndata, ndata_shard = 1) {
-  .Call("R_ggml_opt_dataset_init",
-        as.integer(type_data),
-        as.integer(type_label),
-        as.numeric(ne_datapoint),
-        as.numeric(ne_label),
-        as.numeric(ndata),
-        as.numeric(ndata_shard))
-}
-
-#' Free optimization dataset
+#' \describe{
+#'   \item{\code{ggml_opt_dataset_init()}}{Creates a dataset with the given
+#'     data and label types.}
+#'   \item{\code{ggml_opt_dataset_free()}}{Releases memory associated with a
+#'     dataset.}
+#'   \item{\code{ggml_opt_dataset_ndata()}}{Number of datapoints.}
+#'   \item{\code{ggml_opt_dataset_data()}}{The underlying data tensor, shape
+#'     \code{[ne_datapoint, ndata]}.}
+#'   \item{\code{ggml_opt_dataset_labels()}}{The underlying labels tensor,
+#'     shape \code{[ne_label, ndata]}, or NULL if no labels.}
+#'   \item{\code{ggml_opt_dataset_weights()}}{The loss weights tensor; see
+#'     section \emph{Loss weights}.}
+#'   \item{\code{ggml_opt_dataset_shuffle()}}{Shuffles the dataset using the
+#'     RNG from the optimizer context.}
+#'   \item{\code{ggml_opt_dataset_get_batch()}}{Copies a batch of data and
+#'     labels to the provided tensors.}
+#'   \item{\code{ggml_opt_dataset_get_batch_head()}}{Multi-output counterpart
+#'     of \code{ggml_opt_dataset_get_batch()}. The dataset's labels hold every
+#'     head's labels concatenated along the first dimension; this copies just
+#'     the slice belonging to one head.}
+#' }
 #'
-#' Releases memory associated with a dataset.
-#'
-#' @param dataset External pointer to dataset
-#' @return NULL invisibly
-#' @export
-#' @family optimization
-ggml_opt_dataset_free <- function(dataset) {
-  invisible(.Call("R_ggml_opt_dataset_free", dataset))
-}
-
-#' Get number of datapoints in dataset
-#'
-#' @param dataset External pointer to dataset
-#' @return Number of datapoints
-#' @export
-#' @family optimization
-ggml_opt_dataset_ndata <- function(dataset) {
-  .Call("R_ggml_opt_dataset_ndata", dataset)
-}
-
-#' Get data tensor from dataset
-#'
-#' Returns the underlying data tensor with shape [ne_datapoint, ndata].
-#'
-#' @param dataset External pointer to dataset
-#' @return External pointer to data tensor
-#' @export
-#' @family optimization
-ggml_opt_dataset_data <- function(dataset) {
-  .Call("R_ggml_opt_dataset_data", dataset)
-}
-
-#' Get labels tensor from dataset
-#'
-#' Returns the underlying labels tensor with shape [ne_label, ndata].
-#'
-#' @param dataset External pointer to dataset
-#' @return External pointer to labels tensor, or NULL if no labels
-#' @export
-#' @family optimization
-ggml_opt_dataset_labels <- function(dataset) {
-  .Call("R_ggml_opt_dataset_labels", dataset)
-}
-
-#' Get dataset loss weights tensor
-#'
-#' Returns the (lazily allocated) loss weights tensor with shape
-#' \code{[ne0, ndata]}. The first call allocates it; fill it via
-#' \code{ggml_backend_tensor_set_data()}. Used together with
-#' \code{\link{ggml_opt_loss_type_weighted_mse}}.
+#' @section Loss weights:
+#' \code{ggml_opt_dataset_weights()} returns the (lazily allocated) loss
+#' weights tensor with shape \code{[ne0, ndata]}. The first call allocates it;
+#' fill it via \code{ggml_backend_tensor_set_data()}. Used together with
+#' \code{ggml_opt_loss_type_weighted_mse()} (see \link{ggml_opt_loss_type}).
 #'
 #' \code{ne0 = 1} gives one weight per datapoint, broadcast over the outputs --
 #' the original behaviour. \code{ne0 = ne_label} gives a per-output-element
@@ -237,41 +171,85 @@ ggml_opt_dataset_labels <- function(dataset) {
 #' error rather than a silent return of the cached tensor -- both shapes
 #' broadcast, so a mismatch would otherwise weight the wrong thing unnoticed.
 #'
+#' @param type_data GGML type for data tensor (e.g., GGML_TYPE_F32)
+#' @param type_label GGML type for label tensor (e.g., GGML_TYPE_F32)
+#' @param ne_datapoint Number of elements per datapoint
+#' @param ne_label Number of elements per label (0 if no labels)
+#' @param ndata Total number of datapoints
+#' @param ndata_shard Shard size for shuffling (1 is fine for most cases)
 #' @param dataset External pointer to dataset
 #' @param ne0 Width of the weight tensor: 1 for per-datapoint weights, or the
 #'   label width for a per-output mask.
-#' @return External pointer to weights tensor
+#' @param opt_ctx External pointer to optimizer context
+#' @param idata Number of datapoints to shuffle (-1 for all)
+#' @param data_batch Tensor to receive data batch. For
+#'   \code{ggml_opt_dataset_get_batch_head()} may be NULL to copy only the
+#'   labels (the caller copies the inputs once, with the first head).
+#' @param labels_batch Tensor to receive labels batch (can be NULL for
+#'   \code{ggml_opt_dataset_get_batch()}); for
+#'   \code{ggml_opt_dataset_get_batch_head()}, this head's labels batch tensor.
+#' @param ibatch Batch index, 0-based
+#' @return \code{ggml_opt_dataset_init()}: external pointer to dataset.
+#'   \code{ggml_opt_dataset_ndata()}: number of datapoints.
+#'   \code{ggml_opt_dataset_data()}, \code{ggml_opt_dataset_labels()},
+#'   \code{ggml_opt_dataset_weights()}: external pointer to the tensor (labels
+#'   may be NULL). \code{ggml_opt_dataset_free()},
+#'   \code{ggml_opt_dataset_shuffle()}, \code{ggml_opt_dataset_get_batch()},
+#'   \code{ggml_opt_dataset_get_batch_head()}: NULL invisibly.
+#' @seealso \link{ggmlR-optimization} for the full list of training functions.
+#' @name ggml_opt_dataset
+NULL
+
+#' @rdname ggml_opt_dataset
 #' @export
-#' @family optimization
+ggml_opt_dataset_init <- function(type_data, type_label, ne_datapoint, ne_label, ndata, ndata_shard = 1) {
+  .Call("R_ggml_opt_dataset_init",
+        as.integer(type_data),
+        as.integer(type_label),
+        as.numeric(ne_datapoint),
+        as.numeric(ne_label),
+        as.numeric(ndata),
+        as.numeric(ndata_shard))
+}
+
+#' @rdname ggml_opt_dataset
+#' @export
+ggml_opt_dataset_free <- function(dataset) {
+  invisible(.Call("R_ggml_opt_dataset_free", dataset))
+}
+
+#' @rdname ggml_opt_dataset
+#' @export
+ggml_opt_dataset_ndata <- function(dataset) {
+  .Call("R_ggml_opt_dataset_ndata", dataset)
+}
+
+#' @rdname ggml_opt_dataset
+#' @export
+ggml_opt_dataset_data <- function(dataset) {
+  .Call("R_ggml_opt_dataset_data", dataset)
+}
+
+#' @rdname ggml_opt_dataset
+#' @export
+ggml_opt_dataset_labels <- function(dataset) {
+  .Call("R_ggml_opt_dataset_labels", dataset)
+}
+
+#' @rdname ggml_opt_dataset
+#' @export
 ggml_opt_dataset_weights <- function(dataset, ne0 = 1L) {
   .Call("R_ggml_opt_dataset_weights", dataset, as.numeric(ne0))
 }
 
-#' Shuffle dataset
-#'
-#' Shuffles the dataset using the RNG from the optimizer context.
-#'
-#' @param opt_ctx External pointer to optimizer context
-#' @param dataset External pointer to dataset
-#' @param idata Number of datapoints to shuffle (-1 for all)
-#' @return NULL invisibly
+#' @rdname ggml_opt_dataset
 #' @export
-#' @family optimization
 ggml_opt_dataset_shuffle <- function(opt_ctx, dataset, idata = -1) {
   invisible(.Call("R_ggml_opt_dataset_shuffle", opt_ctx, dataset, as.numeric(idata)))
 }
 
-#' Get batch from dataset
-#'
-#' Copies a batch of data and labels to the provided tensors.
-#'
-#' @param dataset External pointer to dataset
-#' @param data_batch Tensor to receive data batch
-#' @param labels_batch Tensor to receive labels batch (can be NULL)
-#' @param ibatch Batch index
-#' @return NULL invisibly
+#' @rdname ggml_opt_dataset
 #' @export
-#' @family optimization
 ggml_opt_dataset_get_batch <- function(dataset, data_batch, labels_batch = NULL, ibatch) {
   invisible(.Call("R_ggml_opt_dataset_get_batch", dataset, data_batch, labels_batch, as.numeric(ibatch)))
 }
@@ -288,7 +266,7 @@ ggml_opt_dataset_get_batch <- function(dataset, data_batch, labels_batch = NULL,
 #' @param loss_type Loss type constant
 #' @return List with loss_type, build_type, opt_period, optimizer
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_default_params <- function(sched, loss_type) {
   .Call("R_ggml_opt_default_params", sched, as.integer(loss_type))
 }
@@ -306,7 +284,7 @@ ggml_opt_default_params <- function(sched, loss_type) {
 #' @param outputs Output tensor for static graph mode (or NULL)
 #' @return External pointer to optimizer context
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_init <- function(sched, loss_type, optimizer = ggml_opt_optimizer_type_adamw(), opt_period = 1L,
                           ctx_compute = NULL, inputs = NULL, outputs = NULL) {
   .Call("R_ggml_opt_init", sched, as.integer(loss_type), as.integer(optimizer), as.integer(opt_period),
@@ -320,7 +298,7 @@ ggml_opt_init <- function(sched, loss_type, optimizer = ggml_opt_optimizer_type_
 #' @param opt_ctx External pointer to optimizer context
 #' @return NULL invisibly
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_free <- function(opt_ctx) {
   invisible(.Call("R_ggml_opt_free", opt_ctx))
 }
@@ -333,7 +311,7 @@ ggml_opt_free <- function(opt_ctx) {
 #' @param optimizer Whether to also reset optimizer state (momentum, etc.)
 #' @return NULL invisibly
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_reset <- function(opt_ctx, optimizer = FALSE) {
   invisible(.Call("R_ggml_opt_reset", opt_ctx, as.logical(optimizer)))
 }
@@ -343,7 +321,7 @@ ggml_opt_reset <- function(opt_ctx, optimizer = FALSE) {
 #' @param opt_ctx External pointer to optimizer context
 #' @return Logical indicating if graphs are statically allocated
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_static_graphs <- function(opt_ctx) {
   .Call("R_ggml_opt_static_graphs", opt_ctx)
 }
@@ -353,7 +331,7 @@ ggml_opt_static_graphs <- function(opt_ctx) {
 #' @param opt_ctx External pointer to optimizer context
 #' @return External pointer to inputs tensor
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_inputs <- function(opt_ctx) {
   .Call("R_ggml_opt_inputs", opt_ctx)
 }
@@ -363,7 +341,7 @@ ggml_opt_inputs <- function(opt_ctx) {
 #' @param opt_ctx External pointer to optimizer context
 #' @return External pointer to outputs tensor
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_outputs <- function(opt_ctx) {
   .Call("R_ggml_opt_outputs", opt_ctx)
 }
@@ -373,7 +351,7 @@ ggml_opt_outputs <- function(opt_ctx) {
 #' @param opt_ctx External pointer to optimizer context
 #' @return External pointer to labels tensor
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_labels <- function(opt_ctx) {
   .Call("R_ggml_opt_labels", opt_ctx)
 }
@@ -383,7 +361,7 @@ ggml_opt_labels <- function(opt_ctx) {
 #' @param opt_ctx External pointer to optimizer context
 #' @return External pointer to loss tensor
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_loss <- function(opt_ctx) {
   .Call("R_ggml_opt_loss", opt_ctx)
 }
@@ -393,7 +371,7 @@ ggml_opt_loss <- function(opt_ctx) {
 #' @param opt_ctx External pointer to optimizer context
 #' @return External pointer to predictions tensor
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_pred <- function(opt_ctx) {
   .Call("R_ggml_opt_pred", opt_ctx)
 }
@@ -403,7 +381,7 @@ ggml_opt_pred <- function(opt_ctx) {
 #' @param opt_ctx External pointer to optimizer context
 #' @return External pointer to ncorrect tensor
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_ncorrect <- function(opt_ctx) {
   .Call("R_ggml_opt_ncorrect", opt_ctx)
 }
@@ -413,7 +391,7 @@ ggml_opt_ncorrect <- function(opt_ctx) {
 #' @param opt_ctx External pointer to optimizer context
 #' @return Integer number of output heads (1 for single-output models)
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_n_loss <- function(opt_ctx) {
   .Call("R_ggml_opt_n_loss", opt_ctx)
 }
@@ -428,7 +406,7 @@ ggml_opt_n_loss <- function(opt_ctx) {
 #' @param ihead Output head index, 1-based
 #' @return External pointer to the tensor, or NULL if this head has none
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_outputs_i <- function(opt_ctx, ihead) {
   .Call("R_ggml_opt_outputs_i", opt_ctx, as.integer(ihead))
 }
@@ -467,7 +445,7 @@ ggml_opt_ncorrect_i <- function(opt_ctx, ihead) {
 #' @param ihead Output head index, 1-based
 #' @return External pointer to the head's loss tensor
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_loss_i <- function(opt_ctx, ihead) {
   .Call("R_ggml_opt_loss_i", opt_ctx, as.integer(ihead))
 }
@@ -477,7 +455,7 @@ ggml_opt_loss_i <- function(opt_ctx, ihead) {
 #' @param opt_ctx External pointer to optimizer context
 #' @return Integer optimizer type constant
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_context_optimizer_type <- function(opt_ctx) {
   .Call("R_ggml_opt_context_optimizer_type", opt_ctx)
 }
@@ -487,7 +465,7 @@ ggml_opt_context_optimizer_type <- function(opt_ctx) {
 #' @param optimizer_type Integer optimizer type constant
 #' @return Character string with optimizer name
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_optimizer_name <- function(optimizer_type) {
   .Call("R_ggml_opt_optimizer_name", as.integer(optimizer_type))
 }
@@ -496,100 +474,93 @@ ggml_opt_optimizer_name <- function(optimizer_type) {
 # Result Functions
 # ============================================================================
 
-#' Initialize optimization result
+#' Optimization results
 #'
-#' Creates a new result object to accumulate training statistics.
+#' A result object accumulates training statistics (loss, accuracy,
+#' predictions) over an epoch.
 #'
-#' @return External pointer to result object
+#' \describe{
+#'   \item{\code{ggml_opt_result_init()}}{Creates a new result object.}
+#'   \item{\code{ggml_opt_result_free()}, \code{ggml_opt_result_reset()}}{Free
+#'     or reset a result.}
+#'   \item{\code{ggml_opt_result_ndata()}}{Number of datapoints processed.}
+#'   \item{\code{ggml_opt_result_loss()}, \code{ggml_opt_result_accuracy()}}{
+#'     The weighted total the optimizer minimizes, and its accuracy.}
+#'   \item{\code{ggml_opt_result_pred()}}{Predictions as an integer vector;
+#'     its length equals the number of datapoints processed.}
+#'   \item{\code{ggml_opt_result_n_loss()}}{Number of output heads
+#'     accumulated. Zero before the first epoch has run, so callers must
+#'     treat a freshly reset result as holding no per-head data yet.}
+#'   \item{\code{ggml_opt_result_loss_i()}, \code{ggml_opt_result_accuracy_i()}}{
+#'     Per-head counterparts of \code{ggml_opt_result_loss()} and
+#'     \code{ggml_opt_result_accuracy()}: they report a single head on its
+#'     own, before weighting, for the training history. Heads whose loss is
+#'     not cross-entropy have no accuracy; those return \code{NA}.}
+#' }
+#'
+#' @param result External pointer to result object
+#' @param ihead Output head index, 1-based
+#' @return \code{ggml_opt_result_init()}: external pointer to result object.
+#'   \code{ggml_opt_result_free()}, \code{ggml_opt_result_reset()}: NULL
+#'   invisibly. \code{ggml_opt_result_ndata()}: number of datapoints.
+#'   \code{ggml_opt_result_loss()}, \code{ggml_opt_result_accuracy()},
+#'   \code{ggml_opt_result_loss_i()}, \code{ggml_opt_result_accuracy_i()}:
+#'   named numeric vector with the value and its 'uncertainty'.
+#'   \code{ggml_opt_result_n_loss()}: integer number of heads.
+#'   \code{ggml_opt_result_pred()}: integer vector of predictions.
+#' @seealso \link{ggmlR-optimization} for the full list of training functions.
+#' @name ggml_opt_result
+NULL
+
+#' @rdname ggml_opt_result
 #' @export
-#' @family optimization
 ggml_opt_result_init <- function() {
   .Call("R_ggml_opt_result_init")
 }
 
-#' Free optimization result
-#'
-#' @param result External pointer to result object
-#' @return NULL invisibly
+#' @rdname ggml_opt_result
 #' @export
-#' @family optimization
 ggml_opt_result_free <- function(result) {
   invisible(.Call("R_ggml_opt_result_free", result))
 }
 
-#' Reset optimization result
-#'
-#' @param result External pointer to result object
-#' @return NULL invisibly
+#' @rdname ggml_opt_result
 #' @export
-#' @family optimization
 ggml_opt_result_reset <- function(result) {
   invisible(.Call("R_ggml_opt_result_reset", result))
 }
 
-#' Get number of datapoints from result
-#'
-#' @param result External pointer to result object
-#' @return Number of datapoints processed
+#' @rdname ggml_opt_result
 #' @export
-#' @family optimization
 ggml_opt_result_ndata <- function(result) {
   .Call("R_ggml_opt_result_ndata", result)
 }
 
-#' Get loss from result
-#'
-#' @param result External pointer to result object
-#' @return Named numeric vector with 'loss' and 'uncertainty'
+#' @rdname ggml_opt_result
 #' @export
-#' @family optimization
 ggml_opt_result_loss <- function(result) {
   .Call("R_ggml_opt_result_loss", result)
 }
 
-#' Get accuracy from result
-#'
-#' @param result External pointer to result object
-#' @return Named numeric vector with 'accuracy' and 'uncertainty'
+#' @rdname ggml_opt_result
 #' @export
-#' @family optimization
 ggml_opt_result_accuracy <- function(result) {
   .Call("R_ggml_opt_result_accuracy", result)
 }
 
-#' Number of output heads accumulated in a result
-#'
-#' Zero before the first epoch has run, so callers must treat a freshly reset
-#' result as holding no per-head data yet.
-#'
-#' @param result External pointer to result object
-#' @return Integer number of heads
+#' @rdname ggml_opt_result
 #' @export
-#' @family optimization
 ggml_opt_result_n_loss <- function(result) {
   .Call("R_ggml_opt_result_n_loss", result)
 }
 
-#' Get one output head's loss or accuracy from a result
-#'
-#' Per-head counterparts of \code{ggml_opt_result_loss()} and
-#' \code{ggml_opt_result_accuracy()}, which report the weighted total the
-#' optimizer minimizes. These report a single head on its own, before
-#' weighting, for the training history. \code{ihead} is 1-based.
-#'
-#' Heads whose loss is not cross-entropy have no accuracy; those return
-#' \code{NA}.
-#'
-#' @param result External pointer to result object
-#' @param ihead Output head index, 1-based
-#' @return Named numeric vector with the value and its 'uncertainty'
+#' @rdname ggml_opt_result
 #' @export
-#' @family optimization
 ggml_opt_result_loss_i <- function(result, ihead) {
   .Call("R_ggml_opt_result_loss_i", result, as.integer(ihead))
 }
 
-#' @rdname ggml_opt_result_loss_i
+#' @rdname ggml_opt_result
 #' @export
 ggml_opt_result_accuracy_i <- function(result, ihead) {
   .Call("R_ggml_opt_result_accuracy_i", result, as.integer(ihead))
@@ -607,7 +578,7 @@ ggml_opt_result_accuracy_i <- function(result, ihead) {
 #' @param backward Whether to allocate backward graph (for training)
 #' @return NULL invisibly
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_alloc <- function(opt_ctx, backward = TRUE) {
   invisible(.Call("R_ggml_opt_alloc", opt_ctx, as.logical(backward)))
 }
@@ -620,7 +591,7 @@ ggml_opt_alloc <- function(opt_ctx, backward = TRUE) {
 #' @param result External pointer to result object (optional)
 #' @return NULL invisibly
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_eval <- function(opt_ctx, result = NULL) {
   invisible(.Call("R_ggml_opt_eval", opt_ctx, result))
 }
@@ -647,7 +618,7 @@ ggml_opt_eval <- function(opt_ctx, result = NULL) {
 #' @param silent Whether to suppress progress output
 #' @return NULL invisibly
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 #' @examples
 #' # Full training requires building a computation graph
 #' # See package vignettes for complete examples
@@ -703,7 +674,7 @@ ggml_opt_fit <- function(sched, ctx_compute, inputs, outputs, dataset,
 #' @seealso \code{\link{ggml_fit_opt_multi}}, which this wraps and which adds
 #'   callbacks and shuffling control
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_fit_multi <- function(sched, ctx_compute, inputs, outputs, dataset,
                                loss_types,
                                loss_weights = rep(1, length(outputs)),
@@ -735,21 +706,9 @@ ggml_opt_fit_multi <- function(sched, ctx_compute, inputs, outputs, dataset,
        head_accuracy  = attr(hist, "head_accuracy"))
 }
 
-#' Get one output head's slice of a batch's labels
-#'
-#' Multi-output counterpart of \code{ggml_opt_dataset_get_batch()}. The
-#' dataset's labels hold every head's labels concatenated along the first
-#' dimension; this copies just the slice belonging to one head.
-#'
-#' @param dataset Dataset pointer
-#' @param data_batch Input batch tensor, or NULL to copy only the labels
-#'   (the caller copies the inputs once, with the first head)
-#' @param labels_batch This head's labels batch tensor
+#' @rdname ggml_opt_dataset
 #' @param labels_off Offset of this head within a label row, 0-based, in elements
-#' @param ibatch Batch index, 0-based
-#' @return NULL, invisibly
 #' @export
-#' @family optimization
 ggml_opt_dataset_get_batch_head <- function(dataset, data_batch, labels_batch,
                                             labels_off, ibatch) {
   invisible(.Call("R_ggml_opt_dataset_get_batch_head",
@@ -769,20 +728,13 @@ ggml_opt_dataset_get_batch_head <- function(dataset, data_batch, labels_batch,
 #' @param node External pointer to tensor node
 #' @return External pointer to gradient accumulator tensor, or NULL if not found
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_grad_acc <- function(opt_ctx, node) {
   .Call("R_ggml_opt_grad_acc", opt_ctx, node)
 }
 
-#' Get predictions from result
-#'
-#' Returns the predictions as an integer vector.
-#' The length equals the number of datapoints processed.
-#'
-#' @param result External pointer to result object
-#' @return Integer vector of predictions
+#' @rdname ggml_opt_result
 #' @export
-#' @family optimization
 ggml_opt_result_pred <- function(result) {
   .Call("R_ggml_opt_result_pred", result)
 }
@@ -799,7 +751,7 @@ ggml_opt_result_pred <- function(result) {
 #' @param outputs Output tensor
 #' @return NULL invisibly
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_prepare_alloc <- function(opt_ctx, ctx_compute, graph, inputs, outputs) {
   invisible(.Call("R_ggml_opt_prepare_alloc", opt_ctx, ctx_compute, graph, inputs, outputs))
 }
@@ -820,7 +772,7 @@ ggml_opt_prepare_alloc <- function(opt_ctx, ctx_compute, graph, inputs, outputs)
 #'   or a function(train, ibatch, ibatch_max, t_start_us, result)
 #' @return NULL invisibly
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 #' @examples
 #' # Requires full optimizer setup - see ggml_opt_fit() for simpler API
 #' if (FALSE) {
@@ -861,7 +813,7 @@ ggml_opt_epoch <- function(opt_ctx, dataset, result_train = NULL, result_eval = 
 #'   Applied to trainable parameters only, so frozen weights are not decayed.
 #' @return List with elements `opt_ctx` and `lr_ud`
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_init_for_fit <- function(sched, loss_type, optimizer = ggml_opt_optimizer_type_adamw(),
                                    opt_period = 1L, ctx_compute = NULL,
                                    inputs = NULL, outputs = NULL,
@@ -896,7 +848,7 @@ ggml_opt_init_for_fit <- function(sched, loss_type, optimizer = ggml_opt_optimiz
 #' @param weight_decay As for \code{ggml_opt_init_for_fit()}.
 #' @return List with elements `opt_ctx` and `lr_ud`
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_init_for_fit_multi <- function(sched, loss_types, loss_weights, labels_offs,
                                         optimizer = ggml_opt_optimizer_type_adamw(),
                                         opt_period = 1L, ctx_compute = NULL,
@@ -937,7 +889,7 @@ nn_opt_apply_weight_decay <- function(lr_ud, weight_decay) {
 #' @param sgd_lr New SGD learning rate (NA to keep current)
 #' @return NULL invisibly
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_set_lr <- function(lr_ud, adamw_lr = NA, sgd_lr = NA) {
   invisible(.Call("R_ggml_opt_set_lr", lr_ud, as.numeric(adamw_lr), as.numeric(sgd_lr)))
 }
@@ -947,7 +899,7 @@ ggml_opt_set_lr <- function(lr_ud, adamw_lr = NA, sgd_lr = NA) {
 #' @param lr_ud LR userdata pointer (from `ggml_opt_init_for_fit()$lr_ud`)
 #' @return Named numeric vector with 'adamw' and 'sgd' LR values
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 ggml_opt_get_lr <- function(lr_ud) {
   .Call("R_ggml_opt_get_lr", lr_ud)
 }
@@ -996,7 +948,7 @@ ggml_opt_get_lr <- function(lr_ud) {
 #'   \code{\link{ggml_opt_init_for_fit}}; 0 turns it off.
 #' @return Data frame with columns epoch, train_loss, train_accuracy, val_loss, val_accuracy
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 #' @examples
 #' if (FALSE) {
 #' history <- ggml_fit_opt(sched, ctx_compute, inputs, outputs, dataset,
@@ -1212,7 +1164,7 @@ ggml_fit_opt <- function(sched, ctx_compute, inputs, outputs, dataset,
 #'   \code{attr(h, "head_accuracy")}, \code{attr(h, "val_head_loss")} and
 #'   \code{attr(h, "val_head_accuracy")}, plus \code{attr(h, "head_names")}.
 #' @export
-#' @family optimization
+#' @seealso \link{ggmlR-optimization}
 #' @examples
 #' if (FALSE) {
 #' history <- ggml_fit_opt_multi(sched, ctx_compute, inputs, list(out_a, out_b),

@@ -749,7 +749,7 @@ nn_index_vocab <- function(model) {
 #' @param model Compiled model
 #' @param batch_size Batch size
 #' @return List with ctx_weights, ctx_compute, inputs, outputs, buffer
-#' @keywords internal
+#' @noRd
 # logits_output: drop a final softmax from the graph, leaving the last layer's
 # raw logits as the output. ggml_cross_entropy_loss() applies log_softmax to its
 # own input, so feeding it softmax probabilities would apply softmax twice --
@@ -2240,7 +2240,7 @@ summary.ggml_sequential_model <- function(object, ...) {
 #' Count parameters for a single layer
 #' @param layer A layer list
 #' @return Number of parameters
-#' @keywords internal
+#' @noRd
 nn_count_layer_params <- function(layer) {
   if (layer$type == "embedding") {
     return(as.numeric(layer$config$vocab_size) * layer$config$dim)

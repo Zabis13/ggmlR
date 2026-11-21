@@ -5,7 +5,7 @@
 #' @param a First array
 #' @param b Second array (must match dimensions of \code{a} except along dim 1)
 #' @return Combined array
-#' @keywords internal
+#' @noRd
 abind_first <- function(a, b) {
   da <- dim(a)
   db <- dim(b)
@@ -35,7 +35,7 @@ abind_first <- function(a, b) {
 #' @param x A matrix or array.
 #' @param idx Integer indices into the first dimension.
 #' @return \code{x} restricted to \code{idx} along dim 1 (\code{drop = FALSE}).
-#' @keywords internal
+#' @noRd
 slice_first_dim <- function(x, idx) {
   nd <- length(dim(x))
   if (nd <= 1L) {

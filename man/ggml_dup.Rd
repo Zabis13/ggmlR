@@ -2,9 +2,12 @@
 % Please edit documentation in R/operations.R
 \name{ggml_dup}
 \alias{ggml_dup}
+\alias{ggml_dup_inplace}
 \title{Duplicate Tensor (Graph)}
 \usage{
 ggml_dup(ctx, a)
+
+ggml_dup_inplace(ctx, a)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -18,6 +21,9 @@ Tensor representing the copy operation
 Creates a graph node that copies a tensor. This is a graph operation
 that must be computed using ggml_build_forward_expand() and ggml_graph_compute().
 Unlike ggml_dup_tensor which just allocates, this creates a copy operation in the graph.
+}
+\details{
+\code{ggml_dup_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 }
 \examples{
 \donttest{

@@ -2,9 +2,12 @@
 % Please edit documentation in R/operations.R
 \name{ggml_group_norm}
 \alias{ggml_group_norm}
+\alias{ggml_group_norm_inplace}
 \title{Group Normalization (Graph)}
 \usage{
 ggml_group_norm(ctx, a, n_groups, eps = 1e-05)
+
+ggml_group_norm_inplace(ctx, a, n_groups, eps = 1e-05)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -23,6 +26,9 @@ Creates a graph node for group normalization.
 Normalizes along ne0*ne1*n_groups dimensions.
 Used in Stable Diffusion and other image generation models.
 }
+\details{
+\code{ggml_group_norm_inplace()} is the in-place variant: it modifies its input and returns a view of it.
+}
 \examples{
 \donttest{
 ctx <- ggml_init(16 * 1024 * 1024)
@@ -30,6 +36,15 @@ ctx <- ggml_init(16 * 1024 * 1024)
 a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 8)
 ggml_set_f32(a, rnorm(32))
 result <- ggml_group_norm(ctx, a, n_groups = 2)
+graph <- ggml_build_forward_expand(ctx, result)
+ggml_graph_compute(ctx, graph)
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+a <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4, 8)
+ggml_set_f32(a, rnorm(32))
+result <- ggml_group_norm_inplace(ctx, a, n_groups = 2)
 graph <- ggml_build_forward_expand(ctx, result)
 ggml_graph_compute(ctx, graph)
 ggml_free(ctx)

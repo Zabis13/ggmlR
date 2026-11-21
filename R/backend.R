@@ -5,34 +5,34 @@
 # Device Type Constants
 # ============================================================================
 
-#' Device type: CPU
+#' Backend Device Type Constants
 #' @return Integer constant for CPU device type
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_device_type_cpu <- function() {
  .Call("R_ggml_backend_device_type_cpu")
 }
 
-#' Device type: GPU
-#' @return Integer constant for GPU device type
+#' @rdname ggml_backend_device_type_cpu
+#' @details \code{ggml_backend_device_type_gpu()}: 
+#' Returns: Integer constant for GPU device type
 #' @export
-#' @family backend
 ggml_backend_device_type_gpu <- function() {
  .Call("R_ggml_backend_device_type_gpu")
 }
 
-#' Device type: Integrated GPU
-#' @return Integer constant for integrated GPU device type
+#' @rdname ggml_backend_device_type_cpu
+#' @details \code{ggml_backend_device_type_igpu()}: 
+#' Returns: Integer constant for integrated GPU device type
 #' @export
-#' @family backend
 ggml_backend_device_type_igpu <- function() {
  .Call("R_ggml_backend_device_type_igpu")
 }
 
-#' Device type: Accelerator
-#' @return Integer constant for accelerator device type (e.g. BLAS, AMX)
+#' @rdname ggml_backend_device_type_cpu
+#' @details \code{ggml_backend_device_type_accel()}: 
+#' Returns: Integer constant for accelerator device type (e.g. BLAS, AMX)
 #' @export
-#' @family backend
 ggml_backend_device_type_accel <- function() {
  .Call("R_ggml_backend_device_type_accel")
 }
@@ -41,26 +41,26 @@ ggml_backend_device_type_accel <- function() {
 # Buffer Usage Constants
 # ============================================================================
 
-#' Buffer usage: Any
+#' Backend Buffer Usage Constants
 #' @return Integer constant for any buffer usage
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_buffer_usage_any <- function() {
  .Call("R_ggml_backend_buffer_usage_any")
 }
 
-#' Buffer usage: Weights
-#' @return Integer constant for weights buffer usage
+#' @rdname ggml_backend_buffer_usage_any
+#' @details \code{ggml_backend_buffer_usage_weights()}: 
+#' Returns: Integer constant for weights buffer usage
 #' @export
-#' @family backend
 ggml_backend_buffer_usage_weights <- function() {
  .Call("R_ggml_backend_buffer_usage_weights")
 }
 
-#' Buffer usage: Compute
-#' @return Integer constant for compute buffer usage
+#' @rdname ggml_backend_buffer_usage_any
+#' @details \code{ggml_backend_buffer_usage_compute()}: 
+#' Returns: Integer constant for compute buffer usage
 #' @export
-#' @family backend
 ggml_backend_buffer_usage_compute <- function() {
  .Call("R_ggml_backend_buffer_usage_compute")
 }
@@ -69,37 +69,37 @@ ggml_backend_buffer_usage_compute <- function() {
 # Device Enumeration
 # ============================================================================
 
-#' Get number of available devices
+#' Backend Device Lookup
 #' @return Number of devices
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_dev_count <- function() {
  .Call("R_ggml_backend_dev_count")
 }
 
-#' Get device by index
+#' @rdname ggml_backend_dev_count
+#' @details \code{ggml_backend_dev_get()}: 
+#' Returns: External pointer to device, or NULL if not found
 #' @param index Device index (0-based)
-#' @return External pointer to device, or NULL if not found
 #' @export
-#' @family backend
 ggml_backend_dev_get <- function(index) {
  .Call("R_ggml_backend_dev_get", as.numeric(index))
 }
 
-#' Get device by name
+#' @rdname ggml_backend_dev_count
+#' @details \code{ggml_backend_dev_by_name()}: 
+#' Returns: External pointer to device, or NULL if not found
 #' @param name Device name
-#' @return External pointer to device, or NULL if not found
 #' @export
-#' @family backend
 ggml_backend_dev_by_name <- function(name) {
  .Call("R_ggml_backend_dev_by_name", as.character(name))
 }
 
-#' Get device by type
+#' @rdname ggml_backend_dev_count
+#' @details \code{ggml_backend_dev_by_type()}: 
+#' Returns: External pointer to first device of given type, or NULL if not found
 #' @param type Device type (use ggml_backend_device_type_* functions)
-#' @return External pointer to first device of given type, or NULL if not found
 #' @export
-#' @family backend
 ggml_backend_dev_by_type <- function(type) {
  .Call("R_ggml_backend_dev_by_type", as.integer(type))
 }
@@ -108,82 +108,75 @@ ggml_backend_dev_by_type <- function(type) {
 # Device Properties
 # ============================================================================
 
-#' Get device name
+#' Backend Device Properties
 #' @param device External pointer to device
 #' @return Device name
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_dev_name <- function(device) {
  .Call("R_ggml_backend_dev_name", device)
 }
 
-#' Get device description
-#' @param device External pointer to device
-#' @return Device description
+#' @rdname ggml_backend_dev_name
+#' @details \code{ggml_backend_dev_description()}: 
+#' Returns: Device description
 #' @export
-#' @family backend
 ggml_backend_dev_description <- function(device) {
  .Call("R_ggml_backend_dev_description", device)
 }
 
-#' Get device memory
-#' @param device External pointer to device
-#' @return Named numeric vector with 'free' and 'total' memory in bytes
+#' @rdname ggml_backend_dev_name
+#' @details \code{ggml_backend_dev_memory()}: 
+#' Returns: Named numeric vector with 'free' and 'total' memory in bytes
 #' @export
-#' @family backend
 ggml_backend_dev_memory <- function(device) {
  .Call("R_ggml_backend_dev_memory", device)
 }
 
-#' Get device type
-#' @param device External pointer to device
-#' @return Device type constant
+#' @rdname ggml_backend_dev_name
+#' @details \code{ggml_backend_dev_type()}: 
+#' Returns: Device type constant
 #' @export
-#' @family backend
 ggml_backend_dev_type <- function(device) {
  .Call("R_ggml_backend_dev_type", device)
 }
 
-#' Get device properties
-#' @param device External pointer to device
-#' @return List with name, description, memory_free, memory_total, type, device_id, caps
+#' @rdname ggml_backend_dev_name
+#' @details \code{ggml_backend_dev_get_props()}: 
+#' Returns: List with name, description, memory_free, memory_total, type, device_id, caps
 #' @export
-#' @family backend
 ggml_backend_dev_get_props <- function(device) {
  .Call("R_ggml_backend_dev_get_props", device)
 }
 
-#' Check if device supports operation
+#' Backend Device Capability Queries
 #' @param device External pointer to device
 #' @param op External pointer to tensor/operation
 #' @return Logical indicating support
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_dev_supports_op <- function(device, op) {
  .Call("R_ggml_backend_dev_supports_op", device, op)
 }
 
-#' Check if device supports buffer type
-#' @param device External pointer to device
+#' @rdname ggml_backend_dev_supports_op
+#' @details \code{ggml_backend_dev_supports_buft()}: 
+#' Returns: Logical indicating support
 #' @param buft External pointer to buffer type
-#' @return Logical indicating support
 #' @export
-#' @family backend
 ggml_backend_dev_supports_buft <- function(device, buft) {
  .Call("R_ggml_backend_dev_supports_buft", device, buft)
 }
 
-#' Check if device should offload operation
-#' @param device External pointer to device
-#' @param op External pointer to tensor/operation
-#' @return Logical indicating if operation should be offloaded
+#' @rdname ggml_backend_dev_supports_op
+#' @details \code{ggml_backend_dev_offload_op()}: 
+#' Returns: Logical indicating if operation should be offloaded
 #' @export
-#' @family backend
 ggml_backend_dev_offload_op <- function(device, op) {
  .Call("R_ggml_backend_dev_offload_op", device, op)
 }
 
-#' Get the default buffer type of a device
+#' Backend Device Buffer Types
 #'
 #' Returns the buffer type a device allocates from by default. This is the
 #' buffer type the device itself reports as supported, so it is the natural
@@ -195,7 +188,7 @@ ggml_backend_dev_offload_op <- function(device, op) {
 #' @param device External pointer to device
 #' @return External pointer to the buffer type, or NULL if the device has none
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 #' @examples
 #' \donttest{
 #' dev <- ggml_backend_dev_get(0)
@@ -207,65 +200,57 @@ ggml_backend_dev_buffer_type <- function(device) {
  .Call("R_ggml_backend_dev_buffer_type", device)
 }
 
-#' Get the host (pinned) buffer type of a device
-#'
-#' Returns the buffer type used for pinned host memory, which allows faster
+#' @rdname ggml_backend_dev_buffer_type
+#' @details \code{ggml_backend_dev_host_buffer_type()}: Returns the buffer type used for pinned host memory, which allows faster
 #' host-device transfers. Many devices — including the CPU backend — have no
 #' such buffer type and return NULL.
 #'
 #' As with \code{\link{ggml_backend_dev_buffer_type}}, the returned pointer is
 #' owned by the backend and must not be freed.
-#'
-#' @param device External pointer to device
-#' @return External pointer to the host buffer type, or NULL if unavailable
+#' Returns: External pointer to the host buffer type, or NULL if unavailable
 #' @export
-#' @family backend
 ggml_backend_dev_host_buffer_type <- function(device) {
  .Call("R_ggml_backend_dev_host_buffer_type", device)
 }
 
-#' Get the name of a buffer type
+#' Backend Buffer Type Information
 #' @param buft External pointer to buffer type
 #' @return Character name of the buffer type
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_buft_name <- function(buft) {
  .Call("R_ggml_backend_buft_name", buft)
 }
 
-#' Get the allocation alignment of a buffer type
-#' @param buft External pointer to buffer type
-#' @return Numeric alignment in bytes
+#' @rdname ggml_backend_buft_name
+#' @details \code{ggml_backend_buft_get_alignment()}: 
+#' Returns: Numeric alignment in bytes
 #' @export
-#' @family backend
 ggml_backend_buft_get_alignment <- function(buft) {
  .Call("R_ggml_backend_buft_get_alignment", buft)
 }
 
-#' Get the maximum allocation size of a buffer type
-#' @param buft External pointer to buffer type
-#' @return Numeric maximum single-allocation size in bytes
+#' @rdname ggml_backend_buft_name
+#' @details \code{ggml_backend_buft_get_max_size()}: 
+#' Returns: Numeric maximum single-allocation size in bytes
 #' @export
-#' @family backend
 ggml_backend_buft_get_max_size <- function(buft) {
  .Call("R_ggml_backend_buft_get_max_size", buft)
 }
 
-#' Check whether a buffer type allocates host-accessible memory
-#' @param buft External pointer to buffer type
-#' @return Logical, TRUE if buffers of this type live in host memory
+#' @rdname ggml_backend_buft_name
+#' @details \code{ggml_backend_buft_is_host()}: 
+#' Returns: Logical, TRUE if buffers of this type live in host memory
 #' @export
-#' @family backend
 ggml_backend_buft_is_host <- function(buft) {
  .Call("R_ggml_backend_buft_is_host", buft)
 }
 
-#' Initialize backend from device
+#' @rdname ggml_backend_init_by_name
+#' @details \code{ggml_backend_dev_init()}: 
+#' Returns: External pointer to backend, or NULL on failure
 #' @param device External pointer to device
-#' @param params Optional parameters string
-#' @return External pointer to backend, or NULL on failure
 #' @export
-#' @family backend
 ggml_backend_dev_init <- function(device, params = NULL) {
  .Call("R_ggml_backend_dev_init", device, params)
 }
@@ -274,82 +259,79 @@ ggml_backend_dev_init <- function(device, params = NULL) {
 # Backend Registry
 # ============================================================================
 
-#' Get number of registered backends
+#' Backend Registry
 #' @return Number of registered backends
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_reg_count <- function() {
  .Call("R_ggml_backend_reg_count")
 }
 
-#' Get backend registry by index
+#' @rdname ggml_backend_reg_count
+#' @details \code{ggml_backend_reg_get()}: 
+#' Returns: External pointer to registry, or NULL if not found
 #' @param index Registry index (0-based)
-#' @return External pointer to registry, or NULL if not found
 #' @export
-#' @family backend
 ggml_backend_reg_get <- function(index) {
  .Call("R_ggml_backend_reg_get", as.numeric(index))
 }
 
-#' Get backend registry by name
+#' @rdname ggml_backend_reg_count
+#' @details \code{ggml_backend_reg_by_name()}: 
+#' Returns: External pointer to registry, or NULL if not found
 #' @param name Registry name
-#' @return External pointer to registry, or NULL if not found
 #' @export
-#' @family backend
 ggml_backend_reg_by_name <- function(name) {
  .Call("R_ggml_backend_reg_by_name", as.character(name))
 }
 
-#' Get registry name
+#' @rdname ggml_backend_reg_count
+#' @details \code{ggml_backend_reg_name()}: 
+#' Returns: Registry name
 #' @param reg External pointer to registry
-#' @return Registry name
 #' @export
-#' @family backend
 ggml_backend_reg_name <- function(reg) {
  .Call("R_ggml_backend_reg_name", reg)
 }
 
-#' Get number of devices in registry
-#' @param reg External pointer to registry
-#' @return Number of devices
+#' @rdname ggml_backend_reg_count
+#' @details \code{ggml_backend_reg_dev_count()}: 
+#' Returns: Number of devices
 #' @export
-#' @family backend
 ggml_backend_reg_dev_count <- function(reg) {
  .Call("R_ggml_backend_reg_dev_count", reg)
 }
 
-#' Get device from registry
-#' @param reg External pointer to registry
-#' @param index Device index (0-based)
-#' @return External pointer to device
+#' @rdname ggml_backend_reg_count
+#' @details \code{ggml_backend_reg_dev_get()}: 
+#' Returns: External pointer to device
 #' @export
-#' @family backend
 ggml_backend_reg_dev_get <- function(reg, index) {
  .Call("R_ggml_backend_reg_dev_get", reg, as.numeric(index))
 }
 
-#' Load backend from dynamic library
+#' Dynamic Backend Loading
 #' @param path Path to dynamic library
 #' @return External pointer to registry, or NULL on failure
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_load <- function(path) {
  .Call("R_ggml_backend_load", as.character(path))
 }
 
-#' Unload backend
+#' @rdname ggml_backend_load
+#' @details \code{ggml_backend_unload()}: 
+#' Returns: NULL invisibly
 #' @param reg External pointer to registry
-#' @return NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_unload <- function(reg) {
  invisible(.Call("R_ggml_backend_unload", reg))
 }
 
-#' Load all available backends
-#' @return NULL invisibly
+#' @rdname ggml_backend_load
+#' @details \code{ggml_backend_load_all()}: 
+#' Returns: NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_load_all <- function() {
  invisible(.Call("R_ggml_backend_load_all"))
 }
@@ -358,49 +340,45 @@ ggml_backend_load_all <- function() {
 # Events
 # ============================================================================
 
-#' Create new event
+#' Backend Events
 #' @param device External pointer to device
 #' @return External pointer to event, or NULL on failure
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_event_new <- function(device) {
  .Call("R_ggml_backend_event_new", device)
 }
 
-#' Free event
+#' @rdname ggml_backend_event_new
+#' @details \code{ggml_backend_event_free()}: 
+#' Returns: NULL invisibly
 #' @param event External pointer to event
-#' @return NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_event_free <- function(event) {
  invisible(.Call("R_ggml_backend_event_free", event))
 }
 
-#' Record event
-#' @param event External pointer to event
+#' @rdname ggml_backend_event_new
+#' @details \code{ggml_backend_event_record()}: 
+#' Returns: NULL invisibly
 #' @param backend External pointer to backend
-#' @return NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_event_record <- function(event, backend) {
  invisible(.Call("R_ggml_backend_event_record", event, backend))
 }
 
-#' Synchronize event
-#' @param event External pointer to event
-#' @return NULL invisibly
+#' @rdname ggml_backend_event_new
+#' @details \code{ggml_backend_event_synchronize()}: 
+#' Returns: NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_event_synchronize <- function(event) {
  invisible(.Call("R_ggml_backend_event_synchronize", event))
 }
 
-#' Wait for event
-#' @param backend External pointer to backend
-#' @param event External pointer to event
-#' @return NULL invisibly
+#' @rdname ggml_backend_event_new
+#' @details \code{ggml_backend_event_wait()}: 
+#' Returns: NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_event_wait <- function(backend, event) {
  invisible(.Call("R_ggml_backend_event_wait", backend, event))
 }
@@ -409,32 +387,29 @@ ggml_backend_event_wait <- function(backend, event) {
 # Graph Planning
 # ============================================================================
 
-#' Create graph execution plan
+#' Backend Graph Plans
 #' @param backend External pointer to backend
 #' @param graph External pointer to computation graph
 #' @return External pointer to plan, or NULL on failure
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_graph_plan_create <- function(backend, graph) {
  .Call("R_ggml_backend_graph_plan_create", backend, graph)
 }
 
-#' Free graph execution plan
-#' @param backend External pointer to backend
+#' @rdname ggml_backend_graph_plan_create
+#' @details \code{ggml_backend_graph_plan_free()}: 
+#' Returns: NULL invisibly
 #' @param plan External pointer to plan
-#' @return NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_graph_plan_free <- function(backend, plan) {
  invisible(.Call("R_ggml_backend_graph_plan_free", backend, plan))
 }
 
-#' Execute graph plan
-#' @param backend External pointer to backend
-#' @param plan External pointer to plan
-#' @return Status code (0 = success)
+#' @rdname ggml_backend_graph_plan_create
+#' @details \code{ggml_backend_graph_plan_compute()}: 
+#' Returns: Status code (0 = success)
 #' @export
-#' @family backend
 ggml_backend_graph_plan_compute <- function(backend, plan) {
  .Call("R_ggml_backend_graph_plan_compute", backend, plan)
 }
@@ -442,7 +417,7 @@ ggml_backend_graph_plan_compute <- function(backend, plan) {
 # ============================================================================
 # Async Operations
 # ============================================================================
-#' Set tensor data asynchronously
+#' Asynchronous Tensor Transfers
 #' @param backend External pointer to backend
 #' @param tensor External pointer to tensor
 #' @param data Numeric or integer vector
@@ -450,7 +425,7 @@ ggml_backend_graph_plan_compute <- function(backend, plan) {
 #' @param size Number of bytes to copy
 #' @return NULL invisibly
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_tensor_set_async <- function(backend, tensor, data, offset = 0, size = NULL) {
  if (is.null(size)) {
    size <- length(data) * ifelse(is.integer(data), 4L, 8L)
@@ -459,29 +434,23 @@ ggml_backend_tensor_set_async <- function(backend, tensor, data, offset = 0, siz
                  as.numeric(offset), as.numeric(size)))
 }
 
-#' Get tensor data asynchronously
-#' @param backend External pointer to backend
-#' @param tensor External pointer to tensor
-#' @param offset Byte offset (default 0)
-#' @param size Number of bytes to read
-#' @return Double vector of \code{ceiling(size / 8)} elements carrying the raw
-#'   bytes (reinterpret with \code{writeBin}/\code{readBin}); bytes past
-#'   \code{size} are zero. Filled only after \code{ggml_backend_synchronize()}.
+#' @rdname ggml_backend_tensor_set_async
+#' @details \code{ggml_backend_tensor_get_async()}: 
+#' Returns: Double vector of \code{ceiling(size / 8)} elements carrying the raw bytes (reinterpret with \code{writeBin}/\code{readBin}); bytes past \code{size} are zero. Filled only after \code{ggml_backend_synchronize()}.
 #' @export
-#' @family backend
 ggml_backend_tensor_get_async <- function(backend, tensor, offset = 0, size) {
  .Call("R_ggml_backend_tensor_get_async", backend, tensor,
        as.numeric(offset), as.numeric(size))
 }
 
-#' Copy tensor asynchronously between backends
+#' @rdname ggml_backend_tensor_set_async
+#' @details \code{ggml_backend_tensor_copy_async()}: 
+#' Returns: NULL invisibly
 #' @param backend_src Source backend
 #' @param backend_dst Destination backend
 #' @param src Source tensor
 #' @param dst Destination tensor
-#' @return NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_tensor_copy_async <- function(backend_src, backend_dst, src, dst) {
  invisible(.Call("R_ggml_backend_tensor_copy_async", backend_src, backend_dst, src, dst))
 }
@@ -490,49 +459,45 @@ ggml_backend_tensor_copy_async <- function(backend_src, backend_dst, src, dst) {
 # Buffer Management
 # ============================================================================
 
-#' Clear buffer memory
+#' Backend Buffer Operations
 #' @param buffer External pointer to buffer
 #' @param value Byte value to fill with (default 0)
 #' @return NULL invisibly
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_buffer_clear <- function(buffer, value = 0L) {
  invisible(.Call("R_ggml_backend_buffer_clear", buffer, as.integer(value)))
 }
 
-#' Set buffer usage hint
-#' @param buffer External pointer to buffer
+#' @rdname ggml_backend_buffer_clear
+#' @details \code{ggml_backend_buffer_set_usage()}: 
+#' Returns: NULL invisibly
 #' @param usage Usage constant (use ggml_backend_buffer_usage_* functions)
-#' @return NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_buffer_set_usage <- function(buffer, usage) {
  invisible(.Call("R_ggml_backend_buffer_set_usage", buffer, as.integer(usage)))
 }
 
-#' Get buffer usage
-#' @param buffer External pointer to buffer
-#' @return Usage constant
+#' @rdname ggml_backend_buffer_clear
+#' @details \code{ggml_backend_buffer_get_usage()}: 
+#' Returns: Usage constant
 #' @export
-#' @family backend
 ggml_backend_buffer_get_usage <- function(buffer) {
  .Call("R_ggml_backend_buffer_get_usage", buffer)
 }
 
-#' Reset buffer
-#' @param buffer External pointer to buffer
-#' @return NULL invisibly
+#' @rdname ggml_backend_buffer_clear
+#' @details \code{ggml_backend_buffer_reset()}: 
+#' Returns: NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_buffer_reset <- function(buffer) {
  invisible(.Call("R_ggml_backend_buffer_reset", buffer))
 }
 
-#' Check if buffer is host memory
-#' @param buffer External pointer to buffer
-#' @return Logical indicating if buffer is in host memory
+#' @rdname ggml_backend_buffer_clear
+#' @details \code{ggml_backend_buffer_is_host()}: 
+#' Returns: Logical indicating if buffer is in host memory
 #' @export
-#' @family backend
 ggml_backend_buffer_is_host <- function(buffer) {
  .Call("R_ggml_backend_buffer_is_host", buffer)
 }
@@ -541,30 +506,29 @@ ggml_backend_buffer_is_host <- function(buffer) {
 # Direct Backend Initialization
 # ============================================================================
 
-#' Initialize backend by name
+#' Backend Initialization
 #' @param name Backend name (e.g. "CPU", "Vulkan")
 #' @param params Optional parameters string
 #' @return External pointer to backend, or NULL on failure
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_init_by_name <- function(name, params = NULL) {
  .Call("R_ggml_backend_init_by_name", as.character(name), params)
 }
 
-#' Initialize backend by type
+#' @rdname ggml_backend_init_by_name
+#' @details \code{ggml_backend_init_by_type()}: 
+#' Returns: External pointer to backend, or NULL on failure
 #' @param type Device type constant
-#' @param params Optional parameters string
-#' @return External pointer to backend, or NULL on failure
 #' @export
-#' @family backend
 ggml_backend_init_by_type <- function(type, params = NULL) {
  .Call("R_ggml_backend_init_by_type", as.integer(type), params)
 }
 
-#' Initialize best available backend
-#' @return External pointer to backend (GPU if available, otherwise CPU)
+#' @rdname ggml_backend_init_by_name
+#' @details \code{ggml_backend_init_best()}: 
+#' Returns: External pointer to backend (GPU if available, otherwise CPU)
 #' @export
-#' @family backend
 ggml_backend_init_best <- function() {
  .Call("R_ggml_backend_init_best")
 }
@@ -573,7 +537,7 @@ ggml_backend_init_best <- function() {
 #' @param backend External pointer to backend
 #' @return NULL invisibly
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_synchronize <- function(backend) {
  invisible(.Call("R_ggml_backend_synchronize", backend))
 }
@@ -582,7 +546,7 @@ ggml_backend_synchronize <- function(backend) {
 #' @param backend External pointer to backend
 #' @return External pointer to device
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_get_device <- function(backend) {
  .Call("R_ggml_backend_get_device", backend)
 }
@@ -600,7 +564,7 @@ ggml_backend_get_device <- function(backend) {
 #' @param graph External pointer to computation graph
 #' @return Integer status code (0 = success)
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 #' @examples
 #' \donttest{
 #' cpu <- ggml_backend_cpu_init()
@@ -624,7 +588,7 @@ ggml_backend_graph_compute_async <- function(backend, graph) {
 # Multi-buffer Operations
 # ============================================================================
 
-#' Allocate multi-buffer
+#' Backend Multi-buffers
 #'
 #' Creates a buffer that combines multiple backend buffers into one.
 #' Useful for managing memory across different backends.
@@ -632,7 +596,7 @@ ggml_backend_graph_compute_async <- function(backend, graph) {
 #' @param buffers List of backend buffer external pointers
 #' @return External pointer to multi-buffer
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 #' @examples
 #' \donttest{
 #' cpu <- ggml_backend_cpu_init()
@@ -655,23 +619,20 @@ ggml_backend_multi_buffer_alloc_buffer <- function(buffers) {
   .Call("R_ggml_backend_multi_buffer_alloc_buffer", buffers)
 }
 
-#' Check if buffer is a multi-buffer
-#'
+#' @rdname ggml_backend_multi_buffer_alloc_buffer
+#' @details \code{ggml_backend_buffer_is_multi_buffer()}: 
+#' Returns: Logical indicating if buffer is a multi-buffer
 #' @param buffer External pointer to buffer
-#' @return Logical indicating if buffer is a multi-buffer
 #' @export
-#' @family backend
 ggml_backend_buffer_is_multi_buffer <- function(buffer) {
   .Call("R_ggml_backend_buffer_is_multi_buffer", buffer)
 }
 
-#' Set usage for all buffers in a multi-buffer
-#'
-#' @param buffer External pointer to multi-buffer
+#' @rdname ggml_backend_multi_buffer_alloc_buffer
+#' @details \code{ggml_backend_multi_buffer_set_usage()}: 
+#' Returns: NULL invisibly
 #' @param usage Usage constant (from ggml_backend_buffer_usage_*)
-#' @return NULL invisibly
 #' @export
-#' @family backend
 ggml_backend_multi_buffer_set_usage <- function(buffer, usage) {
   invisible(.Call("R_ggml_backend_multi_buffer_set_usage", buffer,
                   as.integer(usage)))
@@ -689,7 +650,7 @@ ggml_backend_multi_buffer_set_usage <- function(buffer, usage) {
 #' @param reg External pointer to backend registry
 #' @return NULL invisibly
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_register <- function(reg) {
   invisible(.Call("R_ggml_backend_register", reg))
 }
@@ -702,7 +663,7 @@ ggml_backend_register <- function(reg) {
 #' @param device External pointer to device
 #' @return NULL invisibly
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_device_register <- function(device) {
   invisible(.Call("R_ggml_backend_device_register", device))
 }
@@ -753,7 +714,7 @@ ggml_backend_device_register <- function(device) {
 #'   defaults to the function's enclosing environment.
 #' @return External pointer to the meta \code{ggml_backend_dev_t}.
 #' @export
-#' @family backend
+#' @seealso \link{ggmlR-backend}
 ggml_backend_meta_device <- function(devs, split_fn, env = environment(split_fn)) {
   stopifnot(is.list(devs), length(devs) >= 1L)
   stopifnot(is.function(split_fn))

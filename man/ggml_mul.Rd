@@ -2,11 +2,14 @@
 % Please edit documentation in R/ggml.R, R/operations.R
 \name{ggml_mul}
 \alias{ggml_mul}
+\alias{ggml_mul_inplace}
 \title{Multiply tensors}
 \usage{
 ggml_mul(ctx, a, b)
 
 ggml_mul(ctx, a, b)
+
+ggml_mul_inplace(ctx, a, b)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -22,6 +25,9 @@ Tensor representing the multiplication operation
 }
 \description{
 Creates a graph node for element-wise multiplication.
+}
+\details{
+\code{ggml_mul_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 }
 \examples{
 \donttest{

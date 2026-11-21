@@ -2,9 +2,12 @@
 % Please edit documentation in R/backend.R
 \name{ggml_backend_dev_buffer_type}
 \alias{ggml_backend_dev_buffer_type}
-\title{Get the default buffer type of a device}
+\alias{ggml_backend_dev_host_buffer_type}
+\title{Backend Device Buffer Types}
 \usage{
 ggml_backend_dev_buffer_type(device)
+
+ggml_backend_dev_host_buffer_type(device)
 }
 \arguments{
 \item{device}{External pointer to device}
@@ -20,6 +23,14 @@ argument to \code{\link{ggml_backend_dev_supports_buft}}.
 \details{
 The buffer type is owned by the backend and lives for as long as the backend
 does; the returned external pointer has no finalizer and must not be freed.
+
+\code{ggml_backend_dev_host_buffer_type()}: Returns the buffer type used for pinned host memory, which allows faster
+host-device transfers. Many devices — including the CPU backend — have no
+such buffer type and return NULL.
+
+As with \code{\link{ggml_backend_dev_buffer_type}}, the returned pointer is
+owned by the backend and must not be freed.
+Returns: External pointer to the host buffer type, or NULL if unavailable
 }
 \examples{
 \donttest{
@@ -30,68 +41,5 @@ ggml_backend_dev_supports_buft(dev, buft)  # TRUE: a device supports its own
 }
 }
 \seealso{
-Other backend: 
-\code{\link{ggml_backend_buffer_clear}()},
-\code{\link{ggml_backend_buffer_get_usage}()},
-\code{\link{ggml_backend_buffer_is_host}()},
-\code{\link{ggml_backend_buffer_is_multi_buffer}()},
-\code{\link{ggml_backend_buffer_reset}()},
-\code{\link{ggml_backend_buffer_set_usage}()},
-\code{\link{ggml_backend_buffer_usage_any}()},
-\code{\link{ggml_backend_buffer_usage_compute}()},
-\code{\link{ggml_backend_buffer_usage_weights}()},
-\code{\link{ggml_backend_buft_get_alignment}()},
-\code{\link{ggml_backend_buft_get_max_size}()},
-\code{\link{ggml_backend_buft_is_host}()},
-\code{\link{ggml_backend_buft_name}()},
-\code{\link{ggml_backend_dev_by_name}()},
-\code{\link{ggml_backend_dev_by_type}()},
-\code{\link{ggml_backend_dev_count}()},
-\code{\link{ggml_backend_dev_description}()},
-\code{\link{ggml_backend_dev_get}()},
-\code{\link{ggml_backend_dev_get_props}()},
-\code{\link{ggml_backend_dev_host_buffer_type}()},
-\code{\link{ggml_backend_dev_init}()},
-\code{\link{ggml_backend_dev_memory}()},
-\code{\link{ggml_backend_dev_name}()},
-\code{\link{ggml_backend_dev_offload_op}()},
-\code{\link{ggml_backend_dev_supports_buft}()},
-\code{\link{ggml_backend_dev_supports_op}()},
-\code{\link{ggml_backend_dev_type}()},
-\code{\link{ggml_backend_device_register}()},
-\code{\link{ggml_backend_device_type_accel}()},
-\code{\link{ggml_backend_device_type_cpu}()},
-\code{\link{ggml_backend_device_type_gpu}()},
-\code{\link{ggml_backend_device_type_igpu}()},
-\code{\link{ggml_backend_event_free}()},
-\code{\link{ggml_backend_event_new}()},
-\code{\link{ggml_backend_event_record}()},
-\code{\link{ggml_backend_event_synchronize}()},
-\code{\link{ggml_backend_event_wait}()},
-\code{\link{ggml_backend_get_device}()},
-\code{\link{ggml_backend_graph_compute_async}()},
-\code{\link{ggml_backend_graph_plan_compute}()},
-\code{\link{ggml_backend_graph_plan_create}()},
-\code{\link{ggml_backend_graph_plan_free}()},
-\code{\link{ggml_backend_init_best}()},
-\code{\link{ggml_backend_init_by_name}()},
-\code{\link{ggml_backend_init_by_type}()},
-\code{\link{ggml_backend_load}()},
-\code{\link{ggml_backend_load_all}()},
-\code{\link{ggml_backend_meta_device}()},
-\code{\link{ggml_backend_multi_buffer_alloc_buffer}()},
-\code{\link{ggml_backend_multi_buffer_set_usage}()},
-\code{\link{ggml_backend_reg_by_name}()},
-\code{\link{ggml_backend_reg_count}()},
-\code{\link{ggml_backend_reg_dev_count}()},
-\code{\link{ggml_backend_reg_dev_get}()},
-\code{\link{ggml_backend_reg_get}()},
-\code{\link{ggml_backend_reg_name}()},
-\code{\link{ggml_backend_register}()},
-\code{\link{ggml_backend_synchronize}()},
-\code{\link{ggml_backend_tensor_copy_async}()},
-\code{\link{ggml_backend_tensor_get_async}()},
-\code{\link{ggml_backend_tensor_set_async}()},
-\code{\link{ggml_backend_unload}()}
+\link{ggmlR-backend}
 }
-\concept{backend}

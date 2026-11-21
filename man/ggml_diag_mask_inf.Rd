@@ -2,9 +2,12 @@
 % Please edit documentation in R/operations.R
 \name{ggml_diag_mask_inf}
 \alias{ggml_diag_mask_inf}
+\alias{ggml_diag_mask_inf_inplace}
 \title{Diagonal Mask with -Inf (Graph)}
 \usage{
 ggml_diag_mask_inf(ctx, a, n_past)
+
+ggml_diag_mask_inf_inplace(ctx, a, n_past)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -28,6 +31,8 @@ softmax, they contribute 0 attention weight.
 
 The n_past parameter allows for KV-cache scenarios where the diagonal
 needs to be shifted to account for previously processed tokens.
+
+\code{ggml_diag_mask_inf_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 }
 \examples{
 \donttest{

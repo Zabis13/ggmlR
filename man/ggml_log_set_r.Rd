@@ -2,9 +2,24 @@
 % Please edit documentation in R/logging.R
 \name{ggml_log_set_r}
 \alias{ggml_log_set_r}
-\title{Enable R-compatible GGML Logging}
+\alias{ggml_log_set_default}
+\alias{ggml_log_is_r_enabled}
+\alias{ggml_set_abort_callback_r}
+\alias{ggml_set_abort_callback_default}
+\alias{ggml_abort_is_r_enabled}
+\title{Logging and Abort Callbacks}
 \usage{
 ggml_log_set_r()
+
+ggml_log_set_default()
+
+ggml_log_is_r_enabled()
+
+ggml_set_abort_callback_r()
+
+ggml_set_abort_callback_default()
+
+ggml_abort_is_r_enabled()
 }
 \value{
 NULL invisibly
@@ -14,18 +29,36 @@ Redirects GGML log messages to R's message system:
 - INFO/DEBUG messages go to stdout (via Rprintf)
 - WARN/ERROR messages go to stderr (via REprintf)
 }
+\details{
+\code{ggml_log_set_default()}: Restores GGML to default logging behavior (stderr output).
+Returns: NULL invisibly
+
+\code{ggml_log_is_r_enabled()}: 
+Returns: Logical indicating if R-compatible logging is active
+
+\code{ggml_set_abort_callback_r()}: Converts GGML abort calls into R errors (via Rf_error).
+This allows R to catch GGML failures with tryCatch.
+Returns: NULL invisibly
+
+\code{ggml_set_abort_callback_default()}: Restores GGML to default abort behavior (prints to stderr and aborts).
+Returns: NULL invisibly
+
+\code{ggml_abort_is_r_enabled()}: 
+Returns: Logical indicating if R-compatible abort handling is active
+}
 \examples{
 \donttest{
 ggml_log_set_r()
 # Now GGML messages will appear in R console
 }
+\donttest{
+ggml_set_abort_callback_r()
+# Now GGML aborts will become R errors
+result <- tryCatch({
+  # ... ggml operations that might fail ...
+}, error = function(e) {
+  message("GGML error caught: ", e$message)
+})
 }
-\seealso{
-Other logging: 
-\code{\link{ggml_abort_is_r_enabled}()},
-\code{\link{ggml_log_is_r_enabled}()},
-\code{\link{ggml_log_set_default}()},
-\code{\link{ggml_set_abort_callback_default}()},
-\code{\link{ggml_set_abort_callback_r}()}
 }
 \concept{logging}

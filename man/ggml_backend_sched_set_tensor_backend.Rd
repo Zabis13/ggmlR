@@ -2,9 +2,12 @@
 % Please edit documentation in R/scheduler.R
 \name{ggml_backend_sched_set_tensor_backend}
 \alias{ggml_backend_sched_set_tensor_backend}
-\title{Set tensor backend assignment}
+\alias{ggml_backend_sched_get_tensor_backend}
+\title{Scheduler Tensor Backend Assignment}
 \usage{
 ggml_backend_sched_set_tensor_backend(sched, tensor, backend)
+
+ggml_backend_sched_get_tensor_backend(sched, tensor)
 }
 \arguments{
 \item{sched}{Scheduler pointer}
@@ -19,4 +22,13 @@ NULL (invisible)
 \description{
 Manually assigns a specific tensor to run on a specific backend.
 This overrides automatic scheduling.
+}
+\details{
+\code{ggml_backend_sched_get_tensor_backend()}: Returns which backend a tensor is assigned to.
+
+Assignments are only meaningful once the scheduler has actually placed the
+graph --- that is, after \code{\link{ggml_backend_sched_graph_compute}}.
+After \code{\link{ggml_backend_sched_reserve}} alone, or for a tensor from a
+different graph, the assignment may not exist and this returns \code{NULL}.
+Returns: Backend pointer, or NULL if the tensor is not assigned to one
 }

@@ -2,9 +2,12 @@
 % Please edit documentation in R/operations.R
 \name{ggml_clamp}
 \alias{ggml_clamp}
+\alias{ggml_clamp_inplace}
 \title{Clamp (Graph)}
 \usage{
 ggml_clamp(ctx, a, min_val, max_val)
+
+ggml_clamp_inplace(ctx, a, min_val, max_val)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -20,6 +23,9 @@ Tensor with values clamped to [min_val, max_val]
 }
 \description{
 Creates a graph node for clamping values to a range: clamp(x, min, max)
+}
+\details{
+\code{ggml_clamp_inplace()} is the in-place variant: it modifies its input and returns a view of it.
 }
 \section{Inference only}{
 

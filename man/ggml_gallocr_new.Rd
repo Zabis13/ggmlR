@@ -2,9 +2,33 @@
 % Please edit documentation in R/graph.R
 \name{ggml_gallocr_new}
 \alias{ggml_gallocr_new}
-\title{Create Graph Allocator}
+\alias{ggml_gallocr_free}
+\alias{ggml_gallocr_reserve}
+\alias{ggml_gallocr_alloc_graph}
+\alias{ggml_gallocr_get_buffer_size}
+\alias{ggml_gallocr_new_buft}
+\title{Graph Allocator}
 \usage{
 ggml_gallocr_new()
+
+ggml_gallocr_free(galloc)
+
+ggml_gallocr_reserve(galloc, graph)
+
+ggml_gallocr_alloc_graph(galloc, graph)
+
+ggml_gallocr_get_buffer_size(galloc, buffer_id = 0L)
+
+ggml_gallocr_new_buft(buft)
+}
+\arguments{
+\item{galloc}{Graph allocator object}
+
+\item{graph}{Graph object}
+
+\item{buffer_id}{Buffer ID (default: 0 for single-buffer allocator)}
+
+\item{buft}{Buffer type (e.g. from \code{ggml_backend_get_default_buffer_type()})}
 }
 \value{
 Graph allocator object (external pointer)
@@ -12,6 +36,25 @@ Graph allocator object (external pointer)
 \description{
 Creates a new graph allocator for efficient memory management.
 The allocator can automatically allocate and reuse memory for graph tensors.
+}
+\details{
+\code{ggml_gallocr_free()}: Frees a graph allocator and all associated buffers.
+Returns: No return value, called for side effects
+
+\code{ggml_gallocr_reserve()}: Pre-allocates memory for a graph. This is optional but recommended
+when running the same graph multiple times to avoid reallocation.
+Returns: TRUE on success, FALSE on failure
+
+\code{ggml_gallocr_alloc_graph()}: Allocates memory for all tensors in the computation graph.
+This must be called before computing the graph.
+Returns: TRUE on success, FALSE on failure
+
+\code{ggml_gallocr_get_buffer_size()}: Returns the size of the buffer used by the graph allocator.
+Returns: Size in bytes
+
+\code{ggml_gallocr_new_buft()}: Like \code{\link{ggml_gallocr_new}}, but allocates from the given buffer type
+rather than the CPU default -- so a graph can be allocated in GPU memory.
+Returns: Graph allocator object (external pointer)
 }
 \examples{
 \donttest{
@@ -24,6 +67,22 @@ graph <- ggml_build_forward_expand(ctx, b)
 
 # Allocate graph
 ggml_gallocr_alloc_graph(galloc, graph)
+
+ggml_gallocr_free(galloc)
+ggml_free(ctx)
+}
+\donttest{
+ctx <- ggml_init(16 * 1024 * 1024)
+galloc <- ggml_gallocr_new()
+
+# Create graph
+a <- ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10)
+b <- ggml_relu(ctx, a)
+graph <- ggml_build_forward_expand(ctx, b)
+
+# Allocate and compute
+ggml_gallocr_alloc_graph(galloc, graph)
+ggml_graph_compute(ctx, graph)
 
 ggml_gallocr_free(galloc)
 ggml_free(ctx)
