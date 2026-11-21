@@ -47,11 +47,19 @@ jobs:
           r-version: ${{ matrix.config.r }}
           use-public-rspm: true
 
+      # rchk only checks C-level PROTECT usage, so Suggests are not needed there.
+      # Installing them pulls the Bioconductor chain (IRanges, S4Arrays), whose
+      # OpenMP build links libomp.so.5, which the rchk image does not provide.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
-          extra-packages: any::rcmdcheck
+          dependencies: ${{ matrix.config.r == 'rchk' && '"hard"' || '"all"' }}
+          extra-packages: ${{ matrix.config.r == 'rchk' && 'any::rcmdcheck, any::testthat' || 'any::rcmdcheck' }}
           needs: check
 
       - uses: r-lib/actions/check-r-package@v2
+        env:
+          _R_CHECK_FORCE_SUGGESTS_: ${{ matrix.config.r == 'rchk' && 'false' || 'true' }}
         with:
           upload-snapshots: true
+          build_args: ${{ matrix.config.r == 'rchk' && 'c("--no-manual", "--no-build-vignettes")' || '"--no-manual"' }}
+          args: ${{ matrix.config.r == 'rchk' && 'c("--no-manual", "--as-cran", "--ignore-vignettes")' || 'c("--no-manual", "--as-cran")' }}

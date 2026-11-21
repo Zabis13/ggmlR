@@ -49,3 +49,4 @@ inst/scripts/ref_depth/
 .claude/
 ab_split_inputs_*/
 bench_vk_current_ops_*.csv
+tests/testthat/_problems/
