@@ -3683,13 +3683,13 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
         if (n_missing > 0) {
             if (c->first_failed_node[0]) {
                 snprintf(g_build_error, sizeof(g_build_error),
-                         "%d of %d model outputs cannot be built (first: '%s'); "
-                         "first failure: node '%s' (%s)",
+                         "%d of %d model outputs cannot be built (first: '%.150s'); "
+                         "first failure: node '%.150s' (%.60s)",
                          n_missing, onnx->n_outputs, missing,
                          c->first_failed_node, c->first_failed_op);
             } else {
                 snprintf(g_build_error, sizeof(g_build_error),
-                         "%d of %d model outputs cannot be built (first: '%s')",
+                         "%d of %d model outputs cannot be built (first: '%.150s')",
                          n_missing, onnx->n_outputs, missing);
             }
             goto fail;

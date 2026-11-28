@@ -469,33 +469,129 @@ test_that("graph backward matches closures for elementwise mul and dropout", {
   expect_lt(grad_maxdiff(r), 1e-3)
 })
 
-test_that("ag_batch_norm still falls back to closures", {
+# ---------------------------------------------------------------------------
+# ag_batch_norm: the normalisation is one "batch_norm" node (ggml_norm over
+# the batch axis / ggml_norm_back; g / std in eval), gamma and beta plain
+# mul/add, running statistics in an [F, 2] ag_buffer updated in place.
+# ---------------------------------------------------------------------------
+
+bn_x0 <- function() { set.seed(81L); matrix(runif(24, -1, 2), 4, 6) }
+bn_y0 <- function() { set.seed(82L); matrix(runif(24, -1, 1), 4, 6) }
+
+test_that("graph backward for batch_norm matches closures in train and eval", {
   skip_if_no_gpu()
   ag_device("gpu")
   on.exit(ag_device("cpu"), add = TRUE)
 
-  # Documents a known gap rather than a desired behaviour: batch_norm is a
-  # hybrid -- its normalisation is one monolithic closure (grad_out / std) and
-  # its gamma/beta go through broadcast helpers that record no op either. Two
-  # of its four tape nodes are therefore uncovered. When an emitter is added,
-  # this expectation flips to "graph"; until then the fallback is what keeps
-  # its gradients right.
-  build <- function() {
-    set.seed(83L)
-    bn <- ag_batch_norm(4L)
-    x  <- ag_tensor(matrix(runif(24, -1, 1), 4, 6))
-    y  <- ag_tensor(matrix(runif(24, -1, 1), 4, 6))
-    loss <- NULL
-    with_grad_tape({
-      loss <- ag_mse_loss(bn$forward(x), y)
-    })
-    list(loss = loss, params = list(bn$gamma, bn$beta))
+  # x is a parameter too, so dx (the part with the batch statistics'
+  # dependence on x in train mode) is compared, not only dgamma/dbeta.
+  for (mode in c("train", "eval")) {
+    build <- function() {
+      set.seed(83L)
+      bn <- ag_batch_norm(4L)
+      if (mode == "eval") {
+        bn$running_mean <- matrix(c(0.5, -0.2, 1.3, 0), 4, 1)
+        bn$running_var  <- matrix(c(2.0, 0.5, 4.0, 1), 4, 1)
+        ag_eval(bn)
+      }
+      x <- ag_param(bn_x0())
+      loss <- NULL
+      with_grad_tape({ loss <- ag_mse_loss(bn$forward(x), ag_tensor(bn_y0())) })
+      list(loss = loss, params = list(x, bn$gamma, bn$beta))
+    }
+    r <- both_paths(build)
+    expect_identical(r$got_path, "graph", info = mode)
+    expect_lt(grad_maxdiff(r), 1e-4)
   }
+})
 
+test_that("batch_norm on the GPU: forward and running statistics match the CPU", {
+  skip_if_no_gpu()
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # Three training steps, then one eval forward, on each device. The
+  # statistics must move identically (f32 on the device: a tolerance), and the
+  # device buffer must keep its address -- the in-place update a captured
+  # graph relies on.
+  run <- function(dev) {
+    ag_device(dev)
+    set.seed(84L)
+    bn <- ag_batch_norm(4L, momentum = 0.3)
+    ptr0 <- bn$stats$core$ptr
+    outs <- list()
+    for (k in 1:3) {
+      x <- ag_tensor(bn_x0() * k)
+      outs[[k]] <- .bwd_as_matrix(ggmlR:::.ag_data(bn$forward(x)))
+    }
+    ag_eval(bn)
+    outs[[4]] <- .bwd_as_matrix(ggmlR:::.ag_data(bn$forward(ag_tensor(bn_x0()))))
+    list(outs = outs, rm = bn$running_mean, rv = bn$running_var,
+         same_ptr = identical(ptr0, bn$stats$core$ptr))
+  }
+  cpu <- run("cpu")
+  gpu <- run("gpu")
+  for (k in seq_along(cpu$outs))
+    expect_equal(gpu$outs[[k]], cpu$outs[[k]], tolerance = 1e-4,
+                 ignore_attr = TRUE, info = paste("forward", k))
+  expect_equal(gpu$rm, cpu$rm, tolerance = 1e-5, ignore_attr = TRUE)
+  expect_equal(gpu$rv, cpu$rv, tolerance = 1e-5, ignore_attr = TRUE)
+  expect_true(gpu$same_ptr)
+})
+
+test_that("batch_norm running statistics assigned on the GPU read back", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # $running_mean / $running_var are views of the device buffer: ag_save()
+  # and ag_load() go through them.
+  bn <- ag_batch_norm(3L)
+  bn$running_mean <- matrix(c(0.5, -0.25, 1.5), 3, 1)
+  bn$running_var  <- matrix(c(2, 0.5, 4), 3, 1)
+  expect_equal(bn$running_mean, matrix(c(0.5, -0.25, 1.5), 3, 1), ignore_attr = TRUE)
+  expect_equal(bn$running_var,  matrix(c(2, 0.5, 4), 3, 1), ignore_attr = TRUE)
+})
+
+test_that("batch_norm statistics are written under ag_graph_mode too", {
+  skip_if_no_gpu()
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # Under graph mode the write is queued with the forward. It once got lost
+  # there (statistics stuck at 0 / 1). Two forwards in a row, no read between:
+  # the second reads the buffer while the first write may still be queued.
+  run <- function(dev, graph) {
+    ag_device(dev)
+    old <- ag_graph_mode(graph); on.exit(ag_graph_mode(old))
+    set.seed(86L)
+    bn <- ag_batch_norm(4L, momentum = 0.3)
+    bn$forward(ag_tensor(bn_x0()))
+    bn$forward(ag_tensor(bn_x0() * 2))
+    list(rm = bn$running_mean, rv = bn$running_var)
+  }
+  cpu <- run("cpu", FALSE)
+  gpu <- run("gpu", TRUE)
+  expect_equal(gpu$rm, cpu$rm, tolerance = 1e-5, ignore_attr = TRUE)
+  expect_equal(gpu$rv, cpu$rv, tolerance = 1e-5, ignore_attr = TRUE)
+})
+
+test_that("graph backward for linear -> batch_norm -> linear matches closures", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  build <- function() {
+    set.seed(85L)
+    m <- ag_sequential(ag_linear(5L, 4L, activation = "relu"),
+                       ag_batch_norm(4L), ag_linear(4L, 3L))
+    x <- ag_tensor(matrix(runif(40, -1, 1), 5, 8))
+    y <- ag_tensor(matrix(runif(24, -1, 1), 3, 8))
+    loss <- NULL
+    with_grad_tape({ loss <- ag_mse_loss(m$forward(x), y) })
+    list(loss = loss, params = unname(m$parameters()))
+  }
   r <- both_paths(build)
-
-  expect_match(r$got_path, "^closures \\(")
-  expect_lt(grad_maxdiff(r), 1e-6)
+  expect_identical(r$got_path, "graph")
+  expect_lt(grad_maxdiff(r), 1e-4)
 })
 
 test_that("the graph path is off unless enabled", {
@@ -672,6 +768,90 @@ test_that("graph backward for pow at x <= 0 behaves like the closure", {
                  .bwd_as_matrix(r$ref_params[[1]]$grad), tolerance = 1e-5,
                  info = paste("p =", p))
   }
+})
+
+# ---------------------------------------------------------------------------
+# ag_embedding: forward ggml_get_rows on the resident table, backward one
+# ggml_get_rows_back (float atomics on Vulkan). The graph path is taken only
+# when the device runs GET_ROWS_BACK; otherwise the tape must decline by name
+# -- the graph has no scheduler, so a refused op would have no CPU to go to.
+# ---------------------------------------------------------------------------
+
+grb_ok <- function() ggmlR:::.ag_bwd_get_rows_back_ok()
+
+# Indices with repeats (3 twice, 0 and 6 twice) and both ends of the vocab.
+emb_idx <- c(0L, 6L, 3L, 3L, 0L, 6L, 2L)
+
+test_that("ag_embedding forward on the GPU equals the CPU lookup", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  set.seed(71L)
+  emb <- ag_embedding(7L, 4L)
+  W   <- .bwd_as_matrix(ggmlR:::.ag_data(emb$weight))
+  out <- emb$forward(emb_idx)
+  expect_identical(out$device, "gpu")
+  expect_equal(.bwd_as_matrix(ggmlR:::.ag_data(out)), W[, emb_idx + 1L],
+               tolerance = 1e-6, ignore_attr = TRUE)
+  expect_error(emb$forward(c(0L, 7L)), "0\\.\\.6")
+  expect_error(emb$forward(c(-1L, 2L)), "0\\.\\.6")
+  expect_error(emb$forward(c(0.5, 2)), "0\\.\\.6")
+})
+
+test_that("graph backward for embedding matches closures and a scatter-add", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # loss = sum(out * C): dW[, j] is the sum of C's columns whose index is j
+  # -- an exact reference independent of both paths, unused rows exactly 0.
+  set.seed(72L)
+  C0 <- matrix(runif(4 * length(emb_idx), -1, 1), 4, length(emb_idx))
+  ref <- matrix(0, 4, 7)
+  for (k in seq_along(emb_idx))
+    ref[, emb_idx[k] + 1L] <- ref[, emb_idx[k] + 1L] + C0[, k]
+
+  build <- function() {
+    set.seed(73L)
+    emb <- ag_embedding(7L, 4L)
+    loss <- NULL
+    with_grad_tape({
+      loss <- ag_sum(ag_mul(emb$forward(emb_idx), ag_tensor(C0)))
+    })
+    list(loss = loss, params = list(emb$weight))
+  }
+  r <- both_paths(build)
+  if (grb_ok()) {
+    expect_identical(r$got_path, "graph")
+  } else {
+    expect_match(r$got_path, "GET_ROWS_BACK")
+  }
+  # atomics: the order of the sums varies, so a tolerance, not identity
+  expect_lt(grad_maxdiff(r), 1e-5)
+  expect_equal(.bwd_as_matrix(r$got_params[[1]]$grad), ref,
+               tolerance = 1e-5, ignore_attr = TRUE)
+})
+
+test_that("graph backward for embedding inside a model matches closures", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # embedding -> linear -> mse: the scatter-add receives a gradient computed
+  # in the graph (mul_mat), and the table and the dense layer train together.
+  build <- function() {
+    set.seed(74L)
+    emb <- ag_embedding(7L, 4L)
+    lin <- ag_linear(4L, 3L)
+    y   <- ag_tensor(matrix(runif(3 * length(emb_idx), -1, 1), 3, length(emb_idx)))
+    loss <- NULL
+    with_grad_tape({ loss <- ag_mse_loss(lin$forward(emb$forward(emb_idx)), y) })
+    list(loss = loss, params = c(list(emb$weight), lin$parameters()))
+  }
+  r <- both_paths(build)
+  if (grb_ok()) expect_identical(r$got_path, "graph")
+  expect_lt(grad_maxdiff(r), 1e-4)
 })
 
 test_that("graph backward for sub matches closures and finite differences", {

@@ -1294,7 +1294,7 @@ GGML_PREC_F32 <- 10L
       op_fn    = function(ctx, ptrs) {
         x <- ptrs[[1L]]
         if (n == 0L)      ggml_fill(ctx, x, 1)
-        else if (n == 1L) ggml_scale(ctx, x, 1)
+        else if (n == 1L) ggml_dup(ctx, x)   # not ggml_scale(x, 1): see the cpy note in the Adam step
         else              .ag_ggml_int_pow(ctx, x, n)
       },
       inputs   = list(x_data),

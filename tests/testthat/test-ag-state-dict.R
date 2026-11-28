@@ -75,6 +75,13 @@ test_that("resume equals continuing, bit for bit on the CPU", {
 test_that("resume equals continuing on the GPU, and across devices", {
   skip_if_no_gpu_sd()
   on.exit(ag_device("cpu"), add = TRUE)
+  # f32 tiles in the GPU matmul: the default kernel keeps f16 tiles past 8
+  # columns (~1e-3 here), enough to flip a relu whose pre-activation sits
+  # near 0 (measured: +5e-5 on the CPU, -2e-4 on the GPU), and one flipped
+  # mask moves dW1 by 0.16. The test is about the state crossing devices,
+  # not the default matmul precision.
+  old_prec <- ag_matmul_precision("f32")
+  on.exit(ag_matmul_precision(old_prec), add = TRUE)
   for (nm in names(opt_makers)) {
     for (path in list(c("gpu", "gpu"), c("cpu", "gpu"), c("gpu", "cpu"))) {
       r <- resume_vs_continue(opt_makers[[nm]], path[1L], path[2L])

@@ -273,7 +273,25 @@ ag_backward_resident <- function(on = TRUE) {
                        "transpose", "softmax", "scale", "mul", "flash_attn",
                        "sub", "log", "sum", "log_softmax", "slice_rows",
                        "concat_rows", "silu", "rms_norm", "conv2d", "reshape", "permute", "conv_transpose2d",
-                       "layer_norm", "pow")
+                       "layer_norm", "pow", "embedding", "batch_norm")
+
+# Does the current device backend run GGML_OP_GET_ROWS_BACK (ag_embedding's
+# rule)? On Vulkan it needs float atomics, which not every device has. Asked
+# once per backend with a shape-only probe node, cached.
+.ag_bwd_get_rows_back_ok <- function() {
+  backend <- .ag_device_state$backend
+  cache <- .ag_bwd$grb_ok
+  if (!is.null(cache) && identical(cache$backend, backend)) return(cache$ok)
+  ctx <- ggml_init(1024 * 1024, no_alloc = TRUE)
+  on.exit(ggml_free(ctx), add = TRUE)
+  g   <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4L, 3L)
+  ids <- ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 3L)
+  shp <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 4L, 5L)
+  op  <- ggml_get_rows_back(ctx, g, ids, shp)
+  ok  <- isTRUE(ggml_backend_dev_supports_op(ggml_backend_get_device(backend), op))
+  .ag_bwd$grb_ok <- list(backend = backend, ok = ok)
+  ok
+}
 
 # Can this tape run as one graph?
 #
@@ -295,6 +313,10 @@ ag_backward_resident <- function(on = TRUE) {
   for (nd in nodes) {
     if (is.null(nd$op)) return("tape node has no op record")
     if (!nd$op %in% .AG_BWD_GRAPH_OPS) return(paste0("unsupported op: ", nd$op))
+    # The graph runs on the device backend alone (no scheduler), so an op the
+    # device refuses has no CPU to go to. GET_ROWS_BACK needs float atomics.
+    if (identical(nd$op, "embedding") && !.ag_bwd_get_rows_back_ok())
+      return("embedding: device has no GET_ROWS_BACK (float atomics)")
   }
 
   # The seed below is a 1x1 ones tensor, so the graph is only correct for a
@@ -682,6 +704,43 @@ ag_backward_profile_report <- function() {
           ggml_scale(ctx, ggml_mul(ctx, g, xp), p)
         }
         accumulate(as.character(x$id), dx)
+      }
+
+    } else if (identical(nd$op, "batch_norm")) {
+      # ag_batch_norm's normalisation (R/ag_layers.R). Train: the forward was
+      # ggml_norm over the batch axis of the transposed x, so the backward is
+      # ggml_norm_back on the transposed g and x, transposed back -- the
+      # batch statistics' dependence on x included, as in the closure.
+      # Eval: the running statistics are constants, dx = g / std, std an
+      # [F, 1] snapshot broadcast over the batch.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad)) {
+        gc <- if (ggml_is_contiguous(g)) g else ggml_cont(ctx, g)
+        dx <- if (identical(nd$mode, "train")) {
+          gt <- ggml_cont(ctx, ggml_transpose(ctx, gc))
+          xt <- ggml_cont(ctx, ggml_transpose(ctx, const(nd$x_snap)))
+          ggml_cont(ctx, ggml_transpose(ctx, ggml_norm_back(ctx, gt, xt, nd$eps)))
+        } else {
+          ggml_div(ctx, gc, const(nd$std_snap))
+        }
+        accumulate(as.character(x$id), dx)
+      }
+
+    } else if (identical(nd$op, "embedding")) {
+      # ag_embedding: out = W[, idx + 1] ([dim, n] from [dim, vocab]). dW is
+      # g scattered back into a zeroed [dim, vocab] table, repeated indices
+      # summing: one ggml_get_rows_back -- on Vulkan the ggmlR shader with
+      # float atomics, so the order of the sums (and the last bits) may vary
+      # between runs. The indices are a constant of the recording, uploaded
+      # as f32 (exact below 2^24, checked in the forward) and cast to I32.
+      # The shape tensor is never computed: get_rows_back reads only its ne.
+      W <- inp$weight
+      if (is_ag_tensor(W) && isTRUE(W$requires_grad)) {
+        n   <- length(nd$idx)
+        gc  <- if (ggml_is_contiguous(g)) g else ggml_cont(ctx, g)
+        ids <- ggml_reshape_1d(ctx, ggml_cast(ctx, const(nd$idx), GGML_TYPE_I32), n)
+        shp <- ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ggml_tensor_shape(gc)[1L], nd$vocab)
+        accumulate(as.character(W$id), ggml_get_rows_back(ctx, gc, ids, shp))
       }
 
     } else if (identical(nd$op, "silu")) {

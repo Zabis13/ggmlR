@@ -424,6 +424,16 @@ ag_capture_set <- function(f, max_grad_norm) {
   })
 }
 
+# Called during a recording by a layer whose state lives in an ag_buffer it
+# reads or writes in the graph (ag_batch_norm): the recording then depends on
+# that buffer as on one declared in `params`. Keyed by buffer id, so a layer
+# used twice in fn notes it once.
+.ag_capture_note_buffer <- function(buf) {
+  if (isTRUE(.ag_capture_reg$recording))
+    .ag_capture_reg$buffers[[buf$core$id]] <- buf
+  invisible(NULL)
+}
+
 # A recording may reference weights (ag_tensor) and device buffers (ag_buffer,
 # read by ag_get_rows): a buffer freed or moved to the host re-records.
 .ag_capture_is_param <- function(p) is_ag_tensor(p) || inherits(p, "ag_buffer")
@@ -434,6 +444,7 @@ ag_capture_set <- function(f, max_grad_norm) {
     identical(cap$backend, st$backend) &&
     identical(cap$p_gen, st$p_ctx_gen) &&
     (is.null(params) || identical(.ag_capture_param_ptrs(params), cap$param_ptrs)) &&
+    identical(.ag_capture_param_ptrs(cap$auto_bufs), cap$auto_ptrs) &&
     (is.null(cap$opt) || identical(.ag_capture_opt_ptrs(cap$opt), cap$opt_ptrs))
 }
 
@@ -606,14 +617,20 @@ ag_capture_set <- function(f, max_grad_norm) {
     .ag_bwd$enabled <- TRUE; .ag_bwd$resident <- TRUE
   }
 
-  # ag_set_rows() during fn adds its write nodes to .ag_capture_reg$effects
+  # ag_set_rows() during fn adds its write nodes to .ag_capture_reg$effects;
+  # a layer that keeps state in an ag_buffer (ag_batch_norm's running
+  # statistics) adds its write there too and notes the buffer in
+  # .ag_capture_reg$buffers, so the recording is checked against it like a
+  # buffer declared in `params`.
   .ag_capture_reg$effects <- list()
+  .ag_capture_reg$buffers <- list()
   .ag_capture_reg$recording <- TRUE
-  on.exit({ .ag_capture_reg$recording <- FALSE; .ag_capture_reg$effects <- list() },
-          add = TRUE)
+  on.exit({ .ag_capture_reg$recording <- FALSE; .ag_capture_reg$effects <- list()
+            .ag_capture_reg$buffers <- list() }, add = TRUE)
   res <- do.call(fn, ins)
   .ag_capture_reg$recording <- FALSE
   effects <- .ag_capture_reg$effects
+  auto_bufs <- unname(.ag_capture_reg$buffers)
   if (!is.null(opt)) .ag_tape$enabled <- FALSE
   single <- is_ag_tensor(res)
   no_out <- is.null(res) || (is.list(res) && !single && !length(res))
@@ -748,6 +765,8 @@ ag_capture_set <- function(f, max_grad_norm) {
   cap$backend    <- st$backend
   cap$p_gen      <- st$p_ctx_gen
   cap$param_ptrs <- if (!is.null(params)) .ag_capture_param_ptrs(params)
+  cap$auto_bufs  <- auto_bufs
+  cap$auto_ptrs  <- .ag_capture_param_ptrs(auto_bufs)
   cap$in_buf     <- in_buf
   cap$in_pos     <- in_pos          # input name -> its elements in in_vals
   cap$in_vals    <- in_vals         # what in_buf holds right now

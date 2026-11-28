@@ -277,3 +277,93 @@ test_that("a non-finite gradient norm is an error and changes nothing", {
   expect_true(is.finite(out$grad_norm[1L]))
   expect_identical(opt$t, before$t + 1L)
 })
+
+# ---------------------------------------------------------------------------
+# ag_batch_norm inside ag_capture_step: the running statistics are written by
+# a node of the recording (ggml_cpy onto the layer's ag_buffer, kept as an
+# effect), so every replay updates them in place; the buffer is noted by the
+# recording and a change to it re-records.
+# ---------------------------------------------------------------------------
+
+bn_cs_model <- function(d) {
+  ps <- list(W1 = ag_param(d$w1), b1 = ag_param(matrix(0, 16L, 1L)),
+             W2 = ag_param(d$w2), b2 = ag_param(matrix(0, 4L, 1L)))
+  bn <- ag_batch_norm(16L, momentum = 0.2)
+  ps <- c(ps, list(gamma = bn$gamma, beta = bn$beta))
+  fn <- function(x, y) {
+    h <- bn$forward(ag_relu(ag_add(ag_matmul(ps$W1, x), ps$b1)))
+    ag_mse_loss(ag_add(ag_matmul(ps$W2, h), ps$b2), y)
+  }
+  list(ps = ps, bn = bn, fn = fn)
+}
+
+bn_cs_run <- function(device, captured, steps = 6L) {
+  ag_device(device)
+  ag_local_mode(graph = TRUE, matmul_precision = "f32")
+  d <- cs_data(); m <- bn_cs_model(d); opt <- cs_opt(m$ps)
+  losses <- numeric(0)
+  if (captured) {
+    train <- ag_capture_step(m$fn, optimizer = opt)
+    on.exit(ag_capture_free(train), add = TRUE)
+    for (k in seq_len(steps)) losses <- c(losses, as.numeric(train(x = d$x, y = d$y)))
+  } else {
+    x <- ag_tensor(d$x); y <- ag_tensor(d$y)
+    for (k in seq_len(steps)) {
+      loss <- NULL
+      with_grad_tape(loss <- m$fn(x, y))
+      opt$step(backward(loss)); opt$zero_grad()
+      losses <- c(losses, as.numeric(as.matrix(loss)))
+    }
+  }
+  list(w = lapply(m$ps, as.matrix), losses = losses,
+       rm = m$bn$running_mean, rv = m$bn$running_var)
+}
+
+test_that("batch_norm in a captured step matches the uncaptured loop and the CPU", {
+  skip_if_no_gpu_cs()
+  on.exit(ag_device("cpu"), add = TRUE)
+  cpu <- bn_cs_run("cpu", FALSE)
+  ref <- bn_cs_run("gpu", FALSE)
+  got <- bn_cs_run("gpu", TRUE)
+  expect_equal(got$losses, ref$losses, tolerance = 1e-5)
+  for (nm in names(ref$w)) expect_equal(got$w[[nm]], ref$w[[nm]], tolerance = 1e-5, info = nm)
+  # six replays moved the statistics exactly as six eager steps did
+  expect_equal(got$rm, ref$rm, tolerance = 1e-5, ignore_attr = TRUE)
+  expect_equal(got$rv, ref$rv, tolerance = 1e-5, ignore_attr = TRUE)
+  expect_false(isTRUE(all.equal(got$rm, matrix(0, 16L, 1L), check.attributes = FALSE)))
+  expect_equal(got$losses, cpu$losses, tolerance = 1e-4)
+  expect_equal(got$rm, cpu$rm, tolerance = 1e-4, ignore_attr = TRUE)
+  expect_equal(got$rv, cpu$rv, tolerance = 1e-4, ignore_attr = TRUE)
+})
+
+test_that("a captured step with batch_norm stays two launches and notes the buffer", {
+  skip_if_no_gpu_cs()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+  ag_local_mode(graph = TRUE, matmul_precision = "f32")
+  d <- cs_data(); m <- bn_cs_model(d); opt <- cs_opt(m$ps)
+  train <- ag_capture_step(m$fn, optimizer = opt)
+  on.exit(ag_capture_free(train), add = TRUE)
+  train(x = d$x, y = d$y)                       # records, then replays
+  ptr0 <- m$bn$stats$core$ptr
+  rm1  <- m$bn$running_mean
+  ggmlR:::ag_launch_count(reset = TRUE)
+  train(x = d$x, y = d$y)
+  expect_equal(launches(), 2)                   # the statistics write is in graph 1
+  expect_false(isTRUE(all.equal(m$bn$running_mean, rm1)))   # and it ran
+  expect_true(identical(ptr0, m$bn$stats$core$ptr))
+
+  # The recording depends on the buffer: a new allocation (what a device
+  # round trip does) invalidates it.
+  cap <- attr(train, "captures")$step
+  expect_length(cap$auto_bufs, 1L)
+  expect_identical(cap$auto_bufs[[1L]], m$bn$stats)
+  valid <- ggmlR:::.ag_capture_valid
+  expect_true(valid(cap, NULL))
+  core <- m$bn$stats$core
+  gen0 <- core$gen
+  core$gen <- gen0 + 1L
+  expect_false(valid(cap, NULL))
+  core$gen <- gen0
+  expect_true(valid(cap, NULL))
+})

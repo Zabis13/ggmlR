@@ -23,6 +23,17 @@ Learnable scale \code{gamma} [F,1] and shift \code{beta} [F,1].
 \details{
 \strong{Training mode}: use batch statistics; update running mean/var.
 \strong{Eval mode}: use stored running statistics.
+
+The running statistics live in one \code{[F, 2]} \code{\link{ag_buffer}}
+(\code{$stats}: column 0 the mean, column 1 the variance), so on the GPU
+they stay on the device and are updated in place, at the same address,
+every training step; \code{$running_mean} and \code{$running_var} read and
+write that buffer. The variance is the biased batch variance.
+
+On the GPU the normalisation is one tape node (\code{ggml_norm} over the
+batch axis; backward \code{ggml_norm_back}, or \code{g / std} in eval mode)
+and \code{gamma}, \code{beta} an ordinary \code{\link{ag_mul}} and
+\code{\link{ag_add}}, so the layer runs in the graph backward.
 }
 \examples{
 \donttest{

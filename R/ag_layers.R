@@ -201,53 +201,6 @@ ag_train.ag_dropout <- function(model) { model$training <- TRUE;  invisible(mode
 ag_eval.ag_dropout  <- function(model) { model$training <- FALSE; invisible(model) }
 
 # ============================================================================
-# Internal: broadcast-mul [F,1] x [F,N] -> [F,N]
-# Used by batch_norm for gamma/beta scaling.
-# ============================================================================
-
-.ag_mul_broadcast_col <- function(scalar_col, mat) {
-  # scalar_col: ag_param [F, 1]; mat: ag_tensor [F, N]
-  # Expands scalar_col to [F, N] then calls ag_mul
-  s_data <- .ag_data(scalar_col)
-  m_data <- .ag_data(mat)
-  n      <- ncol(m_data)
-  # broadcast: replicate column n times
-  s_exp  <- matrix(as.numeric(s_data), nrow(s_data), n)
-  s_t    <- ag_tensor(s_exp)
-  s_t$requires_grad <- is_ag_tensor(scalar_col) && scalar_col$requires_grad
-
-  if (s_t$requires_grad) {
-    s_orig <- scalar_col
-    grad_fn <- function(grad_out) {
-      list(scalar_col = matrix(rowSums(grad_out), nrow(grad_out), 1L))
-    }
-    s_t$grad_fn <- grad_fn
-    ag_record(s_t, grad_fn, list(scalar_col = scalar_col))
-  }
-  ag_mul(s_t, mat)
-}
-
-# Same for bias (beta): add [F,1] broadcast to [F,N]
-.ag_add_broadcast_col <- function(scalar_col, mat) {
-  s_data <- .ag_data(scalar_col)
-  m_data <- .ag_data(mat)
-  n      <- ncol(m_data)
-  s_exp  <- matrix(as.numeric(s_data), nrow(s_data), n)
-  s_t    <- ag_tensor(s_exp)
-  s_t$requires_grad <- is_ag_tensor(scalar_col) && scalar_col$requires_grad
-
-  if (s_t$requires_grad) {
-    s_orig <- scalar_col
-    grad_fn <- function(grad_out) {
-      list(scalar_col = matrix(rowSums(grad_out), nrow(grad_out), 1L))
-    }
-    s_t$grad_fn <- grad_fn
-    ag_record(s_t, grad_fn, list(scalar_col = scalar_col))
-  }
-  ag_add(s_t, mat)
-}
-
-# ============================================================================
 # ag_batch_norm
 # ============================================================================
 
@@ -258,6 +211,17 @@ ag_eval.ag_dropout  <- function(model) { model$training <- FALSE; invisible(mode
 #'
 #' \strong{Training mode}: use batch statistics; update running mean/var.
 #' \strong{Eval mode}: use stored running statistics.
+#'
+#' The running statistics live in one \code{[F, 2]} \code{\link{ag_buffer}}
+#' (\code{$stats}: column 0 the mean, column 1 the variance), so on the GPU
+#' they stay on the device and are updated in place, at the same address,
+#' every training step; \code{$running_mean} and \code{$running_var} read and
+#' write that buffer. The variance is the biased batch variance.
+#'
+#' On the GPU the normalisation is one tape node (\code{ggml_norm} over the
+#' batch axis; backward \code{ggml_norm_back}, or \code{g / std} in eval mode)
+#' and \code{gamma}, \code{beta} an ordinary \code{\link{ag_mul}} and
+#' \code{\link{ag_add}}, so the layer runs in the graph backward.
 #'
 #' @param num_features Number of features (rows of input)
 #' @param eps Numerical stability constant (default 1e-5)
@@ -276,76 +240,196 @@ ag_batch_norm <- function(num_features, eps = 1e-5, momentum = 0.1) {
   env <- new.env(parent = emptyenv())
   env$gamma        <- ag_param(matrix(1.0, num_features, 1L))
   env$beta         <- ag_param(matrix(0.0, num_features, 1L))
-  env$running_mean <- matrix(0.0, num_features, 1L)
-  env$running_var  <- matrix(1.0, num_features, 1L)
+  env$stats        <- ag_buffer(num_features, 2L)
+  ag_buffer_write(env$stats, cbind(rep(0, num_features), rep(1, num_features)), 0)
   env$num_features <- num_features
   env$eps          <- eps
   env$momentum     <- momentum
   env$training     <- TRUE
   env$name         <- paste0("batch_norm(", num_features, ")")
 
+  # The old matrix fields, kept as views of the buffer: ag_save()/ag_load()
+  # and user code read and assign them as before.
+  stat_binding <- function(j) function(value) {
+    if (missing(value)) return(ag_buffer_read(env$stats, j, 1L))
+    ag_buffer_write(env$stats, matrix(as.numeric(value), num_features, 1L), j)
+  }
+  makeActiveBinding("running_mean", stat_binding(0L), env)
+  makeActiveBinding("running_var",  stat_binding(1L), env)
+
   env$forward <- function(x) {
-    x_data <- .ag_data(x)
-    n      <- ncol(x_data)
-
-    if (env$training) {
-      mu  <- rowMeans(x_data)
-      var <- rowMeans((x_data - mu)^2)
-      # update running stats (no gradient through these assignments)
-      env$running_mean <- (1 - env$momentum) * env$running_mean +
-                           env$momentum * matrix(mu,  env$num_features, 1L)
-      env$running_var  <- (1 - env$momentum) * env$running_var  +
-                           env$momentum * matrix(var, env$num_features, 1L)
-    } else {
-      mu  <- as.numeric(env$running_mean)
-      var <- as.numeric(env$running_var)
-    }
-
-    std   <- sqrt(var + env$eps)           # [F] numeric vector
-
-    # Normalise: (x - mu) / std  — pure numeric, no grad needed here
-    mu_m  <- matrix(mu,  num_features, n)
-    std_m <- matrix(std, num_features, n)
-
-    # x_hat as ag_tensor that propagates gradient from x
-    xh_data <- (x_data - mu_m) / std_m
-    x_hat <- ag_tensor(xh_data)
-    x_hat$requires_grad <- is_ag_tensor(x) && x$requires_grad
-
-    if (x_hat$requires_grad) {
-      std_snap <- std_m
-      xh_snap  <- xh_data
-      x_ref    <- x
-
-      if (env$training) {
-        # Training: mu and var are computed from this very batch, so their
-        # dependence on x contributes to the gradient.  Reduction runs along
-        # the batch axis (rows), mirroring ag_layer_norm which reduces along
-        # the feature axis (columns):
-        #   dx = (g - mean_N(g) - x_hat * mean_N(g * x_hat)) / std
-        grad_fn <- function(grad_out) {
-          list(x = (grad_out - rowMeans(grad_out) -
-                      xh_snap * rowMeans(grad_out * xh_snap)) / std_snap)
-        }
-      } else {
-        # Eval: mu and var come from the running statistics and really are
-        # constants w.r.t. x, so the plain scaling is exact here.
-        grad_fn <- function(grad_out) list(x = grad_out / std_snap)
-      }
-
-      x_hat$grad_fn <- grad_fn
-      ag_record(x_hat, grad_fn, list(x = x))
-    }
-
-    # gamma * x_hat + beta  with column broadcast [F,1] -> [F,N]
-    scaled <- .ag_mul_broadcast_col(env$gamma, x_hat)
-    .ag_add_broadcast_col(env$beta, scaled)
+    gpu <- is_ag_tensor(x) && identical(x$device, "gpu") && .ag_buffer_gpu()
+    x_hat <- if (gpu) .ag_bn_normalize_gpu(env, x) else .ag_bn_normalize_cpu(env, x)
+    ag_add(ag_mul(x_hat, env$gamma), env$beta)
   }
 
   env$parameters <- function() list(gamma = env$gamma, beta = env$beta)
 
   class(env) <- c("ag_batch_norm", "ag_layer")
   env
+}
+
+# Host path: statistics in R, one closure node (no op record).
+.ag_bn_normalize_cpu <- function(env, x) {
+  x_data <- .ag_data(x)
+  n      <- ncol(x_data)
+  m      <- env$momentum
+
+  if (env$training) {
+    mu  <- rowMeans(x_data)
+    var <- rowMeans((x_data - mu)^2)
+    # update running stats (no gradient through this write)
+    st <- ag_buffer_read(env$stats)
+    ag_buffer_write(env$stats, cbind((1 - m) * st[, 1L] + m * mu,
+                                     (1 - m) * st[, 2L] + m * var), 0)
+  } else {
+    st  <- ag_buffer_read(env$stats)
+    mu  <- st[, 1L]
+    var <- st[, 2L]
+  }
+
+  std     <- sqrt(var + env$eps)
+  std_m   <- matrix(std, env$num_features, n)
+  xh_data <- (x_data - mu) / std_m
+  x_hat   <- ag_tensor(xh_data)
+  x_hat$requires_grad <- is_ag_tensor(x) && x$requires_grad
+
+  if (x_hat$requires_grad) {
+    if (env$training) {
+      # mu and var come from this very batch, so their dependence on x
+      # contributes:  dx = (g - mean_N(g) - x_hat * mean_N(g * x_hat)) / std
+      grad_fn <- function(grad_out) {
+        list(x = (grad_out - rowMeans(grad_out) -
+                    xh_data * rowMeans(grad_out * xh_data)) / std_m)
+      }
+    } else {
+      # running statistics are constants w.r.t. x
+      grad_fn <- function(grad_out) list(x = grad_out / std_m)
+    }
+    x_hat$grad_fn <- grad_fn
+    ag_record(x_hat, grad_fn, list(x = x))
+  }
+  x_hat
+}
+
+# Device path. Training: x_hat = ggml_norm over the batch axis (ggml_norm
+# normalises ne0, so x is transposed around it), and the running statistics
+# are updated in place in the buffer -- new values computed into the pass
+# pool, then copied onto the buffer through `out =` (the Adam-step pattern), so
+# the address never changes. Eval: (x - mean) / sqrt(var + eps) read straight
+# from the buffer. One tape node, op "batch_norm".
+.ag_bn_normalize_gpu <- function(env, x) {
+  F   <- env$num_features
+  eps <- env$eps
+  m   <- env$momentum
+  core <- .ag_buffer_core(env$stats)
+  .ag_buffer_on_device(core)
+  h <- .ag_handle(core$ptr, c(F, 2L), scope = "persistent")
+  x_op <- .ag_operand(x)
+  if (.ag_nrow(x_op) != F)
+    stop(sprintf("ag_batch_norm: expected %d features, got %d", F, .ag_nrow(x_op)),
+         call. = FALSE)
+  n <- .ag_ncol(x_op)
+  # column j (0-based) of the [F, 2] statistics as an [F, 1] view
+  col <- function(ctx, hp, j) {
+    nb1 <- ggml_tensor_nb(hp)[2L]
+    ggml_view_2d(ctx, hp, F, 1L, nb1, j * nb1)
+  }
+  training <- isTRUE(env$training)
+  std_h <- NULL
+  # This layer's previous statistics write may still be queued (ag_graph_mode).
+  # Both branches below read the buffer, and a read and that write in one graph
+  # have no data dependency -- the Vulkan backend may reorder them -- so the
+  # queue runs first. Only then: a training step's barrier usually ran it.
+  if (!is.null(env$stats_write) && !.ag_handle_computed(env$stats_write) &&
+      !isTRUE(.ag_capture_reg$recording))
+    .ag_defer_drain()
+  env$stats_write <- NULL
+
+  if (training) {
+    res <- .ag_run_op(
+      op_fn = function(ctx, ptrs) {
+        xt <- ggml_cont(ctx, ggml_transpose(ctx, ptrs[[1L]]))
+        ggml_cont(ctx, ggml_transpose(ctx, ggml_norm(ctx, xt, eps)))
+      },
+      inputs = list(x_op), out_shape = c(F, n), resident = TRUE)
+    out <- .ag_wrap_result(res, "gpu")
+
+    # new [F, 2] statistics from x (ptrs[[1]]) and the current ones (ptrs[[2]])
+    new_stats <- function(ctx, ptrs) {
+      xt <- ggml_cont(ctx, ggml_transpose(ctx, .ag_f32_operand(ctx, ptrs[[1L]])))
+      mu <- ggml_mean(ctx, xt)                                   # [1, F]
+      va <- ggml_mean(ctx, ggml_sqr(ctx, ggml_sub(ctx, xt, mu))) # biased
+      rm <- ggml_add(ctx, ggml_scale(ctx, col(ctx, ptrs[[2L]], 0L), 1 - m),
+                     ggml_scale(ctx, ggml_reshape_2d(ctx, mu, F, 1L), m))
+      rv <- ggml_add(ctx, ggml_scale(ctx, col(ctx, ptrs[[2L]], 1L), 1 - m),
+                     ggml_scale(ctx, ggml_reshape_2d(ctx, va, F, 1L), m))
+      ggml_concat(ctx, rm, rv, 1L)
+    }
+    # The write is ONE node: ggml_cpy of the new statistics onto the buffer
+    # tensor itself (h$ptr, not its operand alias ptrs[[2]], which is a leaf
+    # with no buffer of its own as a destination). Read through the alias,
+    # written to the real tensor: the copy depends on the reads, so it runs
+    # after them. Without deferral it runs at once; under ag_graph_mode it is
+    # queued with the forward and runs at the next barrier (a read of the
+    # statistics, backward, the next tape's reset -- all drain first).
+    #
+    # Not "compute into the pass pool, then copy through out =" (the Adam
+    # pattern): under ag_graph_mode that pair lost the write -- measured, the
+    # statistics stayed at their initial values.
+    #
+    # Inside ag_capture / ag_capture_step the same node is kept as an effect
+    # (as ag_set_rows() does), so every replay updates the statistics in place,
+    # and the buffer is noted so that moving or freeing it re-records.
+    recording <- isTRUE(.ag_capture_reg$recording)
+    if (recording) .ag_capture_note_buffer(env$stats)
+    dst <- h$ptr
+    eff <- .ag_run_op(
+      op_fn = function(ctx, ptrs) ggml_cpy(ctx, new_stats(ctx, ptrs), dst),
+      inputs = list(x_op, h), out_shape = c(F, 2L), dtype = "f32",
+      resident = TRUE)
+    if (recording)
+      .ag_capture_reg$effects[[length(.ag_capture_reg$effects) + 1L]] <- eff
+    else
+      env$stats_write <- eff
+  } else {
+    # eval reads the buffer: a recording depends on it too
+    .ag_capture_note_buffer(env$stats)
+    std_h <- .ag_run_op(
+      op_fn = function(ctx, ptrs)
+        ggml_sqrt(ctx, ggml_scale_bias(ctx, col(ctx, ptrs[[1L]], 1L), 1, eps)),
+      inputs = list(h), out_shape = c(F, 1L), dtype = "f32", resident = TRUE)
+    res <- .ag_run_op(
+      op_fn = function(ctx, ptrs)
+        ggml_div(ctx, ggml_sub(ctx, .ag_f32_operand(ctx, ptrs[[1L]]),
+                               col(ctx, ptrs[[2L]], 0L)), ptrs[[3L]]),
+      inputs = list(x_op, h, std_h), out_shape = c(F, n), dtype = "f32",
+      resident = TRUE)
+    out <- .ag_wrap_result(res, "gpu", dtype = "f32")
+  }
+
+  out$requires_grad <- is_ag_tensor(x) && x$requires_grad
+  if (out$requires_grad) {
+    # Closure (fallback path): exact, in double; downloads x (or std) only
+    # when it actually runs.
+    grad_fn <- function(grad_out) {
+      if (training) {
+        xm  <- .ag_as_matrix(x_op)
+        mu  <- rowMeans(xm)
+        std <- sqrt(rowMeans((xm - mu)^2) + eps)
+        xh  <- (xm - mu) / std
+        list(x = (grad_out - rowMeans(grad_out) -
+                    xh * rowMeans(grad_out * xh)) / std)
+      } else {
+        list(x = grad_out / as.numeric(.ag_as_matrix(std_h)))
+      }
+    }
+    out$grad_fn <- grad_fn
+    ag_record(out, grad_fn, list(x = x), op = "batch_norm",
+              mode = if (training) "train" else "eval",
+              x_snap = x_op, std_snap = std_h, eps = eps)
+  }
+  out
 }
 
 #' @export
@@ -667,16 +751,44 @@ ag_embedding <- function(vocab_size, dim) {
   env$name       <- paste0("embedding(", vocab_size, ", ", dim, ")")
 
   env$forward <- function(idx) {
-    idx_int <- as.integer(.ag_data(idx))
+    idx_num <- as.numeric(.ag_data(idx))
+    if (anyNA(idx_num) || any(idx_num != round(idx_num)) ||
+        any(idx_num < 0) || any(idx_num > vocab_size - 1))
+      stop(sprintf("ag_embedding: idx must be whole numbers in 0..%d",
+                   vocab_size - 1L), call. = FALSE)
+    idx_int <- as.integer(idx_num)
     n       <- length(idx_int)
+    if (n < 1L) stop("ag_embedding: idx is empty", call. = FALSE)
 
-    # Read the current weight table through .ag_data(), which sees a value
-    # written by gradcheck's .ag_data_set() as well as one living on the device
-    # (inst/docs/ag_data_contract.md).
-    W_data  <- .ag_data(env$weight)      # [dim, vocab_size]
-    out_data <- W_data[, idx_int + 1L, drop = FALSE]   # [dim, n]
-
-    out <- ag_tensor(out_data)
+    if (identical(env$weight$device, "gpu")) {
+      # The table stays on the device: one ggml_get_rows over the resident
+      # weight, only the indices are sent. They go up as f32 (exact below
+      # 2^24) and are cast to I32 in the graph, as in ag_get_rows(); the clamp
+      # is a guard against reading outside the table, the host check above
+      # already refused anything out of range.
+      if (vocab_size >= 2^24)
+        stop("ag_embedding: vocab_size from 2^24 on is not exact in f32 indices",
+             call. = FALSE)
+      W_op <- .ag_operand(env$weight)
+      res <- .ag_run_op(
+        op_fn = function(ctx, ptrs) {
+          safe <- ggml_clamp(ctx, ptrs[[2L]], 0, vocab_size - 1)
+          i32  <- ggml_reshape_1d(ctx, ggml_cast(ctx, safe, GGML_TYPE_I32), n)
+          ggml_get_rows(ctx, ptrs[[1L]], i32)
+        },
+        inputs    = list(W_op, matrix(idx_num, ncol = 1L)),
+        out_shape = c(dim, n),
+        dtype     = "f32",
+        resident  = .ag_is_handle(W_op)
+      )
+      out <- .ag_wrap_result(res, "gpu", dtype = "f32")
+    } else {
+      # Read the current weight table through .ag_data(), which sees a value
+      # written by gradcheck's .ag_data_set() as well as one living on the
+      # device (inst/docs/ag_data_contract.md).
+      W_data   <- .ag_data(env$weight)                    # [dim, vocab_size]
+      out <- ag_tensor(W_data[, idx_int + 1L, drop = FALSE])   # [dim, n]
+    }
     out$requires_grad <- env$weight$requires_grad
 
     if (out$requires_grad) {
@@ -694,7 +806,10 @@ ag_embedding <- function(vocab_size, dim) {
         list(weight = dW)
       }
       out$grad_fn <- grad_fn
-      ag_record(out, grad_fn, list(weight = env$weight))
+      # The graph backward emits dW as one ggml_get_rows_back (scatter-add of
+      # the columns of g into a zeroed [dim, vocab] table).
+      ag_record(out, grad_fn, list(weight = env$weight), op = "embedding",
+                idx = idx_num, vocab = vocab_size)
     }
     out
   }
