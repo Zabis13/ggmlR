@@ -2350,9 +2350,15 @@ ag_pow <- function(x, p) {
   out$requires_grad <- is_ag_tensor(x) && x$requires_grad
   if (out$requires_grad) {
     x_snap <- x_data
-    grad_fn <- function(grad_out) list(x = grad_out * p * .ag_as_matrix(x_snap) ^ (p - 1))
+    # p = 0: x^0 is a constant, so the gradient is exactly zero -- not
+    # 0 * x^-1, which is NaN at x = 0.
+    grad_fn <- if (p == 0) {
+      function(grad_out) list(x = grad_out * 0)
+    } else {
+      function(grad_out) list(x = grad_out * p * .ag_as_matrix(x_snap) ^ (p - 1))
+    }
     out$grad_fn <- grad_fn
-    ag_record(out, grad_fn, list(x = x))
+    ag_record(out, grad_fn, list(x = x), op = "pow", x_snap = x_snap, p = p)
   }
   out
 }

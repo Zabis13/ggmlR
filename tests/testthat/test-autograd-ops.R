@@ -232,6 +232,14 @@ test_that("gradcheck: ag_pow (p=0.5, sqrt)", {
   expect_true(ok)
 })
 
+test_that("ag_pow p = 0 has a zero gradient, also at x = 0", {
+  # x^0 is constant: the gradient is 0 everywhere, not 0 * 0^-1 = NaN.
+  W <- ag_param(matrix(c(0, -1, 2, 0.5), 2, 2), device = "cpu")
+  with_grad_tape({ loss <- ag_sum(ag_pow(W, 0)) })
+  backward(loss)
+  expect_equal(ag_grad(W), matrix(0, 2, 2), ignore_attr = TRUE)
+})
+
 # ---- gradcheck: composite chain ---------------------------------------------
 
 test_that("gradcheck: matmul -> relu -> sum", {

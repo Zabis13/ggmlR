@@ -1257,10 +1257,46 @@ GGML_PREC_F32 <- 10L
 
 # ag_pow(x, p) = x^p
 # Special cases: p=2 -> ggml_sqr, p=0.5 -> ggml_sqrt, general -> exp(p*log(x))
+# Is p an integer exponent? Those take the integer path on the GPU, so a
+# negative x is finite as with R's `^` (libm pow) instead of NaN from
+# exp(p * log x). Exact test, no tolerance: R's (-1)^2.0000000001 is NaN, and
+# the GPU must give NaN there too rather than a finite value the CPU does not.
+.ag_pow_is_int <- function(p) is.finite(p) && p == round(p)
+
+# x^n for an integer n != 0, so negative x gives what R's `^` gives: finite,
+# with the sign of x^n. |n| <= 4 is a chain of ggml_mul (and one ggml_div for
+# n < 0) -- more accurate than exp/log at small powers. Beyond that,
+# |x|^n = exp(n * log|x|) with the sign restored by parity: even n positive,
+# odd n times sgn(x) (the usual fix for pow lowered to exp(y * log x)).
+# x = 0: 0 for n > 0 as in R; for odd n < 0 it is NaN (Inf * sgn(0)) where
+# R gives Inf. Returns x itself for n = 1; a caller that needs a new node
+# wraps it.
+.ag_ggml_int_pow <- function(ctx, x, n) {
+  m <- abs(n)
+  if (m > 4) {
+    y <- ggml_exp(ctx, ggml_scale(ctx, ggml_log(ctx, ggml_abs(ctx, x)), n))
+    if (m %% 2 == 1) y <- ggml_mul(ctx, y, ggml_sgn(ctx, x))
+    return(y)
+  }
+  y <- if (m == 1) x else ggml_sqr(ctx, x)
+  if (m >= 3) for (k in seq_len(m - 2)) y <- ggml_mul(ctx, y, x)
+  if (n < 0) y <- ggml_div(ctx, ggml_fill(ctx, x, 1), y)
+  y
+}
+
 .ag_gpu_pow <- function(x_data, p) {
-  if (p == 2) {
+  if (.ag_pow_is_int(p)) {
+    # Integer p: x^0 = 1 for every x (as in R, NaN included), x^1 a copy,
+    # otherwise .ag_ggml_int_pow -- exp(p * log x) would be NaN for x < 0
+    # where the CPU path is finite.
+    n <- as.integer(p)
     .ag_run_op(
-      op_fn    = function(ctx, ptrs) ggml_sqr(ctx, ptrs[[1L]]),
+      op_fn    = function(ctx, ptrs) {
+        x <- ptrs[[1L]]
+        if (n == 0L)      ggml_fill(ctx, x, 1)
+        else if (n == 1L) ggml_scale(ctx, x, 1)
+        else              .ag_ggml_int_pow(ctx, x, n)
+      },
       inputs   = list(x_data),
       out_shape = .ag_dim(x_data),
       resident  = .ag_is_handle(x_data)

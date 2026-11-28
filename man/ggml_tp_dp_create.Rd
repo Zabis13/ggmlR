@@ -29,6 +29,9 @@ ggml_tp_dp_free(h)
 \code{\link{ggml_tp_forward}}. For \code{ggml_tp_dp_set_weights()}: the
 same names and shapes as at creation.}
 
+\item{forward, split, default, type, mem_size}{See
+\code{\link{ggml_tp_forward}}.}
+
 \item{replicas}{A non-empty list of device sets, each a valid
 \code{devices} argument of \code{\link{ggml_meta_backend}}, e.g.
 \code{list(c(0L, 1L), c(2L, 3L))} or \code{list(c("CPU", "CPU"), c("CPU", "CPU"))}.}

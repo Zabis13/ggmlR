@@ -273,7 +273,7 @@ ag_backward_resident <- function(on = TRUE) {
                        "transpose", "softmax", "scale", "mul", "flash_attn",
                        "sub", "log", "sum", "log_softmax", "slice_rows",
                        "concat_rows", "silu", "rms_norm", "conv2d", "reshape", "permute", "conv_transpose2d",
-                       "layer_norm")
+                       "layer_norm", "pow")
 
 # Can this tape run as one graph?
 #
@@ -655,6 +655,34 @@ ag_backward_profile_report <- function() {
       x <- inp$x
       if (is_ag_tensor(x) && isTRUE(x$requires_grad))
         accumulate(as.character(x$id), ggml_div(ctx, g, const(nd$x_snap)))
+
+    } else if (identical(nd$op, "pow")) {
+      # dx = g * p * x^(p - 1), p a fixed scalar. x^(p - 1) is built the way
+      # the forward (.ag_gpu_pow) builds x^p, so x <= 0 gives what the
+      # closure's R `^` gives: .ag_ggml_int_pow for integer p (finite for
+      # negative x), 1 / sqrt(x) for p = 0.5 (Inf at 0, NaN below, as
+      # 0.5 * x^-0.5), and exp((p - 1) * log x) otherwise -- NaN for x < 0,
+      # where the forward exp(p * log x) is NaN too. p = 0 is exactly zero
+      # (the derivative of a constant), as the closure gives.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad)) {
+        p  <- as.double(nd$p)
+        xs <- const(nd$x_snap)
+        dx <- if (p == 0) {
+          ggml_scale(ctx, g, 0)
+        } else if (p == 1) {
+          g
+        } else if (.ag_pow_is_int(p)) {
+          xp <- .ag_ggml_int_pow(ctx, xs, as.integer(p) - 1L)
+          ggml_scale(ctx, ggml_mul(ctx, g, xp), p)
+        } else if (p == 0.5) {
+          ggml_scale(ctx, ggml_div(ctx, g, ggml_sqrt(ctx, xs)), 0.5)
+        } else {
+          xp <- ggml_exp(ctx, ggml_scale(ctx, ggml_log(ctx, xs), p - 1))
+          ggml_scale(ctx, ggml_mul(ctx, g, xp), p)
+        }
+        accumulate(as.character(x$id), dx)
+      }
 
     } else if (identical(nd$op, "silu")) {
       # dx = g * s * (1 + x * (1 - s)), s = sigmoid(x): one ggml_silu_back

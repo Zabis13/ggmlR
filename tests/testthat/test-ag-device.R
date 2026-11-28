@@ -442,6 +442,31 @@ test_that("ag_pow GPU p=3 (general) equals CPU", {
   reset_to_cpu()
 })
 
+test_that("ag_pow GPU on x <= 0 equals CPU for integer and fractional p", {
+  skip_if_no_gpu()
+  # Integer |p| <= 4 is a product of x on the GPU, so negative x is finite
+  # with the sign of x^p, as R's `^` gives; x^0 is 1 everywhere. Fractional p
+  # is NaN for x < 0 on both sides. Negative p skips x = 0 (Inf, whose sign
+  # is not part of the contract).
+  x_neg  <- matrix(c(-2, -0.5, 1.5, -1, 0.25, -3), 2, 3)
+  x_zero <- matrix(c(0, -2, -0.5, 1.5, -1, 0.25), 2, 3)
+  cases <- list(list(p = 3, x = x_zero), list(p = 4, x = x_zero),
+                list(p = 2, x = x_zero), list(p = 0, x = x_zero),
+                list(p = -1, x = x_neg), list(p = -3, x = x_neg),
+                list(p = 5, x = x_zero), list(p = 6, x = x_zero),
+                list(p = -5, x = x_neg), list(p = 1.7, x = x_zero))
+  # |p| > 4 is exp(p * log|x|) with the sign by parity: relative tolerance,
+  # f32 exp/log is not as exact as the product chain.
+  ag_device("gpu")
+  for (cs in cases) {
+    x <- ag_tensor(cs$x, device = "gpu")
+    with_grad_tape({ out <- ag_pow(x, cs$p) })
+    expect_equal(ggmlR:::.ag_data(out), cs$x^cs$p, tolerance = 1e-4,
+                 info = paste("p =", cs$p))
+  }
+  reset_to_cpu()
+})
+
 test_that("ag_add GPU with [1,n] broadcast equals CPU", {
   skip_if_no_gpu()
   set.seed(23)

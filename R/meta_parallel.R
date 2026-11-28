@@ -563,6 +563,8 @@ ggml_tp_dp_forward_graph <- function(weights, forward, x, replicas, split = list
 #' @inheritParams ggml_tp_dp_forward_graph
 #' @param max_widths Most shard widths kept built per replica (default 4).
 #'   Bounds the activation memory: one compute buffer per cached width.
+#' @param forward,split,default,type,mem_size See
+#'   \code{\link{ggml_tp_forward}}.
 #' @param h A handle from \code{ggml_tp_dp_create()}.
 #' @param x Numeric array with at least two dimensions; the last one is the
 #'   batch. All dimensions but the last must stay the same between calls.

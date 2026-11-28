@@ -270,14 +270,17 @@ test_that("an op outside the covered set still forces a fallback", {
   ag_device("gpu")
   on.exit(ag_device("cpu"), add = TRUE)
 
-  # ag_pow records no op description, so the tape must decline AS A WHOLE even
-  # though every other node on it is covered. That is the guarantee that keeps a
-  # partly covered tape from silently dropping the gradients it cannot emit.
+  # An ag_function() node records no op description, so the tape must decline
+  # AS A WHOLE even though every other node on it is covered. That is the
+  # guarantee that keeps a partly covered tape from silently dropping the
+  # gradients it cannot emit.
   #
-  # This test has had to be rewritten twice, as relu and then softmax gained
-  # emitters -- so pick the op deliberately: it must be one that is genuinely
-  # outside .AG_BWD_GRAPH_OPS, and it should be re-pointed rather than deleted
-  # when ag_pow is eventually covered too (ag_sub was, in the PPO wave).
+  # This test has been re-pointed three times, as relu, softmax and then ag_pow
+  # gained emitters -- so the op is now a user closure, which the graph path
+  # can never cover by design.
+  sq <- ag_function(
+    forward  = function(ctx, x) { ctx$save_for_backward(x = x); x^2 },
+    backward = function(ctx, grad_output) list(x = 2 * grad_output * ctx$saved$x))
   build <- function() {
     set.seed(51L)
     w <- ag_param(matrix(runif(12, -1, 1), 4, 3))
@@ -286,7 +289,7 @@ test_that("an op outside the covered set still forces a fallback", {
     b <- ag_tensor(matrix(runif(15, -1, 1), 5, 3))
     loss <- NULL
     with_grad_tape({
-      loss <- ag_mse_loss(ag_add(ag_pow(ag_matmul(x, w), 2), b), y)
+      loss <- ag_mse_loss(ag_add(sq(ag_matmul(x, w)), b), y)
     })
     list(loss = loss, params = list(w))
   }
@@ -611,6 +614,64 @@ test_that("graph backward for log at x <= 0 behaves like the closure", {
   expect_identical(r$got_path, "graph")
   expect_equal(.bwd_as_matrix(r$got_params[[1]]$grad),
                .bwd_as_matrix(r$ref_params[[1]]$grad), tolerance = 1e-5)
+})
+
+test_that("graph backward for pow matches closures and finite differences", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # One p per branch of the rule: 1 (g itself), 2 and 3 (product of x),
+  # 0.5 (1 / sqrt), 1.7 and -1 (exp / log). x > 0 here, so every branch is
+  # finite and finite differences of a plain-R loss are a valid reference.
+  set.seed(64L)
+  w0 <- matrix(runif(15, 0.5, 2), 5, 3)
+  y0 <- matrix(runif(15, -1, 1), 5, 3)
+  for (p in c(1, 2, 3, 0.5, 1.7, -1)) {
+    build <- function() {
+      w <- ag_param(w0)
+      loss <- NULL
+      with_grad_tape({ loss <- ag_mse_loss(ag_pow(w, p), ag_tensor(y0)) })
+      list(loss = loss, params = list(w))
+    }
+    r <- both_paths(build)
+    expect_identical(r$got_path, "graph", info = paste("p =", p))
+    expect_lt(grad_maxdiff(r), 1e-3)
+    g <- graph_grad(build)
+    expect_equal(g$g, fd_grad(function(m) mean((m^p - y0)^2), w0),
+                 tolerance = 1e-3, ignore_attr = TRUE, info = paste("p =", p))
+  }
+})
+
+test_that("graph backward for pow at x <= 0 behaves like the closure", {
+  skip_if_no_gpu()
+  ag_device("gpu")
+  on.exit(ag_device("cpu"), add = TRUE)
+
+  # Zero and negative entries, compared with the closure entry by entry,
+  # NaN and Inf included: integer p stays finite (product of x), p = 0 is
+  # exactly 0 (also at x = 0, where 0 * x^-1 used to give NaN), p = 0.5 is
+  # Inf at 0 and NaN below, p = 1.7 is 0 at 0 and NaN below. Negative p
+  # skips x = 0 (Inf, whose sign is not part of the contract). Only the
+  # gradient rule is compared, so the loss is a plain sum (g = 1).
+  w_zero <- matrix(c(0, -1, 2, 0.5, -0.25, 4), 2, 3)
+  w_neg  <- matrix(c(-2, -1, 2, 0.5, -0.25, 4), 2, 3)
+  # p = 5 needs x^4 (product chain), p = 6 x^5 and p = -5 x^-6 (exp/log
+  # with the sign by parity, odd and even).
+  for (p in c(0, 2, 3, 4, 5, 6, 0.5, 1.7, -1, -3, -5)) {
+    w0 <- if (p < 0) w_neg else w_zero
+    build <- function() {
+      w <- ag_param(w0)
+      loss <- NULL
+      with_grad_tape({ loss <- ag_sum(ag_pow(w, p)) })
+      list(loss = loss, params = list(w))
+    }
+    r <- both_paths(build)
+    expect_identical(r$got_path, "graph", info = paste("p =", p))
+    expect_equal(.bwd_as_matrix(r$got_params[[1]]$grad),
+                 .bwd_as_matrix(r$ref_params[[1]]$grad), tolerance = 1e-5,
+                 info = paste("p =", p))
+  }
 })
 
 test_that("graph backward for sub matches closures and finite differences", {
