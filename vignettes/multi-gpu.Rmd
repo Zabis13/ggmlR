@@ -180,12 +180,12 @@ W1 <- array(rnorm(n_in * n_hid),  c(n_in,  n_hid))
 W2 <- array(rnorm(n_hid * n_out), c(n_hid, n_out))
 X  <- array(rnorm(n_in * batch),  c(n_in,  batch))
 
-mlp <- function(ctx, input, w)          # w: the weight tensors, by name
+mlp_forward <- function(ctx, input, w)          # w: the weight tensors, by name
   ggml_mul_mat(ctx, w$w2, ggml_relu(ctx, ggml_mul_mat(ctx, w$w1, input)))
 
 Y <- ggml_tp_forward(
   weights = list(w1 = W1, w2 = W2),            # names are what `split` refers to
-  forward = mlp,
+  forward = mlp_forward,
   x       = X,                                 # the input tensor is named "input"
   devices = c(0L, 1L),
   split   = list(w1 = "rows", w2 = "cols"))
@@ -209,10 +209,10 @@ n_in <- 64L; n_hid <- 128L; n_out <- 32L; batch <- 4L
 W1 <- array(rnorm(n_in * n_hid),  c(n_in,  n_hid))
 W2 <- array(rnorm(n_hid * n_out), c(n_hid, n_out))
 X  <- array(rnorm(n_in * batch),  c(n_in,  batch))
-mlp <- function(ctx, input, w)
+mlp_forward <- function(ctx, input, w)
   ggml_mul_mat(ctx, w$w2, ggml_relu(ctx, ggml_mul_mat(ctx, w$w1, input)))
 
-Y <- ggml_tp_forward(list(w1 = W1, w2 = W2), mlp, X,
+Y <- ggml_tp_forward(list(w1 = W1, w2 = W2), mlp_forward, X,
                      devices = c("CPU", "CPU"),
                      split = list(w1 = "rows", w2 = "cols"))
 max(abs(Y - t(W2) %*% pmax(t(W1) %*% X, 0)))
