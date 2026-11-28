@@ -1294,6 +1294,17 @@ ggml_reshape_4d <- function(ctx, a, ne0, ne1, ne2, ne3) {
         as.numeric(ne2), as.numeric(ne3), PACKAGE = "ggmlR")
 }
 
+#' @rdname ggml_reshape_1d
+#' @details \code{ggml_reshape_5d()}: Reshapes tensor to 5D with shape
+#'   (ne0, ne1, ne2, ne3, ne4). ggml tensors have at most 5 dimensions.
+#' Returns: Reshaped tensor
+#' @param ne4 Size of dimension 4
+#' @export
+ggml_reshape_5d <- function(ctx, a, ne0, ne1, ne2, ne3, ne4) {
+  .Call("R_ggml_reshape_5d", ctx, a, as.numeric(ne0), as.numeric(ne1),
+        as.numeric(ne2), as.numeric(ne3), as.numeric(ne4), PACKAGE = "ggmlR")
+}
+
 #' Permute Tensor Dimensions (Graph)
 #'
 #' Permutes the tensor dimensions according to specified axes.

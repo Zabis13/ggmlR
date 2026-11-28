@@ -1266,6 +1266,28 @@ SEXP R_ggml_reshape_4d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0, SEXP ne1, SEXP ne2, S
     return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
 }
 
+SEXP R_ggml_reshape_5d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0, SEXP ne1, SEXP ne2, SEXP ne3, SEXP ne4) {
+    struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
+    struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);
+
+    if (ctx == NULL || a == NULL) {
+        error("Invalid pointer");
+    }
+
+    int64_t n0 = (int64_t) asReal(ne0);
+    int64_t n1 = (int64_t) asReal(ne1);
+    int64_t n2 = (int64_t) asReal(ne2);
+    int64_t n3 = (int64_t) asReal(ne3);
+    int64_t n4 = (int64_t) asReal(ne4);
+    struct ggml_tensor * result = ggml_reshape_5d(ctx, a, n0, n1, n2, n3, n4);
+
+    if (result == NULL) {
+        error("Failed to reshape to 5D");
+    }
+
+    return R_MakeExternalPtr(result, R_NilValue, R_NilValue);
+}
+
 SEXP R_ggml_permute(SEXP ctx_ptr, SEXP a_ptr, SEXP axis0, SEXP axis1, SEXP axis2, SEXP axis3) {
     struct ggml_context * ctx = (struct ggml_context *) R_ExternalPtrAddr(ctx_ptr);
     struct ggml_tensor * a = (struct ggml_tensor *) R_ExternalPtrAddr(a_ptr);

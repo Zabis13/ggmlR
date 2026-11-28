@@ -1,3 +1,8 @@
+# ggmlR 0.9.1
+
+* ONNX `MaxPool` / `AveragePool`: `ceil_mode` now follows ONNX (extra padding only at the end, only when needed), asymmetric `pads` are exact, and `AveragePool` honours `count_include_pad`. Fixes U²-Net / RMBG-1.4.
+* `onnx_load()` now fails with the reason when a model output cannot be built, instead of returning garbage at run time.
+
 # ggmlR 0.9.0
 
 * RL building blocks for `ag_*`: `ag_gae()`, `ag_discounted_returns()`, `ag_nstep_targets()`, `ag_huber_loss()`, `ag_entropy()`, `ag_normal_log_prob()`, and target networks with `ag_soft_update()` / `ag_hard_update()`.

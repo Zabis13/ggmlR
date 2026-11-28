@@ -102,21 +102,70 @@ int map_node_nn(onnx_ggml_ctx_t *c, const onnx_node_t *n,
             }
         }
         int64_t ceil_mode = onnx_attr_int(n, "ceil_mode", 0);
-        enum ggml_op_pool pool_op = (strcmp(op, "MaxPool") == 0) ?
-                                     GGML_OP_POOL_MAX : GGML_OP_POOL_AVG;
-        /* ggml_pool_2d uses symmetric padding; ONNX pads = [H_begin, W_begin, H_end, W_end].
-         * Use total padding (begin+end) divided by 2, rounded up. */
-        int p0 = (int)((pads[1] + pads[3] + 1) / 2); /* W pad */
-        int p1 = (int)((pads[0] + pads[2] + 1) / 2); /* H pad */
-        /* ceil_mode: add extra padding to emulate ceil division */
+        int is_max = strcmp(op, "MaxPool") == 0;
+        enum ggml_op_pool pool_op = is_max ? GGML_OP_POOL_MAX : GGML_OP_POOL_AVG;
+        /* ONNX pads = [H_begin, W_begin, H_end, W_end]; d = 0 is H (ne[1]), 1 is W (ne[0]).
+         * ceil_mode adds a partial last window: extra END padding, only when the
+         * division is not exact, and not when that window would start past the
+         * input + begin padding (ONNX / PyTorch rule). */
+        int64_t extra[2] = {0, 0};
         if (ceil_mode) {
-            p0 += (int)(strides[1] - 1);
-            p1 += (int)(strides[0] - 1);
+            for (int d = 0; d < 2; d++) {
+                int64_t in_d  = (d == 0) ? a->ne[1] : a->ne[0];
+                int64_t span  = in_d + pads[d] + pads[d + 2] - kshape[d];
+                int64_t rem   = span % strides[d];
+                if (span >= 0 && rem != 0) {
+                    int64_t out_ceil = span / strides[d] + 2;
+                    if ((out_ceil - 1) * strides[d] < in_d + pads[d]) {
+                        extra[d] = strides[d] - rem;
+                    }
+                }
+            }
         }
-        out = ggml_pool_2d(c->ctx, a, pool_op,
-                           (int)kshape[1], (int)kshape[0],
-                           (int)strides[1], (int)strides[0],
-                           p0, p1);
+        int64_t incl = onnx_attr_int(n, "count_include_pad", 0);
+        int any_pad  = pads[0] || pads[1] || pads[2] || pads[3];
+        if (extra[0] == 0 && extra[1] == 0 &&
+            pads[0] == pads[2] && pads[1] == pads[3] &&
+            (is_max || incl || !any_pad)) {
+            /* symmetric padding: ggml_pool_2d pads both sides itself (max skips
+             * the padding; avg always divides by k*k, i.e. count_include_pad=1) */
+            out = ggml_pool_2d(c->ctx, a, pool_op,
+                               (int)kshape[1], (int)kshape[0],
+                               (int)strides[1], (int)strides[0],
+                               (int)pads[1], (int)pads[0]);
+        } else {
+            /* asymmetric padding / ceil tail: pad explicitly, then pool with p = 0.
+             * Padding must not win a max nor count in an average, so pool a
+             * validity map (1 inside the input, 0 in padding) alongside. */
+            int lw = (int)pads[1], rw = (int)(pads[3] + extra[1]);
+            int lh = (int)pads[0], rh = (int)(pads[2] + extra[0]);
+            int kw = (int)kshape[1], kh = (int)kshape[0];
+            int sw = (int)strides[1], sh = (int)strides[0];
+            struct ggml_tensor * xp   = ggml_pad_ext(c->ctx, a, lw, rw, lh, rh, 0, 0, 0, 0);
+            struct ggml_tensor * ones = ggml_scale_bias(c->ctx, a, 0.0f, 1.0f);
+            if (is_max) {
+                /* 0 inside, -1e30 in padding */
+                struct ggml_tensor * valid = ggml_pad_ext(c->ctx, ones, lw, rw, lh, rh, 0, 0, 0, 0);
+                struct ggml_tensor * pen   = ggml_scale_bias(c->ctx, valid, 1e30f, -1e30f);
+                out = ggml_pool_2d(c->ctx, ggml_add(c->ctx, xp, pen), pool_op,
+                                   kw, kh, sw, sh, 0, 0);
+            } else {
+                /* average = sum(x) / count; count_include_pad=1 counts the
+                 * declared pads but never the ceil tail */
+                struct ggml_tensor * cnt;
+                if (incl) {
+                    struct ggml_tensor * declared = ggml_scale_bias(c->ctx,
+                        ggml_pad_ext(c->ctx, a, lw, (int)pads[3], lh, (int)pads[2], 0, 0, 0, 0),
+                        0.0f, 1.0f);
+                    cnt = ggml_pad_ext(c->ctx, declared, 0, (int)extra[1], 0, (int)extra[0], 0, 0, 0, 0);
+                } else {
+                    cnt = ggml_pad_ext(c->ctx, ones, lw, rw, lh, rh, 0, 0, 0, 0);
+                }
+                out = ggml_div(c->ctx,
+                               ggml_pool_2d(c->ctx, xp,  pool_op, kw, kh, sw, sh, 0, 0),
+                               ggml_pool_2d(c->ctx, cnt, pool_op, kw, kh, sw, sh, 0, 0));
+            }
+        }
     }
     else if (strcmp(op, "GlobalAveragePool") == 0) {
         if (!a) return -1;

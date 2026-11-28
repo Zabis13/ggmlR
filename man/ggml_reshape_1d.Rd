@@ -5,6 +5,7 @@
 \alias{ggml_reshape_2d}
 \alias{ggml_reshape_3d}
 \alias{ggml_reshape_4d}
+\alias{ggml_reshape_5d}
 \title{Reshape Tensor (Graph)}
 \usage{
 ggml_reshape_1d(ctx, a, ne0)
@@ -14,6 +15,8 @@ ggml_reshape_2d(ctx, a, ne0, ne1)
 ggml_reshape_3d(ctx, a, ne0, ne1, ne2)
 
 ggml_reshape_4d(ctx, a, ne0, ne1, ne2, ne3)
+
+ggml_reshape_5d(ctx, a, ne0, ne1, ne2, ne3, ne4)
 }
 \arguments{
 \item{ctx}{GGML context}
@@ -27,6 +30,8 @@ ggml_reshape_4d(ctx, a, ne0, ne1, ne2, ne3)
 \item{ne2}{Size of dimension 2}
 
 \item{ne3}{Size of dimension 3}
+
+\item{ne4}{Size of dimension 4}
 }
 \value{
 Reshaped tensor
@@ -42,6 +47,10 @@ Returns: Reshaped tensor
 Returns: Reshaped tensor
 
 \code{ggml_reshape_4d()}: Reshapes tensor to 4D with shape (ne0, ne1, ne2, ne3)
+Returns: Reshaped tensor
+
+\code{ggml_reshape_5d()}: Reshapes tensor to 5D with shape
+  (ne0, ne1, ne2, ne3, ne4). ggml tensors have at most 5 dimensions.
 Returns: Reshaped tensor
 }
 \examples{

@@ -128,7 +128,7 @@ test_that("onnx_reshape_nd 5D: [24] → [1,2,3,4,1] (5D branch)", {
 # ── ne_product: element count verification ───────────────────────
 # Reshape with mismatched count must be caught, not silently corrupt.
 
-test_that("ne_product: mismatch [6] → [2,4] node is skipped (output NULL)", {
+test_that("ne_product: mismatch [6] → [2,4] makes onnx_load fail", {
   inp  <- .onnx_value_info("X", 1L, c(6L))
   shape_raw <- c(.int64_bytes(2L), .int64_bytes(4L))  # 8 != 6
   shape_t  <- .onnx_tensor("shape", c(2L), 7L, shape_raw)
@@ -140,13 +140,12 @@ test_that("ne_product: mismatch [6] → [2,4] node is skipped (output NULL)", {
   path <- tempfile(fileext = ".onnx")
   writeBin(.onnx_model(graph), path)
 
-  # Mismatch is logged as warning; node is skipped → output tensor absent → NULL
-  m <- onnx_load(path, device = "cpu")
-  res <- onnx_run(m, list(X = seq_len(6) * 1.0))
-  expect_null(res[[1]])
+  # Mismatch: node is skipped, so the output cannot be built -> load fails
+  expect_error(onnx_load(path, device = "cpu"),
+               "1 of 1 model outputs cannot be built.*\\(Reshape\\)")
 })
 
-test_that("ne_product: mismatch [12] → [3,5] output is NULL", {
+test_that("ne_product: mismatch [12] → [3,5] makes onnx_load fail", {
   inp  <- .onnx_value_info("X", 1L, c(12L))
   shape_raw <- c(.int64_bytes(3L), .int64_bytes(5L))  # 15 != 12
   shape_t  <- .onnx_tensor("shape", c(2L), 7L, shape_raw)
@@ -158,9 +157,8 @@ test_that("ne_product: mismatch [12] → [3,5] output is NULL", {
   path <- tempfile(fileext = ".onnx")
   writeBin(.onnx_model(graph), path)
 
-  m <- onnx_load(path, device = "cpu")
-  res <- onnx_run(m, list(X = seq_len(12) * 1.0))
-  expect_null(res[[1]])
+  expect_error(onnx_load(path, device = "cpu"),
+               "1 of 1 model outputs cannot be built.*\\(Reshape\\)")
 })
 
 test_that("ne_product: -1 inference correct: [2,3,4] → [-1,4] = [6,4]", {

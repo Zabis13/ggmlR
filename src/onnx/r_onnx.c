@@ -133,6 +133,9 @@ SEXP R_onnx_build(SEXP model_ptr_, SEXP device_, SEXP n_threads_, SEXP dtype_) {
 
     onnx_ggml_ctx_t *ctx = onnx_ggml_build(m, device, n_threads, model_dtype);
     if (!ctx) {
+        const char *why = onnx_ggml_build_error();
+        if (why[0])
+            Rf_error("onnx_load: failed to build ggml graph: %s", why);
         Rf_error("onnx_build: failed to build ggml graph");
         return R_NilValue;
     }

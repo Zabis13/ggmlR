@@ -1296,6 +1296,38 @@ GGML_PREC_F32 <- 10L
   )
 }
 
+# Permute the logical axes packed in the rows of a [prod(shape), B] tensor:
+# each column is array(col, shape) with shape[1] fastest (= ggml ne0), and the
+# result column is aperm(array(col, shape), perm). The batch never moves.
+#
+# aperm's perm names SOURCE axes (output axis j takes source axis perm[j]);
+# ggml_permute's arguments are DESTINATIONS (source axis i goes to p[i]), so
+# p = order(perm) - 1. ggml_permute shuffles ne[0..3] only and leaves ne[4]/nb[4]
+# as they were, which is exactly the batch: up to 3 logical axes use a 4D view
+# (batch in ne3), 4 axes a 5D one (batch in ne4). Shared by the forward and the
+# graph-backward rule (which calls it with shape[perm] and order(perm)).
+.ag_permute_ggml <- function(ctx, a, shape, perm) {
+  k  <- length(shape)
+  B  <- ggml_tensor_shape(a)[2L]
+  s4 <- c(shape, rep(1, 4L - k))
+  p4 <- order(c(perm, seq_len(4L - k) + k)) - 1L
+  src <- if (ggml_is_contiguous(a)) a else ggml_cont(ctx, a)
+  v <- if (k <= 3L) ggml_reshape_4d(ctx, src, s4[1L], s4[2L], s4[3L], B)
+       else         ggml_reshape_5d(ctx, src, s4[1L], s4[2L], s4[3L], s4[4L], B)
+  pr <- if (k <= 3L) ggml_permute(ctx, v, p4[1L], p4[2L], p4[3L], 3L)
+        else         ggml_permute(ctx, v, p4[1L], p4[2L], p4[3L], p4[4L])
+  ggml_reshape_2d(ctx, ggml_cont(ctx, pr), prod(shape), B)
+}
+
+.ag_gpu_permute <- function(x_data, shape, perm) {
+  .ag_run_op(
+    op_fn     = function(ctx, ptrs) .ag_permute_ggml(ctx, ptrs[[1L]], shape, perm),
+    inputs    = list(x_data),
+    out_shape = c(.ag_nrow(x_data), .ag_ncol(x_data)),
+    resident  = .ag_is_handle(x_data)
+  )
+}
+
 # Rows from+1..from+n: a view (rows are ne0, so the view keeps the column
 # stride and starts `from` elements in) made contiguous -- consumers such as
 # mul_mat need a contiguous operand.

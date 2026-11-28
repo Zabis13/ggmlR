@@ -170,3 +170,64 @@ test_that("rank 6 that merges only once is handed on, not refused", {
   # below covers.
   expect_highrank_ok(c(1L, 1L, 3L, 3L, 4L, 4L), c(0, 1, 4, 2, 5, 3))
 })
+
+# ---- 5D Transpose keeping the batch axis: native 5D permute ----
+#
+# perm[0] == 0 keeps ONNX axis 0 (ggml ne[4], the batch) in place, so the four
+# other axes permute directly as a 5D view -- no unit dim needed. The squeeze
+# path cannot do B > 1 with every axis > 1 at all. The resulting cont runs the
+# 5D copy; perm (0,1,4,3,2) moves ONNX axis 4 (ggml ne0, stride 1) to ONNX
+# position 2 (ggml ne2), which selects the tiled copy_transpose_02 shader --
+# 4D-only until 2026-11, when it copied the first batch and left the rest.
+
+expect_transpose_5d_ok <- function(dims, perm0, device) {
+  n <- prod(dims)
+  x <- as.numeric(seq_len(n) - 1)
+  path <- make_highrank_model(dims, perm0)
+  result <- as.numeric(run_onnx(path, list(X = x), device = device))
+  expect_equal(length(result), n)
+  expect_equal(result, onnx_transpose_ref(x, dims, perm0), tolerance = 1e-5,
+               info = paste(device, paste(perm0, collapse = ",")))
+}
+
+# B = 2, every axis > 1 and distinct; 37 and 33 straddle the 32x32 copy tile.
+DIMS_5D  <- c(2L, 3L, 37L, 5L, 33L)
+PERMS_5D <- list(c(0, 1, 4, 3, 2),   # ggml 0<->2: copy_transpose_02
+                 c(0, 3, 4, 1, 2),   # also lands ggml ne0 at ne2
+                 c(0, 2, 1, 3, 4),   # tiles nothing: generic 5D copy
+                 c(0, 1, 2, 4, 3),   # ggml 0<->1: copy_transpose
+                 c(0, 4, 3, 2, 1))   # full reversal of the four inner axes
+
+test_that("5D Transpose with batch 2 and no unit dim, perm keeps the batch (CPU)", {
+  for (p in PERMS_5D) expect_transpose_5d_ok(DIMS_5D, p, "cpu")
+})
+
+test_that("5D Transpose with batch 2 and no unit dim, perm keeps the batch (Vulkan)", {
+  skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 1L,
+              "Vulkan not available")
+  for (p in PERMS_5D) expect_transpose_5d_ok(DIMS_5D, p, "vulkan")
+})
+
+test_that("5D Transpose keeping a unit batch still matches (B = 1, native path)", {
+  # Before the native branch a B = 1 tensor went through squeeze -> 4D; it now
+  # takes the 5D path too, and must give the same answer.
+  expect_transpose_5d_ok(c(1L, 3L, 4L, 5L, 6L), c(0, 1, 4, 3, 2), "cpu")
+  skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 1L,
+              "Vulkan not available")
+  expect_transpose_5d_ok(c(1L, 3L, 4L, 5L, 6L), c(0, 1, 4, 3, 2), "vulkan")
+})
+
+test_that("5D Transpose with no unit dim and perm[0] != 0 is refused, not computed wrongly", {
+  # The squeeze path needs a unit axis; without one it used to carry on with
+  # axis 0 squeezed anyway and a reshape of the wrong size.
+  dims <- c(2L, 3L, 4L, 5L, 6L)
+  x <- as.numeric(seq_len(prod(dims)) - 1)
+  path <- make_highrank_model(dims, c(1, 0, 2, 3, 4))
+  res <- suppressWarnings(try(run_onnx(path, list(X = x)), silent = TRUE))
+  # same refusal contract as the rank-6 reversal above: an error, or no output
+  if (!inherits(res, "try-error")) {
+    expect_equal(length(as.numeric(res)), 0L)
+  } else {
+    succeed()
+  }
+})

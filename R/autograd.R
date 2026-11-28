@@ -2122,6 +2122,73 @@ ag_transpose <- function(x) {
   out
 }
 
+#' Permute the axes packed in the rows of a tensor
+#'
+#' ag_* tensors are \code{[features, batch]}; a multi-axis sample is packed in
+#' the rows, as \code{\link{ag_conv2d}} does with \code{[C*H*W, B]}. Each
+#' column of \code{x} is read as \code{array(col, shape)} (\code{shape[1]}
+#' varies fastest) and replaced by \code{aperm(array(col, shape), perm)}; the
+#' batch (columns) never moves -- use \code{\link{ag_transpose}} for that.
+#'
+#' On the GPU it is one permute made contiguous on the device, for up to 4
+#' axes (with the batch, ggml's 5 dimensions); the CPU takes any number. The
+#' gradient is the inverse permutation.
+#'
+#' @param x ag_tensor (or matrix) \code{[prod(shape), B]}.
+#' @param shape Integer vector: the axes of one sample.
+#' @param perm A permutation of \code{seq_along(shape)}, as in
+#'   \code{\link[base]{aperm}}: output axis \code{j} is input axis \code{perm[j]}.
+#' @return ag_tensor \code{[prod(shape), B]}, each column of shape
+#'   \code{shape[perm]}.
+#' @export
+#' @examples
+#' # two samples of shape (2, 3, 4): swap the last two axes
+#' x <- ag_tensor(matrix(1:48, 24, 2), device = "cpu")
+#' y <- ag_permute(x, c(2, 3, 4), c(1, 3, 2))
+#' all.equal(as.matrix(y)[, 1],
+#'           as.vector(aperm(array(1:24, c(2, 3, 4)), c(1, 3, 2))))
+ag_permute <- function(x, shape, perm) {
+  device <- if (is_ag_tensor(x)) x$device else "cpu"
+  shape  <- as.integer(shape)
+  perm   <- as.integer(perm)
+  k      <- length(shape)
+  if (k < 1L || anyNA(shape) || any(shape < 1L))
+    stop("ag_permute: shape must be a vector of positive integers", call. = FALSE)
+  if (length(perm) != k || anyNA(perm) || !identical(sort(perm), seq_len(k)))
+    stop(sprintf("ag_permute: perm must be a permutation of 1:%d", k), call. = FALSE)
+  if (device == "gpu" && k > 4L)
+    stop(sprintf("ag_permute: at most 4 axes on the GPU (got %d); the CPU takes any number", k),
+         call. = FALSE)
+  x_data <- if (device == "gpu") .ag_operand(x) else .ag_data(x)
+  nr <- if (device == "gpu") .ag_nrow(x_data) else nrow(x_data)
+  nc <- if (device == "gpu") .ag_ncol(x_data) else ncol(x_data)
+  if (nr != prod(shape))
+    stop(sprintf("ag_permute: x has %d rows; prod(shape) is %d", nr, prod(shape)),
+         call. = FALSE)
+
+  if (device == "gpu") {
+    out <- .ag_wrap_result(.ag_gpu_permute(x_data, shape, perm), device)
+  } else {
+    out <- ag_tensor(.ag_permute_host(x_data, shape, perm), device = device)
+  }
+  out$requires_grad <- is_ag_tensor(x) && x$requires_grad
+  if (out$requires_grad) {
+    inv <- order(perm); out_shape <- shape[perm]
+    grad_fn <- function(grad_out)
+      list(x = .ag_permute_host(.ag_as_matrix(grad_out), out_shape, inv))
+    out$grad_fn <- grad_fn
+    ag_record(out, grad_fn, list(x = x), op = "permute", shape = shape, perm = perm)
+  }
+  out
+}
+
+# Host form of ag_permute: aperm over the sample axes, batch kept last.
+.ag_permute_host <- function(m, shape, perm) {
+  B <- ncol(m)
+  a <- aperm(array(m, c(shape, B)), c(perm, length(shape) + 1L))
+  matrix(a, prod(shape), B)
+}
+
 #' Slice a range of rows
 #'
 #' Returns rows \code{from + 1} to \code{from + n} of \code{x} (\code{from} is

@@ -387,3 +387,399 @@ ggml_tp_forward <- function(weights, forward, x, devices, split = list(),
   if (nd == 1L) return(y)
   array(y, dim = ggml_tensor_shape(out)[seq_len(nd)])
 }
+
+#' Data parallelism over graph-level tensor parallelism (meta backend)
+#'
+#' Runs \code{\link{ggml_tp_forward}} on several replicas: the batch -- the
+#' last dimension of \code{x} -- is split into contiguous shards, one per
+#' replica, and each shard is computed on its own group of devices with the
+#' weights split inside the group by \code{split}. The shard outputs are joined
+#' back along their last dimension. There is no cross-replica communication.
+#'
+#' This is the stateless form: every call builds a meta backend per replica and
+#' uploads the weights again. It is the correctness reference for repeated
+#' calls; \code{forward} must treat batch columns independently (no batch norm
+#' or softmax across the batch), since each replica sees only its shard.
+#'
+#' @param weights,forward,split,default,type,mem_size See
+#'   \code{\link{ggml_tp_forward}}.
+#' @param x Numeric array with at least two dimensions; the last one is the
+#'   batch and is split across the replicas.
+#' @param replicas A non-empty list of device sets, each a valid
+#'   \code{devices} argument of \code{\link{ggml_meta_backend}}, e.g.
+#'   \code{list(c(0L, 1L), c(2L, 3L))} or \code{list(c("CPU", "CPU"), c("CPU", "CPU"))}.
+#' @return Numeric array: the per-sample output dimensions followed by the
+#'   batch dimension of \code{x}.
+#' @seealso \code{\link{ggml_tp_forward}}, \code{\link{ggml_tp_dp_forward}}
+#'   (the same layout for a single matrix).
+#' @export
+#' @examples
+#' \donttest{
+#' W1 <- array(rnorm(64 * 128), c(64, 128))
+#' W2 <- array(rnorm(128 * 32), c(128, 32))
+#' X  <- array(rnorm(64 * 6), c(64, 6))
+#' Y <- ggml_tp_dp_forward_graph(
+#'   weights = list(w1 = W1, w2 = W2),
+#'   forward = function(ctx, input, w)
+#'     ggml_mul_mat(ctx, w$w2, ggml_relu(ctx, ggml_mul_mat(ctx, w$w1, input))),
+#'   x = X, replicas = list(c("CPU", "CPU"), c("CPU", "CPU")),
+#'   split = list(w1 = "rows", w2 = "cols"))
+#' max(abs(Y - t(W2) %*% pmax(t(W1) %*% X, 0)))
+#' }
+ggml_tp_dp_forward_graph <- function(weights, forward, x, replicas, split = list(),
+                                     default = "mirror", type = GGML_TYPE_F32,
+                                     mem_size = 16L * 1024L * 1024L) {
+  if (!is.list(replicas) || length(replicas) < 1L) {
+    stop("replicas must be a non-empty list of device sets")
+  }
+  d <- dim(x)
+  if (is.null(d) || length(d) < 2L) {
+    stop("x must be an array with at least two dimensions; the last one is the batch")
+  }
+  nd <- length(d)
+  B  <- d[nd]
+  xm <- matrix(as.numeric(x), ncol = B)
+  shards <- .ggmlr_batch_shards(B, length(replicas))
+
+  ys <- vector("list", length(shards))
+  for (i in seq_along(shards)) {
+    idx <- shards[[i]]
+    xs  <- array(xm[, idx], c(d[-nd], length(idx)))
+    ys[[i]] <- ggml_tp_forward(weights, forward, xs, devices = replicas[[i]],
+                               split = split, default = default, type = type,
+                               mem_size = mem_size)
+  }
+  .ggmlr_tp_dp_join(ys, lengths(shards), B)
+}
+
+# Join per-shard outputs along the batch axis. Shared by the stateless and the
+# stateful DP paths so both return the same shape. ggml drops trailing unit
+# dims, so a one-sample shard may come back without its batch axis; the
+# per-sample shape is taken from a shard that kept it (falling back to a flat
+# feature vector when every shard has one sample).
+.ggmlr_tp_dp_join <- function(ys, nbs, B) {
+  fdims <- NULL
+  cols  <- vector("list", length(ys))
+  for (i in seq_along(ys)) {
+    y <- ys[[i]]; nb <- nbs[[i]]
+    if (length(y) %% nb != 0L) {
+      stop(sprintf("replica %d: output length %d is not a multiple of its shard size %d",
+                   i, length(y), nb))
+    }
+    yd <- dim(y)
+    if (is.null(fdims) && length(yd) >= 2L && yd[length(yd)] == nb) {
+      fdims <- yd[-length(yd)]
+    }
+    cols[[i]] <- matrix(as.numeric(y), ncol = nb)
+  }
+  out <- do.call(cbind, cols)
+  if (is.null(fdims)) fdims <- nrow(out)
+  array(out, c(fdims, B))
+}
+
+# ---- Stateful DP over meta TP: weights uploaded once, graphs cached by shard width ----
+
+.ggmlr_tp_shape <- function(a, what) {
+  if (!is.numeric(a) && !is.logical(a)) stop(sprintf("%s must be numeric", what))
+  d <- if (is.null(dim(a))) length(a) else dim(a)
+  if (length(d) > 4L) stop(sprintf("%s has %d dimensions; at most 4", what, length(d)))
+  if (any(d < 1L)) stop(sprintf("%s has an empty dimension", what))
+  as.numeric(d)
+}
+
+.ggmlr_tp_dp_check_weights <- function(h, weights) {
+  if (!is.list(weights) || is.null(names(weights)) ||
+      !setequal(names(weights), names(h$w_shapes)) || anyDuplicated(names(weights))) {
+    stop("weights must be a named list with exactly the names: ",
+         paste(names(h$w_shapes), collapse = ", "))
+  }
+  for (nm in names(h$w_shapes)) {
+    s <- .ggmlr_tp_shape(weights[[nm]], sprintf("weights$%s", nm))
+    if (!identical(s, h$w_shapes[[nm]])) {
+      stop(sprintf("weights$%s has shape (%s); expected (%s)", nm,
+                   paste(s, collapse = ", "), paste(h$w_shapes[[nm]], collapse = ", ")))
+    }
+  }
+}
+
+.ggmlr_tp_dp_upload <- function(h, weights) {
+  for (r in h$reps) {
+    for (nm in names(h$w_shapes)) {
+      ggml_backend_tensor_set_data(r$w[[nm]], as.numeric(weights[[nm]]))
+    }
+  }
+}
+
+# Free one cached graph entry: its scheduler (with the compute buffer the graph
+# was allocated in) first, then the input buffer and both contexts. compute is
+# synchronous, but synchronize anyway so nothing is freed under running work.
+.ggmlr_tp_dp_free_entry <- function(e) {
+  if (!is.null(e$sched)) {
+    ggml_backend_sched_synchronize(e$sched)
+    ggml_backend_sched_free(e$sched)
+  }
+  if (!is.null(e$ctx_g))  ggml_free(e$ctx_g)
+  if (!is.null(e$buf_in)) ggml_backend_buffer_free(e$buf_in)
+  if (!is.null(e$ctx_in)) ggml_free(e$ctx_in)
+  invisible(NULL)
+}
+
+# Idempotent: every pointer is dropped from the handle as it is freed, so an
+# explicit ggml_tp_dp_free() followed by the finalizer frees nothing twice.
+.ggmlr_tp_dp_release <- function(h) {
+  reps <- h$reps
+  h$reps <- list()
+  for (r in reps) {
+    for (e in as.list(r$cache)) .ggmlr_tp_dp_free_entry(e)
+    if (!is.null(r$buf_w)) ggml_backend_buffer_free(r$buf_w)
+    if (!is.null(r$ctx_w)) ggml_free(r$ctx_w)
+    if (!is.null(r$cpu))   ggml_backend_free(r$cpu)
+    if (!is.null(r$meta))  ggml_backend_free(r$meta)
+  }
+  h$closed <- TRUE
+  invisible(NULL)
+}
+
+#' Persistent DP replicas over graph-level tensor parallelism
+#'
+#' The stateful form of \code{\link{ggml_tp_dp_forward_graph}}: each replica
+#' gets its meta backend and its weight buffer once, here, and
+#' \code{ggml_tp_dp_run()} only uploads the input and computes. The graph
+#' depends on the shard width, so each replica builds it (with its input
+#' tensor) the first time a width is seen and reuses it afterwards; a new batch
+#' size costs a graph build, not a weight upload.
+#'
+#' Each cached width has its own scheduler and compute buffer (activations),
+#' so the cache is capped at \code{max_widths} widths per replica; beyond that
+#' the least recently used width is freed and rebuilt if it comes back.
+#'
+#' Weights belong to the replicas: change them with
+#' \code{ggml_tp_dp_set_weights()}, which uploads to every replica. Release the
+#' device memory with \code{ggml_tp_dp_free()}; a finalizer does the same when
+#' the handle is garbage-collected, but on a GPU it is better not to wait for
+#' that. Every replica holds a full set of weights (split within its group), so
+#' device memory grows with the number of replicas.
+#'
+#' @inheritParams ggml_tp_dp_forward_graph
+#' @param max_widths Most shard widths kept built per replica (default 4).
+#'   Bounds the activation memory: one compute buffer per cached width.
+#' @param h A handle from \code{ggml_tp_dp_create()}.
+#' @param x Numeric array with at least two dimensions; the last one is the
+#'   batch. All dimensions but the last must stay the same between calls.
+#' @param weights For \code{ggml_tp_dp_create()}: see
+#'   \code{\link{ggml_tp_forward}}. For \code{ggml_tp_dp_set_weights()}: the
+#'   same names and shapes as at creation.
+#' @return \code{ggml_tp_dp_create()}: a handle (class
+#'   \code{ggml_tp_dp}). \code{ggml_tp_dp_run()}: as
+#'   \code{\link{ggml_tp_dp_forward_graph}}. \code{ggml_tp_dp_set_weights()},
+#'   \code{ggml_tp_dp_free()}: \code{h}, invisibly.
+#' @seealso \code{\link{ggml_tp_dp_forward_graph}} (stateless reference),
+#'   \code{\link{ggml_tp_forward}}, \code{\link{ggml_meta_backend}}.
+#' @export
+#' @examples
+#' \donttest{
+#' W1 <- array(rnorm(64 * 128), c(64, 128))
+#' W2 <- array(rnorm(128 * 32), c(128, 32))
+#' h <- ggml_tp_dp_create(
+#'   weights = list(w1 = W1, w2 = W2),
+#'   forward = function(ctx, input, w)
+#'     ggml_mul_mat(ctx, w$w2, ggml_relu(ctx, ggml_mul_mat(ctx, w$w1, input))),
+#'   replicas = list(c("CPU", "CPU"), c("CPU", "CPU")),
+#'   split = list(w1 = "rows", w2 = "cols"))
+#' X <- array(rnorm(64 * 6), c(64, 6))
+#' Y <- ggml_tp_dp_run(h, X)
+#' max(abs(Y - t(W2) %*% pmax(t(W1) %*% X, 0)))
+#' ggml_tp_dp_free(h)
+#' }
+ggml_tp_dp_create <- function(weights, forward, replicas, split = list(),
+                                default = "mirror", type = GGML_TYPE_F32,
+                                mem_size = 16L * 1024L * 1024L, max_widths = 4L) {
+  if (!is.list(replicas) || length(replicas) < 1L) {
+    stop("replicas must be a non-empty list of device sets")
+  }
+  if (!is.numeric(max_widths) || length(max_widths) != 1L || is.na(max_widths) ||
+      max_widths < 1) {
+    stop("max_widths must be a single number >= 1")
+  }
+  if (!is.list(weights) || length(weights) < 1L || is.null(names(weights)) ||
+      any(names(weights) == "") || anyDuplicated(names(weights))) {
+    stop("weights must be a non-empty list with unique names")
+  }
+  if ("input" %in% names(weights)) {
+    stop("weights: the name 'input' is reserved for the input tensor")
+  }
+  if (!is.function(forward)) stop("forward must be a function(ctx, input, w)")
+  if (!(type %in% c(GGML_TYPE_F32, GGML_TYPE_F16))) {
+    stop("type must be GGML_TYPE_F32 or GGML_TYPE_F16")
+  }
+
+  h <- new.env(parent = emptyenv())
+  h$w_shapes <- Map(.ggmlr_tp_shape, weights, sprintf("weights$%s", names(weights)))
+  h$forward  <- forward
+  h$type     <- type
+  h$mem_size <- mem_size
+  h$max_widths <- as.integer(max_widths)
+  h$x_inner  <- NULL         # dims of x but the batch, fixed by the first run
+  h$reps     <- list()
+  h$closed   <- FALSE
+  class(h) <- "ggml_tp_dp"
+  reg.finalizer(h, .ggmlr_tp_dp_release, onexit = TRUE)
+
+  ok <- FALSE
+  on.exit(if (!ok) .ggmlr_tp_dp_release(h), add = TRUE)
+  for (i in seq_along(replicas)) {
+    r <- new.env(parent = emptyenv())
+    r$cache <- new.env(parent = emptyenv())   # shard width -> graph entry
+    r$lru   <- character(0)                   # cache keys, least recent first
+    h$reps[[i]] <- r
+    r$meta <- ggml_meta_backend(replicas[[i]], split = split, default = default)
+    r$split_log <- attr(r$meta, "meta_split_log")
+    r$split_log$emit <- FALSE
+    r$cpu <- ggml_backend_cpu_init()
+    r$ctx_w <- ggml_init(mem_size, no_alloc = TRUE)
+    r$w <- lapply(names(weights), function(nm) {
+      t <- ggml_new_tensor(r$ctx_w, type, length(h$w_shapes[[nm]]), h$w_shapes[[nm]])
+      ggml_set_name(t, nm)
+      t
+    })
+    names(r$w) <- names(weights)
+    r$buf_w <- ggml_backend_alloc_ctx_tensors(r$ctx_w, r$meta)
+    if (is.null(r$buf_w)) {
+      stop(sprintf("ggml_tp_dp_create: replica %d: could not allocate the weights (out of memory?)", i))
+    }
+  }
+  warns <- unique(unlist(lapply(h$reps, function(r) r$split_log$warnings)))
+  for (msg in warns) warning(msg, call. = FALSE)
+  .ggmlr_tp_dp_upload(h, weights)
+  ok <- TRUE
+  h
+}
+
+# Graph entry of replica `r` for shard shape `shape` (built on first use).
+#
+# Each entry owns its scheduler. A scheduler shared by graphs of different
+# widths crashes: after a wider graph grows the compute buffer, the narrower
+# graph's nodes still hold data pointers into the freed buffer, and ggml-alloc
+# skips tensors whose data is already set (confirmed: widths 2,2,3 pass, 2,3,1,2
+# segfault). With one scheduler per graph the buffer and the graph live together.
+# That makes the cache size a bound on activation memory too, so it is capped at
+# h$max_widths entries per replica, evicting the least recently used. compute is
+# synchronous, so an evicted entry has no work in flight.
+.ggmlr_tp_dp_entry <- function(h, r, shape) {
+  key <- as.character(shape[length(shape)])
+  e <- r$cache[[key]]
+  if (!is.null(e)) {
+    r$lru <- c(setdiff(r$lru, key), key)
+    return(e)
+  }
+  while (length(r$lru) >= h$max_widths) {
+    old <- r$lru[1L]
+    r$lru <- r$lru[-1L]
+    .ggmlr_tp_dp_free_entry(r$cache[[old]])
+    rm(list = old, envir = r$cache)
+  }
+  e <- new.env(parent = emptyenv())
+  ok <- FALSE
+  on.exit(if (!ok) .ggmlr_tp_dp_free_entry(e), add = TRUE)
+  # The input lives in its own buffer on the meta backend (a split rule may name
+  # it), apart from the weights, so a new width never touches the weights.
+  e$ctx_in <- ggml_init(1024L * 1024L, no_alloc = TRUE)
+  e$input <- ggml_new_tensor(e$ctx_in, GGML_TYPE_F32, length(shape), shape)
+  ggml_set_name(e$input, "input")
+  e$buf_in <- ggml_backend_alloc_ctx_tensors(e$ctx_in, r$meta)
+  if (is.null(e$buf_in)) stop("ggml_tp_dp_run: could not allocate the input (out of memory?)")
+  e$ctx_g <- ggml_init(h$mem_size, no_alloc = TRUE)
+  out <- h$forward(e$ctx_g, e$input, r$w)
+  if (!inherits(out, "externalptr")) stop("forward must return a ggml tensor")
+  out <- ggml_scale(e$ctx_g, out, 1)
+  ggml_set_name(out, "tp_output")
+  ggml_set_output(out)
+  e$out <- out
+  e$gf <- ggml_build_forward_expand(e$ctx_g, out)
+  e$sched <- ggml_backend_sched_new(list(r$meta, r$cpu), parallel = FALSE)
+  for (msg in unique(r$split_log$warnings)) warning(msg, call. = FALSE)
+  r$split_log$warnings <- character(0)
+  assign(key, e, envir = r$cache)
+  r$lru <- c(r$lru, key)
+  ok <- TRUE
+  e
+}
+
+#' @rdname ggml_tp_dp_create
+#' @export
+ggml_tp_dp_run <- function(h, x) {
+  if (!inherits(h, "ggml_tp_dp")) stop("h must come from ggml_tp_dp_create()")
+  if (isTRUE(h$closed)) stop("ggml_tp_dp_run: the replicas have been freed")
+  d <- dim(x)
+  if (is.null(d) || length(d) < 2L) {
+    stop("x must be an array with at least two dimensions; the last one is the batch")
+  }
+  nd <- length(d)
+  if (nd > 4L) stop(sprintf("x has %d dimensions; at most 4", nd))
+  if (is.null(h$x_inner)) {
+    h$x_inner <- as.numeric(d[-nd])
+  } else if (!identical(as.numeric(d[-nd]), h$x_inner)) {
+    stop(sprintf("x has inner dimensions (%s); this handle was first run with (%s)",
+                 paste(d[-nd], collapse = ", "), paste(h$x_inner, collapse = ", ")))
+  }
+  B  <- d[nd]
+  xm <- matrix(as.numeric(x), ncol = B)
+  shards <- .ggmlr_batch_shards(B, length(h$reps))
+
+  # Replicas beyond length(shards) get no shard, so no graph is built for them.
+  ys <- vector("list", length(shards))
+  for (i in seq_along(shards)) {
+    idx <- shards[[i]]
+    nb  <- length(idx)
+    r   <- h$reps[[i]]
+    e   <- .ggmlr_tp_dp_entry(h, r, c(h$x_inner, nb))
+    ggml_backend_tensor_set_data(e$input, as.numeric(xm[, idx]))
+    # The entry's own scheduler: re-allocating the same graph in the same
+    # compute buffer lands every node at the address it already holds.
+    ggml_backend_sched_reset(e$sched)
+    if (!ggml_backend_sched_alloc_graph(e$sched, e$gf)) {
+      stop(sprintf("ggml_tp_dp_run: replica %d: could not allocate the graph", i))
+    }
+    status <- ggml_backend_sched_graph_compute(e$sched, e$gf)
+    if (!identical(as.integer(status), 0L)) {
+      stop(sprintf("ggml_tp_dp_run: replica %d: compute failed (ggml_status %d)",
+                   i, as.integer(status)))
+    }
+    # Same shaping as ggml_tp_forward(), then the shared join.
+    y   <- ggml_backend_tensor_get_data(e$out)
+    ond <- max(1L, ggml_n_dims(e$out))
+    ys[[i]] <- if (ond == 1L) y else array(y, ggml_tensor_shape(e$out)[seq_len(ond)])
+  }
+  .ggmlr_tp_dp_join(ys, lengths(shards), B)
+}
+
+#' @rdname ggml_tp_dp_create
+#' @export
+ggml_tp_dp_set_weights <- function(h, weights) {
+  if (!inherits(h, "ggml_tp_dp")) stop("h must come from ggml_tp_dp_create()")
+  if (isTRUE(h$closed)) stop("ggml_tp_dp_set_weights: the replicas have been freed")
+  .ggmlr_tp_dp_check_weights(h, weights)
+  .ggmlr_tp_dp_upload(h, weights)
+  invisible(h)
+}
+
+#' @rdname ggml_tp_dp_create
+#' @export
+ggml_tp_dp_free <- function(h) {
+  if (!inherits(h, "ggml_tp_dp")) stop("h must come from ggml_tp_dp_create()")
+  .ggmlr_tp_dp_release(h)
+  invisible(h)
+}
+
+#' @export
+print.ggml_tp_dp <- function(x, ...) {
+  if (isTRUE(x$closed)) {
+    cat("<ggml_tp_dp: freed>\n")
+  } else {
+    widths <- unique(unlist(lapply(x$reps, function(r) ls(r$cache))))
+    cat(sprintf("<ggml_tp_dp: %d replica(s), weights: %s; cached shard widths: %s>\n",
+                length(x$reps), paste(names(x$w_shapes), collapse = ", "),
+                if (length(widths)) paste(sort(as.integer(widths)), collapse = ", ") else "none"))
+  }
+  invisible(x)
+}

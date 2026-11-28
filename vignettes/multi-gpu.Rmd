@@ -203,10 +203,19 @@ apply — the axis is shorter than the number of devices — falls back to
 pointers, and may list the same device twice. That is how to try the API on one
 GPU, or with no GPU at all:
 
-```{r eval=FALSE}
+```{r}
+set.seed(1)
+n_in <- 64L; n_hid <- 128L; n_out <- 32L; batch <- 4L
+W1 <- array(rnorm(n_in * n_hid),  c(n_in,  n_hid))
+W2 <- array(rnorm(n_hid * n_out), c(n_hid, n_out))
+X  <- array(rnorm(n_in * batch),  c(n_in,  batch))
+mlp <- function(ctx, input, w)
+  ggml_mul_mat(ctx, w$w2, ggml_relu(ctx, ggml_mul_mat(ctx, w$w1, input)))
+
 Y <- ggml_tp_forward(list(w1 = W1, w2 = W2), mlp, X,
                      devices = c("CPU", "CPU"),
                      split = list(w1 = "rows", w2 = "cols"))
+max(abs(Y - t(W2) %*% pmax(t(W1) %*% X, 0)))
 ```
 
 For a graph you drive yourself — a scheduler, repeated computes, several

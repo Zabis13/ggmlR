@@ -310,6 +310,22 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
 
         if (is_identity) {
             out = a;
+        } else if (nd == 5 && n_perm == 5 && perm[0] == 0) {
+            /* 5D Transpose that keeps the outermost ONNX axis (the batch of a
+             * [B, ...] tensor) in place: native 5D permute. ONNX axis 0 is
+             * ggml ne[4], which ggml_permute leaves untouched (it shuffles
+             * ne[0..3] only), so the other four axes permute directly and no
+             * unit dim is needed -- the squeeze path below requires one and
+             * cannot handle B > 1 with every axis > 1. The cont then runs the
+             * 5D copy (copy_transpose / copy_transpose_02 walk ne[4]). */
+            int ax[4];
+            for (int i = 1; i < 5; i++) {
+                int ggml_dst = 4 - i;
+                int ggml_src = 4 - (int)perm[i];
+                ax[ggml_src] = ggml_dst;
+            }
+            out = ggml_cont(c->ctx, ggml_permute(c->ctx, a, ax[0], ax[1], ax[2], ax[3]));
+            out_nd = 5;
         } else if (nd >= 5 && n_perm >= 5) {
             /* 5D Transpose via squeeze-batch → 4D permute → restore 5D.
              * Find a unit ONNX *input* dim to squeeze out temporarily. */
@@ -321,8 +337,14 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                 }
             }
             if (batch_in < 0) {
-                fprintf(stderr, "[onnx] Transpose 5D: no unit dim to squeeze\n");
-                batch_in = 0;
+                /* Refuse rather than squeeze a non-unit axis: the 4D reshape
+                 * below would get the wrong element count. A perm keeping
+                 * axis 0 never gets here (native 5D branch above). */
+                fprintf(stderr, "[onnx] Transpose %s: 5D with no unit dim and perm[0] = %lld "
+                                "-- only perms keeping axis 0, or tensors with a unit dim, "
+                                "are supported\n",
+                        n->outputs[0], (long long)perm[0]);
+                return -1;
             }
             /* Find where batch_in lands in output: perm[batch_out]==batch_in */
             int batch_out = 0;
@@ -2103,7 +2125,8 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
         if (n->n_inputs > 3 && n->inputs[3][0] != '\0') {
             const onnx_initializer_t *si = onnx_find_initializer(c->onnx, n->inputs[3]);
             if (!si) si = find_constant_tensor(c->onnx, n->inputs[3]);
-            if (si && si->raw_data && si->data_type == ONNX_DTYPE_INT64) {
+            if (si && si->raw_data && si->data_type == ONNX_DTYPE_INT64 &&
+                si->raw_size >= sizeof(int64_t)) {  /* empty "sizes" = not given */
                 int nsz = (int)(si->raw_size / sizeof(int64_t));
                 int64_t sizes[4];
                 if (nsz > 4) nsz = 4;
@@ -2126,7 +2149,8 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                  * the same size it went in, and the Concat downstream failed
                  * on axes that had never been resized. */
                 if (!sci) sci = find_constant_tensor(c->onnx, n->inputs[scales_idx]);
-                if (sci && sci->raw_data && sci->data_type == ONNX_DTYPE_FLOAT) {
+                if (sci && sci->raw_data && sci->data_type == ONNX_DTYPE_FLOAT &&
+                    sci->raw_size >= sizeof(float)) {  /* empty "scales" = not given */
                     int nsc = (int)(sci->raw_size / sizeof(float));
                     float scales[4];
                     if (nsc > 4) nsc = 4;
@@ -2179,6 +2203,13 @@ int map_node_tensor(onnx_ggml_ctx_t *c, const onnx_node_t *n,
                     got_target = 1;
                 }
             }
+        }
+        if (!got_target) {
+            /* Neither sizes nor scales could be read: returning the input
+             * unchanged would surface later as a shape clash far from here. */
+            fprintf(stderr, "[onnx] %s %s: target size unknown (sizes/scales "
+                            "not constant)\n", op, n->outputs[0]);
+            return -1;
         }
         out = ggml_interpolate(c->ctx, a,
                                target_ne[0], target_ne[1],

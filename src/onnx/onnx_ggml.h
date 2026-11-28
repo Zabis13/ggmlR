@@ -496,6 +496,9 @@ typedef struct {
 onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_threads,
                                   enum ggml_type model_dtype);
 
+/* Why the last onnx_ggml_build() returned NULL ("" if no reason was recorded). */
+const char *onnx_ggml_build_error(void);
+
 /* Run inference. input_data/input_names: arrays of length n_inputs.
  * Each input_data[i] is a flat float array matching the model input shape.
  * Returns 0 on success. */

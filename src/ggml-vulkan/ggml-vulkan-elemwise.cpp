@@ -330,10 +330,11 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
 
             if (pipeline == ctx->device->pipeline_cpy_transpose_02_32 ||
                 pipeline == ctx->device->pipeline_cpy_transpose_02_16) {
-                // 32x32 tiles over dims 0 and 2; dim1 and dim3 are the batch
+                // 32x32 tiles over dims 0 and 2; dims 1, 3 and 4 are the batch
+                // (dim4: DIVERGENCE from upstream, must match the shader's z loop)
                 elements[0] = (uint32_t)CEIL_DIV(dst->ne[0], 32);
                 elements[1] = (uint32_t)CEIL_DIV(dst->ne[2], 32);
-                elements[2] = (uint32_t)(dst->ne[1]*dst->ne[3]);
+                elements[2] = (uint32_t)(dst->ne[1]*dst->ne[3]*dst->ne[4]);
                 elements[0] = std::min(elements[0], ctx->device->properties.limits.maxComputeWorkGroupCount[0]);
                 elements[1] = std::min(elements[1], ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
                 elements[2] = std::min(elements[2], ctx->device->properties.limits.maxComputeWorkGroupCount[2]);

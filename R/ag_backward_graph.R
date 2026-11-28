@@ -272,7 +272,7 @@ ag_backward_resident <- function(on = TRUE) {
 .AG_BWD_GRAPH_OPS <- c("matmul", "add", "loss_const", "elemwise_mul",
                        "transpose", "softmax", "scale", "mul", "flash_attn",
                        "sub", "log", "sum", "log_softmax", "slice_rows",
-                       "concat_rows", "silu", "rms_norm", "conv2d", "reshape", "conv_transpose2d",
+                       "concat_rows", "silu", "rms_norm", "conv2d", "reshape", "permute", "conv_transpose2d",
                        "layer_norm")
 
 # Can this tape run as one graph?
@@ -859,6 +859,14 @@ ag_backward_profile_report <- function() {
         accumulate(as.character(x$id),
                    ggml_cont(ctx, ggml_reshape_2d(ctx, src, nd$nrow_x, nd$ncol_x)))
       }
+
+    } else if (identical(nd$op, "permute")) {
+      # dx = g permuted back: the output's axes are shape[perm], and order(perm)
+      # undoes perm (aperm(aperm(a, p), order(p)) == a). Same kernel as forward.
+      x <- inp$x
+      if (is_ag_tensor(x) && isTRUE(x$requires_grad))
+        accumulate(as.character(x$id),
+                   .ag_permute_ggml(ctx, g, nd$shape[nd$perm], order(nd$perm)))
 
     } else if (identical(nd$op, "slice_rows")) {
       # dx = g in rows from+1..from+n, zero elsewhere: one pad node with zero

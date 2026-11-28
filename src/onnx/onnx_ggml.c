@@ -3482,11 +3482,17 @@ static void fill_deferred_tensors(onnx_ggml_ctx_t *c) {
     #undef DF_MARK
 }
 
+/* Reason for the last failed onnx_ggml_build(); R is single-threaded here. */
+static char g_build_error[512];
+
+const char *onnx_ggml_build_error(void) { return g_build_error; }
+
 /* ── Build full graph ───────────────────────────────────────────── */
 
 onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_threads,
                                   enum ggml_type model_dtype) {
     onnx_reset_unsupported_warnings();
+    g_build_error[0] = '\0';
     onnx_ggml_ctx_t *c = calloc(1, sizeof(onnx_ggml_ctx_t));
     if (!c) return NULL;
     c->onnx = onnx;
@@ -3661,6 +3667,33 @@ onnx_ggml_ctx_t *onnx_ggml_build(onnx_model_t *onnx, const char *device, int n_t
                     c->segments[0].first_node, c->segments[0].last_node);
     } else {
         if (map_node_range(c, 0, onnx->n_nodes - 1) != 0) goto fail;
+        /* Single pass: the whole graph is built now, so an output no path
+         * reaches is known here. Fail the load instead of running a graph
+         * whose outputs would be whatever their buffers held. (Segmented
+         * models build their outputs in the last segment, during a run --
+         * onnx_ggml_run reports those.) */
+        int n_missing = 0;
+        const char *missing = NULL;
+        for (int i = 0; i < onnx->n_outputs; i++) {
+            if (!tmap_get(c, onnx->outputs[i].name)) {
+                if (!missing) missing = onnx->outputs[i].name;
+                n_missing++;
+            }
+        }
+        if (n_missing > 0) {
+            if (c->first_failed_node[0]) {
+                snprintf(g_build_error, sizeof(g_build_error),
+                         "%d of %d model outputs cannot be built (first: '%s'); "
+                         "first failure: node '%s' (%s)",
+                         n_missing, onnx->n_outputs, missing,
+                         c->first_failed_node, c->first_failed_op);
+            } else {
+                snprintf(g_build_error, sizeof(g_build_error),
+                         "%d of %d model outputs cannot be built (first: '%s')",
+                         n_missing, onnx->n_outputs, missing);
+            }
+            goto fail;
+        }
     }
 
 

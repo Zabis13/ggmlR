@@ -908,6 +908,7 @@ SEXP R_ggml_reshape_1d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0);
 SEXP R_ggml_reshape_2d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0, SEXP ne1);
 SEXP R_ggml_reshape_3d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0, SEXP ne1, SEXP ne2);
 SEXP R_ggml_reshape_4d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0, SEXP ne1, SEXP ne2, SEXP ne3);
+SEXP R_ggml_reshape_5d(SEXP ctx_ptr, SEXP a_ptr, SEXP ne0, SEXP ne1, SEXP ne2, SEXP ne3, SEXP ne4);
 SEXP R_ggml_permute(SEXP ctx_ptr, SEXP a_ptr, SEXP axis0, SEXP axis1, SEXP axis2, SEXP axis3);
 SEXP R_ggml_cont(SEXP ctx_ptr, SEXP a_ptr);
 // Tensor info
@@ -1516,6 +1517,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"R_ggml_reshape_2d",  (DL_FUNC) &R_ggml_reshape_2d,  4},
     {"R_ggml_reshape_3d",  (DL_FUNC) &R_ggml_reshape_3d,  5},
     {"R_ggml_reshape_4d",  (DL_FUNC) &R_ggml_reshape_4d,  6},
+    {"R_ggml_reshape_5d",  (DL_FUNC) &R_ggml_reshape_5d,  7},
     {"R_ggml_permute",     (DL_FUNC) &R_ggml_permute,     6},
     {"R_ggml_cont",        (DL_FUNC) &R_ggml_cont,        2},
 

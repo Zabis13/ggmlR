@@ -269,3 +269,158 @@ test_that("ggml_tp_forward MLP on 2 real Vulkan devices matches R", {
   y <- tp_mlp(c(0L, 1L), MEGATRON)
   expect_equal(y, MLP_REF, tolerance = 1e-2, ignore_attr = TRUE)
 })
+
+# ---- ggml_tp_dp_forward_graph(): DP replicas over meta TP ----
+
+CPU2 <- c("CPU", "CPU")
+
+test_that("ggml_tp_dp_forward_graph: 1, 2 and 3 replicas on CPU match R", {
+  cpu_dev_or_skip()
+  for (n_rep in 1:3) {
+    y <- ggml_tp_dp_forward_graph(list(w1 = W1, w2 = W2), mlp, X,
+                                  replicas = rep(list(CPU2), n_rep), split = MEGATRON)
+    expect_identical(dim(y), c(N_OUT, BATCH))
+    expect_equal(y, MLP_REF, tolerance = 1e-5, ignore_attr = TRUE)
+  }
+})
+
+test_that("ggml_tp_dp_forward_graph: one-sample shards and more replicas than samples", {
+  cpu_dev_or_skip()
+  # BATCH = 4 over 6 replicas: four shards of one sample, two replicas idle.
+  y <- ggml_tp_dp_forward_graph(list(w1 = W1, w2 = W2), mlp, X,
+                                replicas = rep(list(CPU2), 6L), split = MEGATRON)
+  expect_identical(dim(y), c(N_OUT, BATCH))
+  expect_equal(y, MLP_REF, tolerance = 1e-5, ignore_attr = TRUE)
+})
+
+test_that("ggml_tp_dp_forward_graph: uneven shards and a 3-D input", {
+  cpu_dev_or_skip()
+  # x [N_IN, 2, 5]: batch 5 over 2 replicas -> shards of 3 and 2.
+  x3 <- array(rnorm(N_IN * 2 * 5), c(N_IN, 2L, 5L))
+  ref <- array(apply(x3, 3, function(s) t(W2) %*% pmax(t(W1) %*% s, 0)),
+               c(N_OUT, 2L, 5L))
+  y <- ggml_tp_dp_forward_graph(list(w1 = W1, w2 = W2), mlp, x3,
+                                replicas = list(CPU2, CPU2), split = MEGATRON)
+  expect_identical(dim(y), c(N_OUT, 2L, 5L))
+  expect_equal(y, ref, tolerance = 1e-5, ignore_attr = TRUE)
+})
+
+test_that("ggml_tp_dp_forward_graph validates its arguments", {
+  f <- function(x, replicas) ggml_tp_dp_forward_graph(list(w1 = W1, w2 = W2), mlp,
+                                                      x, replicas = replicas)
+  expect_error(f(X, list()), "non-empty list")
+  expect_error(f(X, CPU2), "non-empty list")
+  expect_error(f(X[, 1], list(CPU2)), "at least two dimensions")
+})
+
+# ---- ggml_tp_dp_create() / _run() / _set_weights() / _free(): stateful DP ----
+
+dp_ref <- function(x, n_rep, w = list(w1 = W1, w2 = W2)) {
+  ggml_tp_dp_forward_graph(w, mlp, x, replicas = rep(list(CPU2), n_rep), split = MEGATRON)
+}
+
+test_that("ggml_tp_dp_run matches the stateless reference across batch sizes", {
+  cpu_dev_or_skip()
+  h <- ggml_tp_dp_create(list(w1 = W1, w2 = W2), mlp,
+                         replicas = list(CPU2, CPU2), split = MEGATRON)
+  on.exit(ggml_tp_dp_free(h))
+  # batch 4 -> 2+2, 5 -> 3+2, 1 -> one shard (one replica idle), 4 again (cache hit)
+  # widths 2, 3, 1, then 2 again: a narrower graph after a wider one (the case
+  # that crashed with one scheduler shared by all widths)
+  for (b in c(4L, 5L, 1L, 4L)) {
+    x <- array(rnorm(N_IN * b), c(N_IN, b))
+    y <- ggml_tp_dp_run(h, x)
+    expect_identical(dim(y), c(N_OUT, b))
+    expect_equal(y, dp_ref(x, 2L), tolerance = 1e-6)
+    expect_equal(y, t(W2) %*% pmax(t(W1) %*% x, 0), tolerance = 1e-5, ignore_attr = TRUE)
+  }
+  # widths seen: 2, 3, 1; the idle replica built nothing for batch 1
+  expect_setequal(ls(h$reps[[1]]$cache), c("1", "2", "3"))
+  expect_setequal(ls(h$reps[[2]]$cache), c("2"))
+  expect_output(print(h), "2 replica\\(s\\).*cached shard widths: 1, 2, 3")
+})
+
+test_that("ggml_tp_dp_set_weights uploads to every replica, after validating", {
+  cpu_dev_or_skip()
+  h <- ggml_tp_dp_create(list(w1 = W1, w2 = W2), mlp,
+                         replicas = list(CPU2, CPU2), split = MEGATRON)
+  on.exit(ggml_tp_dp_free(h))
+  y0 <- ggml_tp_dp_run(h, X)
+  W1b <- W1 * 0.5; W2b <- -W2
+  expect_error(ggml_tp_dp_set_weights(h, list(w1 = W1b)), "exactly the names")
+  expect_error(ggml_tp_dp_set_weights(h, list(w1 = W1b, w2 = t(W2b))), "has shape")
+  # a rejected call must not have written anything
+  expect_equal(ggml_tp_dp_run(h, X), y0, tolerance = 0)
+  ggml_tp_dp_set_weights(h, list(w2 = W2b, w1 = W1b))
+  expect_equal(ggml_tp_dp_run(h, X), dp_ref(X, 2L, list(w1 = W1b, w2 = W2b)),
+               tolerance = 1e-6)
+})
+
+test_that("ggml_tp_dp_free is idempotent and a freed handle refuses to run", {
+  cpu_dev_or_skip()
+  h <- ggml_tp_dp_create(list(w1 = W1, w2 = W2), mlp, replicas = list(CPU2))
+  ggml_tp_dp_run(h, X)
+  ggml_tp_dp_free(h)
+  expect_silent(ggml_tp_dp_free(h))
+  expect_error(ggml_tp_dp_run(h, X), "freed")
+  expect_error(ggml_tp_dp_set_weights(h, list(w1 = W1, w2 = W2)), "freed")
+  expect_output(print(h), "freed")
+  # the finalizer after an explicit free does nothing
+  rm(h); expect_silent(invisible(gc()))
+})
+
+test_that("ggml_tp_dp_create / _run validate their arguments", {
+  f <- function(...) ggml_tp_dp_create(..., replicas = list(CPU2))
+  expect_error(ggml_tp_dp_create(list(w1 = W1), mlp, replicas = list()), "non-empty list")
+  expect_error(f(list(W1), mlp), "unique names")
+  expect_error(f(list(input = W1), mlp), "reserved")
+  expect_error(f(list(w1 = W1), "mlp"), "forward must be")
+  expect_error(f(list(w1 = W1), mlp, type = GGML_TYPE_Q4_0), "F32 or GGML_TYPE_F16")
+  expect_error(ggml_tp_dp_run(list(), X), "ggml_tp_dp_create")
+  cpu_dev_or_skip()
+  h <- f(list(w1 = W1, w2 = W2), mlp, split = MEGATRON)
+  on.exit(ggml_tp_dp_free(h))
+  expect_error(ggml_tp_dp_run(h, X[, 1]), "at least two dimensions")
+  ggml_tp_dp_run(h, X)
+  expect_error(ggml_tp_dp_run(h, array(0, c(N_IN + 1L, 2L))), "inner dimensions")
+})
+
+test_that("ggml_tp_dp_run evicts the least recently used width beyond max_widths", {
+  cpu_dev_or_skip()
+  h <- ggml_tp_dp_create(list(w1 = W1, w2 = W2), mlp, replicas = list(CPU2, CPU2),
+                         split = MEGATRON, max_widths = 2L)
+  on.exit(ggml_tp_dp_free(h))
+  run <- function(b) {
+    x <- array(rnorm(N_IN * b), c(N_IN, b))
+    expect_equal(ggml_tp_dp_run(h, x), dp_ref(x, 2L), tolerance = 1e-6)
+  }
+  run(4L)   # width 2
+  run(6L)   # width 3
+  expect_setequal(ls(h$reps[[1]]$cache), c("2", "3"))
+  run(4L)   # width 2 used again: now 3 is the least recent
+  run(2L)   # width 1 evicts 3
+  expect_setequal(ls(h$reps[[1]]$cache), c("1", "2"))
+  run(6L)   # width 3 rebuilt, evicts 2
+  expect_setequal(ls(h$reps[[1]]$cache), c("1", "3"))
+  expect_identical(h$reps[[1]]$lru, c("1", "3"))
+  expect_error(ggml_tp_dp_create(list(w1 = W1, w2 = W2), mlp, replicas = list(CPU2),
+                                 max_widths = 0), "max_widths")
+})
+
+test_that("ggml_tp_dp_run on Vulkan (2 replicas x 2x the same device) matches R", {
+  skip_if_not(ggml_vulkan_available() && ggml_vulkan_device_count() >= 1L,
+              "Vulkan not available")
+  VK2 <- c(0L, 0L)
+  h <- ggml_tp_dp_create(list(w1 = W1, w2 = W2), mlp, replicas = list(VK2, VK2),
+                         split = MEGATRON, max_widths = 2L)
+  on.exit(ggml_tp_dp_free(h))
+  # narrower after wider, plus an eviction and a rebuild
+  for (b in c(4L, 6L, 2L, 4L)) {
+    x <- array(rnorm(N_IN * b), c(N_IN, b))
+    expect_equal(ggml_tp_dp_run(h, x), t(W2) %*% pmax(t(W1) %*% x, 0),
+                 tolerance = 1e-3, ignore_attr = TRUE)
+  }
+  ggml_tp_dp_set_weights(h, list(w1 = -W1, w2 = W2))
+  expect_equal(ggml_tp_dp_run(h, X), t(W2) %*% pmax(t(-W1) %*% X, 0),
+               tolerance = 1e-3, ignore_attr = TRUE)
+})
